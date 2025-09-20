@@ -1,0 +1,20 @@
+---
+source: tui/src/mcp/manager_view.rs
+expression: render_view(&view)
+---
+┌Configured MCP Servers────────────────────────────────────────────────┐
+│Name            Status     Command                                    │
+│perplexity      failing    perplexity-mcp                             │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+┌Details───────────────────────────────────────────────────────────────┐
+│Name: perplexity  Command: perplexity-mcp                             │
+│Args: --serve                                                         │
+│Description: Sample server                                            │
+│Tags: beta, internal                                                  │
+└──────────────────────────────────────────────────────────────────────┘

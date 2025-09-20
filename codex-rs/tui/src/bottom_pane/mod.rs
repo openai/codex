@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use crate::user_approval_widget::ApprovalRequest;
-use bottom_pane_view::BottomPaneView;
+pub(crate) use bottom_pane_view::BottomPaneView;
 use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
@@ -27,6 +27,8 @@ mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
+
+pub(crate) use scroll_state::ScrollState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -333,6 +335,11 @@ impl BottomPane {
             self.app_event_tx.clone(),
         );
         self.active_view = Some(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn show_custom_view(&mut self, view: Box<dyn BottomPaneView>) {
+        self.active_view = Some(view);
         self.request_redraw();
     }
 

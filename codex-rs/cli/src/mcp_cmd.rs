@@ -6,13 +6,24 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_cli::mcp::cli::WizardArgs;
+use codex_cli::mcp::wizard::WizardOutcome;
+use codex_cli::mcp::wizard::build_non_interactive as build_wizard_non_interactive;
+use codex_cli::mcp::wizard::confirm_apply as wizard_confirm_apply;
+use codex_cli::mcp::wizard::render_json_summary as wizard_render_json;
+use codex_cli::mcp::wizard::run_interactive as run_wizard_interactive;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
+use codex_core::config::migrations::mcp::MigrationOptions;
+use codex_core::config::migrations::mcp::{self};
 use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
+use codex_core::mcp::registry::McpRegistry;
+use codex_core::mcp::registry::validate_server_name;
+use codex_core::mcp::templates::TemplateCatalog;
 
 /// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
 ///
@@ -31,6 +42,7 @@ pub struct McpCli {
     pub cmd: Option<McpSubcommand>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, clap::Subcommand)]
 pub enum McpSubcommand {
     /// [experimental] Run the Codex MCP server (stdio transport).
@@ -47,6 +59,12 @@ pub enum McpSubcommand {
 
     /// [experimental] Remove a global MCP server entry.
     Remove(RemoveArgs),
+
+    /// [experimental] Migrate MCP configuration to the latest schema.
+    Migrate(MigrateArgs),
+
+    /// [experimental] Launch the MCP configuration wizard (preview).
+    Wizard(WizardArgs),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -86,6 +104,17 @@ pub struct RemoveArgs {
     pub name: String,
 }
 
+#[derive(Debug, clap::Parser)]
+pub struct MigrateArgs {
+    /// Apply migration changes instead of performing a dry-run preview.
+    #[arg(long, default_value_t = false)]
+    pub apply: bool,
+
+    /// Migrate even when the schema version is already up-to-date.
+    #[arg(long, default_value_t = false)]
+    pub force: bool,
+}
+
 impl McpCli {
     pub async fn run(self, codex_linux_sandbox_exe: Option<PathBuf>) -> Result<()> {
         let McpCli {
@@ -109,6 +138,12 @@ impl McpCli {
             }
             McpSubcommand::Remove(args) => {
                 run_remove(&config_overrides, args)?;
+            }
+            McpSubcommand::Migrate(args) => {
+                run_migrate(&config_overrides, args)?;
+            }
+            McpSubcommand::Wizard(args) => {
+                run_wizard(&config_overrides, args)?;
             }
         }
 
@@ -149,6 +184,7 @@ fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<(
         args: command_args,
         env: env_map,
         startup_timeout_ms: None,
+        ..McpServerConfig::default()
     };
 
     servers.insert(name.clone(), new_entry);
@@ -188,12 +224,165 @@ fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) ->
     Ok(())
 }
 
+fn run_migrate(config_overrides: &CliConfigOverrides, args: MigrateArgs) -> Result<()> {
+    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .context("failed to load configuration")?;
+
+    if !config.experimental_mcp_overhaul && !args.force {
+        bail!(
+            "MCP overhaul features are disabled. Enable `experimental.mcp_overhaul=true` or rerun with --force."
+        );
+    }
+
+    let options = MigrationOptions {
+        dry_run: !args.apply,
+        force: args.force,
+    };
+
+    let report = mcp::migrate_to_v2(&config.codex_home, &options).with_context(|| {
+        format!(
+            "failed to migrate configuration at {}",
+            config.codex_home.display()
+        )
+    })?;
+
+    if options.dry_run {
+        println!(
+            "Dry run complete (from schema v{} → v{}). Changes detected: {}",
+            report.from_version, report.to_version, report.changes_detected
+        );
+    } else {
+        println!(
+            "Migration applied (schema v{} → v{}). Backup created: {}",
+            report.from_version, report.to_version, report.backed_up
+        );
+    }
+
+    if !report.notes.is_empty() {
+        for note in report.notes {
+            println!("• {note}");
+        }
+    }
+
+    Ok(())
+}
+
+fn run_wizard(config_overrides: &CliConfigOverrides, args: WizardArgs) -> Result<()> {
+    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .context("failed to load configuration")?;
+
+    if !config.experimental_mcp_overhaul {
+        bail!(
+            "MCP overhaul features are disabled. Enable `experimental.mcp_overhaul=true` to use the wizard."
+        );
+    }
+
+    let templates = TemplateCatalog::load_default().unwrap_or_else(|err| {
+        tracing::warn!("Failed to load MCP templates: {err}");
+        TemplateCatalog::empty()
+    });
+    let registry = McpRegistry::new(&config, templates.clone());
+
+    let has_non_interactive_inputs = args.name.is_some()
+        || args.command.is_some()
+        || !args.args.is_empty()
+        || !args.env.is_empty()
+        || args.startup_timeout_ms.is_some()
+        || args.description.is_some()
+        || !args.tags.is_empty()
+        || args.auth_type.is_some()
+        || args.auth_secret_ref.is_some()
+        || !args.auth_env.is_empty()
+        || args.health_type.is_some()
+        || args.health_command.is_some()
+        || !args.health_args.is_empty()
+        || args.health_timeout_ms.is_some()
+        || args.health_interval_seconds.is_some()
+        || args.health_endpoint.is_some()
+        || args.health_protocol.is_some();
+
+    if args.json {
+        if has_non_interactive_inputs {
+            let outcome = build_wizard_non_interactive(&registry, &args)?;
+            println!("{}", wizard_render_json(&outcome)?);
+        } else {
+            let summary = serde_json::json!({
+                "experimental_overhaul": registry.experimental_enabled(),
+                "server_count": registry.servers().count(),
+                "template_ids": templates
+                    .templates()
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                "preselected_template": args.template,
+            });
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        return Ok(());
+    }
+
+    let outcome = if has_non_interactive_inputs {
+        build_wizard_non_interactive(&registry, &args)?
+    } else {
+        run_wizard_interactive(&registry, args.template.as_deref())?
+    };
+
+    let mut applied = false;
+    let mut summary_shown = false;
+
+    if args.apply {
+        print_wizard_summary(&outcome);
+        summary_shown = true;
+        registry
+            .upsert_server(&outcome.name, outcome.server.clone())
+            .context("failed to persist MCP server")?;
+        applied = true;
+    } else if wizard_confirm_apply(&outcome)? {
+        summary_shown = true;
+        registry
+            .upsert_server(&outcome.name, outcome.server.clone())
+            .context("failed to persist MCP server")?;
+        applied = true;
+    }
+
+    if applied {
+        println!(
+            "Saved server '{name}' to {path}",
+            name = outcome.name,
+            path = registry.codex_home().display()
+        );
+        if !summary_shown {
+            print_wizard_summary(&outcome);
+        }
+    } else {
+        println!("No changes saved.");
+    }
+
+    Ok(())
+}
+
+fn print_wizard_summary(outcome: &WizardOutcome) {
+    println!("Configuration summary:");
+    for (key, value) in outcome.summary() {
+        println!("  {key}: {value}");
+    }
+}
+
 fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
     let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .context("failed to load configuration")?;
 
-    let mut entries: Vec<_> = config.mcp_servers.iter().collect();
+    let templates = TemplateCatalog::load_default().unwrap_or_else(|err| {
+        tracing::warn!("Failed to load MCP templates: {err}");
+        TemplateCatalog::empty()
+    });
+    let registry = McpRegistry::new(&config, templates);
+
+    let mut entries: Vec<_> = registry.servers().collect();
     entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     if list_args.json {
@@ -207,10 +396,21 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
                 });
                 serde_json::json!({
                     "name": name,
+                    "display_name": cfg.display_name,
+                    "category": cfg.category,
+                    "template_id": cfg.template_id,
+                    "description": cfg.description,
                     "command": cfg.command,
                     "args": cfg.args,
                     "env": env,
                     "startup_timeout_ms": cfg.startup_timeout_ms,
+                    "auth": cfg.auth,
+                    "healthcheck": cfg.healthcheck,
+                    "tags": cfg.tags,
+                    "created_at": cfg.created_at,
+                    "last_verified_at": cfg.last_verified_at,
+                    "metadata": cfg.metadata,
+                    "experimental_overhaul": registry.experimental_enabled(),
                 })
             })
             .collect();
@@ -290,7 +490,13 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .context("failed to load configuration")?;
 
-    let Some(server) = config.mcp_servers.get(&get_args.name) else {
+    let templates = TemplateCatalog::load_default().unwrap_or_else(|err| {
+        tracing::warn!("Failed to load MCP templates: {err}");
+        TemplateCatalog::empty()
+    });
+    let registry = McpRegistry::new(&config, templates);
+
+    let Some(server) = registry.server(&get_args.name) else {
         bail!("No MCP server named '{name}' found.", name = get_args.name);
     };
 
@@ -306,10 +512,21 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
             "args": server.args,
             "env": env,
             "startup_timeout_ms": server.startup_timeout_ms,
+            "display_name": server.display_name,
+            "category": server.category,
+            "template_id": server.template_id,
+            "description": server.description,
+            "auth": server.auth,
+            "healthcheck": server.healthcheck,
+            "tags": server.tags,
+            "created_at": server.created_at,
+            "last_verified_at": server.last_verified_at,
+            "metadata": server.metadata,
+            "experimental_overhaul": registry.experimental_enabled(),
         }))?;
         println!("{output}");
         return Ok(());
-    }
+    };
 
     println!("{}", get_args.name);
     println!("  command: {}", server.command);
@@ -319,23 +536,35 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
         server.args.join(" ")
     };
     println!("  args: {args}");
-    let env_display = match server.env.as_ref() {
-        None => "-".to_string(),
-        Some(map) if map.is_empty() => "-".to_string(),
+
+    match server.env.as_ref() {
+        None => println!("  env: -"),
+        Some(map) if map.is_empty() => println!("  env: -"),
         Some(map) => {
             let mut pairs: Vec<_> = map.iter().collect();
             pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-            pairs
-                .into_iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            for (k, v) in pairs {
+                println!("  env: {k}={v}");
+            }
         }
-    };
-    println!("  env: {env_display}");
+    }
+
     if let Some(timeout) = server.startup_timeout_ms {
         println!("  startup_timeout_ms: {timeout}");
     }
+    if let Some(display_name) = &server.display_name {
+        println!("  display_name: {display_name}");
+    }
+    if let Some(category) = &server.category {
+        println!("  category: {category}");
+    }
+    if let Some(template_id) = &server.template_id {
+        println!("  template_id: {template_id}");
+    }
+    if let Some(description) = &server.description {
+        println!("  description: {description}");
+    }
+
     println!("  remove: codex mcp remove {}", get_args.name);
 
     Ok(())
@@ -354,17 +583,4 @@ fn parse_env_pair(raw: &str) -> Result<(String, String), String> {
         .ok_or_else(|| "environment entries must be in KEY=VALUE form".to_string())?;
 
     Ok((key.to_string(), value))
-}
-
-fn validate_server_name(name: &str) -> Result<()> {
-    let is_valid = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-
-    if is_valid {
-        Ok(())
-    } else {
-        bail!("invalid server name '{name}' (use letters, numbers, '-', '_')");
-    }
 }

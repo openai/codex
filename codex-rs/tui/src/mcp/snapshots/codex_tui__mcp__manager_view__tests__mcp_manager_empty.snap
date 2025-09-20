@@ -1,0 +1,20 @@
+---
+source: tui/src/mcp/manager_view.rs
+expression: render_view(&view)
+---
+┌Configured MCP Servers────────────────────────────────────────────────┐
+│Name            Status     Command                                    │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+┌Details───────────────────────────────────────────────────────────────┐
+│No MCP servers configured.                                            │
+│Press 'n' to create one using 5 available template(s).                │
+│                                                                      │
+│Keys: ↑/↓ move  n new  Enter edit  r reload  d delete  Esc close      │
+└──────────────────────────────────────────────────────────────────────┘
