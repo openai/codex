@@ -28,6 +28,10 @@ pub fn format_with_separators(n: u64) -> String {
     formatter().format(&Decimal::from(n)).to_string()
 }
 
+fn format_with_separators_with_formatter(n: u64, formatter: &DecimalFormatter) -> String {
+    formatter.format(&Decimal::from(n)).to_string()
+}
+
 fn format_si_suffix_with_formatter(n: u64, formatter: &DecimalFormatter) -> String {
     if n < 1000 {
         return formatter.format(&Decimal::from(n)).to_string();
@@ -57,7 +61,7 @@ fn format_si_suffix_with_formatter(n: u64, formatter: &DecimalFormatter) -> Stri
     // Above 1000G, keep whole‑G precision.
     format!(
         "{}G",
-        format_with_separators(((n as f64) / 1e9).round() as u64)
+        format_with_separators_with_formatter(((n as f64) / 1e9).round() as u64, formatter)
     )
 }
 
