@@ -130,6 +130,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::InitialHistory;
+use uuid::Uuid;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -784,6 +785,7 @@ impl Session {
             command_for_display,
             cwd,
             apply_patch,
+            user_initiated_shell_command,
         } = exec_command_context;
         let msg = match apply_patch {
             Some(ApplyPatchCommandContext {
@@ -806,6 +808,7 @@ impl Session {
                     .into_iter()
                     .map(Into::into)
                     .collect(),
+                user_initiated_shell_command,
             }),
         };
         let event = Event {
@@ -1061,6 +1064,7 @@ pub(crate) struct ExecCommandContext {
     pub(crate) command_for_display: Vec<String>,
     pub(crate) cwd: PathBuf,
     pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
+    pub(crate) user_initiated_shell_command: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1516,6 +1520,14 @@ async fn submission_loop(
                 };
                 sess.send_event(event).await;
             }
+            Op::RunUserShellCommand { command } => {
+                spawn_user_shell_command_task(
+                    sess.clone(),
+                    Arc::clone(&turn_context),
+                    sub.id,
+                    command,
+                );
+            }
             Op::Review { review_request } => {
                 spawn_review_thread(
                     sess.clone(),
@@ -1532,6 +1544,99 @@ async fn submission_loop(
         }
     }
     debug!("Agent loop exited");
+}
+
+fn spawn_user_shell_command_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    sub_id: String,
+    command: String,
+) {
+    let spawn_sub_id = sub_id.clone();
+    let handle = {
+        let sess = Arc::clone(&sess);
+        let turn_context = Arc::clone(&turn_context);
+        tokio::spawn(async move {
+            run_user_shell_command(sess, turn_context, spawn_sub_id, command).await;
+        })
+        .abort_handle()
+    };
+
+    sess.set_task(AgentTask {
+        sess: Arc::clone(&sess),
+        sub_id,
+        handle,
+        kind: AgentTaskKind::Regular,
+    });
+}
+
+async fn run_user_shell_command(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    sub_id: String,
+    command: String,
+) {
+    let event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
+    };
+    sess.send_event(event).await;
+
+    let shell_invocation = sess
+        .user_shell
+        .format_user_shell_script(&command)
+        .unwrap_or_else(|| vec![command.clone()]);
+
+    let params = ExecParams {
+        command: shell_invocation.clone(),
+        cwd: turn_context.cwd.clone(),
+        timeout_ms: None,
+        env: create_env(&turn_context.shell_environment_policy),
+        with_escalated_permissions: None,
+        justification: None,
+    };
+
+    let mut turn_diff_tracker = TurnDiffTracker::new();
+    let call_id = Uuid::new_v4().to_string();
+
+    let exec_ctx = ExecCommandContext {
+        sub_id: sub_id.clone(),
+        call_id: call_id.clone(),
+        command_for_display: shell_invocation,
+        cwd: params.cwd.clone(),
+        apply_patch: None,
+        user_initiated_shell_command: true,
+    };
+
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+    let _ = sess
+        .run_exec_with_events(
+            &mut turn_diff_tracker,
+            exec_ctx,
+            ExecInvokeArgs {
+                params,
+                sandbox_type: SandboxType::None,
+                sandbox_policy: &sandbox_policy,
+                codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
+                stdout_stream: Some(StdoutStream {
+                    sub_id: sub_id.clone(),
+                    call_id: call_id.clone(),
+                    tx_event: sess.tx_event.clone(),
+                }),
+            },
+        )
+        .await;
+
+    let complete = Event {
+        id: sub_id,
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    };
+    sess.send_event(complete).await;
 }
 
 /// Spawn a review thread using the given prompt.
@@ -2881,6 +2986,7 @@ async fn handle_container_exec_with_params(
                 changes: convert_apply_patch_to_protocol(&action),
             },
         ),
+        user_initiated_shell_command: false,
     };
 
     let params = maybe_translate_shell_command(params, sess, turn_context);

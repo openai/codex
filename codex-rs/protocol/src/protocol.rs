@@ -173,6 +173,16 @@ pub enum Op {
 
     /// Request to shut down codex instance.
     Shutdown,
+
+    /// Execute a user-initiated one-off shell command (triggered by "!cmd").
+    ///
+    /// The command string is executed using the user's default shell and may
+    /// include shell syntax (pipes, redirects, etc.). Output is streamed via
+    /// `ExecCommand*` events and the UI regains control upon `TaskComplete`.
+    RunUserShellCommand {
+        /// The raw command string after '!'
+        command: String,
+    },
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -1032,6 +1042,10 @@ pub struct ExecCommandBeginEvent {
     /// The command's working directory if not the default cwd for the agent.
     pub cwd: PathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
+    /// True when this exec was initiated directly by the user (e.g. bang command),
+    /// not by the agent/model. Defaults to false for backwards compatibility.
+    #[serde(default)]
+    pub user_initiated_shell_command: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -1299,5 +1313,20 @@ mod tests {
 
         let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn serialize_run_user_shell_command_op() {
+        let op = Op::RunUserShellCommand {
+            command: "echo hi".to_string(),
+        };
+        let value = serde_json::to_value(op).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "type": "run_user_shell_command",
+                "command": "echo hi",
+            })
+        );
     }
 }

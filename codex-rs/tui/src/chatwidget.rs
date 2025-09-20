@@ -101,6 +101,7 @@ use codex_file_search::FileMatch;
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
+    user_initiated_shell_command: bool,
 }
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
@@ -501,9 +502,9 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        let (command, parsed) = match running {
-            Some(rc) => (rc.command, rc.parsed_cmd),
-            None => (vec![ev.call_id.clone()], Vec::new()),
+        let (command, parsed, user_initiated_shell_command) = match running {
+            Some(rc) => (rc.command, rc.parsed_cmd, rc.user_initiated_shell_command),
+            None => (vec![ev.call_id.clone()], Vec::new(), false),
         };
 
         if self.active_exec_cell.is_none() {
@@ -513,6 +514,7 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 command,
                 parsed,
+                user_initiated_shell_command,
             ));
         }
         if let Some(cell) = self.active_exec_cell.as_mut() {
@@ -592,6 +594,7 @@ impl ChatWidget {
             RunningCommand {
                 command: ev.command.clone(),
                 parsed_cmd: ev.parsed_cmd.clone(),
+                user_initiated_shell_command: ev.user_initiated_shell_command,
             },
         );
         if let Some(exec) = &self.active_exec_cell {
@@ -599,6 +602,7 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd.clone(),
+                ev.user_initiated_shell_command,
             ) {
                 self.active_exec_cell = Some(new_exec);
             } else {
@@ -608,6 +612,7 @@ impl ChatWidget {
                     ev.call_id.clone(),
                     ev.command.clone(),
                     ev.parsed_cmd,
+                    ev.user_initiated_shell_command,
                 ));
             }
         } else {
@@ -615,6 +620,7 @@ impl ChatWidget {
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
+                ev.user_initiated_shell_command,
             ));
         }
 
@@ -1017,6 +1023,15 @@ impl ChatWidget {
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
         let mut items: Vec<InputItem> = Vec::new();
+
+        // Special-case: "!cmd" executes a local shell command instead of sending to the model.
+        if let Some(stripped) = text.strip_prefix('!') {
+            let cmd = stripped.trim().to_string();
+            if !cmd.is_empty() {
+                self.submit_op(Op::RunUserShellCommand { command: cmd });
+                return;
+            }
+        }
 
         if !text.is_empty() {
             items.push(InputItem::Text { text: text.clone() });

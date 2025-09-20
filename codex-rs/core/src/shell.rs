@@ -30,6 +30,28 @@ pub enum Shell {
 }
 
 impl Shell {
+    pub fn format_user_shell_script(&self, script: &str) -> Option<Vec<String>> {
+        match self {
+            Shell::Zsh(zsh) => Some(format_shell_script_with_rc(
+                &zsh.shell_path,
+                &zsh.zshrc_path,
+                script,
+            )),
+            Shell::Bash(bash) => Some(format_shell_script_with_rc(
+                &bash.shell_path,
+                &bash.bashrc_path,
+                script,
+            )),
+            Shell::PowerShell(ps) => Some(vec![
+                ps.exe.clone(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                script.to_string(),
+            ]),
+            Shell::Unknown => None,
+        }
+    }
+
     pub fn format_default_shell_invocation(&self, command: Vec<String>) -> Option<Vec<String>> {
         match self {
             Shell::Zsh(zsh) => format_shell_invocation_with_rc(
@@ -110,16 +132,12 @@ fn format_shell_invocation_with_rc(
     shell_path: &str,
     rc_path: &str,
 ) -> Option<Vec<String>> {
-    let joined = strip_bash_lc(command)
-        .or_else(|| shlex::try_join(command.iter().map(|s| s.as_str())).ok())?;
+    if let Some(script) = strip_bash_lc(command) {
+        return Some(format_shell_script_with_rc(shell_path, rc_path, &script));
+    }
 
-    let rc_command = if std::path::Path::new(rc_path).exists() {
-        format!("source {rc_path} && ({joined})")
-    } else {
-        joined
-    };
-
-    Some(vec![shell_path.to_string(), "-lc".to_string(), rc_command])
+    let joined = shlex::try_join(command.iter().map(|s| s.as_str())).ok()?;
+    Some(format_shell_script_with_rc(shell_path, rc_path, &joined))
 }
 
 fn strip_bash_lc(command: &[String]) -> Option<String> {
@@ -135,8 +153,47 @@ fn strip_bash_lc(command: &[String]) -> Option<String> {
     }
 }
 
+fn format_shell_script_with_rc(shell_path: &str, rc_path: &str, script: &str) -> Vec<String> {
+    let rc_command = if std::path::Path::new(rc_path).exists() {
+        format!("source {rc_path} && ({script})")
+    } else {
+        script.to_string()
+    };
+
+    vec![shell_path.to_string(), "-lc".to_string(), rc_command]
+}
+
+#[cfg(unix)]
+fn create_test_user_shell() -> Option<Shell> {
+    let zsh_candidates = ["/bin/zsh", "/usr/bin/zsh"];
+    for p in zsh_candidates {
+        if std::path::Path::new(p).exists() {
+            return Some(Shell::Zsh(ZshShell {
+                shell_path: p.to_string(),
+                zshrc_path: "/dev/null".to_string(),
+            }));
+        }
+    }
+    let bash_candidates = ["/bin/bash", "/usr/bin/bash"];
+    for p in bash_candidates {
+        if std::path::Path::new(p).exists() {
+            return Some(Shell::Bash(BashShell {
+                shell_path: p.to_string(),
+                bashrc_path: "/dev/null".to_string(),
+            }));
+        }
+    }
+    None
+}
+
 #[cfg(unix)]
 fn detect_default_user_shell() -> Shell {
+    // In tests, optionally prefer a hermetic shell to avoid sourcing user configs.
+    // Try zsh first, then bash; use /dev/null as rc.
+    if std::env::var_os("CODEX_HERMETIC_TEST_SHELL").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        return create_test_user_shell().unwrap_or(Shell::Unknown);
+    }
+
     use libc::getpwuid;
     use libc::getuid;
     use std::ffi::CStr;
