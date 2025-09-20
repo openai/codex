@@ -151,10 +151,7 @@ impl McpConnectionManager {
                 continue;
             }
 
-            let startup_timeout = cfg
-                .startup_timeout_ms
-                .map(Duration::from_millis)
-                .unwrap_or(DEFAULT_STARTUP_TIMEOUT);
+            let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
 
             let tool_timeout =
                 env_tool_timeout.unwrap_or(cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT));

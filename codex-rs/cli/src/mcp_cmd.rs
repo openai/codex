@@ -148,7 +148,7 @@ fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<(
         command: command_bin,
         args: command_args,
         env: env_map,
-        startup_timeout_ms: None,
+        startup_timeout_sec: None,
         tool_timeout_sec: None,
     };
 
@@ -211,7 +211,9 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
                     "command": cfg.command,
                     "args": cfg.args,
                     "env": env,
-                    "startup_timeout_ms": cfg.startup_timeout_ms,
+                    "startup_timeout_sec": cfg
+                        .startup_timeout_sec
+                        .map(|timeout| timeout.as_secs_f64()),
                     "tool_timeout_sec": cfg
                         .tool_timeout_sec
                         .map(|timeout| timeout.as_secs_f64()),
@@ -309,7 +311,9 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
             "command": server.command,
             "args": server.args,
             "env": env,
-            "startup_timeout_ms": server.startup_timeout_ms,
+            "startup_timeout_sec": server
+                .startup_timeout_sec
+                .map(|timeout| timeout.as_secs_f64()),
             "tool_timeout_sec": server
                 .tool_timeout_sec
                 .map(|timeout| timeout.as_secs_f64()),
@@ -340,8 +344,8 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
         }
     };
     println!("  env: {env_display}");
-    if let Some(timeout) = server.startup_timeout_ms {
-        println!("  startup_timeout_ms: {timeout}");
+    if let Some(timeout) = server.startup_timeout_sec {
+        println!("  startup_timeout_sec: {}", timeout.as_secs_f64());
     }
     if let Some(timeout) = server.tool_timeout_sec {
         println!("  tool_timeout_sec: {}", timeout.as_secs_f64());

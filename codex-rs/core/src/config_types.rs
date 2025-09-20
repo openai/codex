@@ -9,9 +9,11 @@ use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::de::Error as SerdeError;
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     pub command: String,
 
@@ -21,13 +23,58 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
 
-    /// Startup timeout in milliseconds for initializing MCP server & initially listing tools.
-    #[serde(default)]
-    pub startup_timeout_ms: Option<u64>,
+    /// Startup timeout in seconds for initializing MCP server & initially listing tools.
+    #[serde(
+        default,
+        with = "option_duration_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub startup_timeout_sec: Option<Duration>,
 
     /// Default timeout for MCP tool calls initiated via this server.
     #[serde(default, with = "option_duration_secs")]
     pub tool_timeout_sec: Option<Duration>,
+}
+
+impl<'de> Deserialize<'de> for McpServerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawMcpServerConfig {
+            command: String,
+            #[serde(default)]
+            args: Vec<String>,
+            #[serde(default)]
+            env: Option<HashMap<String, String>>,
+            #[serde(default)]
+            startup_timeout_sec: Option<f64>,
+            #[serde(default)]
+            startup_timeout_ms: Option<u64>,
+            #[serde(default, with = "option_duration_secs")]
+            tool_timeout_sec: Option<Duration>,
+        }
+
+        let raw = RawMcpServerConfig::deserialize(deserializer)?;
+
+        let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {
+            (Some(sec), _) => {
+                let duration = Duration::try_from_secs_f64(sec).map_err(SerdeError::custom)?;
+                Some(duration)
+            }
+            (None, Some(ms)) => Some(Duration::from_millis(ms)),
+            (None, None) => None,
+        };
+
+        Ok(Self {
+            command: raw.command,
+            args: raw.args,
+            env: raw.env,
+            startup_timeout_sec,
+            tool_timeout_sec: raw.tool_timeout_sec,
+        })
+    }
 }
 
 mod option_duration_secs {
