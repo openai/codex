@@ -1113,6 +1113,7 @@ pub(crate) fn new_limits_unavailable() -> PlainHistoryCell {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell {
         lines: vec![vec![format!("⚠ {message}").yellow()].into()],
