@@ -6,14 +6,14 @@ expression: visual
 
 [bold]Rate limit usage snapshot[/]
 [dim]  Tip: run `/limits` right after Codex replies for freshest numbers.[/]
-  • Weekly limit[dim] (≈5 hours window)[/]: [magenta]20.0% used[/] — [green]80.0% remaining[/]
-  • Hourly limit[dim] (≈1 week window)[/]: [cyan]20.0% used[/] — 80.0% remaining
+  • Hourly limit[dim] (≈5 hours window)[/]: [yellow]20.0% used[/]
+  • Weekly limit[dim] (≈1 week window)[/]: [yellow]20.0% used[/]
 [green]  Within current limits[/]
 
 [dim]  ╭─────────────────────────────────────────────────╮[/]
-  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
-  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
-  [dim]│[/][cyan](>_)[/] [cyan](>_)[/] [cyan](>_)[/] [cyan](>_)[/] [cyan](>_)[/] [cyan](>_)[/] [cyan](>_)[/] [cyan](>_)[/] (>_) (>_)[dim]│[/]
+  [dim]│[/][yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/][dim]│[/]
+  [dim]│[/][yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/] [yellow](>_)[/][dim]│[/]
+  [dim]│[/][green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] (>_) (>_)[dim]│[/]
   [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
   [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
   [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
@@ -24,6 +24,6 @@ expression: visual
 [dim]  ╰─────────────────────────────────────────────────╯[/]
 
 [bold]Legend[/]
-  • Magenta = weekly usage so far
-  • Cyan = hourly capacity still available
-  • White = weekly capacity beyond the hourly window
+  • [yellow+bold]Yellow[/] = weekly usage so far
+  • [green+bold]Green[/] = hourly capacity still available
+  • [bold]White[/] = weekly capacity beyond the hourly window

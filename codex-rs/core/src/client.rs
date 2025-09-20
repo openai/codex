@@ -271,7 +271,6 @@ impl ModelClient {
                         .unwrap_or_default()
                 );
             }
-
             match res {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);

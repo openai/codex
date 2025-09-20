@@ -40,13 +40,13 @@ pub(crate) fn build_rate_limit_display(
     snapshot: &RateLimitSnapshotEvent,
     gauge: LimitGaugeConfig,
 ) -> RateLimitDisplay {
-    let weekly_used = snapshot.primary_used_percent.clamp(0.0, 100.0);
-    let hourly_used = snapshot.protection_used_percent.clamp(0.0, 100.0);
-    let weekly_remaining = (100.0 - weekly_used).max(0.0);
+    let hourly_used = snapshot.primary_used_percent.clamp(0.0, 100.0);
+    let weekly_used = snapshot.protection_used_percent.clamp(0.0, 100.0);
     let hourly_remaining = (100.0 - hourly_used).max(0.0);
+    let weekly_remaining = (100.0 - weekly_used).max(0.0);
 
-    let weekly_window_label = format_window_label(Some(snapshot.primary_window_minutes));
-    let hourly_window_label = format_window_label(Some(snapshot.protection_window_minutes));
+    let hourly_window_label = format_window_label(Some(snapshot.primary_window_minutes));
+    let weekly_window_label = format_window_label(Some(snapshot.protection_window_minutes));
 
     let mut summary_lines: Vec<Line<'static>> = vec![
         "/limits".magenta().into(),
@@ -54,35 +54,23 @@ pub(crate) fn build_rate_limit_display(
         vec!["Rate limit usage snapshot".bold()].into(),
         vec!["  Tip: run `/limits` right after Codex replies for freshest numbers.".dim()].into(),
         vec![
-            "  • Weekly limit".into(),
-            format!(" ({weekly_window_label})").dim(),
-            ": ".into(),
-            format!("{weekly_used:.1}% used").magenta(),
-            " — ".into(),
-            if weekly_remaining <= 0.0 {
-                format!("{weekly_remaining:.1}% remaining").red()
-            } else {
-                format!("{weekly_remaining:.1}% remaining").green()
-            },
-        ]
-        .into(),
-        vec![
             "  • Hourly limit".into(),
             format!(" ({hourly_window_label})").dim(),
             ": ".into(),
-            format!("{hourly_used:.1}% used").cyan(),
-            " — ".into(),
-            if hourly_remaining <= 0.0 {
-                format!("{hourly_remaining:.1}% remaining").red()
-            } else {
-                format!("{hourly_remaining:.1}% remaining").into()
-            },
+            format!("{hourly_used:.1}% used").yellow(),
+        ]
+        .into(),
+        vec![
+            "  • Weekly limit".into(),
+            format!(" ({weekly_window_label})").dim(),
+            ": ".into(),
+            format!("{weekly_used:.1}% used").yellow(),
         ]
         .into(),
     ];
 
-    let weekly_exhausted = weekly_remaining <= 0.0;
     let hourly_exhausted = hourly_remaining <= 0.0;
+    let weekly_exhausted = weekly_remaining <= 0.0;
     let mut status_line: Vec<Span<'static>> = Vec::new();
     if weekly_exhausted || hourly_exhausted {
         status_line.push("  Rate limited: ".into());
@@ -93,12 +81,12 @@ pub(crate) fn build_rate_limit_display(
             (false, false) => unreachable!(),
         };
         status_line.push(reason.red());
-        if weekly_exhausted {
-            status_line.push(" — weekly resets in ".into());
-            status_line.push(format_reset_hint(Some(snapshot.primary_window_minutes)).dim());
-        }
         if hourly_exhausted {
             status_line.push(" — hourly resets in ".into());
+            status_line.push(format_reset_hint(Some(snapshot.primary_window_minutes)).dim());
+        }
+        if weekly_exhausted {
+            status_line.push(" — weekly resets in ".into());
             status_line.push(format_reset_hint(Some(snapshot.protection_window_minutes)).dim());
         }
     } else {
@@ -111,9 +99,24 @@ pub(crate) fn build_rate_limit_display(
     let legend_lines = if gauge_state.is_some() {
         vec![
             vec!["Legend".bold()].into(),
-            vec!["  • Magenta = weekly usage so far".into()].into(),
-            vec!["  • Cyan = hourly capacity still available".into()].into(),
-            vec!["  • White = weekly capacity beyond the hourly window".into()].into(),
+            vec![
+                "  • ".into(),
+                "Yellow".yellow().bold(),
+                " = weekly usage so far".into(),
+            ]
+            .into(),
+            vec![
+                "  • ".into(),
+                "Green".green().bold(),
+                " = hourly capacity still available".into(),
+            ]
+            .into(),
+            vec![
+                "  • ".into(),
+                "White".bold(),
+                " = weekly capacity beyond the hourly window".into(),
+            ]
+            .into(),
         ]
     } else {
         Vec::new()
@@ -128,7 +131,7 @@ pub(crate) fn build_rate_limit_display(
 }
 
 fn compute_gauge_state(snapshot: &RateLimitSnapshotEvent) -> Option<LimitGaugeState> {
-    let weekly_used_ratio = (snapshot.primary_used_percent / 100.0).clamp(0.0, 1.0);
+    let weekly_used_ratio = (snapshot.protection_used_percent / 100.0).clamp(0.0, 1.0);
     let weekly_remaining_ratio = (1.0 - weekly_used_ratio).max(0.0);
 
     let ratio_fraction = {
@@ -145,7 +148,7 @@ fn compute_gauge_state(snapshot: &RateLimitSnapshotEvent) -> Option<LimitGaugeSt
         return None;
     }
 
-    let hourly_used_ratio = (snapshot.protection_used_percent / 100.0).clamp(0.0, 1.0);
+    let hourly_used_ratio = (snapshot.primary_used_percent / 100.0).clamp(0.0, 1.0);
     let hourly_used_within_capacity =
         (hourly_used_ratio * capacity_fraction).min(capacity_fraction);
     let hourly_remaining_within_capacity =
@@ -212,13 +215,13 @@ fn render_limit_gauge(
     let inner_width = side * cell_width + side.saturating_sub(1);
     let total_cells = side * side;
 
-    let mut magenta_cells = (state.weekly_used_ratio * total_cells as f64).round() as isize;
-    magenta_cells = magenta_cells.clamp(0, total_cells as isize);
-    let mut cyan_cells = (state.hourly_remaining_ratio * total_cells as f64).round() as isize;
-    if magenta_cells + cyan_cells > total_cells as isize {
-        cyan_cells = (total_cells as isize - magenta_cells).max(0);
+    let mut yellow_cells = (state.weekly_used_ratio * total_cells as f64).round() as isize;
+    yellow_cells = yellow_cells.clamp(0, total_cells as isize);
+    let mut green_cells = (state.hourly_remaining_ratio * total_cells as f64).round() as isize;
+    if yellow_cells + green_cells > total_cells as isize {
+        green_cells = (total_cells as isize - yellow_cells).max(0);
     }
-    let white_cells = (total_cells as isize - magenta_cells - cyan_cells).max(0);
+    let white_cells = (total_cells as isize - yellow_cells - green_cells).max(0);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("".into());
@@ -239,10 +242,10 @@ fn render_limit_gauge(
             if col > 0 {
                 spans.push(" ".into());
             }
-            let span = if cell_index < magenta_cells {
-                gauge.logo.magenta()
-            } else if cell_index < magenta_cells + cyan_cells {
-                gauge.logo.cyan()
+            let span = if cell_index < yellow_cells {
+                gauge.logo.yellow()
+            } else if cell_index < yellow_cells + green_cells {
+                gauge.logo.green()
             } else {
                 gauge.logo.into()
             };
@@ -387,6 +390,25 @@ mod tests {
                 .any(|span| span.content.contains("Hourly limit"))
         }));
         assert!(!display.gauge_lines(80).is_empty());
+    }
+
+    #[test]
+    fn hourly_and_weekly_percentages_are_not_swapped() {
+        let display = build_rate_limit_display(&snapshot(), DEFAULT_LIMIT_GAUGE_CONFIG);
+        let summary = display
+            .summary_lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(summary.contains("Hourly limit (≈5 hours window): 30.0% used"));
+        assert!(summary.contains("Weekly limit (≈1 week window): 60.0% used"));
     }
 
     #[test]
