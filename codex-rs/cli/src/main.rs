@@ -1,7 +1,6 @@
 use clap::CommandFactory;
 use clap::Parser;
-use clap_complete::Shell;
-use clap_complete::generate;
+use clap_complete_command::Shell;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
@@ -365,8 +364,7 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
 
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
-    let name = "codex";
-    generate(cmd.shell, &mut app, name, &mut std::io::stdout());
+    cmd.shell.generate(&mut app, &mut std::io::stdout());
 }
 
 #[cfg(test)]
