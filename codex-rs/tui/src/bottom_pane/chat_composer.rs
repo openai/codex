@@ -36,6 +36,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
+use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_paste::pasted_image_format;
 use crate::key_hint;
 use crate::ui_consts::LIVE_PREFIX_COLS;
@@ -65,6 +66,12 @@ struct AttachedImage {
     path: PathBuf,
 }
 
+#[derive(Clone, Debug)]
+struct AltPasteFeedback {
+    message: String,
+    expires_at: Instant,
+}
+
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
@@ -87,6 +94,7 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    alt_paste_feedback: Option<AltPasteFeedback>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -99,6 +107,8 @@ enum ActivePopup {
 const FOOTER_HINT_HEIGHT: u16 = 1;
 const FOOTER_SPACING_HEIGHT: u16 = 1;
 const FOOTER_HEIGHT_WITH_HINT: u16 = FOOTER_HINT_HEIGHT + FOOTER_SPACING_HEIGHT;
+const ALT_PASTE_FEEDBACK_DURATION: Duration = Duration::from_millis(2000);
+const ALT_PASTE_FEEDBACK_MESSAGE: &str = "No image found on clipboard";
 
 impl ChatComposer {
     pub fn new(
@@ -130,6 +140,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            alt_paste_feedback: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -248,6 +259,34 @@ impl ChatComposer {
         self.disable_paste_burst = disabled;
         if disabled && !was_disabled {
             self.paste_burst.clear_window_after_non_char();
+        }
+    }
+
+    fn show_alt_paste_feedback(&mut self, message: &str) {
+        let now = Instant::now();
+        let expires_at = now
+            .checked_add(ALT_PASTE_FEEDBACK_DURATION)
+            .unwrap_or(now);
+        self.alt_paste_feedback = Some(AltPasteFeedback {
+            message: message.to_string(),
+            expires_at,
+        });
+    }
+
+    fn clear_alt_paste_feedback(&mut self) {
+        self.alt_paste_feedback = None;
+    }
+
+    pub(crate) fn alt_paste_feedback_deadline(&mut self) -> Option<Instant> {
+        if let Some(feedback) = &self.alt_paste_feedback {
+            if feedback.expires_at <= Instant::now() {
+                self.alt_paste_feedback = None;
+                None
+            } else {
+                Some(feedback.expires_at)
+            }
+        } else {
+            None
         }
     }
 
@@ -726,6 +765,36 @@ impl ChatComposer {
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         match key_event {
+            KeyEvent {
+                code: KeyCode::Char(_ch @ ('v' | 'V')),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::ALT) => match paste_image_to_temp_png() {
+                Ok((path, info)) => {
+                    tracing::debug!(
+                        "alt+v pasted image {}x{} {}",
+                        info.width,
+                        info.height,
+                        info.encoded_format.label()
+                    );
+                    self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                    self.paste_burst.clear_after_explicit_paste();
+                    self.clear_alt_paste_feedback();
+                    self.sync_command_popup();
+                    if matches!(self.active_popup, ActivePopup::Command(_)) {
+                        self.dismissed_file_popup_token = None;
+                    } else {
+                        self.sync_file_search_popup();
+                    }
+                    (InputResult::None, true)
+                }
+                Err(err) => {
+                    tracing::debug!("alt+v clipboard image unavailable: {err}");
+                    self.show_alt_paste_feedback(ALT_PASTE_FEEDBACK_MESSAGE);
+                    (InputResult::None, true)
+                }
+            },
             KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -1329,6 +1398,13 @@ impl WidgetRef for ChatComposer {
                             context_style,
                         ));
                     }
+                }
+
+                if let Some(feedback) = &self.alt_paste_feedback
+                    && feedback.expires_at > Instant::now()
+                {
+                    hint.push("   ".into());
+                    hint.push(feedback.message.clone().dim());
                 }
 
                 Line::from(hint)

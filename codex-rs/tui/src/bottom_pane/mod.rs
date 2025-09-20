@@ -14,6 +14,7 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 use std::time::Duration;
+use std::time::Instant;
 
 mod approval_modal_view;
 mod bottom_pane_view;
@@ -182,6 +183,15 @@ impl BottomPane {
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
                 self.request_redraw();
+            }
+            if let Some(deadline) = self.composer.alt_paste_feedback_deadline() {
+                if let Some(delay) = deadline.checked_duration_since(Instant::now()) {
+                    if delay.is_zero() {
+                        self.request_redraw();
+                    } else {
+                        self.request_redraw_in(delay);
+                    }
+                }
             }
             if self.composer.is_in_paste_burst() {
                 self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
