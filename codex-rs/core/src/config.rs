@@ -333,14 +333,12 @@ pub fn write_global_mcp_servers(
                 entry["env"] = TomlItem::Table(env_table);
             }
 
-            if let Some(timeout) = config.startup_timeout_ms {
-                let timeout = i64::try_from(timeout).map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "startup_timeout_ms exceeds supported range",
-                    )
-                })?;
-                entry["startup_timeout_ms"] = toml_edit::value(timeout);
+            if let Some(timeout) = config.startup_timeout_sec {
+                entry["startup_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
+            }
+
+            if let Some(timeout) = config.tool_timeout_sec {
+                entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
             }
 
             doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);
@@ -1168,6 +1166,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    use std::time::Duration;
     use tempfile::TempDir;
 
     #[test]
@@ -1292,7 +1291,8 @@ exclude_slash_tmp = true
                 command: "echo".to_string(),
                 args: vec!["hello".to_string()],
                 env: None,
-                startup_timeout_ms: None,
+                startup_timeout_sec: Some(Duration::from_secs(3)),
+                tool_timeout_sec: Some(Duration::from_secs(5)),
             },
         );
 
@@ -1303,11 +1303,35 @@ exclude_slash_tmp = true
         let docs = loaded.get("docs").expect("docs entry");
         assert_eq!(docs.command, "echo");
         assert_eq!(docs.args, vec!["hello".to_string()]);
+        assert_eq!(docs.startup_timeout_sec, Some(Duration::from_secs(3)));
+        assert_eq!(docs.tool_timeout_sec, Some(Duration::from_secs(5)));
 
         let empty = BTreeMap::new();
         write_global_mcp_servers(codex_home.path(), &empty)?;
         let loaded = load_global_mcp_servers(codex_home.path())?;
         assert!(loaded.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn load_global_mcp_servers_accepts_legacy_ms_field() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        std::fs::write(
+            &config_path,
+            r#"
+[mcp_servers]
+[mcp_servers.docs]
+command = "echo"
+startup_timeout_ms = 2500
+"#,
+        )?;
+
+        let servers = load_global_mcp_servers(codex_home.path())?;
+        let docs = servers.get("docs").expect("docs entry");
+        assert_eq!(docs.startup_timeout_sec, Some(Duration::from_millis(2500)));
 
         Ok(())
     }
