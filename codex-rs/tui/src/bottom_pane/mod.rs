@@ -170,62 +170,58 @@ impl BottomPane {
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
-        // If a modal/view is active and Esc is pressed, route to the view's
-        // Ctrl-C handler.
-        if !self.view_stack.is_empty() && key_event.code == KeyCode::Esc {
-            if let Some(mut view) = self.view_stack.pop() {
-                let event = view.on_ctrl_c(self);
-                match event {
+        // If a modal/view is active, handle it here; otherwise forward to composer.
+        if let Some(mut view) = self.view_stack.pop() {
+            // Reinsert at the original index so any views pushed during handling stay on top.
+            let reinsertion_index = self.view_stack.len();
+
+            if key_event.code == KeyCode::Esc {
+                match view.on_ctrl_c(self) {
                     CancellationEvent::Handled => {
                         if view.is_complete() {
                             self.on_active_view_complete();
                         } else {
-                            self.view_stack.push(view);
+                            self.view_stack.insert(reinsertion_index, view);
                         }
                     }
                     CancellationEvent::NotHandled => {
-                        // Put the view back unchanged if it didn't handle Esc.
-                        self.view_stack.push(view);
+                        self.view_stack.insert(reinsertion_index, view);
                     }
                 }
-                self.request_redraw();
-                return InputResult::None;
+            } else {
+                view.handle_key_event(self, key_event);
+                if view.is_complete() {
+                    self.view_stack.clear();
+                    self.on_active_view_complete();
+                } else {
+                    self.view_stack.insert(reinsertion_index, view);
+                }
             }
+
+            self.request_redraw();
+            return InputResult::None;
         }
 
-        if let Some(mut view) = self.view_stack.pop() {
-            let reinsertion_index = self.view_stack.len();
-            view.handle_key_event(self, key_event);
-            if view.is_complete() {
-                self.view_stack.clear();
-                self.on_active_view_complete();
-            } else {
-                let idx = reinsertion_index;
-                self.view_stack.insert(idx, view);
-            }
+        // If a task is running and a status line is visible, allow Esc to
+        // send an interrupt even while the composer has focus.
+        if matches!(key_event.code, crossterm::event::KeyCode::Esc)
+            && self.is_task_running
+            && let Some(status) = &self.status
+        {
+            // Send Op::Interrupt
+            status.interrupt();
             self.request_redraw();
-            InputResult::None
-        } else {
-            // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt even while the composer has focus.
-            if matches!(key_event.code, crossterm::event::KeyCode::Esc)
-                && self.is_task_running
-                && let Some(status) = &self.status
-            {
-                // Send Op::Interrupt
-                status.interrupt();
-                self.request_redraw();
-                return InputResult::None;
-            }
-            let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
-            if needs_redraw {
-                self.request_redraw();
-            }
-            if self.composer.is_in_paste_burst() {
-                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
-            }
-            input_result
+            return InputResult::None;
         }
+
+        let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
+        if needs_redraw {
+            self.request_redraw();
+        }
+        if self.composer.is_in_paste_burst() {
+            self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
+        }
+        input_result
     }
 
     /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
