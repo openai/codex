@@ -50,6 +50,10 @@ jobs:
     name: ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write       # Required for GitHub attestations
+      attestations: write   # Required to upload attestations
     defaults:
       run:
         working-directory: codex-rs
@@ -156,6 +160,19 @@ jobs:
             # uncompressed binary to keep the directory small.
             zstd -T0 -19 --rm "$dest/$base"
           done
+
+      - name: Generate build provenance attestation
+        id: provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: codex-rs/dist/${{ matrix.target }}/*
+
+      - name: Stage provenance bundle
+        shell: bash
+        run: |
+          cp "${BUNDLE_PATH}" "dist/${{ matrix.target }}/codex-${{ matrix.target }}.sigstore.json"
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
 
       - uses: actions/upload-artifact@v4
         with:
