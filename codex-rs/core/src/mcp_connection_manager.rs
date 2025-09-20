@@ -44,7 +44,7 @@ const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default timeout for individual tool calls (can be overridden per server or via env var).
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Environment variable that overrides the MCP tool timeout (in seconds). Use `0` to disable.
+/// Environment variable that overrides the MCP tool timeout (in seconds).
 const MCP_TOOL_TIMEOUT_ENV: &str = "MCP_TOOL_TIMEOUT";
 
 /// Map that holds a startup error for every MCP server that could **not** be
