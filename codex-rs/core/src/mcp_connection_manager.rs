@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,9 +41,22 @@ const MAX_TOOL_NAME_LENGTH: usize = 64;
 /// Default timeout for initializing MCP server & initially listing tools.
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Default timeout for individual tool calls (can be overridden per server or via env var).
+const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Environment variable that overrides the MCP tool timeout (in seconds). Use `0` to disable.
+const MCP_TOOL_TIMEOUT_ENV: &str = "MCP_TOOL_TIMEOUT";
+
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
 pub type ClientStartErrors = HashMap<String, anyhow::Error>;
+
+fn parse_tool_timeout_override(raw: &str) -> Option<Duration> {
+    let seconds: f64 = raw.trim().parse().ok()?;
+    Duration::try_from_secs_f64(seconds)
+        .ok()
+        .filter(|duration| !duration.is_zero())
+}
 
 fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
     let mut used_names = HashSet::new();
@@ -85,6 +99,7 @@ struct ToolInfo {
 struct ManagedClient {
     client: Arc<McpClient>,
     startup_timeout: Duration,
+    tool_timeout: Option<Duration>,
 }
 
 /// A thin wrapper around a set of running [`McpClient`] instances.
@@ -117,6 +132,10 @@ impl McpConnectionManager {
             return Ok((Self::default(), ClientStartErrors::default()));
         }
 
+        let env_tool_timeout = env::var(MCP_TOOL_TIMEOUT_ENV)
+            .ok()
+            .and_then(|raw| parse_tool_timeout_override(&raw));
+
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
         let mut errors = ClientStartErrors::new();
@@ -136,6 +155,9 @@ impl McpConnectionManager {
                 .startup_timeout_ms
                 .map(Duration::from_millis)
                 .unwrap_or(DEFAULT_STARTUP_TIMEOUT);
+
+            let tool_timeout =
+                env_tool_timeout.unwrap_or(cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT));
 
             join_set.spawn(async move {
                 let McpServerConfig {
@@ -171,19 +193,19 @@ impl McpConnectionManager {
                             protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                         };
                         let initialize_notification_params = None;
-                        match client
+                        let init_result = client
                             .initialize(
                                 params,
                                 initialize_notification_params,
                                 Some(startup_timeout),
                             )
-                            .await
-                        {
-                            Ok(_response) => (server_name, Ok((client, startup_timeout))),
-                            Err(e) => (server_name, Err(e)),
-                        }
+                            .await;
+                        (
+                            (server_name, tool_timeout),
+                            init_result.map(|_| (client, startup_timeout)),
+                        )
                     }
-                    Err(e) => (server_name, Err(e.into())),
+                    Err(e) => ((server_name, tool_timeout), Err(e.into())),
                 }
             });
         }
@@ -191,8 +213,8 @@ impl McpConnectionManager {
         let mut clients: HashMap<String, ManagedClient> = HashMap::with_capacity(join_set.len());
 
         while let Some(res) = join_set.join_next().await {
-            let (server_name, client_res) = match res {
-                Ok((server_name, client_res)) => (server_name, client_res),
+            let ((server_name, tool_timeout), client_res) = match res {
+                Ok(result) => result,
                 Err(e) => {
                     warn!("Task panic when starting MCP server: {e:#}");
                     continue;
@@ -206,6 +228,7 @@ impl McpConnectionManager {
                         ManagedClient {
                             client: Arc::new(client),
                             startup_timeout,
+                            tool_timeout: Some(tool_timeout),
                         },
                     );
                 }
@@ -243,14 +266,13 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
-        timeout: Option<Duration>,
     ) -> Result<mcp_types::CallToolResult> {
-        let client = self
+        let managed = self
             .clients
             .get(server)
-            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?
-            .client
-            .clone();
+            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let client = managed.client.clone();
+        let timeout = managed.tool_timeout;
 
         client
             .call_tool(tool.to_string(), arguments, timeout)

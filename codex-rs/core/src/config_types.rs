@@ -5,11 +5,13 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
+use serde::Serialize;
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     pub command: String,
 
@@ -22,6 +24,36 @@ pub struct McpServerConfig {
     /// Startup timeout in milliseconds for initializing MCP server & initially listing tools.
     #[serde(default)]
     pub startup_timeout_ms: Option<u64>,
+
+    /// Default timeout for MCP tool calls initiated via this server.
+    #[serde(default, with = "option_duration_secs")]
+    pub tool_timeout_sec: Option<Duration>,
+}
+
+mod option_duration_secs {
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serializer;
+    use std::time::Duration;
+
+    pub fn serialize<S>(value: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(duration) => serializer.serialize_some(&duration.as_secs_f64()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let secs = Option::<f64>::deserialize(deserializer)?;
+        secs.map(|secs| Duration::try_from_secs_f64(secs).map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]

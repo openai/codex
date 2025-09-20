@@ -343,6 +343,10 @@ pub fn write_global_mcp_servers(
                 entry["startup_timeout_ms"] = toml_edit::value(timeout);
             }
 
+            if let Some(timeout) = config.tool_timeout_sec {
+                entry["tool_timeout_sec"] = toml_edit::value(timeout.as_secs_f64());
+            }
+
             doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);
         }
     }
@@ -1168,6 +1172,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    use std::time::Duration;
     use tempfile::TempDir;
 
     #[test]
@@ -1293,6 +1298,7 @@ exclude_slash_tmp = true
                 args: vec!["hello".to_string()],
                 env: None,
                 startup_timeout_ms: None,
+                tool_timeout_sec: Some(Duration::from_secs(5)),
             },
         );
 
@@ -1303,6 +1309,7 @@ exclude_slash_tmp = true
         let docs = loaded.get("docs").expect("docs entry");
         assert_eq!(docs.command, "echo");
         assert_eq!(docs.args, vec!["hello".to_string()]);
+        assert_eq!(docs.tool_timeout_sec, Some(Duration::from_secs(5)));
 
         let empty = BTreeMap::new();
         write_global_mcp_servers(codex_home.path(), &empty)?;
