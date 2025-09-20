@@ -2,9 +2,9 @@ use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
-use crate::rate_limits_view::DEFAULT_LIMIT_GAUGE_CONFIG;
-use crate::rate_limits_view::RateLimitDisplay;
-use crate::rate_limits_view::build_rate_limit_display;
+use crate::rate_limits_view::DEFAULT_GRID_CONFIG;
+use crate::rate_limits_view::LimitsView;
+use crate::rate_limits_view::build_limits_view;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -227,7 +227,7 @@ impl HistoryCell for PlainHistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct LimitsHistoryCell {
-    display: RateLimitDisplay,
+    display: LimitsView,
 }
 
 impl HistoryCell for LimitsHistoryCell {
@@ -1095,7 +1095,7 @@ pub(crate) fn new_completed_mcp_tool_call(
 
 pub(crate) fn new_limits_output(snapshot: &RateLimitSnapshotEvent) -> LimitsHistoryCell {
     LimitsHistoryCell {
-        display: build_rate_limit_display(snapshot, DEFAULT_LIMIT_GAUGE_CONFIG),
+        display: build_limits_view(snapshot, DEFAULT_GRID_CONFIG),
     }
 }
 

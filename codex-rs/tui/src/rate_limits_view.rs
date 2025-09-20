@@ -6,18 +6,18 @@ use ratatui::style::Stylize;
 /// It contains the rendered summary lines, optional legend,
 /// and the precomputed gauge state when one can be shown.
 #[derive(Debug)]
-pub(crate) struct RateLimitDisplay {
+pub(crate) struct LimitsView {
     pub(crate) summary_lines: Vec<Line<'static>>,
     pub(crate) legend_lines: Vec<Line<'static>>,
-    gauge_state: Option<LimitGaugeState>,
-    gauge: LimitGaugeConfig,
+    grid_state: Option<GridState>,
+    grid: GridConfig,
 }
 
-impl RateLimitDisplay {
+impl LimitsView {
     /// Render the gauge for the provided width if the data supports it.
     pub(crate) fn gauge_lines(&self, width: u16) -> Vec<Line<'static>> {
-        match self.gauge_state {
-            Some(state) => render_limit_gauge(state, self.gauge, width),
+        match self.grid_state {
+            Some(state) => render_limit_grid(state, self.grid, width),
             None => Vec::new(),
         }
     }
@@ -25,37 +25,37 @@ impl RateLimitDisplay {
 
 /// Configuration for the simple grid gauge rendered by `/limits`.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct LimitGaugeConfig {
+pub(crate) struct GridConfig {
     pub(crate) weekly_slots: usize,
     pub(crate) logo: &'static str,
 }
 
 /// Default gauge configuration used by the TUI.
-pub(crate) const DEFAULT_LIMIT_GAUGE_CONFIG: LimitGaugeConfig = LimitGaugeConfig {
+pub(crate) const DEFAULT_GRID_CONFIG: GridConfig = GridConfig {
     weekly_slots: 100,
     logo: "(>_)",
 };
 
-/// Build the full display (summary + legend + gauge state) for `/limits`.
-pub(crate) fn build_rate_limit_display(
+/// Build the lines and optional gauge used by the `/limits` view.
+pub(crate) fn build_limits_view(
     snapshot: &RateLimitSnapshotEvent,
-    gauge: LimitGaugeConfig,
-) -> RateLimitDisplay {
+    grid_config: GridConfig,
+) -> LimitsView {
     let metrics = RateLimitMetrics::from_snapshot(snapshot);
-    let gauge_state = extract_capacity_fraction(snapshot)
-        .and_then(|fraction| compute_gauge_state(&metrics, fraction))
-        .map(|state| scale_gauge_state(state, gauge));
+    let grid_state = extract_capacity_fraction(snapshot)
+        .and_then(|fraction| compute_grid_state(&metrics, fraction))
+        .map(|state| scale_grid_state(state, grid_config));
 
-    RateLimitDisplay {
+    LimitsView {
         summary_lines: build_summary_lines(&metrics),
-        legend_lines: build_legend_lines(gauge_state.is_some()),
-        gauge_state,
-        gauge,
+        legend_lines: build_legend_lines(grid_state.is_some()),
+        grid_state,
+        grid: grid_config,
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct LimitGaugeState {
+struct GridState {
     weekly_used_ratio: f64,
     hourly_remaining_ratio: f64,
 }
@@ -188,10 +188,10 @@ fn extract_capacity_fraction(snapshot: &RateLimitSnapshotEvent) -> Option<f64> {
     }
 }
 
-fn compute_gauge_state(
+fn compute_grid_state(
     metrics: &RateLimitMetrics,
     capacity_fraction: f64,
-) -> Option<LimitGaugeState> {
+) -> Option<GridState> {
     if capacity_fraction <= 0.0 {
         return None;
     }
@@ -207,15 +207,15 @@ fn compute_gauge_state(
 
     let hourly_remaining_ratio = hourly_remaining_within_capacity.min(weekly_remaining_ratio);
 
-    Some(LimitGaugeState {
+    Some(GridState {
         weekly_used_ratio,
         hourly_remaining_ratio,
     })
 }
 
-fn scale_gauge_state(state: LimitGaugeState, gauge: LimitGaugeConfig) -> LimitGaugeState {
-    if gauge.weekly_slots == 0 {
-        return LimitGaugeState {
+fn scale_grid_state(state: GridState, grid: GridConfig) -> GridState {
+    if grid.weekly_slots == 0 {
+        return GridState {
             weekly_used_ratio: 0.0,
             hourly_remaining_ratio: 0.0,
         };
@@ -223,104 +223,15 @@ fn scale_gauge_state(state: LimitGaugeState, gauge: LimitGaugeConfig) -> LimitGa
     state
 }
 
-fn render_limit_gauge(
-    state: LimitGaugeState,
-    gauge: LimitGaugeConfig,
+/// Convert the grid state to rendered lines for the TUI.
+fn render_limit_grid(
+    state: GridState,
+    grid_config: GridConfig,
     width: u16,
 ) -> Vec<Line<'static>> {
-    const MIN_SQUARE_SIDE: usize = 4;
-    const MAX_SQUARE_SIDE: usize = 12;
-    const PREFIX: &str = "  ";
-
-    if gauge.weekly_slots == 0 || gauge.logo.is_empty() {
-        return Vec::new();
-    }
-
-    let cell_width = gauge.logo.chars().count();
-    if cell_width == 0 {
-        return Vec::new();
-    }
-
-    let available_inner_width = width.saturating_sub((PREFIX.len() + 2) as u16) as usize;
-    if available_inner_width == 0 {
-        return Vec::new();
-    }
-
-    let base_side = (gauge.weekly_slots as f64)
-        .sqrt()
-        .round()
-        .clamp(1.0, MAX_SQUARE_SIDE as f64) as usize;
-    let width_limited_side =
-        ((available_inner_width + 1) / (cell_width + 1)).clamp(1, MAX_SQUARE_SIDE);
-
-    let mut side = base_side.min(width_limited_side);
-    if width_limited_side >= MIN_SQUARE_SIDE {
-        side = side.max(MIN_SQUARE_SIDE.min(width_limited_side));
-    }
-    side = side.clamp(1, MAX_SQUARE_SIDE);
-
-    if side == 0 {
-        return Vec::new();
-    }
-
-    let inner_width = side * cell_width + side.saturating_sub(1);
-    let total_cells = side * side;
-
-    let mut dark_cells = (state.weekly_used_ratio * total_cells as f64).round() as isize;
-    dark_cells = dark_cells.clamp(0, total_cells as isize);
-    let mut green_cells = (state.hourly_remaining_ratio * total_cells as f64).round() as isize;
-    if dark_cells + green_cells > total_cells as isize {
-        green_cells = (total_cells as isize - dark_cells).max(0);
-    }
-    let white_cells = (total_cells as isize - dark_cells - green_cells).max(0);
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push("".into());
-
-    let mut top = String::from(PREFIX);
-    top.push('╭');
-    top.push_str(&"─".repeat(inner_width));
-    top.push('╮');
-    lines.push(vec![Span::from(top).dim()].into());
-
-    let mut cell_index = 0isize;
-    for _row in 0..side {
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.push(PREFIX.into());
-        spans.push("│".dim());
-
-        for col in 0..side {
-            if col > 0 {
-                spans.push(" ".into());
-            }
-            let span = if cell_index < dark_cells {
-                gauge.logo.dark_gray()
-            } else if cell_index < dark_cells + green_cells {
-                gauge.logo.green()
-            } else {
-                gauge.logo.into()
-            };
-            spans.push(span);
-            cell_index += 1;
-        }
-
-        spans.push("│".dim());
-        lines.push(Line::from(spans));
-    }
-
-    let mut bottom = String::from(PREFIX);
-    bottom.push('╰');
-    bottom.push_str(&"─".repeat(inner_width));
-    bottom.push('╯');
-    lines.push(vec![Span::from(bottom).dim()].into());
-    lines.push("".into());
-
-    if white_cells == 0 {
-        lines.push(vec!["  (No unused weekly capacity remaining)".dim()].into());
-        lines.push("".into());
-    }
-
-    lines
+    GridLayout::new(grid_config, width)
+        .map(|layout| layout.render(state))
+        .unwrap_or_default()
 }
 
 fn format_window_label(minutes: Option<u64>) -> String {
@@ -397,6 +308,133 @@ enum DurationUnit {
     Week,
 }
 
+/// Precomputed layout information for the usage grid.
+struct GridLayout {
+    size: usize,
+    inner_width: usize,
+    config: GridConfig,
+}
+
+impl GridLayout {
+    const MIN_SIDE: usize = 4;
+    const MAX_SIDE: usize = 12;
+    const PREFIX: &'static str = "  ";
+
+    fn new(config: GridConfig, width: u16) -> Option<Self> {
+        if config.weekly_slots == 0 || config.logo.is_empty() {
+            return None;
+        }
+        let cell_width = config.logo.chars().count();
+        if cell_width == 0 {
+            return None;
+        }
+
+        let available_inner = width.saturating_sub((Self::PREFIX.len() + 2) as u16) as usize;
+        if available_inner == 0 {
+            return None;
+        }
+
+        let base_side = (config.weekly_slots as f64)
+            .sqrt()
+            .round()
+            .clamp(1.0, Self::MAX_SIDE as f64) as usize;
+        let width_limited_side =
+            ((available_inner + 1) / (cell_width + 1)).clamp(1, Self::MAX_SIDE);
+
+        let mut side = base_side.min(width_limited_side);
+        if width_limited_side >= Self::MIN_SIDE {
+            side = side.max(Self::MIN_SIDE.min(width_limited_side));
+        }
+        let side = side.clamp(1, Self::MAX_SIDE);
+        if side == 0 {
+            return None;
+        }
+
+        let inner_width = side * cell_width + side.saturating_sub(1);
+        Some(Self {
+            size: side,
+            inner_width,
+            config,
+        })
+    }
+
+    /// Render the grid into styled lines for the history cell.
+    fn render(&self, state: GridState) -> Vec<Line<'static>> {
+        let counts = self.cell_counts(state);
+        let mut lines = Vec::new();
+        lines.push("".into());
+        lines.push(self.render_border('╭', '╮'));
+
+        let mut cell_index = 0isize;
+        for _ in 0..self.size {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            spans.push(Self::PREFIX.into());
+            spans.push("│".dim());
+
+            for col in 0..self.size {
+                if col > 0 {
+                    spans.push(" ".into());
+                }
+                let span = if cell_index < counts.dark_cells {
+                    self.config.logo.dark_gray()
+                } else if cell_index < counts.dark_cells + counts.green_cells {
+                    self.config.logo.green()
+                } else {
+                    self.config.logo.into()
+                };
+                spans.push(span);
+                cell_index += 1;
+            }
+
+            spans.push("│".dim());
+            lines.push(Line::from(spans));
+        }
+
+        lines.push(self.render_border('╰', '╯'));
+        lines.push("".into());
+
+        if counts.white_cells == 0 {
+            lines.push(vec!["  (No unused weekly capacity remaining)".dim()].into());
+            lines.push("".into());
+        }
+
+        lines
+    }
+
+    fn render_border(&self, left: char, right: char) -> Line<'static> {
+        let mut text = String::from(Self::PREFIX);
+        text.push(left);
+        text.push_str(&"─".repeat(self.inner_width));
+        text.push(right);
+        vec![Span::from(text).dim()].into()
+    }
+
+    /// Translate usage ratios into the number of coloured cells.
+    fn cell_counts(&self, state: GridState) -> GridCellCounts {
+        let total_cells = self.size * self.size;
+        let mut dark_cells = (state.weekly_used_ratio * total_cells as f64).round() as isize;
+        dark_cells = dark_cells.clamp(0, total_cells as isize);
+        let mut green_cells = (state.hourly_remaining_ratio * total_cells as f64).round() as isize;
+        if dark_cells + green_cells > total_cells as isize {
+            green_cells = (total_cells as isize - dark_cells).max(0);
+        }
+        let white_cells = (total_cells as isize - dark_cells - green_cells).max(0);
+
+        GridCellCounts {
+            dark_cells,
+            green_cells,
+            white_cells,
+        }
+    }
+}
+
+/// Number of weekly (dark), hourly (green) and unused (default) cells.
+struct GridCellCounts {
+    dark_cells: isize,
+    green_cells: isize,
+    white_cells: isize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,7 +467,7 @@ mod tests {
 
     #[test]
     fn build_display_constructs_summary_and_gauge() {
-        let display = build_rate_limit_display(&snapshot(), DEFAULT_LIMIT_GAUGE_CONFIG);
+        let display = build_limits_view(&snapshot(), DEFAULT_GRID_CONFIG);
         assert!(display.summary_lines.iter().any(|line| {
             line.spans
                 .iter()
@@ -445,7 +483,7 @@ mod tests {
 
     #[test]
     fn hourly_and_weekly_percentages_are_not_swapped() {
-        let display = build_rate_limit_display(&snapshot(), DEFAULT_LIMIT_GAUGE_CONFIG);
+        let display = build_limits_view(&snapshot(), DEFAULT_GRID_CONFIG);
         let summary = display
             .summary_lines
             .iter()
@@ -466,7 +504,7 @@ mod tests {
     fn build_display_without_ratio_skips_gauge() {
         let mut s = snapshot();
         s.primary_to_protection_ratio_percent = f64::NAN;
-        let display = build_rate_limit_display(&s, DEFAULT_LIMIT_GAUGE_CONFIG);
+        let display = build_limits_view(&s, DEFAULT_GRID_CONFIG);
         assert!(display.gauge_lines(80).is_empty());
         assert!(display.legend_lines.is_empty());
     }
