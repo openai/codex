@@ -108,6 +108,61 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     Some(git_info)
 }
 
+/// A minimal commit summary entry used for pickers (subject + timestamp + sha).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommitLogEntry {
+    pub sha: String,
+    /// Unix timestamp (seconds since epoch) of the commit time (committer time).
+    pub timestamp: i64,
+    /// Single-line subject of the commit message.
+    pub subject: String,
+}
+
+/// Return the last `limit` commits reachable from HEAD for the current branch.
+/// Each entry contains the SHA, commit timestamp (seconds), and subject line.
+/// Returns an empty vector if not in a git repo or on error/timeout.
+pub async fn recent_commits(cwd: &Path, limit: usize) -> Vec<CommitLogEntry> {
+    // Ensure we're in a git repo first to avoid noisy errors.
+    let Some(out) = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd).await else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+
+    let fmt = "%H%x1f%ct%x1f%s"; // <sha> <US> <commit_time> <US> <subject>
+    let n = limit.max(1).to_string();
+    let Some(log_out) =
+        run_git_command_with_timeout(&["log", "-n", &n, &format!("--pretty=format:{fmt}")], cwd)
+            .await
+    else {
+        return Vec::new();
+    };
+    if !log_out.status.success() {
+        return Vec::new();
+    }
+
+    let text = String::from_utf8_lossy(&log_out.stdout);
+    let mut entries: Vec<CommitLogEntry> = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.split('\u{001f}');
+        let sha = parts.next().unwrap_or("").trim();
+        let ts_s = parts.next().unwrap_or("").trim();
+        let subject = parts.next().unwrap_or("").trim();
+        if sha.is_empty() || ts_s.is_empty() {
+            continue;
+        }
+        let timestamp = ts_s.parse::<i64>().unwrap_or(0);
+        entries.push(CommitLogEntry {
+            sha: sha.to_string(),
+            timestamp,
+            subject: subject.to_string(),
+        });
+    }
+
+    entries
+}
+
 /// Returns the closest git sha to HEAD that is on a remote as well as the diff to that sha.
 pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
     get_git_repo_root(cwd)?;
@@ -594,6 +649,80 @@ mod tests {
             .expect("Failed to commit");
 
         repo_path
+    }
+
+    #[tokio::test]
+    async fn test_recent_commits_non_git_directory_returns_empty() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let entries = recent_commits(temp_dir.path(), 10).await;
+        assert!(entries.is_empty(), "expected no commits outside a git repo");
+    }
+
+    #[tokio::test]
+    async fn test_recent_commits_orders_and_limits() {
+        use tokio::time::Duration;
+        use tokio::time::sleep;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        // Make three distinct commits with small delays to ensure ordering by timestamp.
+        fs::write(repo_path.join("file.txt"), "one").unwrap();
+        Command::new("git")
+            .args(["add", "file.txt"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "first change"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git commit 1");
+
+        sleep(Duration::from_millis(1100)).await;
+
+        fs::write(repo_path.join("file.txt"), "two").unwrap();
+        Command::new("git")
+            .args(["add", "file.txt"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git add 2");
+        Command::new("git")
+            .args(["commit", "-m", "second change"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git commit 2");
+
+        sleep(Duration::from_millis(1100)).await;
+
+        fs::write(repo_path.join("file.txt"), "three").unwrap();
+        Command::new("git")
+            .args(["add", "file.txt"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git add 3");
+        Command::new("git")
+            .args(["commit", "-m", "third change"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("git commit 3");
+
+        // Request the latest 3 commits; should be our three changes in reverse time order.
+        let entries = recent_commits(&repo_path, 3).await;
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].subject, "third change");
+        assert_eq!(entries[1].subject, "second change");
+        assert_eq!(entries[2].subject, "first change");
+        // Basic sanity on SHA formatting
+        for e in entries {
+            assert!(e.sha.len() >= 7 && e.sha.chars().all(|c| c.is_ascii_hexdigit()));
+        }
     }
 
     async fn create_test_git_repo_with_remote(temp_dir: &TempDir) -> (PathBuf, String) {

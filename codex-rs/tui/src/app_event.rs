@@ -71,6 +71,9 @@ pub(crate) enum AppEvent {
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
 
+    /// Open the commit picker option from the review popup.
+    OpenReviewCommitPicker(PathBuf),
+
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
 }

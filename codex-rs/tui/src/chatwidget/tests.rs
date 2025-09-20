@@ -653,7 +653,8 @@ fn review_popup_custom_prompt_action_sends_event() {
     // Open the preset selection popup
     chat.open_review_popup();
 
-    // Move selection down to the third item: "Custom review instructions"
+    // Move selection down to the fourth item: "Custom review instructions"
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     // Activate
@@ -668,6 +669,67 @@ fn review_popup_custom_prompt_action_sends_event() {
         }
     }
     assert!(found, "expected OpenReviewCustomPrompt event to be sent");
+}
+
+/// The commit picker shows only commit subjects (no timestamps).
+#[test]
+fn review_commit_picker_shows_subjects_without_timestamps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Show commit picker with synthetic entries.
+    let entries = vec![
+        codex_core::git_info::CommitLogEntry {
+            sha: "1111111deadbeef".to_string(),
+            timestamp: 0,
+            subject: "Add new feature X".to_string(),
+        },
+        codex_core::git_info::CommitLogEntry {
+            sha: "2222222cafebabe".to_string(),
+            timestamp: 0,
+            subject: "Fix bug Y".to_string(),
+        },
+    ];
+    super::show_review_commit_picker_with_entries(&mut chat, entries);
+
+    // Render the bottom pane and inspect the lines for subjects and absence of time words.
+    let width = 72;
+    let height = chat.desired_height(width);
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    (&chat).render_ref(area, &mut buf);
+
+    let mut blob = String::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let s = buf[(x, y)].symbol();
+            if s.is_empty() {
+                blob.push(' ');
+            } else {
+                blob.push_str(s);
+            }
+        }
+        blob.push('\n');
+    }
+
+    assert!(
+        blob.contains("Add new feature X"),
+        "expected subject in output"
+    );
+    assert!(blob.contains("Fix bug Y"), "expected subject in output");
+
+    // Ensure no relative-time phrasing is present.
+    let lowered = blob.to_lowercase();
+    assert!(
+        !lowered.contains("ago")
+            && !lowered.contains(" second")
+            && !lowered.contains(" minute")
+            && !lowered.contains(" hour")
+            && !lowered.contains(" day"),
+        "expected no relative time in commit picker output: {blob:?}"
+    );
 }
 
 /// Submitting the custom prompt view sends Op::Review with the typed prompt

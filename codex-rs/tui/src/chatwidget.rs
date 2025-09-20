@@ -91,6 +91,7 @@ mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+//
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
@@ -1513,7 +1514,7 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
 
         items.push(SelectionItem {
-            name: "Review current changes".to_string(),
+            name: "Review uncommitted changes".to_string(),
             description: None,
             is_current: false,
             actions: vec![Box::new(
@@ -1527,6 +1528,21 @@ impl ChatWidget {
                 },
             )],
             dismiss_on_select: true,
+            search_value: None,
+        });
+
+        // New: Review a specific commit (opens commit picker)
+        items.push(SelectionItem {
+            name: "Review a commit".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
             search_value: None,
         });
 
@@ -1597,6 +1613,48 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search branches".to_string()),
+            empty_message: Some("no matches".to_string()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
+        let commits = codex_core::git_info::recent_commits(cwd, 50).await;
+
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
+        for entry in commits {
+            let subject = entry.subject.clone();
+            let sha = entry.sha.clone();
+            let short = sha.chars().take(7).collect::<String>();
+            let search_val = format!("{subject} {sha}");
+
+            items.push(SelectionItem {
+                name: subject.clone(),
+                description: None,
+                is_current: false,
+                actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    let hint = format!("commit {short}");
+                    let prompt = format!(
+                        "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
+                    );
+                    tx3.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt,
+                            user_facing_hint: hint,
+                        },
+                    }));
+                })],
+                dismiss_on_select: true,
+                search_value: Some(search_val),
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a commit to review".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search commits".to_string()),
             empty_message: Some("no matches".to_string()),
             ..Default::default()
         });
@@ -1778,6 +1836,50 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+#[cfg(test)]
+pub(crate) fn show_review_commit_picker_with_entries(
+    chat: &mut ChatWidget,
+    entries: Vec<codex_core::git_info::CommitLogEntry>,
+) {
+    let mut items: Vec<SelectionItem> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let subject = entry.subject.clone();
+        let sha = entry.sha.clone();
+        let short = sha.chars().take(7).collect::<String>();
+        let search_val = format!("{subject} {sha}");
+
+        items.push(SelectionItem {
+            name: subject.clone(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(move |tx3: &AppEventSender| {
+                let hint = format!("commit {short}");
+                let prompt = format!(
+                    "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
+                );
+                tx3.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                    },
+                }));
+            })],
+            dismiss_on_select: true,
+            search_value: Some(search_val),
+        });
+    }
+
+    chat.bottom_pane.show_selection_view(SelectionViewParams {
+        title: "Select a commit to review".to_string(),
+        footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+        items,
+        is_searchable: true,
+        search_placeholder: Some("Type to search commits".to_string()),
+        empty_message: Some("no matches".to_string()),
+        ..Default::default()
+    });
 }
 
 #[cfg(test)]
