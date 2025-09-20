@@ -19,6 +19,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
@@ -27,6 +28,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
@@ -36,6 +38,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -63,10 +66,12 @@ use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
+use crate::history_cell::AgentMessageCell;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
@@ -91,7 +96,6 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use codex_protocol::mcp_protocol::ConversationId;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -141,6 +145,8 @@ pub(crate) struct ChatWidget {
     queued_user_messages: VecDeque<UserMessage>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
+    // Simple review mode flag; used to adjust layout and banners.
+    is_review_mode: bool,
 }
 
 struct UserMessage {
@@ -255,7 +261,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self) {
+    fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize only that stream to flush any tail
         // without emitting stray headers for other streams.
         if self.stream.is_write_cycle_active() {
@@ -270,20 +276,19 @@ impl ChatWidget {
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
-        self.notify(Notification::AgentTurnComplete);
+        self.notify(Notification::AgentTurnComplete {
+            response: last_agent_message.unwrap_or_default(),
+        });
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.bottom_pane.set_token_usage(info.clone());
         self.token_info = info;
     }
-    /// Finalize any active exec as failed, push an error message into history,
-    /// and stop/clear running UI state.
-    fn finalize_turn_with_error_message(&mut self, message: String) {
+    /// Finalize any active exec as failed and stop/clear running UI state.
+    fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_exec_cell_as_failed();
-        // Emit the provided error message/history cell.
-        self.add_to_history(history_cell::new_error_event(message));
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -291,7 +296,8 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
-        self.finalize_turn_with_error_message(message);
+        self.finalize_turn();
+        self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
@@ -301,11 +307,15 @@ impl ChatWidget {
     /// Handle a turn aborted due to user interrupt (Esc).
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
-    fn on_interrupted_turn(&mut self) {
+    fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
-        self.finalize_turn_with_error_message(
-            "Conversation interrupted - tell the model what to do differently".to_owned(),
-        );
+        self.finalize_turn();
+
+        if reason != TurnAbortReason::ReviewEnded {
+            self.add_to_history(history_cell::new_error_event(
+                "Conversation interrupted - tell the model what to do differently".to_owned(),
+            ));
+        }
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
@@ -700,6 +710,7 @@ impl ChatWidget {
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
             pending_notification: None,
+            is_review_mode: false,
         }
     }
 
@@ -756,6 +767,7 @@ impl ChatWidget {
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
             pending_notification: None,
+            is_review_mode: false,
         }
     }
 
@@ -869,6 +881,15 @@ impl ChatWidget {
             SlashCommand::Compact => {
                 self.clear_token_usage();
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
+            }
+            SlashCommand::Review => {
+                // Simplified flow: directly send a review op for current changes.
+                self.submit_op(Op::Review {
+                    review_request: ReviewRequest {
+                        prompt: "review current changes".to_string(),
+                        user_facing_hint: "current changes".to_string(),
+                    },
+                });
             }
             SlashCommand::Model => {
                 self.open_model_popup();
@@ -1082,15 +1103,20 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted(_) => self.on_task_started(),
-            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
+            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+                self.on_task_complete(last_agent_message)
+            }
             EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
-                    self.on_interrupted_turn();
+                    self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::Replaced => {
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
+                }
+                TurnAbortReason::ReviewEnded => {
+                    self.on_interrupted_turn(ev.reason);
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
@@ -1128,9 +1154,60 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
-            EventMsg::EnteredReviewMode(_) => {}
-            EventMsg::ExitedReviewMode(_) => {}
+            EventMsg::EnteredReviewMode(review_request) => {
+                self.on_entered_review_mode(review_request)
+            }
+            EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
         }
+    }
+
+    fn on_entered_review_mode(&mut self, review: ReviewRequest) {
+        // Enter review mode and emit a concise banner
+        self.is_review_mode = true;
+        let banner = format!(">> Code review started: {} <<", review.user_facing_hint);
+        self.add_to_history(history_cell::new_review_status_line(banner));
+        self.request_redraw();
+    }
+
+    fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
+        // Leave review mode; if output is present, flush pending stream + show results.
+        if let Some(output) = review.review_output {
+            self.flush_answer_stream_with_separator();
+            self.flush_interrupt_queue();
+            self.flush_active_exec_cell();
+
+            if output.findings.is_empty() {
+                let explanation = output.overall_explanation.trim().to_string();
+                if explanation.is_empty() {
+                    tracing::error!("Reviewer failed to output a response.");
+                    self.add_to_history(history_cell::new_error_event(
+                        "Reviewer failed to output a response.".to_owned(),
+                    ));
+                } else {
+                    // Show explanation when there are no structured findings.
+                    let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
+                    append_markdown(&explanation, &mut rendered, &self.config);
+                    let body_cell = AgentMessageCell::new(rendered, false);
+                    self.app_event_tx
+                        .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+                }
+            } else {
+                let message_text =
+                    codex_core::review_format::format_review_findings_block(&output.findings, None);
+                let mut message_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+                append_markdown(&message_text, &mut message_lines, &self.config);
+                let body_cell = AgentMessageCell::new(message_lines, true);
+                self.app_event_tx
+                    .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+            }
+        }
+
+        self.is_review_mode = false;
+        // Append a finishing banner at the end of this turn.
+        self.add_to_history(history_cell::new_review_status_line(
+            "<< Code review finished >>".to_string(),
+        ));
+        self.request_redraw();
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
@@ -1479,7 +1556,7 @@ impl WidgetRef for &ChatWidget {
 }
 
 enum Notification {
-    AgentTurnComplete,
+    AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
 }
@@ -1487,7 +1564,10 @@ enum Notification {
 impl Notification {
     fn display(&self) -> String {
         match self {
-            Notification::AgentTurnComplete => "Agent turn complete".to_string(),
+            Notification::AgentTurnComplete { response } => {
+                Notification::agent_turn_preview(response)
+                    .unwrap_or_else(|| "Agent turn complete".to_string())
+            }
             Notification::ExecApprovalRequested { command } => {
                 format!("Approval requested: {}", truncate_text(command, 30))
             }
@@ -1507,7 +1587,7 @@ impl Notification {
 
     fn type_name(&self) -> &str {
         match self {
-            Notification::AgentTurnComplete => "agent-turn-complete",
+            Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. } => "approval-requested",
         }
@@ -1519,7 +1599,25 @@ impl Notification {
             Notifications::Custom(allowed) => allowed.iter().any(|a| a == self.type_name()),
         }
     }
+
+    fn agent_turn_preview(response: &str) -> Option<String> {
+        let mut normalized = String::new();
+        for part in response.split_whitespace() {
+            if !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            normalized.push_str(part);
+        }
+        let trimmed = normalized.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(truncate_text(trimmed, AGENT_NOTIFICATION_PREVIEW_GRAPHEMES))
+        }
+    }
 }
+
+const AGENT_NOTIFICATION_PREVIEW_GRAPHEMES: usize = 200;
 
 const EXAMPLE_PROMPTS: [&str; 6] = [
     "Explain this codebase",
