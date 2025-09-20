@@ -170,12 +170,27 @@ impl BottomPane {
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
-        // If a modal/view is active, treat Esc like Ctrl+C to let the view
-        // handle dismissal. Otherwise, forward Esc to the composer so its
-        // popups (e.g., slash/file search) can process it.
+        // If a modal/view is active and Esc is pressed, route to the view's
+        // Ctrl-C handler.
         if !self.view_stack.is_empty() && key_event.code == KeyCode::Esc {
-            self.on_ctrl_c();
-            return InputResult::None;
+            if let Some(mut view) = self.view_stack.pop() {
+                let event = view.on_ctrl_c(self);
+                match event {
+                    CancellationEvent::Handled => {
+                        if view.is_complete() {
+                            self.on_active_view_complete();
+                        } else {
+                            self.view_stack.push(view);
+                        }
+                    }
+                    CancellationEvent::NotHandled => {
+                        // Put the view back unchanged if it didn't handle Esc.
+                        self.view_stack.push(view);
+                    }
+                }
+                self.request_redraw();
+                return InputResult::None;
+            }
         }
 
         if let Some(mut view) = self.view_stack.pop() {
