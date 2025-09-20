@@ -21,3 +21,6 @@ tokio = { version = "1", features = [
     "sync",
     "time",
 ] }
+
+[dev-dependencies]
+which = "6"
