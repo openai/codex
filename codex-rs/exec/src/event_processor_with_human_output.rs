@@ -199,6 +199,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     );
                 }
             }
+            EventMsg::RateLimitSnapshot(_) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
                     ts_println!(self, "{}\n", "codex".style(self.italic).style(self.magenta));
