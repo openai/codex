@@ -212,11 +212,77 @@ fn remove_toml_edit_segments(doc: &mut DocumentMut, segments: &[&str]) -> bool {
     current.remove(segments[segments.len() - 1]).is_some()
 }
 
+/// Persist boolean overrides into `config.toml`. Keys are specified by explicit
+/// segments (e.g., `["tui", "experimental", "my-flag"]`). When a profile is
+/// active, values are written under `profiles.<name>.…` unless the provided
+/// segments already start with `profiles`.
+pub async fn persist_bool_overrides(
+    codex_home: &Path,
+    profile: Option<&str>,
+    overrides: &[(&[&str], bool)],
+) -> Result<()> {
+    if overrides.is_empty() {
+        return Ok(());
+    }
+
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let read_result = tokio::fs::read_to_string(&config_path).await;
+    let mut doc = match read_result {
+        Ok(contents) => contents.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tokio::fs::create_dir_all(codex_home).await?;
+            DocumentMut::new()
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let effective_profile = if let Some(p) = profile {
+        Some(p.to_owned())
+    } else {
+        doc.get("profile")
+            .and_then(|i| i.as_str())
+            .map(|s| s.to_string())
+    };
+
+    let mut mutated = false;
+    for (segments, value) in overrides.iter().copied() {
+        let mut seg_buf: Vec<&str> = Vec::new();
+        let segments_to_apply: &[&str];
+        if let Some(ref name) = effective_profile {
+            if segments.first().copied() == Some("profiles") {
+                segments_to_apply = segments;
+            } else {
+                seg_buf.reserve(2 + segments.len());
+                seg_buf.push("profiles");
+                seg_buf.push(name.as_str());
+                seg_buf.extend_from_slice(segments);
+                segments_to_apply = seg_buf.as_slice();
+            }
+        } else {
+            segments_to_apply = segments;
+        }
+
+        let item_value = toml_edit::value(value);
+        apply_toml_edit_override_segments(&mut doc, segments_to_apply, item_value);
+        mutated = true;
+    }
+
+    if !mutated {
+        return Ok(());
+    }
+
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    tokio::fs::write(tmp_file.path(), doc.to_string()).await?;
+    tmp_file.persist(config_path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+    use toml::Value as TomlValue;
 
     /// Verifies model and effort are written at top-level when no profile is set.
     #[tokio::test]
@@ -240,6 +306,69 @@ mod tests {
 model_reasoning_effort = "high"
 "#;
         assert_eq!(contents, expected);
+    }
+
+    // `read_config` helper is defined at the bottom of this tests module.
+
+    #[tokio::test]
+    async fn persist_bool_overrides_top_level_tui_experimental() {
+        let tmpdir = tempdir().expect("tmp");
+        let codex_home = tmpdir.path();
+
+        persist_bool_overrides(
+            codex_home,
+            None,
+            &[
+                (&["tui", "experimental", "feat-a"], true),
+                (&["tui", "experimental", "feat-b"], false),
+            ],
+        )
+        .await
+        .expect("persist bool overrides");
+
+        let contents = read_config(codex_home).await;
+        let parsed: TomlValue = toml::from_str(&contents).expect("valid toml");
+        let feat_a = parsed
+            .get("tui")
+            .and_then(|t| t.get("experimental"))
+            .and_then(|e| e.get("feat-a"))
+            .and_then(|v| v.as_bool())
+            .unwrap();
+        let feat_b = parsed
+            .get("tui")
+            .and_then(|t| t.get("experimental"))
+            .and_then(|e| e.get("feat-b"))
+            .and_then(|v| v.as_bool())
+            .unwrap();
+        assert!(feat_a);
+        assert!(!feat_b);
+    }
+
+    #[tokio::test]
+    async fn persist_bool_overrides_profile_tui_experimental() {
+        let tmpdir = tempdir().expect("tmp");
+        let codex_home = tmpdir.path();
+
+        // Persist under the "dev" profile.
+        persist_bool_overrides(
+            codex_home,
+            Some("dev"),
+            &[(&["tui", "experimental", "alpha"], true)],
+        )
+        .await
+        .expect("persist bool overrides");
+
+        let contents = read_config(codex_home).await;
+        let parsed: TomlValue = toml::from_str(&contents).expect("valid toml");
+        let alpha = parsed
+            .get("profiles")
+            .and_then(|p| p.get("dev"))
+            .and_then(|d| d.get("tui"))
+            .and_then(|t| t.get("experimental"))
+            .and_then(|e| e.get("alpha"))
+            .and_then(|v| v.as_bool())
+            .unwrap();
+        assert!(alpha);
     }
 
     /// Verifies values are written under the active profile when `profile` is set.

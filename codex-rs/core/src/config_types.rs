@@ -96,6 +96,18 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Experimental feature flags scoped to the TUI. Keys are arbitrary
+    /// kebab-case strings and values are booleans.
+    #[serde(default)]
+    pub experimental: Option<TuiExperimental>,
+}
+
+/// Flattened map of experimental feature flags under the `[tui.experimental]` table.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct TuiExperimental {
+    #[serde(default, flatten)]
+    pub flags: std::collections::HashMap<String, bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]

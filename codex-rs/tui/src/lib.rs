@@ -42,6 +42,7 @@ mod clipboard_paste;
 pub mod custom_terminal;
 mod diff_render;
 mod exec_command;
+mod experimental;
 mod file_search;
 mod frames;
 mod get_git_diff;

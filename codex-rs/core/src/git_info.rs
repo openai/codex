@@ -202,6 +202,11 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
     }
 
     // No remote-derived default; try common local defaults if they exist
+    get_default_branch_local(cwd).await
+}
+
+/// Attempt to determine the repository's default branch name from local branches.
+async fn get_default_branch_local(cwd: &Path) -> Option<String> {
     for candidate in ["main", "master"] {
         if let Some(verify) = run_git_command_with_timeout(
             &[
@@ -483,6 +488,46 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
     // Normalize to handle macOS /var vs /private/var and resolve ".." segments.
     let git_dir_path = std::fs::canonicalize(&git_dir_path_raw).unwrap_or(git_dir_path_raw);
     git_dir_path.parent().map(Path::to_path_buf)
+}
+
+/// Returns a list of local git branches.
+/// Includes the default branch at the beginning of the list, if it exists.
+pub async fn local_git_branches(cwd: &Path) -> Vec<String> {
+    let mut branches: Vec<String> = if let Some(out) =
+        run_git_command_with_timeout(&["branch", "--format=%(refname:short)"], cwd).await
+        && out.status.success()
+    {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    branches.sort_unstable();
+
+    if let Some(base) = get_default_branch_local(cwd).await
+        && let Some(pos) = branches.iter().position(|name| name == &base)
+    {
+        let base_branch = branches.remove(pos);
+        branches.insert(0, base_branch);
+    }
+
+    branches
+}
+
+/// Returns the current checked out branch name.
+pub async fn current_branch_name(cwd: &Path) -> Option<String> {
+    let out = run_git_command_with_timeout(&["branch", "--show-current"], cwd).await?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|name| !name.is_empty())
 }
 
 #[cfg(test)]

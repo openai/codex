@@ -194,6 +194,9 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+
+    /// Experimental feature flags for the TUI loaded from `[tui.experimental]`.
+    pub experimental_flags: HashMap<String, bool>,
 }
 
 impl Config {
@@ -1053,6 +1056,12 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            experimental_flags: cfg
+                .tui
+                .as_ref()
+                .and_then(|t| t.experimental.as_ref())
+                .map(|e| e.flags.clone())
+                .unwrap_or_default(),
         };
         Ok(config)
     }
@@ -1631,6 +1640,7 @@ model_verbosity = "high"
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                experimental_flags: HashMap::new(),
             },
             o3_profile_config
         );
@@ -1689,6 +1699,7 @@ model_verbosity = "high"
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            experimental_flags: HashMap::new(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1762,6 +1773,7 @@ model_verbosity = "high"
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            experimental_flags: HashMap::new(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1821,6 +1833,7 @@ model_verbosity = "high"
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            experimental_flags: HashMap::new(),
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

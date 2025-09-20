@@ -87,6 +87,7 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    include_comment_command: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -107,6 +108,7 @@ impl ChatComposer {
         enhanced_keys_supported: bool,
         placeholder_text: String,
         disable_paste_burst: bool,
+        include_comment_command: bool,
     ) -> Self {
         let use_shift_enter_hint = enhanced_keys_supported;
 
@@ -130,6 +132,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            include_comment_command,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -1157,7 +1160,10 @@ impl ChatComposer {
             }
             _ => {
                 if input_starts_with_slash {
-                    let mut command_popup = CommandPopup::new(self.custom_prompts.clone());
+                    let mut command_popup = CommandPopup::new(
+                        self.custom_prompts.clone(),
+                        self.include_comment_command,
+                    );
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -1169,6 +1175,15 @@ impl ChatComposer {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {
             popup.set_prompts(prompts);
+        }
+    }
+
+    pub(crate) fn set_include_comment_command(&mut self, include: bool) {
+        self.include_comment_command = include;
+        // If the command popup is open, rebuild it to reflect the new builtins set.
+        if let ActivePopup::Command(_) = &self.active_popup {
+            // Re-sync based on current text to rebuild.
+            self.sync_command_popup();
         }
     }
 
@@ -1392,6 +1407,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         let area = Rect::new(0, 0, 40, 6);
@@ -1599,6 +1615,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         let needs_redraw = composer.handle_paste("hello".to_string());
@@ -1628,6 +1645,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Ensure composer is empty and press Enter.
@@ -1654,6 +1672,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -1689,6 +1708,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -1730,6 +1750,7 @@ mod tests {
                 sender.clone(),
                 false,
                 "Ask Codex to do anything".to_string(),
+                false,
                 false,
             );
 
@@ -1774,6 +1795,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Type "/mo" humanlike so paste-burst doesn’t interfere.
@@ -1801,6 +1823,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
         type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
@@ -1845,6 +1868,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Type the slash command.
@@ -1882,6 +1906,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         type_chars_humanlike(&mut composer, &['/', 'c']);
@@ -1906,6 +1931,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -1941,6 +1967,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -2021,6 +2048,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Define test cases: (content, is_large)
@@ -2093,6 +2121,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Define test cases: (cursor_position_from_end, expected_pending_count)
@@ -2141,6 +2170,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
         let path = PathBuf::from("/tmp/image1.png");
         composer.attach_image(path.clone(), 32, 16, "PNG");
@@ -2164,6 +2194,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
         let path = PathBuf::from("/tmp/image2.png");
@@ -2189,6 +2220,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
         let path = PathBuf::from("/tmp/image3.png");
@@ -2231,6 +2263,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Insert an image placeholder at the start
@@ -2256,6 +2289,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -2304,6 +2338,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
@@ -2325,6 +2360,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -2359,6 +2395,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -2404,6 +2441,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         let count = LARGE_PASTE_CHAR_THRESHOLD + 1; // > threshold to trigger placeholder
@@ -2435,6 +2473,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 

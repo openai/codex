@@ -28,8 +28,8 @@ pub(crate) struct CommandPopup {
 }
 
 impl CommandPopup {
-    pub(crate) fn new(mut prompts: Vec<CustomPrompt>) -> Self {
-        let builtins = built_in_slash_commands();
+    pub(crate) fn new(mut prompts: Vec<CustomPrompt>, include_comment: bool) -> Self {
+        let builtins = built_in_slash_commands(include_comment);
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
         prompts.retain(|p| !exclude.contains(&p.name));
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
-        let mut popup = CommandPopup::new(Vec::new());
+        let mut popup = CommandPopup::new(Vec::new(), false);
         // Simulate the composer line starting with '/in' so the popup filters
         // matching commands by prefix.
         popup.on_composer_text_change("/in".to_string());
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn selecting_init_by_exact_match() {
-        let mut popup = CommandPopup::new(Vec::new());
+        let mut popup = CommandPopup::new(Vec::new(), false);
         popup.on_composer_text_change("/init".to_string());
 
         // When an exact match exists, the selected command should be that
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn model_is_first_suggestion_for_mo() {
-        let mut popup = CommandPopup::new(Vec::new());
+        let mut popup = CommandPopup::new(Vec::new(), false);
         popup.on_composer_text_change("/mo".to_string());
         let matches = popup.filtered_items();
         match matches.first() {
@@ -282,7 +282,7 @@ mod tests {
                 content: "hello from bar".to_string(),
             },
         ];
-        let popup = CommandPopup::new(prompts);
+        let popup = CommandPopup::new(prompts, false);
         let items = popup.filtered_items();
         let mut prompt_names: Vec<String> = items
             .into_iter()
@@ -298,11 +298,14 @@ mod tests {
     #[test]
     fn prompt_name_collision_with_builtin_is_ignored() {
         // Create a prompt named like a builtin (e.g. "init").
-        let popup = CommandPopup::new(vec![CustomPrompt {
-            name: "init".to_string(),
-            path: "/tmp/init.md".to_string().into(),
-            content: "should be ignored".to_string(),
-        }]);
+        let popup = CommandPopup::new(
+            vec![CustomPrompt {
+                name: "init".to_string(),
+                path: "/tmp/init.md".to_string().into(),
+                content: "should be ignored".to_string(),
+            }],
+            false,
+        );
         let items = popup.filtered_items();
         let has_collision_prompt = items.into_iter().any(|it| match it {
             CommandItem::UserPrompt(i) => popup.prompt_name(i) == Some("init"),
@@ -312,5 +315,31 @@ mod tests {
             !has_collision_prompt,
             "prompt with builtin name should be ignored"
         );
+    }
+
+    #[test]
+    fn comment_hidden_by_default() {
+        let popup = CommandPopup::new(Vec::new(), false);
+        let items = popup.filtered_items();
+        let has_comment = items.into_iter().any(|it| match it {
+            CommandItem::Builtin(cmd) => cmd.command() == "comment",
+            _ => false,
+        });
+        assert!(
+            !has_comment,
+            "/comment should be hidden when feature disabled"
+        );
+    }
+
+    #[test]
+    fn comment_visible_when_enabled() {
+        let mut popup = CommandPopup::new(Vec::new(), true);
+        popup.on_composer_text_change("/comm".to_string());
+        let items = popup.filtered_items();
+        let has_comment = items.into_iter().any(|it| match it {
+            CommandItem::Builtin(cmd) => cmd.command() == "comment",
+            _ => false,
+        });
+        assert!(has_comment, "/comment should be shown when feature enabled");
     }
 }

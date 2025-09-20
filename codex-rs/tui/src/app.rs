@@ -354,6 +354,68 @@ impl App {
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
             }
+            AppEvent::OpenReviewBranchPicker(cwd) => {
+                self.chat_widget.show_review_branch_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCustomPrompt => {
+                self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::UpdateExperimentalFlags(flags) => {
+                self.config.experimental_flags = flags.clone();
+                self.chat_widget.set_experimental_flags(flags.clone());
+                self.chat_widget
+                    .add_info_message("Experimental features updated".to_string(), None);
+            }
+            AppEvent::PersistExperimentalFlags(flags) => {
+                use codex_core::config_edit::persist_bool_overrides;
+                // Persist into [tui.experimental]
+                let profile = self.active_profile.as_deref();
+                let mut entries: Vec<(Vec<String>, bool)> = Vec::new();
+                for (k, v) in flags.iter() {
+                    entries.push((
+                        vec!["tui".to_string(), "experimental".to_string(), k.clone()],
+                        *v,
+                    ));
+                }
+                // Convert to segments for the helper
+                let segs: Vec<(Vec<&str>, bool)> = entries
+                    .iter()
+                    .map(|(p, v)| (p.iter().map(|s| s.as_str()).collect::<Vec<&str>>(), *v))
+                    .collect();
+
+                // Transform to borrowed tuples
+                let borrowed: Vec<(&[&str], bool)> =
+                    segs.iter().map(|(v, b)| (v.as_slice(), *b)).collect();
+
+                match persist_bool_overrides(&self.config.codex_home, profile, &borrowed).await {
+                    Ok(()) => {
+                        let count = flags.len();
+                        if let Some(p) = profile {
+                            self.chat_widget.add_info_message(
+                                format!("Saved {count} experimental flags for profile {p}"),
+                                None,
+                            );
+                        } else {
+                            self.chat_widget.add_info_message(
+                                format!("Saved {count} experimental flags"),
+                                None,
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!("failed to persist experimental flags: {err}");
+                        if let Some(p) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save experimental flags for profile `{p}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save experimental flags: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
         }
         Ok(true)
     }
