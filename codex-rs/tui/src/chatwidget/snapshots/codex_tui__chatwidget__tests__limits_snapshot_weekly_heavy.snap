@@ -1,0 +1,31 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: visual
+---
+[magenta]/limits[/]
+
+[bold]Rate limit usage snapshot[/]
+[dim]  Tip: run `/limits` right after Codex replies for freshest numbers.[/]
+  • Weekly limit[dim] (≈5 hours window)[/]: [magenta]98.0% used[/] — [green]2.0% remaining[/]
+  • Hourly limit[dim] (≈1 week window)[/]: [cyan]0.0% used[/] — 100.0% remaining
+[green]  Within current limits[/]
+
+[dim]  ╭─────────────────────────────────────────────────╮[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/][dim]│[/]
+  [dim]│[/][magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [magenta](>_)[/] [cyan](>_)[/] [cyan](>_)[/][dim]│[/]
+[dim]  ╰─────────────────────────────────────────────────╯[/]
+
+[dim]  (No unused weekly capacity remaining)[/]
+
+[bold]Legend[/]
+  • Magenta = weekly usage so far
+  • Cyan = hourly capacity still available
+  • White = weekly capacity beyond the hourly window
