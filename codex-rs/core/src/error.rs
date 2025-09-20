@@ -93,6 +93,11 @@ pub enum CodexErr {
     #[error("exceeded retry limit, last status: {0}")]
     RetryLimit(StatusCode),
 
+    /// Attempted to send a message to a provider that requires authentication
+    /// while no credentials were available (neither API key nor ChatGPT token).
+    #[error("not authenticated: please log in (run `codex login`) or set an API key")]
+    NotAuthenticated,
+
     /// Agent loop died unexpectedly
     #[error("internal error; agent loop died unexpectedly")]
     InternalAgentDied,
