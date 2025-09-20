@@ -373,6 +373,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_plan_progress(&mut self, step: Option<String>) {
+        if self.composer.set_current_plan_step(step) {
+            self.request_redraw();
+        }
+    }
+
     /// Called when the agent requests user approval.
     pub fn push_approval_request(&mut self, request: ApprovalRequest) {
         let request = if let Some(view) = self.active_view.as_mut() {

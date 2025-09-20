@@ -82,6 +82,7 @@ pub(crate) struct ChatComposer {
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
     is_task_running: bool,
+    current_plan_step: Option<String>,
     // Non-bracketed paste burst tracker.
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
@@ -127,6 +128,7 @@ impl ChatComposer {
             attached_images: Vec::new(),
             placeholder_text,
             is_task_running: false,
+            current_plan_step: None,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
@@ -175,6 +177,14 @@ impl ChatComposer {
     /// context when the composer is empty.
     pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
         self.token_usage_info = token_info;
+    }
+
+    pub(crate) fn set_current_plan_step(&mut self, step: Option<String>) -> bool {
+        if self.current_plan_step == step {
+            return false;
+        }
+        self.current_plan_step = step;
+        true
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
@@ -1300,6 +1310,13 @@ impl WidgetRef for ChatComposer {
                     hint.push(" edit prev".into());
                 }
 
+                if let Some(step) = &self.current_plan_step {
+                    hint.push("   ".into());
+                    hint.push("Now:".dim());
+                    hint.push(" ".into());
+                    hint.push(step.clone().cyan().bold());
+                }
+
                 // Append token/context usage info to the footer hints when available.
                 if let Some(token_usage_info) = &self.token_usage_info {
                     let token_usage = &token_usage_info.total_token_usage;
@@ -1433,6 +1450,44 @@ mod tests {
             spacing_row.trim(),
             "",
             "expected blank spacing row above hints but saw: {spacing_row:?}",
+        );
+    }
+
+    #[test]
+    fn footer_hint_includes_current_plan_step() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.set_current_plan_step(Some("Implement feature".to_string())));
+
+        let area = Rect::new(0, 0, 80, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render_ref(area, &mut buf);
+
+        let bottom_row: String = (0..area.width)
+            .map(|x| {
+                buf[(x, area.height - 1)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' ')
+            })
+            .collect();
+
+        assert!(
+            bottom_row.contains("Now:"),
+            "missing status label: {bottom_row:?}"
+        );
+        assert!(
+            bottom_row.contains("Implement feature"),
+            "missing plan text: {bottom_row:?}"
         );
     }
 

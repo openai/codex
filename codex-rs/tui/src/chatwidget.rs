@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_core::config_types::Notifications;
+use codex_core::plan_tool::PlanItemArg;
+use codex_core::plan_tool::StepStatus;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -178,6 +180,7 @@ impl ChatWidget {
     }
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
+        self.bottom_pane.set_plan_progress(None);
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
@@ -335,6 +338,8 @@ impl ChatWidget {
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
+        let current_step = select_current_plan_step(&update.plan);
+        self.bottom_pane.set_plan_progress(current_step);
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -1656,6 +1661,38 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn select_current_plan_step(plan: &[PlanItemArg]) -> Option<String> {
+    let in_progress = plan.iter().find_map(|item| {
+        if matches!(item.status, StepStatus::InProgress) {
+            let trimmed = item.step.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        } else {
+            None
+        }
+    });
+
+    if in_progress.is_some() {
+        return in_progress;
+    }
+
+    plan.iter().find_map(|item| {
+        if matches!(item.status, StepStatus::Pending) {
+            let trimmed = item.step.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
