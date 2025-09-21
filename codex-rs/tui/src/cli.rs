@@ -72,6 +72,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Disable all animations for accessibility (useful with screen readers).
+    #[arg(long = "no-animations", default_value_t = false)]
+    pub no_animations: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
