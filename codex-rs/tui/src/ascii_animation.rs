@@ -15,6 +15,7 @@ pub(crate) struct AsciiAnimation {
     variant_idx: usize,
     frame_tick: Duration,
     start: Instant,
+    enabled: bool,
 }
 
 impl AsciiAnimation {
@@ -38,10 +39,14 @@ impl AsciiAnimation {
             variant_idx: clamped_idx,
             frame_tick: FRAME_TICK_DEFAULT,
             start: Instant::now(),
+            enabled: true,
         }
     }
 
     pub(crate) fn schedule_next_frame(&self) {
+        if !self.enabled {
+            return;
+        }
         let tick_ms = self.frame_tick.as_millis();
         if tick_ms == 0 {
             self.request_frame.schedule_frame();
@@ -63,6 +68,9 @@ impl AsciiAnimation {
     }
 
     pub(crate) fn current_frame(&self) -> &'static str {
+        if !self.enabled {
+            return "";
+        }
         let frames = self.frames();
         if frames.is_empty() {
             return "";
@@ -77,6 +85,9 @@ impl AsciiAnimation {
     }
 
     pub(crate) fn pick_random_variant(&mut self) -> bool {
+        if !self.enabled {
+            return false;
+        }
         if self.variants.len() <= 1 {
             return false;
         }
@@ -91,7 +102,18 @@ impl AsciiAnimation {
     }
 
     pub(crate) fn request_frame(&self) {
+        if !self.enabled {
+            return;
+        }
         self.request_frame.schedule_frame();
+    }
+
+    pub(crate) fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     fn frames(&self) -> &'static [&'static str] {

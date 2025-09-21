@@ -14,8 +14,9 @@ use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::is_screen_reader_active;
 use crate::key_hint;
-use crate::shimmer::shimmer_spans;
+use crate::shimmer::shimmer_spans_with_animation_control;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 
@@ -24,6 +25,7 @@ pub(crate) struct StatusIndicatorWidget {
     header: String,
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
+    animations_enabled: bool,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -51,9 +53,11 @@ fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
 
 impl StatusIndicatorWidget {
     pub(crate) fn new(app_event_tx: AppEventSender, frame_requester: FrameRequester) -> Self {
+        let animations_enabled = !is_screen_reader_active();
         Self {
             header: String::from("Working"),
             queued_messages: Vec::new(),
+            animations_enabled,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -154,14 +158,19 @@ impl WidgetRef for StatusIndicatorWidget {
         }
 
         // Schedule next animation frame.
-        self.frame_requester
-            .schedule_frame_in(Duration::from_millis(32));
+        if self.animations_enabled {
+            self.frame_requester
+                .schedule_frame_in(Duration::from_millis(32));
+        }
         let elapsed = self.elapsed_seconds();
         let pretty_elapsed = fmt_elapsed_compact(elapsed);
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];
-        spans.extend(shimmer_spans(&self.header));
+        spans.extend(shimmer_spans_with_animation_control(
+            &self.header,
+            self.animations_enabled,
+        ));
         spans.extend(vec![
             " ".into(),
             format!("({pretty_elapsed} • ").dim(),

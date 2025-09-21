@@ -62,6 +62,17 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     spans
 }
 
+pub(crate) fn shimmer_spans_with_animation_control(
+    text: &str,
+    animations_enabled: bool,
+) -> Vec<Span<'static>> {
+    if animations_enabled {
+        shimmer_spans(text)
+    } else {
+        vec![Span::raw(text.to_string())]
+    }
+}
+
 fn color_for_level(level: u8) -> Style {
     // Tune thresholds so the edges of the shimmer band appear dim
     // in fallback mode (no true color support).
