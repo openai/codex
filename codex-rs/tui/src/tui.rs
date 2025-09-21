@@ -210,6 +210,33 @@ impl FrameRequester {
             frame_schedule_tx: tx,
         }
     }
+
+    /// Create a frame requester paired with a counter that records scheduled frames.
+    pub(crate) fn test_with_counter() -> (Self, FrameScheduleCounter) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        (
+            FrameRequester {
+                frame_schedule_tx: tx,
+            },
+            FrameScheduleCounter { rx },
+        )
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct FrameScheduleCounter {
+    rx: tokio::sync::mpsc::UnboundedReceiver<Instant>,
+}
+
+#[cfg(test)]
+impl FrameScheduleCounter {
+    pub(crate) fn take_count(&mut self) -> usize {
+        let mut count = 0;
+        while self.rx.try_recv().is_ok() {
+            count += 1;
+        }
+        count
+    }
 }
 
 impl Tui {
