@@ -3,6 +3,7 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
+pub use accessibility::is_screen_reader_active;
 use app::App;
 pub use app::AppExitInfo;
 use codex_core::AuthManager;
@@ -29,6 +30,7 @@ use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
+mod accessibility;
 mod app;
 mod app_backtrack;
 mod app_event;
