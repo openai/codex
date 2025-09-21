@@ -1,0 +1,22 @@
+---
+source: tui/src/mcp/wizard_view.rs
+expression: render(&view)
+---
+┌Select authentication───────────────────────────────────────────────────────┐
+│none                                                                        │
+│env                                                                         │
+│oauth                                                                       │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+Enter to confirm • Esc to cancel─────────────────────────────────────────────┘

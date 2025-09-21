@@ -3,7 +3,9 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::history_cell::HistoryCell;
+use crate::mcp::McpManagerEntry;
+use crate::mcp::McpManagerState;
+use crate::mcp::McpWizardDraft;
 use crate::pager_overlay::Overlay;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
@@ -13,17 +15,22 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
+use codex_core::config_types::McpServerConfig;
+use codex_core::mcp::registry::McpRegistry;
+use codex_core::mcp::templates::TemplateCatalog;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::mcp_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
+use color_eyre::eyre::eyre;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -34,11 +41,7 @@ use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 // use uuid::Uuid;
 
-#[derive(Debug, Clone)]
-pub struct AppExitInfo {
-    pub token_usage: TokenUsage,
-    pub conversation_id: Option<ConversationId>,
-}
+use tracing::warn;
 
 pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
@@ -52,7 +55,7 @@ pub(crate) struct App {
 
     pub(crate) file_search: FileSearchManager,
 
-    pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    pub(crate) transcript_lines: Vec<Line<'static>>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -77,14 +80,14 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
-    ) -> Result<AppExitInfo> {
+    ) -> Result<TokenUsage> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
         let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
-        let enhanced_keys_supported = tui.enhanced_keys_supported();
+        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
         let chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
@@ -138,7 +141,7 @@ impl App {
             active_profile,
             file_search,
             enhanced_keys_supported,
-            transcript_cells: Vec::new(),
+            transcript_lines: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -160,10 +163,7 @@ impl App {
             }
         } {}
         tui.terminal.clear()?;
-        Ok(AppExitInfo {
-            token_usage: app.token_usage(),
-            conversation_id: app.chat_widget.conversation_id(),
-        })
+        Ok(app.token_usage())
     }
 
     pub(crate) async fn handle_tui_event(
@@ -225,12 +225,15 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let cell: Arc<dyn HistoryCell> = cell.into();
+                let mut cell_transcript = cell.transcript_lines();
+                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
+                    cell_transcript.insert(0, Line::from(""));
+                }
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
+                    t.insert_lines(cell_transcript.clone());
                     tui.frame_requester().schedule_frame();
                 }
-                self.transcript_cells.push(cell.clone());
+                self.transcript_lines.extend(cell_transcript.clone());
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
@@ -280,6 +283,28 @@ impl App {
             }
             AppEvent::ExitRequest => {
                 return Ok(false);
+            }
+            AppEvent::OpenMcpManager => {
+                self.open_mcp_manager()?;
+            }
+            AppEvent::OpenMcpWizard {
+                template_id,
+                draft,
+                existing_name,
+            } => {
+                self.open_mcp_wizard(template_id, draft, existing_name)?;
+            }
+            AppEvent::ApplyMcpWizard {
+                draft,
+                existing_name,
+            } => {
+                self.apply_mcp_wizard(draft, existing_name)?;
+            }
+            AppEvent::ReloadMcpServers => {
+                self.reload_mcp_servers()?;
+            }
+            AppEvent::RemoveMcpServer { name } => {
+                self.remove_mcp_server(name)?;
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
@@ -361,6 +386,156 @@ impl App {
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         self.chat_widget.token_usage()
     }
+    fn open_mcp_manager(&mut self) -> Result<()> {
+        if !self.config.experimental_mcp_overhaul {
+            self.chat_widget.show_mcp_history_summary();
+            return Ok(());
+        }
+
+        let catalog = self.load_template_catalog();
+        let registry = McpRegistry::new(&self.config, catalog);
+        let state = McpManagerState::from_registry(&registry);
+        let entries: Vec<McpManagerEntry> = state
+            .servers
+            .into_iter()
+            .map(|snapshot| {
+                let health = registry.health_report(&snapshot.name);
+                McpManagerEntry { snapshot, health }
+            })
+            .collect();
+
+        self.chat_widget
+            .show_mcp_manager(entries, state.template_count);
+        Ok(())
+    }
+
+    fn open_mcp_wizard(
+        &mut self,
+        template_id: Option<String>,
+        draft: Option<McpWizardDraft>,
+        existing_name: Option<String>,
+    ) -> Result<()> {
+        if !self.config.experimental_mcp_overhaul {
+            self.chat_widget.show_mcp_history_summary();
+            return Ok(());
+        }
+
+        let catalog = self.load_template_catalog();
+        let mut draft = draft.unwrap_or_default();
+        if draft.template_id.is_none()
+            && let Some(id) = template_id
+            && let Some(cfg) = catalog.instantiate(&id)
+        {
+            draft.apply_template_config(&cfg);
+            draft.template_id = Some(id);
+        }
+        if draft.name.is_empty()
+            && existing_name.is_none()
+            && let Some(id) = draft.template_id.clone()
+        {
+            draft.name = sanitize_name(&id);
+        }
+
+        self.chat_widget
+            .show_mcp_wizard(catalog, Some(draft), existing_name);
+        Ok(())
+    }
+
+    fn apply_mcp_wizard(
+        &mut self,
+        draft: McpWizardDraft,
+        existing_name: Option<String>,
+    ) -> Result<()> {
+        if !self.config.experimental_mcp_overhaul {
+            self.chat_widget.show_mcp_history_summary();
+            return Ok(());
+        }
+
+        let catalog = self.load_template_catalog();
+        let retry_draft = draft.clone();
+        let server_config = match draft.build_server_config(&catalog) {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to validate MCP server: {err}"));
+                self.chat_widget
+                    .show_mcp_wizard(catalog, Some(retry_draft), existing_name);
+                return Ok(());
+            }
+        };
+
+        let registry = McpRegistry::new(&self.config, catalog);
+        registry
+            .upsert_server_with_existing(existing_name.as_deref(), &draft.name, server_config.clone())
+            .map_err(|err| eyre!(err))?;
+
+        if let Some(ref old_name) = existing_name
+            && old_name != &draft.name
+        {
+            self.config.mcp_servers.remove(old_name);
+        }
+        self.config
+            .mcp_servers
+            .insert(draft.name.clone(), server_config);
+        self.chat_widget
+            .set_mcp_servers(self.current_mcp_servers_btree());
+        self.chat_widget
+            .add_info_message(format!("Saved MCP server '{}'", draft.name), None);
+        self.open_mcp_manager()?;
+        Ok(())
+    }
+
+    fn reload_mcp_servers(&mut self) -> Result<()> {
+        if !self.config.experimental_mcp_overhaul {
+            self.chat_widget.show_mcp_history_summary();
+            return Ok(());
+        }
+
+        let catalog = self.load_template_catalog();
+        let registry = McpRegistry::new(&self.config, catalog);
+        let servers = registry.reload_servers().map_err(|err| eyre!(err))?;
+        self.config.mcp_servers = servers.clone().into_iter().collect();
+        self.chat_widget.set_mcp_servers(servers);
+        self.open_mcp_manager()?;
+        Ok(())
+    }
+
+    fn remove_mcp_server(&mut self, name: String) -> Result<()> {
+        if !self.config.experimental_mcp_overhaul {
+            self.chat_widget.show_mcp_history_summary();
+            return Ok(());
+        }
+
+        let catalog = self.load_template_catalog();
+        let registry = McpRegistry::new(&self.config, catalog);
+        if registry.remove_server(&name).map_err(|err| eyre!(err))? {
+            self.config.mcp_servers.remove(&name);
+            self.chat_widget
+                .set_mcp_servers(self.current_mcp_servers_btree());
+            self.chat_widget
+                .add_info_message(format!("Removed MCP server '{name}'."), None);
+        } else {
+            self.chat_widget
+                .add_info_message(format!("No MCP server named '{name}' found."), None);
+        }
+        self.open_mcp_manager()?;
+        Ok(())
+    }
+
+    fn load_template_catalog(&self) -> TemplateCatalog {
+        TemplateCatalog::load_default().unwrap_or_else(|err| {
+            warn!(error = %err, "Failed to load MCP templates");
+            TemplateCatalog::empty()
+        })
+    }
+
+    fn current_mcp_servers_btree(&self) -> BTreeMap<String, McpServerConfig> {
+        self.config
+            .mcp_servers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.chat_widget.set_reasoning_effort(effort);
@@ -377,7 +552,7 @@ impl App {
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+                self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
@@ -402,7 +577,7 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } if self.backtrack.primed
-                && self.backtrack.nth_user_message != usize::MAX
+                && self.backtrack.count > 0
                 && self.chat_widget.composer_is_empty() =>
             {
                 // Delegate to helper for clarity; preserves behavior.
@@ -426,6 +601,17 @@ impl App {
         };
     }
 }
+fn sanitize_name(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -436,6 +622,7 @@ mod tests {
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use ratatui::text::Line;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -458,7 +645,7 @@ mod tests {
             config,
             active_profile: None,
             file_search,
-            transcript_cells: Vec::new(),
+            transcript_lines: Vec::<Line<'static>>::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
