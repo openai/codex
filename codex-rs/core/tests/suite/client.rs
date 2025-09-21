@@ -852,10 +852,10 @@ async fn token_count_includes_rate_limits_snapshot() {
             },
             "rate_limits": {
                 "primary_used_percent": 12.5,
-                "protection_used_percent": 40.0,
-                "primary_to_protection_ratio_percent": 75.0,
+                "weekly_used_percent": 40.0,
+                "primary_to_weekly_ratio_percent": 75.0,
                 "primary_window_minutes": 10,
-                "protection_window_minutes": 60
+                "weekly_window_minutes": 60
             }
         })
     );
