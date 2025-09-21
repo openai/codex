@@ -28,6 +28,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::RateLimitSnapshotEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
@@ -103,6 +104,42 @@ struct RunningCommand {
     parsed_cmd: Vec<ParsedCommand>,
 }
 
+const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [50.0, 75.0, 90.0];
+
+#[derive(Default)]
+struct RateLimitWarningState {
+    weekly_index: usize,
+    hourly_index: usize,
+}
+
+impl RateLimitWarningState {
+    fn take_warnings(&mut self, weekly_used_percent: f64, hourly_used_percent: f64) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        while self.weekly_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+            && weekly_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.weekly_index]
+        {
+            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.weekly_index];
+            warnings.push(format!(
+                "Weekly usage exceeded {threshold:.0}% of the limit. Run /limits for detailed usage."
+            ));
+            self.weekly_index += 1;
+        }
+
+        while self.hourly_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+            && hourly_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.hourly_index]
+        {
+            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.hourly_index];
+            warnings.push(format!(
+                "Hourly usage exceeded {threshold:.0}% of the limit. Run /limits for detailed usage."
+            ));
+            self.hourly_index += 1;
+        }
+
+        warnings
+    }
+}
+
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
@@ -124,6 +161,8 @@ pub(crate) struct ChatWidget {
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
+    rate_limit_snapshot: Option<RateLimitSnapshotEvent>,
+    rate_limit_warnings: RateLimitWarningState,
     // Stream lifecycle controller
     stream: StreamController,
     running_commands: HashMap<String, RunningCommand>,
@@ -284,6 +323,21 @@ impl ChatWidget {
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.bottom_pane.set_token_usage(info.clone());
         self.token_info = info;
+    }
+
+    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshotEvent>) {
+        if let Some(snapshot) = snapshot {
+            let warnings = self
+                .rate_limit_warnings
+                .take_warnings(snapshot.weekly_used_percent, snapshot.primary_used_percent);
+            self.rate_limit_snapshot = Some(snapshot);
+            if !warnings.is_empty() {
+                for warning in warnings {
+                    self.add_to_history(history_cell::new_warning_event(warning));
+                }
+                self.request_redraw();
+            }
+        }
     }
     /// Finalize any active exec as failed and stop/clear running UI state.
     fn finalize_turn(&mut self) {
@@ -699,6 +753,8 @@ impl ChatWidget {
                 initial_images,
             ),
             token_info: None,
+            rate_limit_snapshot: None,
+            rate_limit_warnings: RateLimitWarningState::default(),
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -756,6 +812,8 @@ impl ChatWidget {
                 initial_images,
             ),
             token_info: None,
+            rate_limit_snapshot: None,
+            rate_limit_warnings: RateLimitWarningState::default(),
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -928,6 +986,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+            }
+            SlashCommand::Limits => {
+                self.add_limits_output();
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -1106,7 +1167,10 @@ impl ChatWidget {
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message)
             }
-            EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
+            EventMsg::TokenCount(ev) => {
+                self.set_token_info(ev.info);
+                self.on_rate_limit_snapshot(ev.rate_limits);
+            }
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
@@ -1279,6 +1343,15 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_diff_complete(&mut self) {
+        self.request_redraw();
+    }
+
+    pub(crate) fn add_limits_output(&mut self) {
+        if let Some(snapshot) = &self.rate_limit_snapshot {
+            self.add_to_history(history_cell::new_limits_output(snapshot));
+        } else {
+            self.add_to_history(history_cell::new_limits_unavailable());
+        }
         self.request_redraw();
     }
 
