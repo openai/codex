@@ -15,7 +15,6 @@ use std::env;
 use std::path::PathBuf;
 
 pub async fn login_with_chatgpt(codex_home: PathBuf, originator: String) -> std::io::Result<()> {
-    // 1) Start the server first (unchanged)
     let opts = ServerOptions::new(codex_home, CLIENT_ID.to_string(), originator);
     let server = run_login_server(opts)?;
 
@@ -25,7 +24,6 @@ If your browser did not open, use ANY browser to visit:\n\n{}\n",
         server.actual_port, server.auth_url
     );
 
-    // 2) Optional fast-path: paste the final redirected URL (or code&state)
     eprintln!("If the browser cannot reach localhost, paste the final redirected URL here.");
     eprintln!("(Or paste `code=<...>&state=<...>`). Press Enter to skip and just wait.\n");
 
@@ -36,9 +34,7 @@ If your browser did not open, use ANY browser to visit:\n\n{}\n",
     let paste = line.trim();
 
     if !paste.is_empty() {
-        // 3) Extract code & state from whatever the user pasted
         let (code, state) = if paste.contains("code=") {
-            // full URL or query string
             let q = if paste.starts_with("http") {
                 url::Url::parse(paste)
                     .ok()
@@ -60,12 +56,10 @@ If your browser did not open, use ANY browser to visit:\n\n{}\n",
             }
             (code.unwrap_or_default(), state.unwrap_or_default())
         } else {
-            // user pasted just the code; state won't match, but try anyway
             (paste.to_string(), String::new())
         };
 
         if !code.is_empty() {
-            // 4) Synthesize the callback to our local server
             let path = format!(
                 "/auth/callback?code={}&state={}",
                 urlencoding::encode(&code),
@@ -79,11 +73,9 @@ If your browser did not open, use ANY browser to visit:\n\n{}\n",
                 TcpStream::connect(("127.0.0.1", server.actual_port))?;
             use std::io::Write as _;
             stream.write_all(req.as_bytes())?;
-            // ignore response body; the server will finish login and exit
         }
     }
 
-    // 5) Proceed as usual — server will finish the flow and write auth.json
     server.block_until_done().await
 }
 
