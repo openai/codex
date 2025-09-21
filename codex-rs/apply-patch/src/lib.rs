@@ -648,11 +648,22 @@ fn derive_new_contents_from_chunks(
         }
     };
 
-    // Detect whether the source file uses Windows CRLF line endings.
-    // For matching, normalise lines by stripping a trailing '\r' when present.
-    // When re-emitting the updated file, preserve the original EOL style to
-    // avoid mixed line endings on Windows (see issue #4003).
-    let uses_crlf = original_contents.contains("\r\n");
+    // Detect whether the source file uses Windows CRLF line endings consistently.
+    // We only consider a file CRLF-formatted if every newline is part of a
+    // CRLF sequence. This avoids rewriting an LF-formatted file that merely
+    // contains embedded "\r\n" within string literals.
+    let bytes = original_contents.as_bytes();
+    let mut n_newlines = 0usize;
+    let mut n_crlf = 0usize;
+    for i in 0..bytes.len() {
+        if bytes[i] == b'\n' {
+            n_newlines += 1;
+            if i > 0 && bytes[i - 1] == b'\r' {
+                n_crlf += 1;
+            }
+        }
+    }
+    let uses_crlf = n_newlines > 0 && n_crlf == n_newlines;
 
     let mut original_lines: Vec<String> = original_contents
         .split('\n')
