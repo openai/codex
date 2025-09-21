@@ -648,9 +648,21 @@ fn derive_new_contents_from_chunks(
         }
     };
 
+    // Detect whether the source file uses Windows CRLF line endings.
+    // For matching, normalise lines by stripping a trailing '\r' when present.
+    // When re-emitting the updated file, preserve the original EOL style to
+    // avoid mixed line endings on Windows (see issue #4003).
+    let uses_crlf = original_contents.contains("\r\n");
+
     let mut original_lines: Vec<String> = original_contents
         .split('\n')
-        .map(|s| s.to_string())
+        .map(|s| {
+            if uses_crlf && s.ends_with('\r') {
+                s.trim_end_matches('\r').to_string()
+            } else {
+                s.to_string()
+            }
+        })
         .collect();
 
     // Drop the trailing empty element that results from the final newline so
@@ -665,7 +677,11 @@ fn derive_new_contents_from_chunks(
     if !new_lines.last().is_some_and(|s| s.is_empty()) {
         new_lines.push(String::new());
     }
-    let new_contents = new_lines.join("\n");
+    let new_contents = if uses_crlf {
+        new_lines.join("\r\n")
+    } else {
+        new_lines.join("\n")
+    };
     Ok(AppliedPatch {
         original_contents,
         new_contents,
@@ -1265,6 +1281,43 @@ PATCH"#,
 
         let contents = fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "a\nB\nc\nd\nE\nf\ng\n");
+    }
+
+    /// Ensure CRLF line endings are preserved for updated files on Windows‑style inputs.
+    #[test]
+    fn test_preserve_crlf_line_endings_on_update() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("crlf.txt");
+
+        // Original file uses CRLF (\r\n) endings.
+        std::fs::write(&path, b"a\r\nb\r\nc\r\n").unwrap();
+
+        // Replace `b` -> `B` and append `d`.
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+ a
+-b
++B
+@@
+ c
++d
+*** End of File"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        let out = std::fs::read(&path).unwrap();
+        // Expect all CRLF endings; count occurrences of CRLF and ensure there are 4 lines.
+        let content = String::from_utf8_lossy(&out);
+        assert!(content.contains("\r\n"));
+        // No bare LF occurrences immediately preceding a non-CR: the text should not contain "a\nb".
+        assert!(!content.contains("a\nb"));
+        // Validate exact content sequence with CRLF delimiters.
+        assert_eq!(content, "a\r\nB\r\nc\r\nd\r\n");
     }
 
     #[test]
