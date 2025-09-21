@@ -11,6 +11,7 @@ use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -40,6 +41,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
+use crate::protocol::RateLimitSnapshotEvent;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
@@ -274,6 +276,15 @@ impl ModelClient {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
+                    if let Some(snapshot) = parse_rate_limit_snapshot(resp.headers())
+                        && tx_event
+                            .send(Ok(ResponseEvent::RateLimits(snapshot)))
+                            .await
+                            .is_err()
+                    {
+                        debug!("receiver dropped rate limit snapshot event");
+                    }
+
                     // spawn task to process SSE
                     let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
                     tokio::spawn(process_sse(
@@ -471,6 +482,38 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
             }
         }
     }
+}
+
+fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshotEvent> {
+    let primary_used_percent = parse_header_f64(headers, "x-codex-primary-used-percent")?;
+    let weekly_used_percent = parse_header_f64(headers, "x-codex-protection-used-percent")?;
+    let primary_to_weekly_ratio_percent =
+        parse_header_f64(headers, "x-codex-primary-over-protection-limit-percent")?;
+    let primary_window_minutes = parse_header_u64(headers, "x-codex-primary-window-minutes")?;
+    let weekly_window_minutes = parse_header_u64(headers, "x-codex-protection-window-minutes")?;
+
+    Some(RateLimitSnapshotEvent {
+        primary_used_percent,
+        weekly_used_percent,
+        primary_to_weekly_ratio_percent,
+        primary_window_minutes,
+        weekly_window_minutes,
+    })
+}
+
+fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
+    parse_header_str(headers, name)?
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
+fn parse_header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
+    parse_header_str(headers, name)?.parse::<u64>().ok()
+}
+
+fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name)?.to_str().ok()
 }
 
 async fn process_sse<S>(
