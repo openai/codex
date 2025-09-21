@@ -748,15 +748,16 @@ impl Session {
         if let Some(snapshot) = new_rate_limits {
             state.latest_rate_limits = Some(snapshot);
         }
-        let token_usage_owned = token_usage.cloned();
-        let info = TokenUsageInfo::new_or_append(
-            &state.token_info,
-            &token_usage_owned,
-            turn_context.client.get_model_context_window(),
-        );
-        state.token_info = info.clone();
+        if let Some(token_usage) = token_usage {
+            let info = TokenUsageInfo::new_or_append(
+                &state.token_info,
+                &Some(token_usage.clone()),
+                turn_context.client.get_model_context_window(),
+            );
+            state.token_info = info;
+        }
         TokenCountEvent {
-            info,
+            info: state.token_info.clone(),
             rate_limits: state.latest_rate_limits.clone(),
         }
     }
