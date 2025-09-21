@@ -1,3 +1,4 @@
+use crate::accessibility::animations_enabled;
 use crate::ascii_animation::AsciiAnimation;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -36,14 +37,19 @@ struct ModelUpgradePopup {
     highlighted: ModelUpgradeOption,
     decision: Option<ModelUpgradeDecision>,
     animation: AsciiAnimation,
+    animations_enabled: bool,
 }
 
 impl ModelUpgradePopup {
     fn new(request_frame: FrameRequester) -> Self {
+        let mut animation = AsciiAnimation::new(request_frame);
+        let animations_enabled = animations_enabled();
+        animation.set_enabled(animations_enabled);
         Self {
             highlighted: ModelUpgradeOption::TryNewModel,
             decision: None,
-            animation: AsciiAnimation::new(request_frame),
+            animation,
+            animations_enabled,
         }
     }
 
@@ -56,7 +62,7 @@ impl ModelUpgradePopup {
             KeyCode::Enter => self.select(self.highlighted),
             KeyCode::Esc => self.select(ModelUpgradeOption::KeepCurrent),
             KeyCode::Char('.') => {
-                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                if self.animations_enabled && key_event.modifiers.contains(KeyModifiers::CONTROL) {
                     let _ = self.animation.pick_random_variant();
                 }
             }
@@ -67,13 +73,21 @@ impl ModelUpgradePopup {
     fn highlight(&mut self, option: ModelUpgradeOption) {
         if self.highlighted != option {
             self.highlighted = option;
-            self.animation.request_frame();
+            self.request_frame();
         }
     }
 
     fn select(&mut self, option: ModelUpgradeOption) {
         self.decision = Some(option.into());
-        self.animation.request_frame();
+        self.request_frame();
+    }
+
+    fn request_frame(&self) {
+        if self.animations_enabled {
+            self.animation.request_frame();
+        } else {
+            self.animation.force_frame();
+        }
     }
 }
 
@@ -89,7 +103,9 @@ impl From<ModelUpgradeOption> for ModelUpgradeDecision {
 impl WidgetRef for &ModelUpgradePopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        self.animation.schedule_next_frame();
+        if self.animations_enabled {
+            self.animation.schedule_next_frame();
+        }
 
         // Skip the animation entirely when the viewport is too small so we don't clip frames.
         let show_animation =

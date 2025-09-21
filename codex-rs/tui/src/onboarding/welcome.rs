@@ -12,7 +12,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use crate::accessibility::is_screen_reader_active;
+use crate::accessibility::animations_enabled;
 use crate::ascii_animation::AsciiAnimation;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
@@ -43,7 +43,7 @@ impl KeyboardHandler for WelcomeWidget {
 impl WelcomeWidget {
     pub(crate) fn new(is_logged_in: bool, request_frame: FrameRequester) -> Self {
         let mut animation = AsciiAnimation::new(request_frame);
-        if is_screen_reader_active() {
+        if !animations_enabled() {
             animation.set_enabled(false);
         }
 
@@ -99,6 +99,7 @@ impl StepStateProvider for WelcomeWidget {
 mod tests {
     use super::*;
     use crate::accessibility::reset_cache_for_tests;
+    use crate::accessibility::with_cli_animations_disabled_for_tests;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -193,151 +194,176 @@ mod tests {
     #[test]
     #[serial]
     fn disables_animation_when_screen_reader_detected() {
-        with_screen_reader_env(|| {
-            let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-            assert_eq!(widget.animation.is_enabled(), false);
-            assert_eq!(widget.animation.current_frame(), "");
+        with_cli_animations_disabled_for_tests(false, || {
+            with_screen_reader_env(|| {
+                let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+                assert_eq!(widget.animation.is_enabled(), false);
+                assert_eq!(widget.animation.current_frame(), "");
+            });
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn disables_animation_when_cli_flag_set() {
+        with_cli_animations_disabled_for_tests(true, || {
+            with_no_screen_reader_env(|| {
+                let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+                assert_eq!(widget.animation.is_enabled(), false);
+            });
         });
     }
 
     #[test]
     #[serial]
     fn keeps_animation_enabled_when_no_screen_reader_detected() {
-        with_no_screen_reader_env(|| {
-            let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-            assert_eq!(widget.animation.is_enabled(), true);
-            assert!(
-                !widget.animation.current_frame().is_empty(),
-                "expected animation frame when no screen reader is active"
-            );
+        with_cli_animations_disabled_for_tests(false, || {
+            with_no_screen_reader_env(|| {
+                let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+                assert_eq!(widget.animation.is_enabled(), true);
+                assert!(
+                    !widget.animation.current_frame().is_empty(),
+                    "expected animation frame when no screen reader is active"
+                );
+            });
         });
     }
 
     #[test]
     #[serial]
     fn render_omits_animation_when_screen_reader_is_active() {
-        with_screen_reader_env(|| {
-            let mut widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-            let was_enabled = widget.animation.is_enabled();
-            assert_eq!(was_enabled, false);
+        with_cli_animations_disabled_for_tests(false, || {
+            with_screen_reader_env(|| {
+                let mut widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+                let was_enabled = widget.animation.is_enabled();
+                assert_eq!(was_enabled, false);
 
-            widget.animation =
-                AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0);
-            widget.animation.set_enabled(was_enabled);
+                widget.animation =
+                    AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0);
+                widget.animation.set_enabled(was_enabled);
 
-            let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
-            let mut buf = Buffer::empty(area);
-            (&widget).render(area, &mut buf);
+                let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
+                let mut buf = Buffer::empty(area);
+                (&widget).render(area, &mut buf);
 
-            assert!(
-                !buffer_contains(&buf, area, "frame-a"),
-                "expected animation content to be hidden when screen reader is active"
-            );
-            assert!(
-                buffer_contains(&buf, area, "Codex"),
-                "expected welcome text to remain visible when screen reader is active"
-            );
+                assert!(
+                    !buffer_contains(&buf, area, "frame-a"),
+                    "expected animation content to be hidden when screen reader is active"
+                );
+                assert!(
+                    buffer_contains(&buf, area, "Codex"),
+                    "expected welcome text to remain visible when screen reader is active"
+                );
+            });
         });
     }
 
     #[test]
     #[serial]
     fn render_does_not_schedule_frame_when_animation_disabled() {
-        with_screen_reader_env(|| {
-            let (requester, mut counter) = FrameRequester::test_with_counter();
-            let widget = WelcomeWidget::new(false, requester);
-            assert_eq!(widget.animation.is_enabled(), false);
+        with_cli_animations_disabled_for_tests(false, || {
+            with_screen_reader_env(|| {
+                let (requester, mut counter) = FrameRequester::test_with_counter();
+                let widget = WelcomeWidget::new(false, requester);
+                assert_eq!(widget.animation.is_enabled(), false);
 
-            let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
-            let mut buf = Buffer::empty(area);
-            (&widget).render(area, &mut buf);
+                let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
+                let mut buf = Buffer::empty(area);
+                (&widget).render(area, &mut buf);
 
-            assert_eq!(
-                counter.take_count(),
-                0,
-                "expected no frame scheduling when animation is disabled"
-            );
+                assert_eq!(
+                    counter.take_count(),
+                    0,
+                    "expected no frame scheduling when animation is disabled"
+                );
+            });
         });
     }
 
     #[test]
     #[serial]
     fn render_includes_animation_when_screen_reader_is_inactive() {
-        with_no_screen_reader_env(|| {
-            let mut widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-            let was_enabled = widget.animation.is_enabled();
-            assert_eq!(was_enabled, true);
+        with_cli_animations_disabled_for_tests(false, || {
+            with_no_screen_reader_env(|| {
+                let mut widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+                let was_enabled = widget.animation.is_enabled();
+                assert_eq!(was_enabled, true);
 
-            widget.animation =
-                AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0);
-            widget.animation.set_enabled(was_enabled);
+                widget.animation =
+                    AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0);
+                widget.animation.set_enabled(was_enabled);
 
-            let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
-            let mut buf = Buffer::empty(area);
-            (&widget).render(area, &mut buf);
+                let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
+                let mut buf = Buffer::empty(area);
+                (&widget).render(area, &mut buf);
 
-            assert!(
-                buffer_contains(&buf, area, "frame-a"),
-                "expected animation content to render when no screen reader is active"
-            );
-            assert!(
-                buffer_contains(&buf, area, "Codex"),
-                "expected welcome text to render when no screen reader is active"
-            );
+                assert!(
+                    buffer_contains(&buf, area, "frame-a"),
+                    "expected animation content to render when no screen reader is active"
+                );
+                assert!(
+                    buffer_contains(&buf, area, "Codex"),
+                    "expected welcome text to render when no screen reader is active"
+                );
+            });
         });
     }
 
     #[test]
     #[serial]
     fn welcome_renders_animation_on_first_draw() {
-        with_no_screen_reader_env(|| {
-            let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
-            let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
-            let mut buf = Buffer::empty(area);
-            (&widget).render(area, &mut buf);
+        with_cli_animations_disabled_for_tests(false, || {
+            with_no_screen_reader_env(|| {
+                let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+                let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
+                let mut buf = Buffer::empty(area);
+                (&widget).render(area, &mut buf);
 
-            let mut found = false;
-            let mut last_non_empty: Option<u16> = None;
-            for y in 0..area.height {
-                for x in 0..area.width {
-                    if !buf[(x, y)].symbol().trim().is_empty() {
-                        found = true;
-                        last_non_empty = Some(y);
-                        break;
+                let mut found = false;
+                let mut last_non_empty: Option<u16> = None;
+                for y in 0..area.height {
+                    for x in 0..area.width {
+                        if !buf[(x, y)].symbol().trim().is_empty() {
+                            found = true;
+                            last_non_empty = Some(y);
+                            break;
+                        }
                     }
                 }
-            }
 
-            assert!(found, "expected welcome animation to render characters");
-            let measured_rows = last_non_empty.map(|v| v + 2).unwrap_or(0);
-            assert!(
-                measured_rows >= MIN_ANIMATION_HEIGHT,
-                "expected measurement to report at least {MIN_ANIMATION_HEIGHT} rows, got {measured_rows}"
-            );
+                assert!(found, "expected welcome animation to render characters");
+                let measured_rows = last_non_empty.map(|v| v + 2).unwrap_or(0);
+                assert!(
+                    measured_rows >= MIN_ANIMATION_HEIGHT,
+                    "expected measurement to report at least {MIN_ANIMATION_HEIGHT} rows, got {measured_rows}"
+                );
+            });
         });
     }
 
     #[test]
     #[serial]
     fn ctrl_dot_changes_animation_variant() {
-        with_no_screen_reader_env(|| {
-            let mut widget = WelcomeWidget {
-                is_logged_in: false,
-                animation: AsciiAnimation::with_variants(
-                    FrameRequester::test_dummy(),
-                    &VARIANTS,
-                    0,
-                ),
-            };
+        with_cli_animations_disabled_for_tests(false, || {
+            with_no_screen_reader_env(|| {
+                let mut widget = WelcomeWidget {
+                    is_logged_in: false,
+                    animation: AsciiAnimation::with_variants(
+                        FrameRequester::test_dummy(),
+                        &VARIANTS,
+                        0,
+                    ),
+                };
 
-            let before = widget.animation.current_frame();
-            widget.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::CONTROL));
-            let after = widget.animation.current_frame();
+                let before = widget.animation.current_frame();
+                widget.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::CONTROL));
+                let after = widget.animation.current_frame();
 
-            assert_ne!(
-                before, after,
-                "expected ctrl+. to switch welcome animation variant"
-            );
+                assert_ne!(
+                    before, after,
+                    "expected ctrl+. to switch welcome animation variant"
+                );
+            });
         });
     }
 }

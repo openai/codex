@@ -31,9 +31,10 @@ use codex_protocol::mcp_protocol::AuthMode;
 use std::sync::RwLock;
 
 use crate::LoginStatus;
+use crate::accessibility::animations_enabled;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
-use crate::shimmer::shimmer_spans;
+use crate::shimmer::shimmer_spans_with_animation_control;
 use crate::tui::FrameRequester;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -207,10 +208,16 @@ impl AuthModeWidget {
 
     fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
         let mut spans = vec!["  ".into()];
+        let animations_enabled = animations_enabled();
         // Schedule a follow-up frame to keep the shimmer animation going.
-        self.request_frame
-            .schedule_frame_in(std::time::Duration::from_millis(100));
-        spans.extend(shimmer_spans("Finish signing in via your browser"));
+        if animations_enabled {
+            self.request_frame
+                .schedule_frame_in(std::time::Duration::from_millis(100));
+        }
+        spans.extend(shimmer_spans_with_animation_control(
+            "Finish signing in via your browser",
+            animations_enabled,
+        ));
         let mut lines = vec![spans.into(), "".into()];
 
         let sign_in_state = self.sign_in_state.read().unwrap();

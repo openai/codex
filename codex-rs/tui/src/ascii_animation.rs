@@ -108,6 +108,10 @@ impl AsciiAnimation {
         self.request_frame.schedule_frame();
     }
 
+    pub(crate) fn force_frame(&self) {
+        self.request_frame.schedule_frame();
+    }
+
     pub(crate) fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }

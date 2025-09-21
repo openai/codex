@@ -1,5 +1,7 @@
 use std::sync::OnceLock;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 const SCREEN_READER_ENV_VARS: [&str; 5] = [
     "NVDA_RUNNING",
@@ -10,6 +12,7 @@ const SCREEN_READER_ENV_VARS: [&str; 5] = [
 ];
 
 static SCREEN_READER_ACTIVE: OnceLock<RwLock<Option<bool>>> = OnceLock::new();
+static CLI_ANIMATIONS_DISABLED: AtomicBool = AtomicBool::new(false);
 
 fn cache() -> &'static RwLock<Option<bool>> {
     SCREEN_READER_ACTIVE.get_or_init(|| RwLock::new(None))
@@ -54,6 +57,18 @@ pub fn is_screen_reader_active() -> bool {
     }
 }
 
+pub(crate) fn set_cli_animations_disabled(value: bool) {
+    CLI_ANIMATIONS_DISABLED.store(value, Ordering::Relaxed);
+}
+
+pub(crate) fn animations_disabled_by_cli() -> bool {
+    CLI_ANIMATIONS_DISABLED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn animations_enabled() -> bool {
+    !(is_screen_reader_active() || animations_disabled_by_cli())
+}
+
 fn detect_screen_reader() -> bool {
     SCREEN_READER_ENV_VARS
         .iter()
@@ -85,6 +100,18 @@ pub(crate) fn reset_cache_for_tests() {
             .write()
             .expect("screen reader cache poisoned during reset") = None;
     }
+}
+
+#[cfg(test)]
+pub(crate) fn with_cli_animations_disabled_for_tests<F, R>(value: bool, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let previous = animations_disabled_by_cli();
+    set_cli_animations_disabled(value);
+    let result = f();
+    set_cli_animations_disabled(previous);
+    result
 }
 
 #[cfg(test)]

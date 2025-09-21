@@ -74,6 +74,7 @@ mod wrapping;
 #[cfg(not(debug_assertions))]
 mod updates;
 
+use crate::accessibility::set_cli_animations_disabled;
 use crate::new_model_popup::ModelUpgradeDecision;
 use crate::new_model_popup::run_model_upgrade_popup;
 use crate::onboarding::TrustDirectorySelection;
@@ -263,6 +264,8 @@ async fn run_ratatui_app(
 ) -> color_eyre::Result<AppExitInfo> {
     let mut config = config;
     color_eyre::install()?;
+
+    set_cli_animations_disabled(cli.no_animations);
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
