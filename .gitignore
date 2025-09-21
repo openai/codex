@@ -81,3 +81,6 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
+
+# codex CLI artifacts
+.codex/
