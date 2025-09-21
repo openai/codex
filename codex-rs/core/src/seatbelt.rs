@@ -8,6 +8,64 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
+/// Captures canonical and lexical representations of a path for Seatbelt policy generation.
+struct SeatbeltPathExpr {
+    canonical: String,
+    lexical: Option<String>,
+}
+
+impl SeatbeltPathExpr {
+    fn new(path: &Path) -> Self {
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canonical = canonical_path.to_string_lossy().to_string();
+        let lexical = if canonical_path == path || !path.is_absolute() {
+            None
+        } else {
+            Some(path.to_string_lossy().to_string())
+        };
+
+        Self { canonical, lexical }
+    }
+
+    fn cli_arg(&self, param: &str) -> String {
+        format!("-D{param}={}", self.canonical)
+    }
+
+    fn subpath_clause(&self, param: &str) -> String {
+        match &self.lexical {
+            Some(lexical) => format!(
+                "(require-any (subpath (param \"{param}\")) (subpath \"{}\"))",
+                escape_sbpl_string(lexical)
+            ),
+            None => format!("(subpath (param \"{param}\"))"),
+        }
+    }
+
+    fn require_not_clause(&self, param: &str) -> String {
+        match &self.lexical {
+            Some(lexical) => format!(
+                "(require-not (require-any (subpath (param \"{param}\")) (subpath \"{}\")))",
+                escape_sbpl_string(lexical)
+            ),
+            None => format!("(require-not (subpath (param \"{param}\")))"),
+        }
+    }
+}
+
+fn escape_sbpl_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
@@ -18,20 +76,19 @@ const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 
 pub async fn spawn_command_under_seatbelt(
     command: Vec<String>,
-    command_cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
-    sandbox_policy_cwd: &Path,
+    cwd: PathBuf,
     stdio_policy: StdioPolicy,
     mut env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd);
+    let args = create_seatbelt_command_args(command, sandbox_policy, &cwd);
     let arg0 = None;
     env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
     spawn_child_async(
         PathBuf::from(MACOS_PATH_TO_SEATBELT_EXECUTABLE),
         args,
         arg0,
-        command_cwd,
+        cwd,
         sandbox_policy,
         stdio_policy,
         env,
@@ -42,7 +99,7 @@ pub async fn spawn_command_under_seatbelt(
 fn create_seatbelt_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
-    sandbox_policy_cwd: &Path,
+    cwd: &Path,
 ) -> Vec<String> {
     let (file_write_policy, extra_cli_args) = {
         if sandbox_policy.has_full_disk_write_access() {
@@ -52,33 +109,28 @@ fn create_seatbelt_command_args(
                 Vec::<String>::new(),
             )
         } else {
-            let writable_roots = sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+            let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
 
             let mut writable_folder_policies: Vec<String> = Vec::new();
             let mut cli_args: Vec<String> = Vec::new();
 
             for (index, wr) in writable_roots.iter().enumerate() {
-                // Canonicalize to avoid mismatches like /var vs /private/var on macOS.
-                let canonical_root = wr.root.canonicalize().unwrap_or_else(|_| wr.root.clone());
                 let root_param = format!("WRITABLE_ROOT_{index}");
-                cli_args.push(format!(
-                    "-D{root_param}={}",
-                    canonical_root.to_string_lossy()
-                ));
+                let root_expr = SeatbeltPathExpr::new(&wr.root);
+                cli_args.push(root_expr.cli_arg(&root_param));
 
                 if wr.read_only_subpaths.is_empty() {
-                    writable_folder_policies.push(format!("(subpath (param \"{root_param}\"))"));
+                    writable_folder_policies.push(root_expr.subpath_clause(&root_param));
                 } else {
                     // Add parameters for each read-only subpath and generate
                     // the `(require-not ...)` clauses.
                     let mut require_parts: Vec<String> = Vec::new();
-                    require_parts.push(format!("(subpath (param \"{root_param}\"))"));
+                    require_parts.push(root_expr.subpath_clause(&root_param));
                     for (subpath_index, ro) in wr.read_only_subpaths.iter().enumerate() {
-                        let canonical_ro = ro.canonicalize().unwrap_or_else(|_| ro.clone());
                         let ro_param = format!("WRITABLE_ROOT_{index}_RO_{subpath_index}");
-                        cli_args.push(format!("-D{ro_param}={}", canonical_ro.to_string_lossy()));
-                        require_parts
-                            .push(format!("(require-not (subpath (param \"{ro_param}\")))"));
+                        let ro_expr = SeatbeltPathExpr::new(ro);
+                        cli_args.push(ro_expr.cli_arg(&ro_param));
+                        require_parts.push(ro_expr.require_not_clause(&ro_param));
                     }
                     let policy_component = format!("(require-all {} )", require_parts.join(" "));
                     writable_folder_policies.push(policy_component);
@@ -299,6 +351,60 @@ mod tests {
         ]);
 
         assert_eq!(expected_args, args);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_seatbelt_args_with_symlink_root_includes_lexical_paths() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let real_root = tmp.path().join("real_repo");
+        let symlink_root = tmp.path().join("symlink_repo");
+
+        fs::create_dir_all(real_root.join(".git")).expect("create real repo with .git");
+        symlink(&real_root, &symlink_root).expect("create symlink to repo");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![symlink_root.clone()],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let args = create_seatbelt_command_args(
+            vec!["/bin/echo".to_string(), "hello".to_string()],
+            &policy,
+            &symlink_root,
+        );
+
+        // Verify canonical path used for CLI argument.
+        let canonical_root = real_root
+            .canonicalize()
+            .expect("canonicalize real root")
+            .to_string_lossy()
+            .to_string();
+        let expected_cli_arg = format!("-DWRITABLE_ROOT_0={canonical_root}");
+        assert!(
+            args.contains(&expected_cli_arg),
+            "missing canonical CLI arg"
+        );
+
+        let policy_text = &args[1];
+        let lexical_root = symlink_root.to_string_lossy().to_string();
+        assert!(
+            policy_text.contains(&format!(
+                "(require-any (subpath (param \"WRITABLE_ROOT_0\")) (subpath \"{lexical_root}\"))"
+            )),
+            "policy should allow lexical root form"
+        );
+        let lexical_git = symlink_root.join(".git").to_string_lossy().to_string();
+        assert!(
+            policy_text.contains(&format!(
+                "(require-not (require-any (subpath (param \"WRITABLE_ROOT_0_RO_0\")) (subpath \"{lexical_git}\")))"
+            )),
+            "policy should deny lexical .git subpath"
+        );
     }
 
     struct PopulatedTmp {

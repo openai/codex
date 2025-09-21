@@ -1,12 +1,8 @@
-#![allow(clippy::expect_used, clippy::unwrap_used, unused_imports)]
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_core::CODEX_APPLY_PATCH_ARG1;
-use core_test_support::responses::ev_apply_patch_custom_tool_call;
-use core_test_support::responses::ev_apply_patch_function_call;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::sse;
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
@@ -59,28 +55,15 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
 
     let tmp_cwd = tempdir().expect("failed to create temp dir");
     let tmp_path = tmp_cwd.path().to_path_buf();
-    let add_patch = r#"*** Begin Patch
-*** Add File: test.md
-+Hello world
-*** End Patch"#;
-    let update_patch = r#"*** Begin Patch
-*** Update File: test.md
-@@
--Hello world
-+Final text
-*** End Patch"#;
-    let response_streams = vec![
-        sse(vec![
-            ev_apply_patch_custom_tool_call("request_0", add_patch),
-            ev_completed("request_0"),
-        ]),
-        sse(vec![
-            ev_apply_patch_function_call("request_1", update_patch),
-            ev_completed("request_1"),
-        ]),
-        sse(vec![ev_completed("request_2")]),
-    ];
-    run_e2e_exec_test(tmp_cwd.path(), response_streams).await;
+    run_e2e_exec_test(
+        tmp_cwd.path(),
+        vec![
+            include_str!("../fixtures/sse_apply_patch_add.json").to_string(),
+            include_str!("../fixtures/sse_apply_patch_update.json").to_string(),
+            include_str!("../fixtures/sse_response_completed.json").to_string(),
+        ],
+    )
+    .await;
 
     let final_path = tmp_path.join("test.md");
     let contents = std::fs::read_to_string(&final_path)
@@ -103,39 +86,27 @@ async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
     }
 
     let tmp_cwd = tempdir().expect("failed to create temp dir");
-    let freeform_add_patch = r#"*** Begin Patch
-*** Add File: app.py
-+class BaseClass:
-+  def method():
-+    return False
-*** End Patch"#;
-    let freeform_update_patch = r#"*** Begin Patch
-*** Update File: app.py
-@@  def method():
--    return False
-+
-+    return True
-*** End Patch"#;
-    let response_streams = vec![
-        sse(vec![
-            ev_apply_patch_custom_tool_call("request_0", freeform_add_patch),
-            ev_completed("request_0"),
-        ]),
-        sse(vec![
-            ev_apply_patch_custom_tool_call("request_1", freeform_update_patch),
-            ev_completed("request_1"),
-        ]),
-        sse(vec![ev_completed("request_2")]),
-    ];
-    run_e2e_exec_test(tmp_cwd.path(), response_streams).await;
+    run_e2e_exec_test(
+        tmp_cwd.path(),
+        vec![
+            include_str!("../fixtures/sse_apply_patch_freeform_add.json").to_string(),
+            include_str!("../fixtures/sse_apply_patch_freeform_update.json").to_string(),
+            include_str!("../fixtures/sse_response_completed.json").to_string(),
+        ],
+    )
+    .await;
 
     // Verify final file contents
     let final_path = tmp_cwd.path().join("app.py");
     let contents = std::fs::read_to_string(&final_path)
         .unwrap_or_else(|e| panic!("failed reading {}: {e}", final_path.display()));
+    fn normalize_line_endings(s: &str) -> String {
+        s.replace("\r\n", "\n")
+    }
+
     assert_eq!(
-        contents,
-        include_str!("../fixtures/apply_patch_freeform_final.txt")
+        normalize_line_endings(&contents),
+        normalize_line_endings(include_str!("../fixtures/apply_patch_freeform_final.txt"))
     );
     Ok(())
 }
