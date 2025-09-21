@@ -1172,14 +1172,23 @@ fn default_review_model() -> String {
 /// - If `CODEX_HOME` is not set, this function does not verify that the
 ///   directory exists.
 pub fn find_codex_home() -> std::io::Result<PathBuf> {
-    // Honor the `CODEX_HOME` environment variable when it is set to allow users
-    // (and tests) to override the default location.
+    // First preference: project-local ./.codex directory, if it exists.
+    // This enables per-project overrides without requiring --config or env vars.
+    let cwd = std::env::current_dir()?;
+    let project_codex = cwd.join(".codex");
+    if project_codex.is_dir() {
+        return Ok(project_codex);
+    }
+
+    // Next: honor the `CODEX_HOME` environment variable when it is set to allow
+    // users (and tests) to override the default location.
     if let Ok(val) = std::env::var("CODEX_HOME")
         && !val.is_empty()
     {
         return PathBuf::from(val).canonicalize();
     }
 
+    // Fallback: ~/.codex (do not require it to exist).
     let mut p = home_dir().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
