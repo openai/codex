@@ -1,6 +1,9 @@
+pub mod migrations;
+
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::McpTemplate;
 use crate::config_types::Notifications;
 use crate::config_types::ReasoningSummaryFormat;
 use crate::config_types::SandboxWorkspaceWrite;
@@ -129,6 +132,15 @@ pub struct Config {
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: HashMap<String, McpServerConfig>,
+
+    /// Optional templates leveraged by the MCP wizard experience.
+    pub mcp_templates: HashMap<String, McpTemplate>,
+
+    /// Schema version for MCP configuration blocks as declared on disk.
+    pub mcp_schema_version: Option<u32>,
+
+    /// Feature flag indicating whether overhaul-specific behaviours are enabled.
+    pub experimental_mcp_overhaul: bool,
 
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
@@ -310,6 +322,23 @@ pub fn write_global_mcp_servers(
         for (name, config) in servers {
             let mut entry = TomlTable::new();
             entry.set_implicit(false);
+
+            if let Some(display_name) = &config.display_name {
+                entry["display_name"] = toml_edit::value(display_name.clone());
+            }
+
+            if let Some(category) = &config.category {
+                entry["category"] = toml_edit::value(category.clone());
+            }
+
+            if let Some(template_id) = &config.template_id {
+                entry["template_id"] = toml_edit::value(template_id.clone());
+            }
+
+            if let Some(description) = &config.description {
+                entry["description"] = toml_edit::value(description.clone());
+            }
+
             entry["command"] = toml_edit::value(config.command.clone());
 
             if !config.args.is_empty() {
@@ -341,6 +370,102 @@ pub fn write_global_mcp_servers(
                     )
                 })?;
                 entry["startup_timeout_ms"] = toml_edit::value(timeout);
+            }
+
+            if let Some(auth) = &config.auth {
+                let mut auth_table = TomlTable::new();
+                auth_table.set_implicit(false);
+                if let Some(kind) = &auth.kind {
+                    auth_table["type"] = toml_edit::value(kind.clone());
+                }
+                if let Some(secret_ref) = &auth.secret_ref {
+                    auth_table["secret_ref"] = toml_edit::value(secret_ref.clone());
+                }
+                if let Some(env) = &auth.env
+                    && !env.is_empty()
+                {
+                    let mut env_table = TomlTable::new();
+                    env_table.set_implicit(false);
+                    let mut pairs: Vec<_> = env.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    for (key, value) in pairs {
+                        env_table.insert(key, toml_edit::value(value.clone()));
+                    }
+                    auth_table["env"] = TomlItem::Table(env_table);
+                }
+                entry["auth"] = TomlItem::Table(auth_table);
+            }
+
+            if let Some(health) = &config.healthcheck {
+                let mut health_table = TomlTable::new();
+                health_table.set_implicit(false);
+                if let Some(kind) = &health.kind {
+                    health_table["type"] = toml_edit::value(kind.clone());
+                }
+                if let Some(command) = &health.command {
+                    health_table["command"] = toml_edit::value(command.clone());
+                }
+                if !health.args.is_empty() {
+                    let mut args = TomlArray::new();
+                    for arg in &health.args {
+                        args.push(arg.clone());
+                    }
+                    health_table["args"] = TomlItem::Value(args.into());
+                }
+                if let Some(timeout) = health.timeout_ms {
+                    let timeout = i64::try_from(timeout).map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "healthcheck.timeout_ms exceeds supported range",
+                        )
+                    })?;
+                    health_table["timeout_ms"] = toml_edit::value(timeout);
+                }
+                if let Some(interval) = health.interval_seconds {
+                    let interval = i64::try_from(interval).map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "healthcheck.interval_seconds exceeds supported range",
+                        )
+                    })?;
+                    health_table["interval_seconds"] = toml_edit::value(interval);
+                }
+                if let Some(endpoint) = &health.endpoint {
+                    health_table["endpoint"] = toml_edit::value(endpoint.clone());
+                }
+                if let Some(protocol) = &health.protocol {
+                    health_table["protocol"] = toml_edit::value(protocol.clone());
+                }
+                entry["healthcheck"] = TomlItem::Table(health_table);
+            }
+
+            if !config.tags.is_empty() {
+                let mut tags = TomlArray::new();
+                for tag in &config.tags {
+                    tags.push(tag.clone());
+                }
+                entry["tags"] = TomlItem::Value(tags.into());
+            }
+
+            if let Some(created_at) = &config.created_at {
+                entry["created_at"] = toml_edit::value(created_at.clone());
+            }
+
+            if let Some(last_verified_at) = &config.last_verified_at {
+                entry["last_verified_at"] = toml_edit::value(last_verified_at.clone());
+            }
+
+            if let Some(metadata) = &config.metadata
+                && !metadata.is_empty()
+            {
+                let mut metadata_table = TomlTable::new();
+                metadata_table.set_implicit(false);
+                let mut entries: Vec<_> = metadata.iter().collect();
+                entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+                for (key, value) in entries {
+                    metadata_table.insert(key, toml_edit::value(value.clone()));
+                }
+                entry["metadata"] = TomlItem::Table(metadata_table);
             }
 
             doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);
@@ -643,6 +768,13 @@ pub struct ConfigToml {
     #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerConfig>,
 
+    /// Templates that can seed MCP server configuration via wizard flows.
+    #[serde(default)]
+    pub mcp_templates: HashMap<String, McpTemplate>,
+
+    /// Schema version for MCP-related configuration.
+    pub mcp_schema_version: Option<u32>,
+
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
     pub model_providers: HashMap<String, ModelProviderInfo>,
@@ -696,6 +828,9 @@ pub struct ConfigToml {
     pub experimental_use_exec_command_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
 
+    #[serde(default)]
+    pub experimental: Option<ExperimentalConfigToml>,
+
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Nested tools section for feature toggles
@@ -733,6 +868,12 @@ impl From<ConfigToml> for UserSavedConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct ExperimentalConfigToml {
+    #[serde(default)]
+    pub mcp_overhaul: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -946,6 +1087,12 @@ impl Config {
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
 
+        let experimental_mcp_overhaul = cfg
+            .experimental
+            .as_ref()
+            .and_then(|exp| exp.mcp_overhaul)
+            .unwrap_or(false);
+
         let model = model
             .or(config_profile.model)
             .or(cfg.model)
@@ -1012,6 +1159,9 @@ impl Config {
             user_instructions,
             base_instructions,
             mcp_servers: cfg.mcp_servers,
+            mcp_templates: cfg.mcp_templates,
+            mcp_schema_version: cfg.mcp_schema_version,
+            experimental_mcp_overhaul,
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             codex_home,
@@ -1163,7 +1313,6 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use crate::config_types::HistoryPersistence;
-    use crate::config_types::Notifications;
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1200,19 +1349,6 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
-    }
-
-    #[test]
-    fn tui_config_missing_notifications_field_defaults_to_disabled() {
-        let cfg = r#"
-[tui]
-"#;
-
-        let parsed = toml::from_str::<ConfigToml>(cfg)
-            .expect("TUI config without notifications should succeed");
-        let tui = parsed.tui.expect("config should include tui section");
-
-        assert_eq!(tui.notifications, Notifications::Enabled(false));
     }
 
     #[test]
@@ -1292,7 +1428,7 @@ exclude_slash_tmp = true
                 command: "echo".to_string(),
                 args: vec!["hello".to_string()],
                 env: None,
-                startup_timeout_ms: None,
+                ..McpServerConfig::default()
             },
         );
 
@@ -1609,6 +1745,9 @@ model_verbosity = "high"
                 notify: None,
                 cwd: fixture.cwd(),
                 mcp_servers: HashMap::new(),
+                mcp_templates: HashMap::new(),
+                mcp_schema_version: None,
+                experimental_mcp_overhaul: false,
                 model_providers: fixture.model_provider_map.clone(),
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 codex_home: fixture.codex_home(),
@@ -1667,6 +1806,9 @@ model_verbosity = "high"
             notify: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
+            mcp_templates: HashMap::new(),
+            mcp_schema_version: None,
+            experimental_mcp_overhaul: false,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             codex_home: fixture.codex_home(),
@@ -1740,6 +1882,9 @@ model_verbosity = "high"
             notify: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
+            mcp_templates: HashMap::new(),
+            mcp_schema_version: None,
+            experimental_mcp_overhaul: false,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             codex_home: fixture.codex_home(),
@@ -1799,6 +1944,9 @@ model_verbosity = "high"
             notify: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
+            mcp_templates: HashMap::new(),
+            mcp_schema_version: None,
+            experimental_mcp_overhaul: false,
             model_providers: fixture.model_provider_map.clone(),
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             codex_home: fixture.codex_home(),

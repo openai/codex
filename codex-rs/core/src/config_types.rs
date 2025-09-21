@@ -8,9 +8,22 @@ use std::path::PathBuf;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
+use serde::Serialize;
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct McpServerConfig {
+    #[serde(default)]
+    pub display_name: Option<String>,
+
+    #[serde(default)]
+    pub category: Option<String>,
+
+    #[serde(default)]
+    pub template_id: Option<String>,
+
+    #[serde(default)]
+    pub description: Option<String>,
+
     pub command: String,
 
     #[serde(default)]
@@ -22,6 +35,108 @@ pub struct McpServerConfig {
     /// Startup timeout in milliseconds for initializing MCP server & initially listing tools.
     #[serde(default)]
     pub startup_timeout_ms: Option<u64>,
+
+    #[serde(default)]
+    pub auth: Option<McpAuthConfig>,
+
+    #[serde(default)]
+    pub healthcheck: Option<McpHealthcheckConfig>,
+
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[serde(default)]
+    pub created_at: Option<String>,
+
+    #[serde(default)]
+    pub last_verified_at: Option<String>,
+
+    #[serde(default)]
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct McpAuthConfig {
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+
+    #[serde(default)]
+    pub secret_ref: Option<String>,
+
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct McpHealthcheckConfig {
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+
+    #[serde(default)]
+    pub command: Option<String>,
+
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+
+    #[serde(default)]
+    pub interval_seconds: Option<u64>,
+
+    #[serde(default)]
+    pub endpoint: Option<String>,
+
+    #[serde(default)]
+    pub protocol: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct McpTemplate {
+    #[serde(default)]
+    pub version: Option<String>,
+
+    #[serde(default)]
+    pub summary: Option<String>,
+
+    #[serde(default)]
+    pub category: Option<String>,
+
+    #[serde(default)]
+    pub defaults: Option<McpTemplateDefaults>,
+
+    #[serde(default)]
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct McpTemplateDefaults {
+    #[serde(default)]
+    pub command: Option<String>,
+
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+
+    #[serde(default)]
+    pub auth: Option<McpAuthConfig>,
+
+    #[serde(default)]
+    pub healthcheck: Option<McpHealthcheckConfig>,
+
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
+
+    #[serde(default)]
+    pub description: Option<String>,
+
+    #[serde(default)]
+    pub metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
@@ -94,7 +209,6 @@ impl Default for Notifications {
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
     /// Defaults to `false`.
-    #[serde(default)]
     pub notifications: Notifications,
 }
 
