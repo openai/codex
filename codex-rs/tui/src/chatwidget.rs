@@ -1596,7 +1596,7 @@ impl ChatWidget {
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
                             prompt: format!(
-                                "Review the code changes against the base branch '{branch}'. Start by finding the fork point between the current branch and {branch} e.g. (git merge-base HEAD {branch}), then run `git diff` against that fork point to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
+                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch} e.g. (git merge-base HEAD {branch}), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
                             ),
                             user_facing_hint: format!("changes against '{branch}'"),
                         },
