@@ -1,4 +1,5 @@
 use std::sync::OnceLock;
+use std::sync::RwLock;
 
 const SCREEN_READER_ENV_VARS: [&str; 5] = [
     "NVDA_RUNNING",
@@ -8,7 +9,11 @@ const SCREEN_READER_ENV_VARS: [&str; 5] = [
     "ACCESSIBILITY_ENABLED",
 ];
 
-static SCREEN_READER_ACTIVE: OnceLock<bool> = OnceLock::new();
+static SCREEN_READER_ACTIVE: OnceLock<RwLock<Option<bool>>> = OnceLock::new();
+
+fn cache() -> &'static RwLock<Option<bool>> {
+    SCREEN_READER_ACTIVE.get_or_init(|| RwLock::new(None))
+}
 
 /// Determine whether a screen reader is likely active for the current process.
 ///
@@ -35,7 +40,18 @@ static SCREEN_READER_ACTIVE: OnceLock<bool> = OnceLock::new();
 /// }
 /// ```
 pub fn is_screen_reader_active() -> bool {
-    *SCREEN_READER_ACTIVE.get_or_init(detect_screen_reader)
+    if let Some(value) = *cache().read().expect("screen reader cache poisoned") {
+        return value;
+    }
+
+    let mut guard = cache().write().expect("screen reader cache poisoned");
+    if let Some(value) = *guard {
+        value
+    } else {
+        let value = detect_screen_reader();
+        *guard = Some(value);
+        value
+    }
 }
 
 fn detect_screen_reader() -> bool {
@@ -52,9 +68,22 @@ fn env_var_indicates_screen_reader(name: &str) -> bool {
                 return false;
             }
 
-            !trimmed.eq_ignore_ascii_case("0") && !trimmed.eq_ignore_ascii_case("false")
+            let normalized = trimmed.to_ascii_lowercase();
+            !matches!(
+                normalized.as_str(),
+                "0" | "false" | "no" | "off" | "disabled"
+            )
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_cache_for_tests() {
+    if let Some(cache) = SCREEN_READER_ACTIVE.get() {
+        *cache
+            .write()
+            .expect("screen reader cache poisoned during reset") = None;
     }
 }
 
@@ -62,19 +91,17 @@ fn env_var_indicates_screen_reader(name: &str) -> bool {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::sync::Mutex;
-
-    static TEST_GUARD: Mutex<()> = Mutex::new(());
+    use serial_test::serial;
 
     fn set_env(var: &str, value: &str) {
-        // Safety: Tests run under a mutex so no other threads observe the intermediate state.
+        // Safety: Tests are serialised with #[serial], so no other threads mutate the environment.
         unsafe {
             std::env::set_var(var, value);
         }
     }
 
     fn remove_env(var: &str) {
-        // Safety: See `set_env`; the mutex ensures serialised environment access.
+        // Safety: See `set_env`; #[serial] ensures exclusive access during the test.
         unsafe {
             std::env::remove_var(var);
         }
@@ -84,7 +111,6 @@ mod tests {
     where
         F: FnOnce() -> R,
     {
-        let _guard = TEST_GUARD.lock().expect("test mutex poisoned");
         let saved: Vec<(&'static str, Option<String>)> = SCREEN_READER_ENV_VARS
             .iter()
             .map(|&var| (var, std::env::var(var).ok()))
@@ -93,6 +119,8 @@ mod tests {
         for &var in &SCREEN_READER_ENV_VARS {
             remove_env(var);
         }
+
+        reset_cache_for_tests();
 
         let result = f();
 
@@ -104,10 +132,13 @@ mod tests {
             }
         }
 
+        reset_cache_for_tests();
+
         result
     }
 
     #[test]
+    #[serial]
     fn returns_false_when_no_environment_variables_are_set() {
         with_clean_env(|| {
             assert_eq!(detect_screen_reader(), false);
@@ -115,6 +146,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn detects_nvda_running() {
         with_clean_env(|| {
             set_env("NVDA_RUNNING", "1");
@@ -123,6 +155,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn detects_jaws_running() {
         with_clean_env(|| {
             set_env("JAWS", "true");
@@ -131,6 +164,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn detects_orca_running() {
         with_clean_env(|| {
             set_env("ORCA_RUNNING", "yes");
@@ -139,6 +173,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn detects_speech_dispatcher_running() {
         with_clean_env(|| {
             set_env("SPEECHD_RUNNING", "1");
@@ -147,6 +182,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn detects_generic_accessibility_flag() {
         with_clean_env(|| {
             set_env("ACCESSIBILITY_ENABLED", "true");
@@ -155,6 +191,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn empty_values_are_ignored() {
         with_clean_env(|| {
             set_env("NVDA_RUNNING", "");
@@ -163,6 +200,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn whitespace_values_are_ignored() {
         with_clean_env(|| {
             set_env("JAWS", "   ");
@@ -171,6 +209,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn multiple_variables_set_returns_true() {
         with_clean_env(|| {
             set_env("NVDA_RUNNING", "1");
@@ -180,6 +219,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn false_like_values_do_not_trigger_detection() {
         with_clean_env(|| {
             set_env("ORCA_RUNNING", "false");
@@ -189,6 +229,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn cached_value_is_reused() {
         with_clean_env(|| {
             set_env("SPEECHD_RUNNING", "1");
@@ -196,6 +237,17 @@ mod tests {
 
             remove_env("SPEECHD_RUNNING");
             assert_eq!(is_screen_reader_active(), true);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn extended_false_like_values_do_not_trigger_detection() {
+        with_clean_env(|| {
+            for value in ["NO", "Off", "disabled"] {
+                set_env("ACCESSIBILITY_ENABLED", value);
+                assert_eq!(detect_screen_reader(), false, "value {value:?}");
+            }
         });
     }
 }

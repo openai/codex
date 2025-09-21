@@ -101,4 +101,5 @@ chrono = { version = "0.4", features = ["serde"] }
 insta = "1.43.2"
 pretty_assertions = "1"
 rand = "0.9"
+serial_test = "3"
 vt100 = "0.16.2"
