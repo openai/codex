@@ -738,16 +738,12 @@ impl Session {
         }
     }
 
-    async fn update_token_count(
+    async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
-        new_rate_limits: Option<RateLimitSnapshotEvent>,
-    ) -> TokenCountEvent {
+    ) {
         let mut state = self.state.lock().await;
-        if let Some(snapshot) = new_rate_limits {
-            state.latest_rate_limits = Some(snapshot);
-        }
         if let Some(token_usage) = token_usage {
             let info = TokenUsageInfo::new_or_append(
                 &state.token_info,
@@ -756,6 +752,15 @@ impl Session {
             );
             state.token_info = info;
         }
+    }
+
+    async fn update_rate_limits(&self, new_rate_limits: RateLimitSnapshotEvent) {
+        let mut state = self.state.lock().await;
+        state.latest_rate_limits = Some(new_rate_limits);
+    }
+
+    async fn get_token_count_event(&self) -> TokenCountEvent {
+        let state = self.state.lock().await;
         TokenCountEvent {
             info: state.token_info.clone(),
             rate_limits: state.latest_rate_limits.clone(),
@@ -2149,22 +2154,17 @@ async fn try_run_turn(
                     .await;
             }
             ResponseEvent::RateLimits(snapshot) => {
-                let token_event = sess
-                    .update_token_count(turn_context, None, Some(snapshot))
-                    .await;
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::TokenCount(token_event),
-                };
-                sess.send_event(event).await;
+                // Update internal state with latest rate limits, but defer sending until
+                // token usage is available to avoid duplicate TokenCount events.
+                sess.update_rate_limits(snapshot).await;
             }
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
             } => {
-                let token_event = sess
-                    .update_token_count(turn_context, token_usage.as_ref(), None)
+                sess.update_token_usage_info(turn_context, token_usage.as_ref())
                     .await;
+                let token_event = sess.get_token_count_event().await;
                 let _ = sess
                     .send_event(Event {
                         id: sub_id.to_string(),

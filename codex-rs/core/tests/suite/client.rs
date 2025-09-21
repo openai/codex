@@ -822,31 +822,43 @@ async fn token_count_includes_rate_limits_snapshot() {
         .await
         .unwrap();
 
-    let first_token_event =
-        wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
-    let first_payload = match first_token_event {
+    let token_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let final_payload = match token_event {
         EventMsg::TokenCount(ev) => ev,
         _ => unreachable!(),
     };
-    assert!(
-        first_payload.info.is_none(),
-        "no usage should be reported before the response completes"
+    // Assert full JSON for the final token count event (usage + rate limits)
+    let final_json = serde_json::to_value(&final_payload).unwrap();
+    pretty_assertions::assert_eq!(
+        final_json,
+        json!({
+            "info": {
+                "total_token_usage": {
+                    "input_tokens": 123,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 123
+                },
+                "last_token_usage": {
+                    "input_tokens": 123,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 123
+                },
+                // Default model is gpt-5 in tests → 272000 context window
+                "model_context_window": 272000
+            },
+            "rate_limits": {
+                "primary_used_percent": 12.5,
+                "protection_used_percent": 40.0,
+                "primary_to_protection_ratio_percent": 75.0,
+                "primary_window_minutes": 10,
+                "protection_window_minutes": 60
+            }
+        })
     );
-    let snapshot = first_payload
-        .rate_limits
-        .expect("rate limit snapshot should be present");
-    assert_eq!(snapshot.primary_used_percent, 12.5);
-    assert_eq!(snapshot.protection_used_percent, 40.0);
-    assert_eq!(snapshot.primary_to_protection_ratio_percent, 75.0);
-    assert_eq!(snapshot.primary_window_minutes, 10);
-    assert_eq!(snapshot.protection_window_minutes, 60);
-
-    let second_token_event =
-        wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
-    let final_payload = match second_token_event {
-        EventMsg::TokenCount(ev) => ev,
-        _ => unreachable!(),
-    };
     let usage = final_payload
         .info
         .expect("token usage info should be recorded after completion");
