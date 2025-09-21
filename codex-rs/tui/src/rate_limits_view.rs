@@ -69,16 +69,16 @@ struct RateLimitMetrics {
 impl RateLimitMetrics {
     fn from_snapshot(snapshot: &RateLimitSnapshotEvent) -> Self {
         let hourly_used = snapshot.primary_used_percent.clamp(0.0, 100.0);
-        let weekly_used = snapshot.protection_used_percent.clamp(0.0, 100.0);
+        let weekly_used = snapshot.weekly_used_percent.clamp(0.0, 100.0);
         Self {
             hourly_used,
             weekly_used,
             hourly_remaining: (100.0 - hourly_used).max(0.0),
             weekly_remaining: (100.0 - weekly_used).max(0.0),
             hourly_window_label: format_window_label(Some(snapshot.primary_window_minutes)),
-            weekly_window_label: format_window_label(Some(snapshot.protection_window_minutes)),
+            weekly_window_label: format_window_label(Some(snapshot.weekly_window_minutes)),
             hourly_reset_hint: format_reset_hint(Some(snapshot.primary_window_minutes)),
-            weekly_reset_hint: format_reset_hint(Some(snapshot.protection_window_minutes)),
+            weekly_reset_hint: format_reset_hint(Some(snapshot.weekly_window_minutes)),
         }
     }
 
@@ -254,7 +254,7 @@ fn build_legend_lines(show_gauge: bool) -> Vec<Line<'static>> {
 }
 
 fn extract_capacity_fraction(snapshot: &RateLimitSnapshotEvent) -> Option<f64> {
-    let ratio = snapshot.primary_to_protection_ratio_percent;
+    let ratio = snapshot.primary_to_weekly_ratio_percent;
     if ratio.is_finite() {
         Some((ratio / 100.0).clamp(0.0, 1.0))
     } else {
@@ -435,10 +435,10 @@ mod tests {
     fn snapshot() -> RateLimitSnapshotEvent {
         RateLimitSnapshotEvent {
             primary_used_percent: 30.0,
-            protection_used_percent: 60.0,
-            primary_to_protection_ratio_percent: 40.0,
+            weekly_used_percent: 60.0,
+            primary_to_weekly_ratio_percent: 40.0,
             primary_window_minutes: 300,
-            protection_window_minutes: 10_080,
+            weekly_window_minutes: 10_080,
         }
     }
 
@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn build_display_without_ratio_skips_gauge() {
         let mut s = snapshot();
-        s.primary_to_protection_ratio_percent = f64::NAN;
+        s.primary_to_weekly_ratio_percent = f64::NAN;
         let display = build_limits_view(&s, DEFAULT_GRID_CONFIG);
         assert!(display.gauge_lines(80).is_empty());
         assert!(display.legend_lines.is_empty());

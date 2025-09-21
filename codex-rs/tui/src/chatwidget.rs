@@ -325,17 +325,18 @@ impl ChatWidget {
         self.token_info = info;
     }
 
-    fn on_rate_limit_snapshot(&mut self, snapshot: RateLimitSnapshotEvent) {
-        let warnings = self.rate_limit_warnings.take_warnings(
-            snapshot.protection_used_percent,
-            snapshot.primary_used_percent,
-        );
-        self.rate_limit_snapshot = Some(snapshot);
-        if !warnings.is_empty() {
-            for warning in warnings {
-                self.add_to_history(history_cell::new_warning_event(warning));
+    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshotEvent>) {
+        if let Some(snapshot) = snapshot {
+            let warnings = self
+                .rate_limit_warnings
+                .take_warnings(snapshot.weekly_used_percent, snapshot.primary_used_percent);
+            self.rate_limit_snapshot = Some(snapshot);
+            if !warnings.is_empty() {
+                for warning in warnings {
+                    self.add_to_history(history_cell::new_warning_event(warning));
+                }
+                self.request_redraw();
             }
-            self.request_redraw();
         }
     }
     /// Finalize any active exec as failed and stop/clear running UI state.
@@ -1166,7 +1167,10 @@ impl ChatWidget {
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message)
             }
-            EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
+            EventMsg::TokenCount(ev) => {
+                self.set_token_info(ev.info);
+                self.on_rate_limit_snapshot(ev.rate_limits);
+            }
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
