@@ -22,7 +22,6 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -85,7 +84,7 @@ impl App {
 
         let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        let enhanced_keys_supported = tui.enhanced_keys_supported();
 
         let chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
