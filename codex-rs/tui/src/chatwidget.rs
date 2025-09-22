@@ -621,7 +621,7 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         // Emit the proposed command into history (like proposed patches)
         self.add_to_history(history_cell::new_proposed_command(&ev.command));
-        let command = shlex::try_join(ev.command.iter().map(|s| s.as_str()))
+        let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
 
@@ -1650,7 +1650,6 @@ impl ChatWidget {
             title: "Select a review preset".into(),
             footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
-            on_escape: None,
             ..Default::default()
         });
     }
@@ -1672,7 +1671,7 @@ impl ChatWidget {
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
                             prompt: format!(
-                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch} e.g. (git merge-base HEAD {branch}), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
+                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
                             ),
                             user_facing_hint: format!("changes against '{branch}'"),
                         },
@@ -1689,7 +1688,6 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search branches".to_string()),
-            on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
             ..Default::default()
         });
     }
@@ -1731,7 +1729,6 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search commits".to_string()),
-            on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
             ..Default::default()
         });
     }
@@ -1742,8 +1739,6 @@ impl ChatWidget {
             "Custom review instructions".to_string(),
             "Type instructions and press Enter".to_string(),
             None,
-            self.app_event_tx.clone(),
-            Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
             Box::new(move |prompt: String| {
                 let trimmed = prompt.trim().to_string();
                 if trimmed.is_empty() {

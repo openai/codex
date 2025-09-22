@@ -3,6 +3,7 @@ use anyhow::Context;
 use assert_cmd::prelude::*;
 use serde_json::Value;
 use std::process::Command;
+use std::string::ToString;
 use tempfile::TempDir;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -45,7 +46,7 @@ fn find_session_file_containing_marker(
                 && payload.get("type").and_then(|t| t.as_str()) == Some("message")
                 && payload
                     .get("content")
-                    .map(|c| c.to_string())
+                    .map(ToString::to_string)
                     .unwrap_or_default()
                     .contains(marker)
             {

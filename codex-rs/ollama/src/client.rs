@@ -117,7 +117,7 @@ impl OllamaClient {
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
-                    .map(|s| s.to_string())
+                    .map(str::to_string)
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
