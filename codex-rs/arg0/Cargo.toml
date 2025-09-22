@@ -11,10 +11,10 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-anyhow = "1"
-codex-apply-patch = { path = "../apply-patch" }
-codex-core = { path = "../core" }
-codex-linux-sandbox = { path = "../linux-sandbox" }
-dotenvy = "0.15.7"
-tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread"] }
+anyhow = { workspace = true }
+codex-apply-patch = { workspace = true }
+codex-core = { workspace = true }
+codex-linux-sandbox = { workspace = true }
+dotenvy = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
