@@ -261,7 +261,6 @@ impl ModelClient {
             }
 
             let res = req_builder.send().await;
-            warn!("res: {:?}", res);
             if let Ok(resp) = &res {
                 trace!(
                     "Response status: {}, cf-ray: {}",
