@@ -37,7 +37,6 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
-            SlashCommand::Review => "review my changes and find issues",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
             SlashCommand::Quit => "exit Codex",
