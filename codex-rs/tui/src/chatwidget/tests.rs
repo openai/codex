@@ -397,26 +397,26 @@ fn rate_limit_warnings_emit_thresholds() {
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Hourly usage exceeded 50%")),
-        "expected hourly 50% warning"
+            .any(|w| w.contains("Heads up, you've used over 50% of your 5h limit.")),
+        "expected hourly 50% warning (new copy)"
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Weekly usage exceeded 50%")),
-        "expected weekly 50% warning"
+            .any(|w| w.contains("Heads up, you've used over 50% of your weekly limit.")),
+        "expected weekly 50% warning (new copy)"
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Hourly usage exceeded 90%")),
-        "expected hourly 90% warning"
+            .any(|w| w.contains("Heads up, you've used over 90% of your 5h limit.")),
+        "expected hourly 90% warning (new copy)"
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Weekly usage exceeded 90%")),
-        "expected weekly 90% warning"
+            .any(|w| w.contains("Heads up, you've used over 90% of your weekly limit.")),
+        "expected weekly 90% warning (new copy)"
     );
 }
 
