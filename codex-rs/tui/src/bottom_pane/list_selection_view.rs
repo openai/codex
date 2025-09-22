@@ -11,7 +11,6 @@ use ratatui::widgets::Widget;
 
 use crate::app_event_sender::AppEventSender;
 
-use super::BottomPane;
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::popup_consts::MAX_POPUP_ROWS;
@@ -40,7 +39,6 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
-    pub on_escape: Option<SelectionAction>,
 }
 
 pub(crate) struct ListSelectionView {
@@ -51,7 +49,6 @@ pub(crate) struct ListSelectionView {
     state: ScrollState,
     complete: bool,
     app_event_tx: AppEventSender,
-    on_escape: Option<SelectionAction>,
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
@@ -77,7 +74,6 @@ impl ListSelectionView {
             state: ScrollState::new(),
             complete: false,
             app_event_tx,
-            on_escape: params.on_escape,
             is_searchable: params.is_searchable,
             search_query: String::new(),
             search_placeholder: if params.is_searchable {
@@ -221,7 +217,7 @@ impl ListSelectionView {
 }
 
 impl BottomPaneView for ListSelectionView {
-    fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Up, ..
@@ -240,7 +236,7 @@ impl BottomPaneView for ListSelectionView {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                self.on_ctrl_c(_pane);
+                self.on_ctrl_c();
             }
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -266,11 +262,8 @@ impl BottomPaneView for ListSelectionView {
         self.complete
     }
 
-    fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
+    fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.complete = true;
-        if let Some(cb) = &self.on_escape {
-            cb(&self.app_event_tx);
-        }
         CancellationEvent::Handled
     }
 
