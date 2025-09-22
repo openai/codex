@@ -382,10 +382,6 @@ fn nth_user_position(
         .find_map(|(i, idx)| (i == nth).then_some(idx))
 }
 
-fn last_user_position(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> Option<usize> {
-    user_positions_iter(cells).last()
-}
-
 fn user_positions_iter(
     cells: &[Arc<dyn crate::history_cell::HistoryCell>],
 ) -> impl Iterator<Item = usize> + '_ {
