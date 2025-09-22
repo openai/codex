@@ -161,8 +161,8 @@ impl ChatComposer {
         // Leave 1 for border and 1 for padding
         textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
         textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
-        let state = self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, &state)
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 
     /// Returns true if the composer currently contains no user input.
