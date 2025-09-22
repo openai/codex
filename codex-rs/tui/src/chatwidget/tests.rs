@@ -320,12 +320,12 @@ fn make_chatwidget_manual() -> (
         active_exec_cell: None,
         config: cfg.clone(),
         auth_manager,
-        session_header: SessionHeader::new(cfg.model.clone()),
+        session_header: SessionHeader::new(cfg.model),
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
         rate_limit_warnings: RateLimitWarningState::default(),
-        stream: StreamController::new(cfg),
+        stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
@@ -2133,8 +2133,12 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
 // then the exec block, another blank line, the status line, a blank line, and the composer.
 #[test]
 fn chatwidget_exec_and_status_layout_vt100_snapshot() {
-    // Setup identical scenario
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+    });
+
     chat.handle_codex_event(Event {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -2182,10 +2186,6 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     });
     chat.bottom_pane
         .set_composer_text("Summarize recent commits".to_string());
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
-    });
 
     // Dimensions
     let width: u16 = 80;
