@@ -1,12 +1,13 @@
 [package]
+edition = "2024"
 name = "core_test_support"
 version = { workspace = true }
-edition = "2024"
 
 [lib]
 path = "lib.rs"
 
 [dependencies]
+anyhow = "1"
 codex-core = { path = "../.." }
 serde_json = "1"
 tempfile = "3"

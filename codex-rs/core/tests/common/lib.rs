@@ -8,6 +8,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 
 pub mod responses;
+pub mod test_codex;
 
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
