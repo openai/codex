@@ -14,8 +14,11 @@ use codex_cli::login::run_logout;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
+use owo_colors::OwoColorize;
 use std::path::PathBuf;
+use supports_color::Stream;
 
 mod mcp_cmd;
 
@@ -156,6 +159,41 @@ struct GenerateTsCommand {
     prettier: Option<PathBuf>,
 }
 
+fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<String> {
+    let AppExitInfo {
+        token_usage,
+        conversation_id,
+    } = exit_info;
+
+    if token_usage.is_zero() {
+        return Vec::new();
+    }
+
+    let mut lines = vec![format!(
+        "{}",
+        codex_core::protocol::FinalOutput::from(token_usage)
+    )];
+
+    if let Some(session_id) = conversation_id {
+        let resume_cmd = format!("codex resume {session_id}");
+        let command = if color_enabled {
+            resume_cmd.cyan().to_string()
+        } else {
+            resume_cmd
+        };
+        lines.push(format!("To continue this session, run {command}."));
+    }
+
+    lines
+}
+
+fn print_exit_messages(exit_info: AppExitInfo) {
+    let color_enabled = supports_color::on(Stream::Stdout).is_some();
+    for line in format_exit_messages(exit_info, color_enabled) {
+        println!("{line}");
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
@@ -176,13 +214,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
             );
-            let usage = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            if !usage.token_usage.is_zero() {
-                println!(
-                    "{}",
-                    codex_core::protocol::FinalOutput::from(usage.token_usage)
-                );
-            }
+            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            print_exit_messages(exit_info);
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -372,6 +405,8 @@ fn print_completion(cmd: CompletionCommand) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::protocol::TokenUsage;
+    use codex_protocol::mcp_protocol::ConversationId;
 
     fn finalize_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");
@@ -391,6 +426,52 @@ mod tests {
         };
 
         finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli)
+    }
+
+    fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
+        let token_usage = TokenUsage {
+            output_tokens: 2,
+            total_tokens: 2,
+            ..Default::default()
+        };
+        AppExitInfo {
+            token_usage,
+            conversation_id: conversation
+                .map(ConversationId::from_string)
+                .map(Result::unwrap),
+        }
+    }
+
+    #[test]
+    fn format_exit_messages_skips_zero_usage() {
+        let exit_info = AppExitInfo {
+            token_usage: TokenUsage::default(),
+            conversation_id: None,
+        };
+        let lines = format_exit_messages(exit_info, false);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn format_exit_messages_includes_resume_hint_without_color() {
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
+        let lines = format_exit_messages(exit_info, false);
+        assert_eq!(
+            lines,
+            vec![
+                "Token usage: total=2 input=0 output=2".to_string(),
+                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000."
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn format_exit_messages_applies_color_when_enabled() {
+        let exit_info = sample_exit_info(Some("123e4567-e89b-12d3-a456-426614174000"));
+        let lines = format_exit_messages(exit_info, true);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].contains("\u{1b}[36m"));
     }
 
     #[test]
