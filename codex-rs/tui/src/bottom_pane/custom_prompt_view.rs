@@ -236,8 +236,8 @@ impl BottomPaneView for CustomPromptView {
             width: area.width.saturating_sub(2),
             height: text_area_height,
         };
-        let state = self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, &state)
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 }
 
