@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
-use crossterm::cursor;
+#[cfg(unix)]
 use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
@@ -27,7 +27,7 @@ use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
-use crossterm::terminal::ScrollUp;
+use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
@@ -127,15 +127,6 @@ pub fn init() -> Result<Terminal> {
 
     set_panic_hook();
 
-    // Instead of clearing the screen (which can drop scrollback in some terminals),
-    // scroll existing lines up until the cursor reaches the top, then start at (0, 0).
-    if let Ok((_x, y)) = cursor::position()
-        && y > 0
-    {
-        execute!(stdout(), ScrollUp(y))?;
-    }
-    execute!(stdout(), MoveTo(0, 0))?;
-
     let backend = CrosstermBackend::new(stdout());
     let tui = CustomTerminal::with_options(backend)?;
     Ok(tui)
@@ -170,6 +161,7 @@ pub struct Tui {
     alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
+    enhanced_keys_supported: bool,
 }
 
 #[cfg(unix)]
@@ -276,6 +268,10 @@ impl Tui {
             }
         });
 
+        // Detect keyboard enhancement support before any EventStream is created so the
+        // crossterm poller can acquire its lock without contention.
+        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+
         Self {
             frame_schedule_tx,
             draw_tx,
@@ -288,6 +284,7 @@ impl Tui {
             suspend_cursor_y: Arc::new(AtomicU16::new(0)),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
+            enhanced_keys_supported,
         }
     }
 
@@ -295,6 +292,10 @@ impl Tui {
         FrameRequester {
             frame_schedule_tx: self.frame_schedule_tx.clone(),
         }
+    }
+
+    pub fn enhanced_keys_supported(&self) -> bool {
+        self.enhanced_keys_supported
     }
 
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
