@@ -7,7 +7,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::user_approval_widget::ApprovalRequest;
 use crate::user_approval_widget::UserApprovalWidget;
 
-use super::BottomPane;
 use super::BottomPaneView;
 use super::CancellationEvent;
 

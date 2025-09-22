@@ -11,7 +11,6 @@ use ratatui::widgets::Widget;
 
 use crate::app_event_sender::AppEventSender;
 
-use super::BottomPane;
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::popup_consts::MAX_POPUP_ROWS;

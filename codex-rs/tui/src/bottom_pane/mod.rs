@@ -171,30 +171,22 @@ impl BottomPane {
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
-        if let Some(mut view) = self.view_stack.pop() {
-            // Reinsert at the original index so any views pushed during handling stay on top.
-            let reinsertion_index = self.view_stack.len();
-
+        if let Some(view) = self.view_stack.last_mut() {
             if key_event.code == KeyCode::Esc {
                 match view.on_ctrl_c() {
                     CancellationEvent::Handled => {
                         if view.is_complete() {
+                            self.view_stack.pop();
                             self.on_active_view_complete();
-                        } else {
-                            self.view_stack.insert(reinsertion_index, view);
                         }
                     }
-                    CancellationEvent::NotHandled => {
-                        self.view_stack.insert(reinsertion_index, view);
-                    }
+                    CancellationEvent::NotHandled => {}
                 }
             } else {
                 view.handle_key_event(key_event);
                 if view.is_complete() {
                     self.view_stack.clear();
                     self.on_active_view_complete();
-                } else {
-                    self.view_stack.insert(reinsertion_index, view);
                 }
             }
             self.request_redraw();
@@ -225,43 +217,29 @@ impl BottomPane {
     /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
     /// chance to consume the event (e.g. to dismiss itself).
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
-        let mut view = match self.view_stack.pop() {
-            Some(view) => view,
-            None => {
-                return if self.composer_is_empty() {
-                    CancellationEvent::NotHandled
-                } else {
-                    self.set_composer_text(String::new());
-                    self.show_ctrl_c_quit_hint();
-                    CancellationEvent::Handled
-                };
-            }
-        };
-
-        let event = view.on_ctrl_c();
-        match event {
-            CancellationEvent::Handled => {
+        if let Some(view) = self.view_stack.last_mut() {
+            let event = view.on_ctrl_c();
+            if matches!(event, CancellationEvent::Handled) {
                 if view.is_complete() {
                     self.on_active_view_complete();
-                } else {
-                    self.view_stack.push(view);
                 }
                 self.show_ctrl_c_quit_hint();
             }
-            CancellationEvent::NotHandled => {
-                self.view_stack.push(view);
-            }
+            event
+        } else if self.composer_is_empty() {
+            CancellationEvent::NotHandled
+        } else {
+            self.set_composer_text(String::new());
+            self.show_ctrl_c_quit_hint();
+            CancellationEvent::Handled
         }
-        event
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
-        if let Some(mut view) = self.view_stack.pop() {
+        if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
             if view.is_complete() {
                 self.on_active_view_complete();
-            } else {
-                self.view_stack.push(view);
             }
             if needs_redraw {
                 self.request_redraw();
