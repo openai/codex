@@ -226,7 +226,7 @@ impl App {
         if let Some(base_id) = self.backtrack.base_id {
             let prefill = nth_user_position(&self.transcript_cells, nth_user_message)
                 .and_then(|idx| self.transcript_cells.get(idx))
-                .and_then(|cell| (cell.as_ref() as &dyn Any).downcast_ref::<UserHistoryCell>())
+                .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
                 .map(|c| c.message.clone())
                 .unwrap_or_default();
             self.close_transcript_overlay(tui);
@@ -252,7 +252,7 @@ impl App {
             let prefill =
                 nth_user_position(&self.transcript_cells, self.backtrack.nth_user_message)
                     .and_then(|idx| self.transcript_cells.get(idx))
-                    .and_then(|cell| (cell.as_ref() as &dyn Any).downcast_ref::<UserHistoryCell>())
+                    .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
                     .map(|c| c.message.clone())
                     .unwrap_or_default();
             self.request_backtrack(prefill, base_id, self.backtrack.nth_user_message);
@@ -387,8 +387,7 @@ fn user_positions_iter(
 ) -> impl Iterator<Item = usize> + '_ {
     let header_type = TypeId::of::<CompositeHistoryCell>();
     let user_type = TypeId::of::<UserHistoryCell>();
-    let type_of =
-        |cell: &Arc<dyn crate::history_cell::HistoryCell>| (cell.as_ref() as &dyn Any).type_id();
+    let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
 
     let start = cells
         .iter()
@@ -439,7 +438,8 @@ mod tests {
         trim_transcript_cells_to_nth_user(&mut cells, 0);
 
         assert_eq!(cells.len(), 1);
-        let agent = (cells[0].as_ref() as &dyn Any)
+        let agent = cells[0]
+            .as_any()
             .downcast_ref::<AgentMessageCell>()
             .expect("agent cell");
         let agent_lines = agent.display_lines(u16::MAX);
@@ -471,7 +471,7 @@ mod tests {
         trim_transcript_cells_to_nth_user(&mut cells, 1);
 
         assert_eq!(cells.len(), 3);
-        let agent_intro = (cells[0].as_ref() as &dyn Any)
+        let agent_intro = cells[0].as_any()
             .downcast_ref::<AgentMessageCell>()
             .expect("intro agent");
         let intro_lines = agent_intro.display_lines(u16::MAX);
@@ -482,12 +482,14 @@ mod tests {
             .collect();
         assert_eq!(intro_text, "> intro");
 
-        let user_first = (cells[1].as_ref() as &dyn Any)
+        let user_first = cells[1]
+            .as_any()
             .downcast_ref::<UserHistoryCell>()
             .expect("first user");
         assert_eq!(user_first.message, "first");
 
-        let agent_between = (cells[2].as_ref() as &dyn Any)
+        let agent_between = cells[2]
+            .as_any()
             .downcast_ref::<AgentMessageCell>()
             .expect("between agent");
         let between_lines = agent_between.display_lines(u16::MAX);
