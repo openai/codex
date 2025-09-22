@@ -406,7 +406,6 @@ mod tests {
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
     use ratatui::prelude::Line;
-    use std::any::Any;
     use std::sync::Arc;
 
     #[test]
