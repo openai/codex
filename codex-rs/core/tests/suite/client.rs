@@ -16,12 +16,13 @@ use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
+use core_test_support::non_sandbox_test;
+use core_test_support::responses;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
 use serde_json::json;
@@ -125,12 +126,7 @@ fn write_auth_json(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_includes_initial_messages_and_sends_prior_items() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Create a fake rollout session file with prior user + system + assistant messages.
     let tmpdir = TempDir::new().unwrap();
@@ -296,12 +292,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_conversation_id_and_model_headers_in_request() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Mock server
     let server = MockServer::start().await;
@@ -426,12 +417,7 @@ async fn includes_base_instructions_override_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chatgpt_auth_sends_correct_request() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Mock server
     let server = MockServer::start().await;
@@ -505,12 +491,7 @@ async fn chatgpt_auth_sends_correct_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Mock server
     let server = MockServer::start().await;
@@ -637,12 +618,7 @@ async fn includes_user_instructions_message_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_responses_request_includes_store_and_reasoning_ids() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let server = MockServer::start().await;
 
@@ -774,6 +750,100 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
     assert_eq!(body["input"][4]["id"].as_str(), Some("local-shell-id"));
     assert_eq!(body["input"][5]["id"].as_str(), Some("custom-tool-id"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_count_includes_rate_limits_snapshot() {
+    let server = MockServer::start().await;
+
+    let sse_body = responses::sse(vec![responses::ev_completed_with_tokens("resp_rate", 123)]);
+
+    let response = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .insert_header("x-codex-primary-used-percent", "12.5")
+        .insert_header("x-codex-protection-used-percent", "40.0")
+        .insert_header("x-codex-primary-over-protection-limit-percent", "75.0")
+        .insert_header("x-codex-primary-window-minutes", "10")
+        .insert_header("x-codex-protection-window-minutes", "60")
+        .set_body_raw(sse_body, "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(response)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut provider = built_in_model_providers()["openai"].clone();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = provider;
+
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("test"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    let token_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let final_payload = match token_event {
+        EventMsg::TokenCount(ev) => ev,
+        _ => unreachable!(),
+    };
+    // Assert full JSON for the final token count event (usage + rate limits)
+    let final_json = serde_json::to_value(&final_payload).unwrap();
+    pretty_assertions::assert_eq!(
+        final_json,
+        json!({
+            "info": {
+                "total_token_usage": {
+                    "input_tokens": 123,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 123
+                },
+                "last_token_usage": {
+                    "input_tokens": 123,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 123
+                },
+                // Default model is gpt-5 in tests → 272000 context window
+                "model_context_window": 272000
+            },
+            "rate_limits": {
+                "primary_used_percent": 12.5,
+                "weekly_used_percent": 40.0,
+                "primary_to_weekly_ratio_percent": 75.0,
+                "primary_window_minutes": 10,
+                "weekly_window_minutes": 60
+            }
+        })
+    );
+    let usage = final_payload
+        .info
+        .expect("token usage info should be recorded after completion");
+    assert_eq!(usage.total_token_usage.total_tokens, 123);
+    let final_snapshot = final_payload
+        .rate_limits
+        .expect("latest rate limit snapshot should be retained");
+    assert_eq!(final_snapshot.primary_used_percent, 12.5);
+
+    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -941,12 +1011,7 @@ fn create_dummy_codex_auth() -> CodexAuth {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Skip under Codex sandbox network restrictions (mirrors other tests).
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Mock server that will receive three sequential requests and return the same SSE stream
     // each time: a few deltas, then a final assistant message, then completed.

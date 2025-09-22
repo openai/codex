@@ -160,8 +160,8 @@ impl ChatComposer {
         // Leave 1 for border and 1 for padding
         textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
         textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
-        let state = self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, &state)
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 
     /// Returns true if the composer currently contains no user input.
@@ -420,7 +420,7 @@ impl ChatComposer {
                     // Capture any needed data from popup before clearing it.
                     let prompt_content = match sel {
                         CommandItem::UserPrompt(idx) => {
-                            popup.prompt_content(idx).map(|s| s.to_string())
+                            popup.prompt_content(idx).map(str::to_string)
                         }
                         _ => None,
                     };
@@ -549,7 +549,7 @@ impl ChatComposer {
                         let format_label = match Path::new(&sel_path)
                             .extension()
                             .and_then(|e| e.to_str())
-                            .map(|s| s.to_ascii_lowercase())
+                            .map(str::to_ascii_lowercase)
                         {
                             Some(ext) if ext == "png" => "PNG",
                             Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
@@ -616,7 +616,7 @@ impl ChatComposer {
             text[safe_cursor..]
                 .chars()
                 .next()
-                .map(|c| c.is_whitespace())
+                .map(char::is_whitespace)
                 .unwrap_or(false)
         } else {
             false
@@ -644,7 +644,7 @@ impl ChatComposer {
         let ws_len_right: usize = after_cursor
             .chars()
             .take_while(|c| c.is_whitespace())
-            .map(|c| c.len_utf8())
+            .map(char::len_utf8)
             .sum();
         let start_right = safe_cursor + ws_len_right;
         let end_right_rel = text[start_right..]

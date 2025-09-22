@@ -342,7 +342,8 @@ Defines the list of MCP servers that Codex can consult for tool use. Currently, 
 
 **Note:** Codex may cache the list of tools and resources from an MCP server so that Codex can include this information in context at startup without spawning all the servers. This is designed to save resources by loading MCP servers lazily.
 
-Each server may set `startup_timeout_ms` to adjust how long Codex waits for it to start and respond to a tools listing. The default is `10_000` (10 seconds).
+Each server may set `startup_timeout_sec` to adjust how long Codex waits for it to start and respond to a tools listing. The default is `10` seconds.
+Similarly, `tool_timeout_sec` limits how long individual tool calls may run (default: `60` seconds), and Codex will fall back to the default when this value is omitted.
 
 This config option is comparable to how Claude and Cursor define `mcpServers` in their respective JSON config files, though because Codex uses TOML for its config language, the format is slightly different. For example, the following config in JSON:
 
@@ -369,7 +370,9 @@ command = "npx"
 args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
 # Optional: override the default 10s startup timeout
-startup_timeout_ms = 20_000
+startup_timeout_sec = 20
+# Optional: override the default 60s per-tool timeout
+tool_timeout_sec = 30
 ```
 
 You can also manage these entries from the CLI [experimental]:
@@ -619,7 +622,8 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `mcp_servers.<id>.command` | string | MCP server launcher command. |
 | `mcp_servers.<id>.args` | array<string> | MCP server args. |
 | `mcp_servers.<id>.env` | map<string,string> | MCP server env vars. |
-| `mcp_servers.<id>.startup_timeout_ms` | number | Startup timeout in milliseconds (default: 10_000). Timeout is applied both for initializing MCP server and initially listing tools. |
+| `mcp_servers.<id>.startup_timeout_sec` | number | Startup timeout in seconds (default: 10). Timeout is applied both for initializing MCP server and initially listing tools. |
+| `mcp_servers.<id>.tool_timeout_sec` | number | Per-tool timeout in seconds (default: 60). Accepts fractional values; omit to use the default. |
 | `model_providers.<id>.name` | string | Display name. |
 | `model_providers.<id>.base_url` | string | API base URL. |
 | `model_providers.<id>.env_key` | string | Env var for API key. |
