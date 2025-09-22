@@ -55,12 +55,12 @@ impl CustomPromptView {
 }
 
 impl BottomPaneView for CustomPromptView {
-    fn handle_key_event(&mut self, _pane: &mut super::BottomPane, key_event: KeyEvent) {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                self.on_ctrl_c(_pane);
+                self.on_ctrl_c();
             }
             KeyEvent {
                 code: KeyCode::Enter,
@@ -85,7 +85,7 @@ impl BottomPaneView for CustomPromptView {
         }
     }
 
-    fn on_ctrl_c(&mut self, _pane: &mut super::BottomPane) -> CancellationEvent {
+    fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.complete = true;
         CancellationEvent::Handled
     }
@@ -201,7 +201,7 @@ impl BottomPaneView for CustomPromptView {
         }
     }
 
-    fn handle_paste(&mut self, _pane: &mut super::BottomPane, pasted: String) -> bool {
+    fn handle_paste(&mut self, pasted: String) -> bool {
         if pasted.is_empty() {
             return false;
         }

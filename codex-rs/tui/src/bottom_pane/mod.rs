@@ -176,7 +176,7 @@ impl BottomPane {
             let reinsertion_index = self.view_stack.len();
 
             if key_event.code == KeyCode::Esc {
-                match view.on_ctrl_c(self) {
+                match view.on_ctrl_c() {
                     CancellationEvent::Handled => {
                         if view.is_complete() {
                             self.on_active_view_complete();
@@ -189,7 +189,7 @@ impl BottomPane {
                     }
                 }
             } else {
-                view.handle_key_event(self, key_event);
+                view.handle_key_event(key_event);
                 if view.is_complete() {
                     self.view_stack.clear();
                     self.on_active_view_complete();
@@ -238,7 +238,7 @@ impl BottomPane {
             }
         };
 
-        let event = view.on_ctrl_c(self);
+        let event = view.on_ctrl_c();
         match event {
             CancellationEvent::Handled => {
                 if view.is_complete() {
@@ -257,7 +257,7 @@ impl BottomPane {
 
     pub fn handle_paste(&mut self, pasted: String) {
         if let Some(mut view) = self.view_stack.pop() {
-            let needs_redraw = view.handle_paste(self, pasted);
+            let needs_redraw = view.handle_paste(pasted);
             if view.is_complete() {
                 self.on_active_view_complete();
             } else {
