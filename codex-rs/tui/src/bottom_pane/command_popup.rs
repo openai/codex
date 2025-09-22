@@ -287,7 +287,7 @@ mod tests {
         let mut prompt_names: Vec<String> = items
             .into_iter()
             .filter_map(|it| match it {
-                CommandItem::UserPrompt(i) => popup.prompt_name(i).map(|s| s.to_string()),
+                CommandItem::UserPrompt(i) => popup.prompt_name(i).map(std::string::ToString::to_string),
                 _ => None,
             })
             .collect();

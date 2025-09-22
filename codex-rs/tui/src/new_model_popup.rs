@@ -98,7 +98,7 @@ impl WidgetRef for &ModelUpgradePopup {
         let mut lines: Vec<Line> = Vec::new();
         if show_animation {
             let frame = self.animation.current_frame();
-            lines.extend(frame.lines().map(|l| l.into()));
+            lines.extend(frame.lines().map(Into::into));
             // Spacer between animation and text content.
             lines.push("".into());
         }

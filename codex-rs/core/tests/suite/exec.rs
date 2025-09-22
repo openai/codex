@@ -29,7 +29,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
 
     let params = ExecParams {
-        command: cmd.iter().map(|s| s.to_string()).collect(),
+        command: cmd.iter().map(std::string::ToString::to_string).collect(),
         cwd: tmp.path().to_path_buf(),
         timeout_ms: Some(1000),
         env: HashMap::new(),

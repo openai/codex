@@ -45,7 +45,7 @@ fn find_session_file_containing_marker(
                 && payload.get("type").and_then(|t| t.as_str()) == Some("message")
                 && payload
                     .get("content")
-                    .map(|c| c.to_string())
+                    .map(std::string::ToString::to_string)
                     .unwrap_or_default()
                     .contains(marker)
             {

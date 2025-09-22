@@ -73,7 +73,7 @@ impl Shell {
                         return Some(command);
                     }
 
-                    let joined = shlex::try_join(command.iter().map(|s| s.as_str())).ok();
+                    let joined = shlex::try_join(command.iter().map(String::as_str)).ok();
                     return joined.map(|arg| {
                         vec![
                             ps.exe.clone(),
@@ -111,7 +111,7 @@ fn format_shell_invocation_with_rc(
     rc_path: &str,
 ) -> Option<Vec<String>> {
     let joined = strip_bash_lc(command)
-        .or_else(|| shlex::try_join(command.iter().map(|s| s.as_str())).ok())?;
+        .or_else(|| shlex::try_join(command.iter().map(String::as_str)).ok())?;
 
     let rc_command = if std::path::Path::new(rc_path).exists() {
         format!("source {rc_path} && ({joined})")
@@ -327,7 +327,7 @@ mod tests {
             });
 
             let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
+                .format_default_shell_invocation(input.iter().map(std::string::ToString::to_string).collect());
             let expected_cmd = expected_cmd
                 .iter()
                 .map(|s| s.replace("BASHRC_PATH", bashrc_path.to_str().unwrap()))
@@ -434,7 +434,7 @@ mod macos_tests {
             });
 
             let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
+                .format_default_shell_invocation(input.iter().map(std::string::ToString::to_string).collect());
             let expected_cmd = expected_cmd
                 .iter()
                 .map(|s| s.replace("ZSHRC_PATH", zshrc_path.to_str().unwrap()))

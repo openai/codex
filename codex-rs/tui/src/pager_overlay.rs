@@ -382,7 +382,7 @@ impl TranscriptOverlay {
             let cell_lines = if Some(idx) == highlight_cell {
                 cell.transcript_lines()
                     .into_iter()
-                    .map(|l| l.reversed())
+                    .map(<Line<'static> as Stylize<'static, Line<'static>>>::reversed)
                     .collect()
             } else {
                 cell.transcript_lines()

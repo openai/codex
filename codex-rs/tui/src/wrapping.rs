@@ -543,7 +543,7 @@ mod tests {
         let lines = [line];
         // Force small width to exercise wrapping at spaces.
         let wrapped = word_wrap_lines_borrowed(&lines, 40);
-        let joined: String = wrapped.iter().map(|l| l.to_string()).join("\n");
+        let joined: String = wrapped.iter().map(std::string::ToString::to_string).join("\n");
         assert_eq!(
             joined,
             r#"Years passed, and Willowmere thrived
