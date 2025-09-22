@@ -1,0 +1,29 @@
+---
+source: tui/src/history_cell.rs
+assertion_line: 1782
+expression: visual
+---
+/status
+📂 Workspace
+  • Path: ~/code/codex/codex-rs/tui
+  • Approval Mode: on-request
+  • Sandbox: read-only
+  • AGENTS files: ../../AGENTS.md
+
+🧠 Model
+  • Name: gpt-5
+  • Provider: OpenAI
+  • Reasoning Effort: None
+  • Reasoning Summaries: Auto
+
+💻 Client
+  • CLI Version: 0.0.0
+
+📊 Token Usage
+  • Input: 0
+  • Output: 0
+  • Total: 0
+
+⏱️ Usage Limits
+  • 5h limit    : [████████████████████████████████████████] 100% used
+  • Weekly limit: [████████████████████████████████████████] 100% used
