@@ -616,7 +616,7 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         // Emit the proposed command into history (like proposed patches)
         self.add_to_history(history_cell::new_proposed_command(&ev.command));
-        let command = shlex::try_join(ev.command.iter().map(|s| s.as_str()))
+        let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
 

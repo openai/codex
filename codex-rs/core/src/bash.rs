@@ -1,3 +1,4 @@
+use tree_sitter::Node;
 use tree_sitter::Parser;
 use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
@@ -74,7 +75,7 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
     }
 
     // Walk uses a stack (LIFO), so re-sort by position to restore source order.
-    command_nodes.sort_by_key(|node| node.start_byte());
+    command_nodes.sort_by_key(Node::start_byte);
 
     let mut commands = Vec::new();
     for node in command_nodes {

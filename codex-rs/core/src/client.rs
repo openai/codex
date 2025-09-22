@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::auth::CodexAuth;
 use bytes::Bytes;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -337,7 +338,7 @@ impl ModelClient {
                                 // token.
                                 let plan_type = error
                                     .plan_type
-                                    .or_else(|| auth.as_ref().and_then(|a| a.get_plan_type()));
+                                    .or_else(|| auth.as_ref().and_then(CodexAuth::get_plan_type));
                                 let resets_in_seconds = error.resets_in_seconds;
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
