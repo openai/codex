@@ -29,6 +29,7 @@ use futures::prelude::*;
 
 pub(super) const COMPACT_TRIGGER_TEXT: &str = "Start Summarization";
 const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
+const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 #[derive(Template)]
 #[template(path = "compact/history_bridge.md", escape = "none")]
@@ -256,8 +257,7 @@ pub(crate) fn build_compacted_history(
     };
     // Truncate the concatenated prior user messages so the bridge message
     // stays well under the context window (approx. 4 bytes/token).
-    const MAX_TOKENS: usize = 20_000;
-    let max_bytes = MAX_TOKENS * 4;
+    let max_bytes = COMPACT_USER_MESSAGE_MAX_TOKENS * 4;
     if user_messages_text.len() > max_bytes {
         user_messages_text = truncate_middle(&user_messages_text, max_bytes).0;
     }
