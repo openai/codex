@@ -9,9 +9,7 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
-use core_test_support::responses;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -21,11 +19,16 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+use core_test_support::non_sandbox_test;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
+use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
-use responses::ev_assistant_message;
-use responses::ev_completed;
-use responses::sse;
-use responses::start_mock_server;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
@@ -50,12 +53,7 @@ const DUMMY_CALL_ID: &str = "call-multi-auto";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Set up a mock server that we can inspect after the run.
     let server = start_mock_server().await;
@@ -81,19 +79,19 @@ async fn summarize_context_three_requests_and_instructions() {
         body.contains("\"text\":\"hello world\"")
             && !body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
     };
-    responses::mount_sse_once(&server, first_matcher, sse1).await;
+    mount_sse_once(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
     };
-    responses::mount_sse_once(&server, second_matcher, sse2).await;
+    mount_sse_once(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{THIRD_USER_MSG}\""))
     };
-    responses::mount_sse_once(&server, third_matcher, sse3).await;
+    mount_sse_once(&server, third_matcher, sse3).await;
 
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = ModelProviderInfo {
@@ -276,28 +274,23 @@ async fn summarize_context_three_requests_and_instructions() {
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn auto_compact_runs_after_token_limit_hit() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let server = start_mock_server().await;
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
-        responses::ev_completed_with_tokens("r1", 70_000),
+        ev_completed_with_tokens("r1", 70_000),
     ]);
 
     let sse2 = sse(vec![
         ev_assistant_message("m2", "SECOND_REPLY"),
-        responses::ev_completed_with_tokens("r2", 330_000),
+        ev_completed_with_tokens("r2", 330_000),
     ]);
 
     let sse3 = sse(vec![
         ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
-        responses::ev_completed_with_tokens("r3", 200),
+        ev_completed_with_tokens("r3", 200),
     ]);
 
     let first_matcher = |req: &wiremock::Request| {
@@ -309,7 +302,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(first_matcher)
-        .respond_with(responses::sse_response(sse1))
+        .respond_with(sse_response(sse1))
         .mount(&server)
         .await;
 
@@ -322,7 +315,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(second_matcher)
-        .respond_with(responses::sse_response(sse2))
+        .respond_with(sse_response(sse2))
         .mount(&server)
         .await;
 
@@ -333,7 +326,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(third_matcher)
-        .respond_with(responses::sse_response(sse3))
+        .respond_with(sse_response(sse3))
         .mount(&server)
         .await;
 
@@ -417,28 +410,23 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_persists_rollout_entries() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let server = start_mock_server().await;
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
-        responses::ev_completed_with_tokens("r1", 70_000),
+        ev_completed_with_tokens("r1", 70_000),
     ]);
 
     let sse2 = sse(vec![
         ev_assistant_message("m2", "SECOND_REPLY"),
-        responses::ev_completed_with_tokens("r2", 330_000),
+        ev_completed_with_tokens("r2", 330_000),
     ]);
 
     let sse3 = sse(vec![
         ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
-        responses::ev_completed_with_tokens("r3", 200),
+        ev_completed_with_tokens("r3", 200),
     ]);
 
     let first_matcher = |req: &wiremock::Request| {
@@ -450,7 +438,7 @@ async fn auto_compact_persists_rollout_entries() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(first_matcher)
-        .respond_with(responses::sse_response(sse1))
+        .respond_with(sse_response(sse1))
         .mount(&server)
         .await;
 
@@ -463,7 +451,7 @@ async fn auto_compact_persists_rollout_entries() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(second_matcher)
-        .respond_with(responses::sse_response(sse2))
+        .respond_with(sse_response(sse2))
         .mount(&server)
         .await;
 
@@ -474,7 +462,7 @@ async fn auto_compact_persists_rollout_entries() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(third_matcher)
-        .respond_with(responses::sse_response(sse3))
+        .respond_with(sse_response(sse3))
         .mount(&server)
         .await;
 
@@ -550,28 +538,23 @@ async fn auto_compact_persists_rollout_entries() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_stops_after_failed_attempt() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let server = start_mock_server().await;
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
-        responses::ev_completed_with_tokens("r1", 500),
+        ev_completed_with_tokens("r1", 500),
     ]);
 
     let sse2 = sse(vec![
         ev_assistant_message("m2", SUMMARY_TEXT),
-        responses::ev_completed_with_tokens("r2", 50),
+        ev_completed_with_tokens("r2", 50),
     ]);
 
     let sse3 = sse(vec![
         ev_assistant_message("m3", STILL_TOO_BIG_REPLY),
-        responses::ev_completed_with_tokens("r3", 500),
+        ev_completed_with_tokens("r3", 500),
     ]);
 
     let first_matcher = |req: &wiremock::Request| {
@@ -582,7 +565,7 @@ async fn auto_compact_stops_after_failed_attempt() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(first_matcher)
-        .respond_with(responses::sse_response(sse1.clone()))
+        .respond_with(sse_response(sse1.clone()))
         .mount(&server)
         .await;
 
@@ -593,7 +576,7 @@ async fn auto_compact_stops_after_failed_attempt() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(second_matcher)
-        .respond_with(responses::sse_response(sse2.clone()))
+        .respond_with(sse_response(sse2.clone()))
         .mount(&server)
         .await;
 
@@ -605,7 +588,7 @@ async fn auto_compact_stops_after_failed_attempt() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(third_matcher)
-        .respond_with(responses::sse_response(sse3.clone()))
+        .respond_with(sse_response(sse3.clone()))
         .mount(&server)
         .await;
 
@@ -664,38 +647,33 @@ async fn auto_compact_stops_after_failed_attempt() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_events() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let server = start_mock_server().await;
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
-        responses::ev_completed_with_tokens("r1", 500),
+        ev_completed_with_tokens("r1", 500),
     ]);
     let sse2 = sse(vec![
         ev_assistant_message("m2", FIRST_AUTO_SUMMARY),
-        responses::ev_completed_with_tokens("r2", 50),
+        ev_completed_with_tokens("r2", 50),
     ]);
     let sse3 = sse(vec![
-        responses::ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
-        responses::ev_completed_with_tokens("r3", 150),
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r3", 150),
     ]);
     let sse4 = sse(vec![
         ev_assistant_message("m4", SECOND_LARGE_REPLY),
-        responses::ev_completed_with_tokens("r4", 450),
+        ev_completed_with_tokens("r4", 450),
     ]);
     let sse5 = sse(vec![
         ev_assistant_message("m5", SECOND_AUTO_SUMMARY),
-        responses::ev_completed_with_tokens("r5", 60),
+        ev_completed_with_tokens("r5", 60),
     ]);
     let sse6 = sse(vec![
         ev_assistant_message("m6", FINAL_REPLY),
-        responses::ev_completed_with_tokens("r6", 120),
+        ev_completed_with_tokens("r6", 120),
     ]);
 
     #[derive(Clone)]
