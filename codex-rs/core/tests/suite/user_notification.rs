@@ -1,9 +1,11 @@
+#![cfg(not(target_os = "windows"))]
+
 use std::os::unix::fs::PermissionsExt;
 
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use core_test_support::non_sandbox_test;
 use core_test_support::responses;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
@@ -20,12 +22,7 @@ use tokio::time::sleep;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() -> anyhow::Result<()> {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return Ok(());
-    }
+    non_sandbox_test!(result);
 
     let server = start_mock_server().await;
 
@@ -45,10 +42,10 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
     std::fs::set_permissions(&notify_script, std::fs::Permissions::from_mode(0o755))?;
 
     let notify_file = notify_dir.path().join("notify.txt");
-    let notify_file_str = notify_script.to_str().unwrap().to_string();
+    let notify_script_str = notify_script.to_str().unwrap().to_string();
 
     let TestCodex { codex, .. } = test_codex()
-        .with_config(move |cfg| cfg.notify = Some(vec![notify_file_str]))
+        .with_config(move |cfg| cfg.notify = Some(vec![notify_script_str]))
         .build(&server)
         .await?;
 
