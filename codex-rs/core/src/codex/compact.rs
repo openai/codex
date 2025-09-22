@@ -258,7 +258,7 @@ pub(crate) fn build_compacted_history(
     // stays well under the context window (approx. 4 bytes/token).
     const MAX_TOKENS: usize = 20_000;
     let max_bytes = MAX_TOKENS * 4;
-    if user_messages_text.as_bytes().len() > max_bytes {
+    if user_messages_text.len() > max_bytes {
         user_messages_text = truncate_middle(&user_messages_text, max_bytes).0;
     }
     let summary_text = if summary_text.is_empty() {
