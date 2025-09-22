@@ -933,7 +933,6 @@ dependencies = [
  "libc",
  "mcp-types",
  "once_cell",
- "owo-colors",
  "path-clean",
  "pathdiff",
  "pretty_assertions",
