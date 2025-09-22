@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,22 +40,12 @@ const MAX_TOOL_NAME_LENGTH: usize = 64;
 /// Default timeout for initializing MCP server & initially listing tools.
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Default timeout for individual tool calls (can be overridden per server or via env var).
+/// Default timeout for individual tool calls.
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Environment variable that overrides the MCP tool timeout (in seconds).
-const MCP_TOOL_TIMEOUT_ENV: &str = "MCP_TOOL_TIMEOUT";
 
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
 pub type ClientStartErrors = HashMap<String, anyhow::Error>;
-
-fn parse_tool_timeout_override(raw: &str) -> Option<Duration> {
-    let seconds: f64 = raw.trim().parse().ok()?;
-    Duration::try_from_secs_f64(seconds)
-        .ok()
-        .filter(|duration| !duration.is_zero())
-}
 
 fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
     let mut used_names = HashSet::new();
@@ -132,10 +121,6 @@ impl McpConnectionManager {
             return Ok((Self::default(), ClientStartErrors::default()));
         }
 
-        let env_tool_timeout = env::var(MCP_TOOL_TIMEOUT_ENV)
-            .ok()
-            .and_then(|raw| parse_tool_timeout_override(&raw));
-
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
         let mut errors = ClientStartErrors::new();
@@ -153,8 +138,7 @@ impl McpConnectionManager {
 
             let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
 
-            let tool_timeout =
-                env_tool_timeout.unwrap_or(cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT));
+            let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
 
             join_set.spawn(async move {
                 let McpServerConfig {

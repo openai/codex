@@ -343,7 +343,7 @@ Defines the list of MCP servers that Codex can consult for tool use. Currently, 
 **Note:** Codex may cache the list of tools and resources from an MCP server so that Codex can include this information in context at startup without spawning all the servers. This is designed to save resources by loading MCP servers lazily.
 
 Each server may set `startup_timeout_sec` to adjust how long Codex waits for it to start and respond to a tools listing. The default is `10` seconds.
-Similarly, `tool_timeout_sec` limits how long individual tool calls may run (default: `60` seconds). Fractional seconds are allowed (`4.5`, `120.0`, etc.), and Codex will fall back to the default when this value is omitted. You can also override the timeout globally with the `MCP_TOOL_TIMEOUT` environment variable (interpreted as seconds) when launching Codex; leave it unset to use the default.
+Similarly, `tool_timeout_sec` limits how long individual tool calls may run (default: `60` seconds), and Codex will fall back to the default when this value is omitted.
 
 This config option is comparable to how Claude and Cursor define `mcpServers` in their respective JSON config files, though because Codex uses TOML for its config language, the format is slightly different. For example, the following config in JSON:
 
