@@ -40,10 +40,6 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
-    pub empty_message: Option<String>,
-    /// Optional callback invoked on Esc/Ctrl-C to allow parent flows to
-    /// react (e.g., reopen the review popup). If set, the view will emit this
-    /// action and then mark itself complete.
     pub on_escape: Option<SelectionAction>,
 }
 
@@ -59,7 +55,6 @@ pub(crate) struct ListSelectionView {
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
-    empty_message: Option<String>,
     filtered_indices: Vec<usize>,
 }
 
@@ -90,7 +85,6 @@ impl ListSelectionView {
             } else {
                 None
             },
-            empty_message: params.empty_message,
             filtered_indices: Vec::new(),
         };
         s.apply_filter();
@@ -371,15 +365,7 @@ impl BottomPaneView for ListSelectionView {
 
         let rows = self.build_rows();
         if rows_area.height > 0 {
-            render_rows(
-                rows_area,
-                buf,
-                &rows,
-                &self.state,
-                MAX_POPUP_ROWS,
-                true,
-                self.empty_message.as_deref().unwrap_or("no matches"),
-            );
+            render_rows(rows_area, buf, &rows, &self.state, MAX_POPUP_ROWS, true);
         }
 
         if let Some(hint) = &self.footer_hint {
@@ -496,7 +482,6 @@ mod tests {
                 items,
                 is_searchable: true,
                 search_placeholder: Some("Type to search branches".to_string()),
-                empty_message: Some("no matches".to_string()),
                 ..Default::default()
             },
             tx,

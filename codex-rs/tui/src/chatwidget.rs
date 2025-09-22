@@ -1614,7 +1614,6 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search branches".to_string()),
-            empty_message: Some("no matches".to_string()),
             on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
             ..Default::default()
         });
@@ -1657,7 +1656,6 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search commits".to_string()),
-            empty_message: Some("no matches".to_string()),
             on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
             ..Default::default()
         });
@@ -1882,7 +1880,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
         items,
         is_searchable: true,
         search_placeholder: Some("Type to search commits".to_string()),
-        empty_message: Some("no matches".to_string()),
         ..Default::default()
     });
 }

@@ -120,7 +120,6 @@ pub(crate) fn render_rows(
     state: &ScrollState,
     max_results: usize,
     _dim_non_selected: bool,
-    empty_message: &str,
 ) {
     // Always draw a dim left border to match other popups.
     let block = Block::default()
@@ -159,7 +158,7 @@ pub(crate) fn render_rows(
 
     if rows_all.is_empty() {
         if content_area.height > 0 {
-            let para = Paragraph::new(Line::from(empty_message.dim().italic()));
+            let para = Paragraph::new(Line::from("no matches".dim().italic()));
             para.render(
                 Rect {
                     x: content_area.x,
