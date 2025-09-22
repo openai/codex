@@ -845,6 +845,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::string::ToString;
     use tempfile::tempdir;
 
     /// Helper to construct a patch with the given body.
@@ -853,7 +854,7 @@ mod tests {
     }
 
     fn strs_to_strings(strs: &[&str]) -> Vec<String> {
-        strs.iter().map(std::string::ToString::to_string).collect()
+        strs.iter().map(ToString::to_string).collect()
     }
 
     // Test helpers to reduce repetition when building bash -lc heredoc scripts

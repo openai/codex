@@ -224,6 +224,7 @@ pub async fn default_user_shell() -> Shell {
 mod tests {
     use super::*;
     use std::process::Command;
+    use std::string::ToString;
 
     #[tokio::test]
     async fn test_current_shell_detects_zsh() {
@@ -326,9 +327,8 @@ mod tests {
                 bashrc_path: bashrc_path.to_str().unwrap().to_string(),
             });
 
-            let actual_cmd = shell.format_default_shell_invocation(
-                input.iter().map(std::string::ToString::to_string).collect(),
-            );
+            let actual_cmd = shell
+                .format_default_shell_invocation(input.iter().map(ToString::to_string).collect());
             let expected_cmd = expected_cmd
                 .iter()
                 .map(|s| s.replace("BASHRC_PATH", bashrc_path.to_str().unwrap()))
@@ -372,6 +372,7 @@ mod tests {
 #[cfg(target_os = "macos")]
 mod macos_tests {
     use super::*;
+    use std::string::ToString;
 
     #[tokio::test]
     async fn test_run_with_profile_escaping_and_execution() {
@@ -434,9 +435,8 @@ mod macos_tests {
                 zshrc_path: zshrc_path.to_str().unwrap().to_string(),
             });
 
-            let actual_cmd = shell.format_default_shell_invocation(
-                input.iter().map(std::string::ToString::to_string).collect(),
-            );
+            let actual_cmd = shell
+                .format_default_shell_invocation(input.iter().map(ToString::to_string).collect());
             let expected_cmd = expected_cmd
                 .iter()
                 .map(|s| s.replace("ZSHRC_PATH", zshrc_path.to_str().unwrap()))

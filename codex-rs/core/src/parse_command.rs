@@ -72,17 +72,14 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
 /// Tests are at the top to encourage using TDD + Codex to fix the implementation.
 mod tests {
     use super::*;
+    use std::string::ToString;
 
     fn shlex_split_safe(s: &str) -> Vec<String> {
-        shlex_split(s).unwrap_or_else(|| {
-            s.split_whitespace()
-                .map(std::string::ToString::to_string)
-                .collect()
-        })
+        shlex_split(s).unwrap_or_else(|| s.split_whitespace().map(ToString::to_string).collect())
     }
 
     fn vec_str(args: &[&str]) -> Vec<String> {
-        args.iter().map(std::string::ToString::to_string).collect()
+        args.iter().map(ToString::to_string).collect()
     }
 
     fn assert_parsed(args: &[String], expected: Vec<ParsedCommand>) {
