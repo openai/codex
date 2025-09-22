@@ -25,7 +25,6 @@ use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
-use codex_core::protocol::RateLimitSnapshotEvent;
 use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
@@ -40,8 +39,6 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -320,12 +317,12 @@ fn make_chatwidget_manual() -> (
         active_cell: None,
         config: cfg.clone(),
         auth_manager,
-        session_header: SessionHeader::new(cfg.model.clone()),
+        session_header: SessionHeader::new(cfg.model),
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
         rate_limit_warnings: RateLimitWarningState::default(),
-        stream: StreamController::new(cfg),
+        stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
@@ -380,115 +377,6 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     s
 }
 
-fn styled_lines_to_string(lines: &[ratatui::text::Line<'static>]) -> String {
-    let mut out = String::new();
-    for line in lines {
-        for span in &line.spans {
-            let mut tags: Vec<&str> = Vec::new();
-            if let Some(color) = span.style.fg {
-                let name = match color {
-                    Color::Black => "black",
-                    Color::Blue => "blue",
-                    Color::Cyan => "cyan",
-                    Color::DarkGray => "dark-gray",
-                    Color::Gray => "gray",
-                    Color::Green => "green",
-                    Color::LightBlue => "light-blue",
-                    Color::LightCyan => "light-cyan",
-                    Color::LightGreen => "light-green",
-                    Color::LightMagenta => "light-magenta",
-                    Color::LightRed => "light-red",
-                    Color::LightYellow => "light-yellow",
-                    Color::Magenta => "magenta",
-                    Color::Red => "red",
-                    Color::Rgb(_, _, _) => "rgb",
-                    Color::Indexed(_) => "indexed",
-                    Color::Reset => "reset",
-                    Color::Yellow => "yellow",
-                    Color::White => "white",
-                };
-                tags.push(name);
-            }
-            let modifiers = span.style.add_modifier;
-            if modifiers.contains(Modifier::BOLD) {
-                tags.push("bold");
-            }
-            if modifiers.contains(Modifier::DIM) {
-                tags.push("dim");
-            }
-            if modifiers.contains(Modifier::ITALIC) {
-                tags.push("italic");
-            }
-            if modifiers.contains(Modifier::UNDERLINED) {
-                tags.push("underlined");
-            }
-            if !tags.is_empty() {
-                out.push('[');
-                out.push_str(&tags.join("+"));
-                out.push(']');
-            }
-            out.push_str(&span.content);
-            if !tags.is_empty() {
-                out.push_str("[/]");
-            }
-        }
-        out.push('\n');
-    }
-    out
-}
-
-fn sample_rate_limit_snapshot(
-    primary_used_percent: f64,
-    weekly_used_percent: f64,
-    ratio_percent: f64,
-) -> RateLimitSnapshotEvent {
-    RateLimitSnapshotEvent {
-        primary_used_percent,
-        weekly_used_percent,
-        primary_to_weekly_ratio_percent: ratio_percent,
-        primary_window_minutes: 300,
-        weekly_window_minutes: 10_080,
-    }
-}
-
-fn capture_limits_snapshot(snapshot: Option<RateLimitSnapshotEvent>) -> String {
-    let lines = match snapshot {
-        Some(ref snapshot) => history_cell::new_limits_output(snapshot).display_lines(80),
-        None => history_cell::new_limits_unavailable().display_lines(80),
-    };
-    styled_lines_to_string(&lines)
-}
-
-#[test]
-fn limits_placeholder() {
-    let visual = capture_limits_snapshot(None);
-    assert_snapshot!(visual);
-}
-
-#[test]
-fn limits_snapshot_basic() {
-    let visual = capture_limits_snapshot(Some(sample_rate_limit_snapshot(30.0, 60.0, 40.0)));
-    assert_snapshot!(visual);
-}
-
-#[test]
-fn limits_snapshot_hourly_remaining() {
-    let visual = capture_limits_snapshot(Some(sample_rate_limit_snapshot(0.0, 20.0, 10.0)));
-    assert_snapshot!(visual);
-}
-
-#[test]
-fn limits_snapshot_mixed_usage() {
-    let visual = capture_limits_snapshot(Some(sample_rate_limit_snapshot(20.0, 20.0, 10.0)));
-    assert_snapshot!(visual);
-}
-
-#[test]
-fn limits_snapshot_weekly_heavy() {
-    let visual = capture_limits_snapshot(Some(sample_rate_limit_snapshot(98.0, 0.0, 10.0)));
-    assert_snapshot!(visual);
-}
-
 #[test]
 fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
@@ -509,26 +397,26 @@ fn rate_limit_warnings_emit_thresholds() {
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Hourly usage exceeded 50%")),
-        "expected hourly 50% warning"
+            .any(|w| w.contains("Heads up, you've used over 50% of your 5h limit.")),
+        "expected hourly 50% warning (new copy)"
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Weekly usage exceeded 50%")),
-        "expected weekly 50% warning"
+            .any(|w| w.contains("Heads up, you've used over 50% of your weekly limit.")),
+        "expected weekly 50% warning (new copy)"
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Hourly usage exceeded 90%")),
-        "expected hourly 90% warning"
+            .any(|w| w.contains("Heads up, you've used over 90% of your 5h limit.")),
+        "expected hourly 90% warning (new copy)"
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Weekly usage exceeded 90%")),
-        "expected weekly 90% warning"
+            .any(|w| w.contains("Heads up, you've used over 90% of your weekly limit.")),
+        "expected weekly 90% warning (new copy)"
     );
 }
 
@@ -963,7 +851,7 @@ fn interrupt_exec_marks_failed_snapshot() {
 /// parent popup, pressing Esc again dismisses all panels (back to normal mode).
 #[test]
 fn review_custom_prompt_escape_navigates_back_then_dismisses() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     // Open the Review presets parent popup.
     chat.open_review_popup();
@@ -980,13 +868,6 @@ fn review_custom_prompt_escape_navigates_back_then_dismisses() {
 
     // Esc once: child view closes, parent (review presets) remains.
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    // Process emitted app events to reopen the parent review popup.
-    while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::OpenReviewPopup = ev {
-            chat.open_review_popup();
-            break;
-        }
-    }
     let header = render_bottom_first_row(&chat, 60);
     assert!(
         header.contains("Select a review preset"),
@@ -1005,7 +886,7 @@ fn review_custom_prompt_escape_navigates_back_then_dismisses() {
 /// parent popup, pressing Esc again dismisses all panels (back to normal mode).
 #[tokio::test(flavor = "current_thread")]
 async fn review_branch_picker_escape_navigates_back_then_dismisses() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     // Open the Review presets parent popup.
     chat.open_review_popup();
@@ -1023,13 +904,6 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
 
     // Esc once: child view closes, parent remains.
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    // Process emitted app events to reopen the parent review popup.
-    while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::OpenReviewPopup = ev {
-            chat.open_review_popup();
-            break;
-        }
-    }
     let header = render_bottom_first_row(&chat, 60);
     assert!(
         header.contains("Select a review preset"),
@@ -1170,7 +1044,10 @@ async fn binary_size_transcript_snapshot() {
                                     call_id: e.call_id.clone(),
                                     command: e.command,
                                     cwd: e.cwd,
-                                    parsed_cmd: parsed_cmd.into_iter().map(|c| c.into()).collect(),
+                                    parsed_cmd: parsed_cmd
+                                        .into_iter()
+                                        .map(std::convert::Into::into)
+                                        .collect(),
                                 }),
                             }
                         }
@@ -1247,7 +1124,7 @@ async fn binary_size_transcript_snapshot() {
         // Trim trailing spaces to match plain text fixture
         lines.push(s.trim_end().to_string());
     }
-    while lines.last().is_some_and(|l| l.is_empty()) {
+    while lines.last().is_some_and(std::string::String::is_empty) {
         lines.pop();
     }
     // Consider content only after the last session banner marker. Skip the transient
@@ -2133,8 +2010,12 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
 // then the exec block, another blank line, the status line, a blank line, and the composer.
 #[test]
 fn chatwidget_exec_and_status_layout_vt100_snapshot() {
-    // Setup identical scenario
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+    });
+
     chat.handle_codex_event(Event {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -2182,10 +2063,6 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     });
     chat.bottom_pane
         .set_composer_text("Summarize recent commits".to_string());
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
-    });
 
     // Dimensions
     let width: u16 = 80;

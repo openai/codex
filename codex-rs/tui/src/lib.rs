@@ -55,7 +55,6 @@ mod markdown_stream;
 mod new_model_popup;
 pub mod onboarding;
 mod pager_overlay;
-mod rate_limits_view;
 mod render;
 mod resume_picker;
 mod session_log;
@@ -552,18 +551,24 @@ mod tests {
     use codex_core::auth::write_auth_json;
     use codex_core::token_data::IdTokenInfo;
     use codex_core::token_data::TokenData;
-    fn make_config() -> Config {
-        // Create a unique CODEX_HOME per test to isolate auth.json writes.
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    fn get_next_codex_home() -> PathBuf {
+        static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
         let mut codex_home = std::env::temp_dir();
         let unique_suffix = format!(
             "codex_tui_test_{}_{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            NEXT_CODEX_HOME_ID.fetch_add(1, Ordering::Relaxed)
         );
         codex_home.push(unique_suffix);
+        codex_home
+    }
+
+    fn make_config() -> Config {
+        // Create a unique CODEX_HOME per test to isolate auth.json writes.
+        let codex_home = get_next_codex_home();
         std::fs::create_dir_all(&codex_home).expect("create unique CODEX_HOME");
 
         Config::load_from_base_config_with_overrides(

@@ -462,7 +462,7 @@ async fn process_chat_sse<S>(
             if let Some(reasoning_val) = choice.get("delta").and_then(|d| d.get("reasoning")) {
                 let mut maybe_text = reasoning_val
                     .as_str()
-                    .map(|s| s.to_string())
+                    .map(str::to_string)
                     .filter(|s| !s.is_empty());
 
                 if maybe_text.is_none() && reasoning_val.is_object() {

@@ -13,8 +13,6 @@ use ratatui::widgets::Widget;
 use std::cell::RefCell;
 
 use super::popup_consts::STANDARD_POPUP_HINT_LINE;
-use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::SelectionAction;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -30,8 +28,6 @@ pub(crate) struct CustomPromptView {
     placeholder: String,
     context_label: Option<String>,
     on_submit: PromptSubmitted,
-    app_event_tx: AppEventSender,
-    on_escape: Option<SelectionAction>,
 
     // UI state
     textarea: TextArea,
@@ -44,8 +40,6 @@ impl CustomPromptView {
         title: String,
         placeholder: String,
         context_label: Option<String>,
-        app_event_tx: AppEventSender,
-        on_escape: Option<SelectionAction>,
         on_submit: PromptSubmitted,
     ) -> Self {
         Self {
@@ -53,8 +47,6 @@ impl CustomPromptView {
             placeholder,
             context_label,
             on_submit,
-            app_event_tx,
-            on_escape,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
@@ -63,12 +55,12 @@ impl CustomPromptView {
 }
 
 impl BottomPaneView for CustomPromptView {
-    fn handle_key_event(&mut self, _pane: &mut super::BottomPane, key_event: KeyEvent) {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                self.on_ctrl_c(_pane);
+                self.on_ctrl_c();
             }
             KeyEvent {
                 code: KeyCode::Enter,
@@ -93,11 +85,8 @@ impl BottomPaneView for CustomPromptView {
         }
     }
 
-    fn on_ctrl_c(&mut self, _pane: &mut super::BottomPane) -> CancellationEvent {
+    fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.complete = true;
-        if let Some(cb) = &self.on_escape {
-            cb(&self.app_event_tx);
-        }
         CancellationEvent::Handled
     }
 
@@ -212,7 +201,7 @@ impl BottomPaneView for CustomPromptView {
         }
     }
 
-    fn handle_paste(&mut self, _pane: &mut super::BottomPane, pasted: String) -> bool {
+    fn handle_paste(&mut self, pasted: String) -> bool {
         if pasted.is_empty() {
             return false;
         }
@@ -236,8 +225,8 @@ impl BottomPaneView for CustomPromptView {
             width: area.width.saturating_sub(2),
             height: text_area_height,
         };
-        let state = self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, &state)
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 }
 
