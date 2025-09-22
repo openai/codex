@@ -310,10 +310,8 @@ mod tests {
         let long = "> This is a very long quoted line that should wrap across multiple columns to verify style preservation.";
         let out = super::simulate_stream_markdown_for_tests(&[long, "\n"], true, &cfg);
         // Wrap to a narrow width to force multiple output lines.
-        let wrapped = crate::wrapping::word_wrap_lines(
-            out.iter().collect::<Vec<_>>(),
-            crate::wrapping::RtOptions::new(24),
-        );
+        let wrapped =
+            crate::wrapping::word_wrap_lines(out.iter(), crate::wrapping::RtOptions::new(24));
         // Filter out purely blank lines
         let non_blank: Vec<_> = wrapped
             .into_iter()

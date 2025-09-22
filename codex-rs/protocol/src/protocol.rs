@@ -589,6 +589,21 @@ impl TokenUsageInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
+    pub rate_limits: Option<RateLimitSnapshotEvent>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct RateLimitSnapshotEvent {
+    /// Percentage (0-100) of the primary window that has been consumed.
+    pub primary_used_percent: f64,
+    /// Percentage (0-100) of the protection window that has been consumed.
+    pub weekly_used_percent: f64,
+    /// Size of the primary window relative to weekly (0-100).
+    pub primary_to_weekly_ratio_percent: f64,
+    /// Rolling window duration for the primary limit, in minutes.
+    pub primary_window_minutes: u64,
+    /// Rolling window duration for the weekly limit, in minutes.
+    pub weekly_window_minutes: u64,
 }
 
 // Includes prompts, tools and space to call compact.
