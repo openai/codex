@@ -326,8 +326,9 @@ mod tests {
                 bashrc_path: bashrc_path.to_str().unwrap().to_string(),
             });
 
-            let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(std::string::ToString::to_string).collect());
+            let actual_cmd = shell.format_default_shell_invocation(
+                input.iter().map(std::string::ToString::to_string).collect(),
+            );
             let expected_cmd = expected_cmd
                 .iter()
                 .map(|s| s.replace("BASHRC_PATH", bashrc_path.to_str().unwrap()))
@@ -433,8 +434,9 @@ mod macos_tests {
                 zshrc_path: zshrc_path.to_str().unwrap().to_string(),
             });
 
-            let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(std::string::ToString::to_string).collect());
+            let actual_cmd = shell.format_default_shell_invocation(
+                input.iter().map(std::string::ToString::to_string).collect(),
+            );
             let expected_cmd = expected_cmd
                 .iter()
                 .map(|s| s.replace("ZSHRC_PATH", zshrc_path.to_str().unwrap()))
@@ -559,10 +561,10 @@ mod tests_windows {
 
         for (shell, input, expected_cmd) in cases {
             let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
+                .format_default_shell_invocation(input.iter().map(String::to_string).collect());
             assert_eq!(
                 actual_cmd,
-                Some(expected_cmd.iter().map(|s| s.to_string()).collect())
+                Some(expected_cmd.iter().map(String::to_string).collect())
             );
         }
     }

@@ -74,7 +74,11 @@ mod tests {
     use super::*;
 
     fn shlex_split_safe(s: &str) -> Vec<String> {
-        shlex_split(s).unwrap_or_else(|| s.split_whitespace().map(std::string::ToString::to_string).collect())
+        shlex_split(s).unwrap_or_else(|| {
+            s.split_whitespace()
+                .map(std::string::ToString::to_string)
+                .collect()
+        })
     }
 
     fn vec_str(args: &[&str]) -> Vec<String> {

@@ -1170,7 +1170,10 @@ async fn binary_size_transcript_snapshot() {
                                     call_id: e.call_id.clone(),
                                     command: e.command,
                                     cwd: e.cwd,
-                                    parsed_cmd: parsed_cmd.into_iter().map(std::convert::Into::into).collect(),
+                                    parsed_cmd: parsed_cmd
+                                        .into_iter()
+                                        .map(std::convert::Into::into)
+                                        .collect(),
                                 }),
                             }
                         }

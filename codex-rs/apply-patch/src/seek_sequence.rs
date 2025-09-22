@@ -114,7 +114,10 @@ mod tests {
     use super::seek_sequence;
 
     fn to_vec(strings: &[&str]) -> Vec<String> {
-        strings.iter().map(std::string::ToString::to_string).collect()
+        strings
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect()
     }
 
     #[test]
