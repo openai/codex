@@ -13,8 +13,6 @@ use ratatui::widgets::Widget;
 use std::cell::RefCell;
 
 use super::popup_consts::STANDARD_POPUP_HINT_LINE;
-use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::SelectionAction;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -30,8 +28,6 @@ pub(crate) struct CustomPromptView {
     placeholder: String,
     context_label: Option<String>,
     on_submit: PromptSubmitted,
-    app_event_tx: AppEventSender,
-    on_escape: Option<SelectionAction>,
 
     // UI state
     textarea: TextArea,
@@ -44,8 +40,6 @@ impl CustomPromptView {
         title: String,
         placeholder: String,
         context_label: Option<String>,
-        app_event_tx: AppEventSender,
-        on_escape: Option<SelectionAction>,
         on_submit: PromptSubmitted,
     ) -> Self {
         Self {
@@ -53,8 +47,6 @@ impl CustomPromptView {
             placeholder,
             context_label,
             on_submit,
-            app_event_tx,
-            on_escape,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
@@ -95,9 +87,6 @@ impl BottomPaneView for CustomPromptView {
 
     fn on_ctrl_c(&mut self, _pane: &mut super::BottomPane) -> CancellationEvent {
         self.complete = true;
-        if let Some(cb) = &self.on_escape {
-            cb(&self.app_event_tx);
-        }
         CancellationEvent::Handled
     }
 

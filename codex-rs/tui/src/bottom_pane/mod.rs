@@ -7,6 +7,7 @@ use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
 use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -51,8 +52,8 @@ pub(crate) struct BottomPane {
     /// input state is retained when the view is closed.
     composer: ChatComposer,
 
-    /// If present, this is displayed instead of the `composer` (e.g. modals).
-    active_view: Option<Box<dyn BottomPaneView>>,
+    /// Stack of views displayed instead of the composer (e.g. popups/modals).
+    view_stack: Vec<Box<dyn BottomPaneView>>,
 
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
@@ -89,7 +90,7 @@ impl BottomPane {
                 params.placeholder_text,
                 params.disable_paste_burst,
             ),
-            active_view: None,
+            view_stack: Vec::new(),
             app_event_tx: params.app_event_tx,
             frame_requester: params.frame_requester,
             has_input_focus: params.has_input_focus,
@@ -101,12 +102,21 @@ impl BottomPane {
         }
     }
 
+    fn active_view(&self) -> Option<&dyn BottomPaneView> {
+        self.view_stack.last().map(|view| view.as_ref())
+    }
+
+    fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
+        self.view_stack.push(view);
+        self.request_redraw();
+    }
+
     pub fn desired_height(&self, width: u16) -> u16 {
         // Always reserve one blank row above the pane for visual spacing.
         let top_margin = 1;
 
         // Base height depends on whether a modal/overlay is active.
-        let base = match self.active_view.as_ref() {
+        let base = match self.active_view().as_ref() {
             Some(view) => view.desired_height(width),
             None => self.composer.desired_height(width).saturating_add(
                 self.status
@@ -133,7 +143,7 @@ impl BottomPane {
             width: area.width,
             height: area.height - top_margin - bottom_margin,
         };
-        match self.active_view.as_ref() {
+        match self.active_view() {
             Some(_) => [Rect::ZERO, area],
             None => {
                 let status_height = self
@@ -151,7 +161,7 @@ impl BottomPane {
         // In these states the textarea is not interactable, so we should not
         // show its caret.
         let [_, content] = self.layout(area);
-        if let Some(view) = self.active_view.as_ref() {
+        if let Some(view) = self.active_view() {
             view.cursor_pos(content)
         } else {
             self.composer.cursor_pos(content)
@@ -160,12 +170,32 @@ impl BottomPane {
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
-        if let Some(mut view) = self.active_view.take() {
-            view.handle_key_event(self, key_event);
-            if !view.is_complete() {
-                self.active_view = Some(view);
+        // If a modal/view is active, handle it here; otherwise forward to composer.
+        if let Some(mut view) = self.view_stack.pop() {
+            // Reinsert at the original index so any views pushed during handling stay on top.
+            let reinsertion_index = self.view_stack.len();
+
+            if key_event.code == KeyCode::Esc {
+                match view.on_ctrl_c(self) {
+                    CancellationEvent::Handled => {
+                        if view.is_complete() {
+                            self.on_active_view_complete();
+                        } else {
+                            self.view_stack.insert(reinsertion_index, view);
+                        }
+                    }
+                    CancellationEvent::NotHandled => {
+                        self.view_stack.insert(reinsertion_index, view);
+                    }
+                }
             } else {
-                self.on_active_view_complete();
+                view.handle_key_event(self, key_event);
+                if view.is_complete() {
+                    self.view_stack.clear();
+                    self.on_active_view_complete();
+                } else {
+                    self.view_stack.insert(reinsertion_index, view);
+                }
             }
             self.request_redraw();
             InputResult::None
@@ -195,7 +225,7 @@ impl BottomPane {
     /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
     /// chance to consume the event (e.g. to dismiss itself).
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
-        let mut view = match self.active_view.take() {
+        let mut view = match self.view_stack.pop() {
             Some(view) => view,
             None => {
                 return if self.composer_is_empty() {
@@ -211,27 +241,27 @@ impl BottomPane {
         let event = view.on_ctrl_c(self);
         match event {
             CancellationEvent::Handled => {
-                if !view.is_complete() {
-                    self.active_view = Some(view);
-                } else {
+                if view.is_complete() {
                     self.on_active_view_complete();
+                } else {
+                    self.view_stack.push(view);
                 }
                 self.show_ctrl_c_quit_hint();
             }
             CancellationEvent::NotHandled => {
-                self.active_view = Some(view);
+                self.view_stack.push(view);
             }
         }
         event
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
-        if let Some(mut view) = self.active_view.take() {
+        if let Some(mut view) = self.view_stack.pop() {
             let needs_redraw = view.handle_paste(self, pasted);
             if view.is_complete() {
                 self.on_active_view_complete();
             } else {
-                self.active_view = Some(view);
+                self.view_stack.push(view);
             }
             if needs_redraw {
                 self.request_redraw();
@@ -332,7 +362,7 @@ impl BottomPane {
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
-        self.active_view = Some(Box::new(view));
+        self.push_view(Box::new(view));
     }
 
     /// Update the queued messages shown under the status header.
@@ -362,7 +392,7 @@ impl BottomPane {
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
-        !self.is_task_running && self.active_view.is_none() && !self.composer.popup_active()
+        !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
     }
 
     /// Update the *context-window remaining* indicator in the composer. This
@@ -373,13 +403,12 @@ impl BottomPane {
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
-        self.active_view = Some(view);
-        self.request_redraw();
+        self.push_view(view);
     }
 
     /// Called when the agent requests user approval.
     pub fn push_approval_request(&mut self, request: ApprovalRequest) {
-        let request = if let Some(view) = self.active_view.as_mut() {
+        let request = if let Some(view) = self.view_stack.last_mut() {
             match view.try_consume_approval_request(request) {
                 Some(request) => request,
                 None => {
@@ -394,8 +423,7 @@ impl BottomPane {
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
         self.pause_status_timer_for_modal();
-        self.active_view = Some(Box::new(modal));
-        self.request_redraw()
+        self.push_view(Box::new(modal));
     }
 
     fn on_active_view_complete(&mut self) {
@@ -464,7 +492,7 @@ impl BottomPane {
         height: u32,
         format_label: &str,
     ) {
-        if self.active_view.is_none() {
+        if self.view_stack.is_empty() {
             self.composer
                 .attach_image(path, width, height, format_label);
             self.request_redraw();
@@ -481,7 +509,7 @@ impl WidgetRef for &BottomPane {
         let [status_area, content] = self.layout(area);
 
         // When a modal view is active, it owns the whole content area.
-        if let Some(view) = &self.active_view {
+        if let Some(view) = self.active_view() {
             view.render(content, buf);
         } else {
             // No active modal:
@@ -591,7 +619,7 @@ mod tests {
         // After denial, since the task is still running, the status indicator should be
         // visible above the composer. The modal should be gone.
         assert!(
-            pane.active_view.is_none(),
+            pane.view_stack.is_empty(),
             "no active modal view after denial"
         );
 

@@ -1648,7 +1648,6 @@ impl ChatWidget {
             title: "Select a review preset".into(),
             footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
-            on_escape: None,
             ..Default::default()
         });
     }
@@ -1687,7 +1686,6 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search branches".to_string()),
-            on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
             ..Default::default()
         });
     }
@@ -1729,7 +1727,6 @@ impl ChatWidget {
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search commits".to_string()),
-            on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
             ..Default::default()
         });
     }
@@ -1740,8 +1737,6 @@ impl ChatWidget {
             "Custom review instructions".to_string(),
             "Type instructions and press Enter".to_string(),
             None,
-            self.app_event_tx.clone(),
-            Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
             Box::new(move |prompt: String| {
                 let trimmed = prompt.trim().to_string();
                 if trimmed.is_empty() {

@@ -963,7 +963,7 @@ fn interrupt_exec_marks_failed_snapshot() {
 /// parent popup, pressing Esc again dismisses all panels (back to normal mode).
 #[test]
 fn review_custom_prompt_escape_navigates_back_then_dismisses() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     // Open the Review presets parent popup.
     chat.open_review_popup();
@@ -980,13 +980,6 @@ fn review_custom_prompt_escape_navigates_back_then_dismisses() {
 
     // Esc once: child view closes, parent (review presets) remains.
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    // Process emitted app events to reopen the parent review popup.
-    while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::OpenReviewPopup = ev {
-            chat.open_review_popup();
-            break;
-        }
-    }
     let header = render_bottom_first_row(&chat, 60);
     assert!(
         header.contains("Select a review preset"),
@@ -1005,7 +998,7 @@ fn review_custom_prompt_escape_navigates_back_then_dismisses() {
 /// parent popup, pressing Esc again dismisses all panels (back to normal mode).
 #[tokio::test(flavor = "current_thread")]
 async fn review_branch_picker_escape_navigates_back_then_dismisses() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     // Open the Review presets parent popup.
     chat.open_review_popup();
@@ -1023,13 +1016,6 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
 
     // Esc once: child view closes, parent remains.
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    // Process emitted app events to reopen the parent review popup.
-    while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::OpenReviewPopup = ev {
-            chat.open_review_popup();
-            break;
-        }
-    }
     let header = render_bottom_first_row(&chat, 60);
     assert!(
         header.contains("Select a review preset"),
