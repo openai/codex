@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_core::config_types::Notifications;
+use codex_core::git_info::current_branch_name;
+use codex_core::git_info::local_git_branches;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -19,6 +21,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
@@ -27,6 +30,8 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::RateLimitSnapshotEvent;
+use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
@@ -36,6 +41,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -59,14 +65,19 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::custom_prompt_view::CustomPromptView;
+use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
+use crate::history_cell::AgentMessageCell;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
@@ -81,6 +92,7 @@ mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+//
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
@@ -91,12 +103,48 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use codex_protocol::mcp_protocol::ConversationId;
+use std::path::Path;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
+}
+
+const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [50.0, 75.0, 90.0];
+
+#[derive(Default)]
+struct RateLimitWarningState {
+    weekly_index: usize,
+    hourly_index: usize,
+}
+
+impl RateLimitWarningState {
+    fn take_warnings(&mut self, weekly_used_percent: f64, hourly_used_percent: f64) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        while self.weekly_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+            && weekly_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.weekly_index]
+        {
+            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.weekly_index];
+            warnings.push(format!(
+                "Weekly usage exceeded {threshold:.0}% of the limit. Run /limits for detailed usage."
+            ));
+            self.weekly_index += 1;
+        }
+
+        while self.hourly_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+            && hourly_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.hourly_index]
+        {
+            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.hourly_index];
+            warnings.push(format!(
+                "Hourly usage exceeded {threshold:.0}% of the limit. Run /limits for detailed usage."
+            ));
+            self.hourly_index += 1;
+        }
+
+        warnings
+    }
 }
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
@@ -120,6 +168,8 @@ pub(crate) struct ChatWidget {
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
+    rate_limit_snapshot: Option<RateLimitSnapshotEvent>,
+    rate_limit_warnings: RateLimitWarningState,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
@@ -141,6 +191,8 @@ pub(crate) struct ChatWidget {
     queued_user_messages: VecDeque<UserMessage>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
+    // Simple review mode flag; used to adjust layout and banners.
+    is_review_mode: bool,
 }
 
 struct UserMessage {
@@ -284,13 +336,25 @@ impl ChatWidget {
         self.bottom_pane.set_token_usage(info.clone());
         self.token_info = info;
     }
-    /// Finalize any active exec as failed, push an error message into history,
-    /// and stop/clear running UI state.
-    fn finalize_turn_with_error_message(&mut self, message: String) {
+
+    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshotEvent>) {
+        if let Some(snapshot) = snapshot {
+            let warnings = self
+                .rate_limit_warnings
+                .take_warnings(snapshot.weekly_used_percent, snapshot.primary_used_percent);
+            self.rate_limit_snapshot = Some(snapshot);
+            if !warnings.is_empty() {
+                for warning in warnings {
+                    self.add_to_history(history_cell::new_warning_event(warning));
+                }
+                self.request_redraw();
+            }
+        }
+    }
+    /// Finalize any active exec as failed and stop/clear running UI state.
+    fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_exec_cell_as_failed();
-        // Emit the provided error message/history cell.
-        self.add_to_history(history_cell::new_error_event(message));
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -298,7 +362,8 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
-        self.finalize_turn_with_error_message(message);
+        self.finalize_turn();
+        self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
@@ -308,11 +373,15 @@ impl ChatWidget {
     /// Handle a turn aborted due to user interrupt (Esc).
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
-    fn on_interrupted_turn(&mut self) {
+    fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
-        self.finalize_turn_with_error_message(
-            "Conversation interrupted - tell the model what to do differently".to_owned(),
-        );
+        self.finalize_turn();
+
+        if reason != TurnAbortReason::ReviewEnded {
+            self.add_to_history(history_cell::new_error_event(
+                "Conversation interrupted - tell the model what to do differently".to_owned(),
+            ));
+        }
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
@@ -699,6 +768,8 @@ impl ChatWidget {
                 initial_images,
             ),
             token_info: None,
+            rate_limit_snapshot: None,
+            rate_limit_warnings: RateLimitWarningState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -710,6 +781,7 @@ impl ChatWidget {
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
             pending_notification: None,
+            is_review_mode: false,
         }
     }
 
@@ -755,6 +827,8 @@ impl ChatWidget {
                 initial_images,
             ),
             token_info: None,
+            rate_limit_snapshot: None,
+            rate_limit_warnings: RateLimitWarningState::default(),
             stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
@@ -766,6 +840,7 @@ impl ChatWidget {
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
             pending_notification: None,
+            is_review_mode: false,
         }
     }
 
@@ -880,6 +955,9 @@ impl ChatWidget {
                 self.clear_token_usage();
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
             }
+            SlashCommand::Review => {
+                self.open_review_popup();
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }
@@ -917,6 +995,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+            }
+            SlashCommand::Limits => {
+                self.add_limits_output();
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -1095,14 +1176,20 @@ impl ChatWidget {
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message)
             }
-            EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
+            EventMsg::TokenCount(ev) => {
+                self.set_token_info(ev.info);
+                self.on_rate_limit_snapshot(ev.rate_limits);
+            }
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
-                    self.on_interrupted_turn();
+                    self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::Replaced => {
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
+                }
+                TurnAbortReason::ReviewEnded => {
+                    self.on_interrupted_turn(ev.reason);
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
@@ -1140,9 +1227,60 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
-            EventMsg::EnteredReviewMode(_) => {}
-            EventMsg::ExitedReviewMode(_) => {}
+            EventMsg::EnteredReviewMode(review_request) => {
+                self.on_entered_review_mode(review_request)
+            }
+            EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
         }
+    }
+
+    fn on_entered_review_mode(&mut self, review: ReviewRequest) {
+        // Enter review mode and emit a concise banner
+        self.is_review_mode = true;
+        let banner = format!(">> Code review started: {} <<", review.user_facing_hint);
+        self.add_to_history(history_cell::new_review_status_line(banner));
+        self.request_redraw();
+    }
+
+    fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
+        // Leave review mode; if output is present, flush pending stream + show results.
+        if let Some(output) = review.review_output {
+            self.flush_answer_stream_with_separator();
+            self.flush_interrupt_queue();
+            self.flush_active_exec_cell();
+
+            if output.findings.is_empty() {
+                let explanation = output.overall_explanation.trim().to_string();
+                if explanation.is_empty() {
+                    tracing::error!("Reviewer failed to output a response.");
+                    self.add_to_history(history_cell::new_error_event(
+                        "Reviewer failed to output a response.".to_owned(),
+                    ));
+                } else {
+                    // Show explanation when there are no structured findings.
+                    let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
+                    append_markdown(&explanation, &mut rendered, &self.config);
+                    let body_cell = AgentMessageCell::new(rendered, false);
+                    self.app_event_tx
+                        .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+                }
+            } else {
+                let message_text =
+                    codex_core::review_format::format_review_findings_block(&output.findings, None);
+                let mut message_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+                append_markdown(&message_text, &mut message_lines, &self.config);
+                let body_cell = AgentMessageCell::new(message_lines, true);
+                self.app_event_tx
+                    .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+            }
+        }
+
+        self.is_review_mode = false;
+        // Append a finishing banner at the end of this turn.
+        self.add_to_history(history_cell::new_review_status_line(
+            "<< Code review finished >>".to_string(),
+        ));
+        self.request_redraw();
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
@@ -1217,6 +1355,15 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn add_limits_output(&mut self) {
+        if let Some(snapshot) = &self.rate_limit_snapshot {
+            self.add_to_history(history_cell::new_limits_output(snapshot));
+        } else {
+            self.add_to_history(history_cell::new_limits_unavailable());
+        }
+        self.request_redraw();
+    }
+
     pub(crate) fn add_status_output(&mut self) {
         let default_usage;
         let usage_ref = if let Some(ti) = &self.token_info {
@@ -1279,15 +1426,20 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                dismiss_on_select: true,
+                search_value: None,
             });
         }
 
-        self.bottom_pane.show_selection_view(
-            "Select model and reasoning level".to_string(),
-            Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
-            Some("Press Enter to confirm or Esc to go back".to_string()),
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select model and reasoning level".to_string(),
+            subtitle: Some(
+                "Switch between OpenAI models for this and future Codex CLI session".to_string(),
+            ),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
-        );
+            ..Default::default()
+        });
     }
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
@@ -1320,15 +1472,17 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                dismiss_on_select: true,
+                search_value: None,
             });
         }
 
-        self.bottom_pane.show_selection_view(
-            "Select Approval Mode".to_string(),
-            None,
-            Some("Press Enter to confirm or Esc to go back".to_string()),
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select Approval Mode".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
-        );
+            ..Default::default()
+        });
     }
 
     /// Set the approval policy in the widget's config copy.
@@ -1435,6 +1589,181 @@ impl ChatWidget {
         debug!("received {len} custom prompts");
         // Forward to bottom pane so the slash popup can show them now.
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
+    }
+
+    pub(crate) fn open_review_popup(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        items.push(SelectionItem {
+            name: "Review uncommitted changes".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(
+                move |tx: &AppEventSender| {
+                    tx.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
+                            user_facing_hint: "current changes".to_string(),
+                        },
+                    }));
+                },
+            )],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        // New: Review a specific commit (opens commit picker)
+        items.push(SelectionItem {
+            name: "Review a commit".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        items.push(SelectionItem {
+            name: "Review against a base branch".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        items.push(SelectionItem {
+            name: "Custom review instructions".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenReviewCustomPrompt);
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a review preset".into(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            on_escape: None,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn show_review_branch_picker(&mut self, cwd: &Path) {
+        let branches = local_git_branches(cwd).await;
+        let current_branch = current_branch_name(cwd)
+            .await
+            .unwrap_or_else(|| "(detached HEAD)".to_string());
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(branches.len());
+
+        for option in branches {
+            let branch = option.clone();
+            items.push(SelectionItem {
+                name: format!("{current_branch} -> {branch}"),
+                description: None,
+                is_current: false,
+                actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    tx3.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt: format!(
+                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch} e.g. (git merge-base HEAD {branch}), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
+                            ),
+                            user_facing_hint: format!("changes against '{branch}'"),
+                        },
+                    }));
+                })],
+                dismiss_on_select: true,
+                search_value: Some(option),
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a base branch".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search branches".to_string()),
+            on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
+        let commits = codex_core::git_info::recent_commits(cwd, 100).await;
+
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
+        for entry in commits {
+            let subject = entry.subject.clone();
+            let sha = entry.sha.clone();
+            let short = sha.chars().take(7).collect::<String>();
+            let search_val = format!("{subject} {sha}");
+
+            items.push(SelectionItem {
+                name: subject.clone(),
+                description: None,
+                is_current: false,
+                actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    let hint = format!("commit {short}");
+                    let prompt = format!(
+                        "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
+                    );
+                    tx3.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt,
+                            user_facing_hint: hint,
+                        },
+                    }));
+                })],
+                dismiss_on_select: true,
+                search_value: Some(search_val),
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a commit to review".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search commits".to_string()),
+            on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn show_review_custom_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Custom review instructions".to_string(),
+            "Type instructions and press Enter".to_string(),
+            None,
+            self.app_event_tx.clone(),
+            Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        prompt: trimmed.clone(),
+                        user_facing_hint: trimmed,
+                    },
+                }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     /// Programmatically submit a user text message as if typed in the
@@ -1591,6 +1920,49 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+#[cfg(test)]
+pub(crate) fn show_review_commit_picker_with_entries(
+    chat: &mut ChatWidget,
+    entries: Vec<codex_core::git_info::CommitLogEntry>,
+) {
+    let mut items: Vec<SelectionItem> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let subject = entry.subject.clone();
+        let sha = entry.sha.clone();
+        let short = sha.chars().take(7).collect::<String>();
+        let search_val = format!("{subject} {sha}");
+
+        items.push(SelectionItem {
+            name: subject.clone(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(move |tx3: &AppEventSender| {
+                let hint = format!("commit {short}");
+                let prompt = format!(
+                    "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
+                );
+                tx3.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                    },
+                }));
+            })],
+            dismiss_on_select: true,
+            search_value: Some(search_val),
+        });
+    }
+
+    chat.bottom_pane.show_selection_view(SelectionViewParams {
+        title: "Select a commit to review".to_string(),
+        footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+        items,
+        is_searchable: true,
+        search_placeholder: Some("Type to search commits".to_string()),
+        ..Default::default()
+    });
 }
 
 #[cfg(test)]

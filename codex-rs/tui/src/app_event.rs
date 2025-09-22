@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
@@ -65,4 +67,16 @@ pub(crate) enum AppEvent {
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
+
+    /// Open the branch picker option from the review popup.
+    OpenReviewBranchPicker(PathBuf),
+
+    /// Open the commit picker option from the review popup.
+    OpenReviewCommitPicker(PathBuf),
+
+    /// Open the custom prompt option from the review popup.
+    OpenReviewCustomPrompt,
+
+    /// Open the top-level review presets popup.
+    OpenReviewPopup,
 }

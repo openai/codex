@@ -7,6 +7,8 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 
+pub mod responses;
+
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
@@ -123,4 +125,22 @@ where
             return ev.msg;
         }
     }
+}
+
+#[macro_export]
+macro_rules! non_sandbox_test {
+    // For tests that return ()
+    () => {{
+        if ::std::env::var("CODEX_SANDBOX_NETWORK_DISABLED").is_ok() {
+            println!("Skipping test because it cannot execute when network is disabled in a Codex sandbox.");
+            return;
+        }
+    }};
+    // For tests that return Result<(), _>
+    (result $(,)?) => {{
+        if ::std::env::var("CODEX_SANDBOX_NETWORK_DISABLED").is_ok() {
+            println!("Skipping test because it cannot execute when network is disabled in a Codex sandbox.");
+            return ::core::result::Result::Ok(());
+        }
+    }};
 }

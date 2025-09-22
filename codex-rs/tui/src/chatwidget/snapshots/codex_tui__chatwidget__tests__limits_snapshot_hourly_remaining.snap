@@ -1,0 +1,29 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: visual
+---
+[magenta]/limits[/]
+
+[bold]Rate limit usage snapshot[/]
+[dim]  Tip: run `/limits` right after Codex replies for freshest numbers.[/]
+  • Hourly limit[dim] (≈5 hours window)[/]: [dark-gray+bold]0.0% used[/]
+  • Weekly limit[dim] (≈1 week window)[/]: [dark-gray+bold]20.0% used[/]
+[green]  Within current limits[/]
+
+[dim]  ╭─────────────────────────────────────────────────╮[/]
+  [dim]│[/][dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/][dim]│[/]
+  [dim]│[/][dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/] [dark-gray](>_)[/][dim]│[/]
+  [dim]│[/][green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/] [green](>_)[/][dim]│[/]
+  [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
+  [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
+  [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
+  [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
+  [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
+  [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
+  [dim]│[/](>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_) (>_)[dim]│[/]
+[dim]  ╰─────────────────────────────────────────────────╯[/]
+
+[bold]Legend[/]
+  • [dark-gray+bold]Dark gray[/] = weekly usage so far
+  • [green+bold]Green[/] = hourly capacity still available
+  • [bold]Default[/] = weekly capacity beyond the hourly window
