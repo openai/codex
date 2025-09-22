@@ -156,6 +156,11 @@ redundant_clone = "deny"
 uninlined_format_args = "deny"
 unwrap_used = "deny"
 
+# cargo-shear cannot see the platform-specific openssl-sys usage, so we
+# silence the false positive here instead of deleting a real dependency.
+[workspace.metadata.cargo-shear]
+ignored = ["openssl-sys"]
+
 [profile.release]
 lto = "fat"
 # Because we bundle some of these executables with the TypeScript CLI, we
