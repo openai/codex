@@ -3,14 +3,13 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::BottomPane;
 use super::CancellationEvent;
 
 /// Trait implemented by every view that can be shown in the bottom pane.
 pub(crate) trait BottomPaneView {
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
-    fn handle_key_event(&mut self, _pane: &mut BottomPane, _key_event: KeyEvent) {}
+    fn handle_key_event(&mut self, _key_event: KeyEvent) {}
 
     /// Return `true` if the view has finished and should be removed.
     fn is_complete(&self) -> bool {
@@ -18,7 +17,7 @@ pub(crate) trait BottomPaneView {
     }
 
     /// Handle Ctrl-C while this view is active.
-    fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
+    fn on_ctrl_c(&mut self) -> CancellationEvent {
         CancellationEvent::NotHandled
     }
 
@@ -30,7 +29,7 @@ pub(crate) trait BottomPaneView {
 
     /// Optional paste handler. Return true if the view modified its state and
     /// needs a redraw.
-    fn handle_paste(&mut self, _pane: &mut BottomPane, _pasted: String) -> bool {
+    fn handle_paste(&mut self, _pasted: String) -> bool {
         false
     }
 
