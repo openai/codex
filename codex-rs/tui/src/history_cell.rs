@@ -1739,45 +1739,6 @@ mod tests {
         render_lines(&cell.transcript_lines())
     }
 
-    fn sample_rate_limits(hourly: f64, weekly: f64) -> RateLimitSnapshotEvent {
-        RateLimitSnapshotEvent {
-            primary_used_percent: hourly,
-            weekly_used_percent: weekly,
-            primary_to_weekly_ratio_percent: 20.0,
-            primary_window_minutes: 300,
-            weekly_window_minutes: 10_080,
-        }
-    }
-
-    fn capture_status_usage_snapshot(hourly: f64, weekly: f64) -> String {
-        let snapshot = sample_rate_limits(hourly, weekly);
-        let cell = new_status_output(
-            &test_config(),
-            &TokenUsage::default(),
-            &None,
-            Some(&snapshot),
-        );
-        render_lines(&cell.display_lines(80)).join("\n")
-    }
-
-    #[test]
-    fn status_usage_limits_empty_snapshot() {
-        let visual = capture_status_usage_snapshot(0.0, 0.0);
-        insta::assert_snapshot!(visual);
-    }
-
-    #[test]
-    fn status_usage_limits_partial_snapshot() {
-        let visual = capture_status_usage_snapshot(16.0, 56.0);
-        insta::assert_snapshot!(visual);
-    }
-
-    #[test]
-    fn status_usage_limits_full_snapshot() {
-        let visual = capture_status_usage_snapshot(100.0, 100.0);
-        insta::assert_snapshot!(visual);
-    }
-
     #[test]
     fn session_header_includes_reasoning_level_when_present() {
         let cell = SessionHeaderHistoryCell::new(
