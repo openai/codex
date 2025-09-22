@@ -26,8 +26,11 @@ codex-exec = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-protocol = { workspace = true }
+codex-protocol-ts = { workspace = true }
 codex-tui = { workspace = true }
+owo-colors = { workspace = true }
 serde_json = { workspace = true }
+supports-color = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -37,7 +40,6 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-codex-protocol-ts = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
