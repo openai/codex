@@ -41,6 +41,7 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 base64 = { workspace = true }
+core_test_support = { workspace = true }
 mcp_test_support = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }

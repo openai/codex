@@ -30,4 +30,5 @@ urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 
 [dev-dependencies]
+core_test_support = { workspace = true }
 tempfile = { workspace = true }
