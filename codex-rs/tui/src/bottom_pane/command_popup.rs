@@ -161,10 +161,15 @@ impl CommandPopup {
                     CommandItem::Builtin(cmd) => {
                         (format!("/{}", cmd.command()), cmd.description().to_string())
                     }
-                    CommandItem::UserPrompt(i) => (
-                        format!("/{}", self.prompts[i].name),
-                        "send saved prompt".to_string(),
-                    ),
+                    CommandItem::UserPrompt(i) => {
+                        let prompt = &self.prompts[i];
+                        let desc = prompt
+                            .description
+                            .as_deref()
+                            .unwrap_or("send saved prompt")
+                            .to_string();
+                        (format!("/{}", prompt.name), desc)
+                    }
                 };
                 GenericDisplayRow {
                     name,
@@ -276,11 +281,13 @@ mod tests {
                 name: "foo".to_string(),
                 path: "/tmp/foo.md".to_string().into(),
                 content: "hello from foo".to_string(),
+                description: None,
             },
             CustomPrompt {
                 name: "bar".to_string(),
                 path: "/tmp/bar.md".to_string().into(),
                 content: "hello from bar".to_string(),
+                description: None,
             },
         ];
         let popup = CommandPopup::new(prompts);
@@ -303,6 +310,7 @@ mod tests {
             name: "init".to_string(),
             path: "/tmp/init.md".to_string().into(),
             content: "should be ignored".to_string(),
+            description: None,
         }]);
         let items = popup.filtered_items();
         let has_collision_prompt = items.into_iter().any(|it| match it {

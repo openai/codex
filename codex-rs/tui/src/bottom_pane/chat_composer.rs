@@ -2410,6 +2410,7 @@ mod tests {
             name: "my-prompt".to_string(),
             path: "/tmp/my-prompt.md".to_string().into(),
             content: prompt_text.to_string(),
+            description: None,
         }]);
 
         type_chars_humanlike(
@@ -2544,6 +2545,7 @@ mod tests {
             name: "test".to_string(),
             path: "/tmp/test.md".to_string().into(),
             content: template.to_string(),
+            description: None,
         }]);
 
         type_chars_humanlike(
@@ -2578,6 +2580,7 @@ mod tests {
             name: "test1".to_string(),
             path: "/tmp/test1.md".to_string().into(),
             content: template.to_string(),
+            description: None,
         }]);
         type_chars_humanlike(
             &mut composer,
@@ -2614,6 +2617,7 @@ mod tests {
             name: "test2".to_string(),
             path: "/tmp/test2.md".to_string().into(),
             content: template.to_string(),
+            description: None,
         }]);
 
         // Provide only one positional argument; $2 and $9 should remain verbatim.
