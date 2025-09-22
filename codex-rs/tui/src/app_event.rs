@@ -76,7 +76,4 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
-
-    /// Open the top-level review presets popup.
-    OpenReviewPopup,
 }
