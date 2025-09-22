@@ -22,7 +22,6 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -85,7 +84,7 @@ impl App {
 
         let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        let enhanced_keys_supported = tui.enhanced_keys_supported();
 
         let chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
@@ -354,6 +353,18 @@ impl App {
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
+            }
+            AppEvent::OpenReviewBranchPicker(cwd) => {
+                self.chat_widget.show_review_branch_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCommitPicker(cwd) => {
+                self.chat_widget.show_review_commit_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCustomPrompt => {
+                self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::OpenReviewPopup => {
+                self.chat_widget.open_review_popup();
             }
         }
         Ok(true)

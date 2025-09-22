@@ -95,32 +95,10 @@ impl CommandPopup {
     /// Determine the preferred height of the popup for a given width.
     /// Accounts for wrapped descriptions so that long tooltips don't overflow.
     pub(crate) fn calculate_required_height(&self, width: u16) -> u16 {
-        use super::selection_popup_common::GenericDisplayRow;
         use super::selection_popup_common::measure_rows_height;
-        let matches = self.filtered();
-        let rows_all: Vec<GenericDisplayRow> = if matches.is_empty() {
-            Vec::new()
-        } else {
-            matches
-                .into_iter()
-                .map(|(item, indices, _)| match item {
-                    CommandItem::Builtin(cmd) => GenericDisplayRow {
-                        name: format!("/{}", cmd.command()),
-                        match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
-                        is_current: false,
-                        description: Some(cmd.description().to_string()),
-                    },
-                    CommandItem::UserPrompt(i) => GenericDisplayRow {
-                        name: format!("/{}", self.prompts[i].name),
-                        match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
-                        is_current: false,
-                        description: Some("send saved prompt".to_string()),
-                    },
-                })
-                .collect()
-        };
+        let rows = self.rows_from_matches(self.filtered());
 
-        measure_rows_height(&rows_all, &self.state, MAX_POPUP_ROWS, width)
+        measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
     /// Compute fuzzy-filtered matches over built-in commands and user prompts,
@@ -172,6 +150,32 @@ impl CommandPopup {
         self.filtered().into_iter().map(|(c, _, _)| c).collect()
     }
 
+    fn rows_from_matches(
+        &self,
+        matches: Vec<(CommandItem, Option<Vec<usize>>, i32)>,
+    ) -> Vec<GenericDisplayRow> {
+        matches
+            .into_iter()
+            .map(|(item, indices, _)| {
+                let (name, description) = match item {
+                    CommandItem::Builtin(cmd) => {
+                        (format!("/{}", cmd.command()), cmd.description().to_string())
+                    }
+                    CommandItem::UserPrompt(i) => (
+                        format!("/{}", self.prompts[i].name),
+                        "send saved prompt".to_string(),
+                    ),
+                };
+                GenericDisplayRow {
+                    name,
+                    match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
+                    is_current: false,
+                    description: Some(description),
+                }
+            })
+            .collect()
+    }
+
     /// Move the selection cursor one step up.
     pub(crate) fn move_up(&mut self) {
         let len = self.filtered_items().len();
@@ -198,32 +202,11 @@ impl CommandPopup {
 
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let matches = self.filtered();
-        let rows_all: Vec<GenericDisplayRow> = if matches.is_empty() {
-            Vec::new()
-        } else {
-            matches
-                .into_iter()
-                .map(|(item, indices, _)| match item {
-                    CommandItem::Builtin(cmd) => GenericDisplayRow {
-                        name: format!("/{}", cmd.command()),
-                        match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
-                        is_current: false,
-                        description: Some(cmd.description().to_string()),
-                    },
-                    CommandItem::UserPrompt(i) => GenericDisplayRow {
-                        name: format!("/{}", self.prompts[i].name),
-                        match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
-                        is_current: false,
-                        description: Some("send saved prompt".to_string()),
-                    },
-                })
-                .collect()
-        };
+        let rows = self.rows_from_matches(self.filtered());
         render_rows(
             area,
             buf,
-            &rows_all,
+            &rows,
             &self.state,
             MAX_POPUP_ROWS,
             false,
