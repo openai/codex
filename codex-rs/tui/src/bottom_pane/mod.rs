@@ -433,6 +433,11 @@ impl BottomPane {
         self.composer.set_history_metadata(log_id, entry_count);
     }
 
+    /// Take and clear the one-shot history override captured by the composer.
+    pub(crate) fn take_next_history_override(&mut self) -> Option<String> {
+        self.composer.take_next_history_override()
+    }
+
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
         self.composer.flush_paste_burst_if_due()
     }

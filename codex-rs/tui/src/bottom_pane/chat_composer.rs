@@ -87,6 +87,8 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    next_history_override: Option<String>,
+    custom_prompts_loaded: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -130,6 +132,8 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            next_history_override: None,
+            custom_prompts_loaded: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -416,8 +420,7 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
-                    // Prepare data while we still have access to the textarea and popup.
-                    let first_line = self.textarea.text().lines().next().unwrap_or("");
+                    // Capture raw input for potential history override and compute action
                     let raw_input = self.textarea.text().to_string();
                     let mut maybe_builtin: Option<SlashCommand> = None;
                     let mut maybe_submission: Option<String> = None;
@@ -431,12 +434,14 @@ impl ChatComposer {
                                 .map(|s| s.to_string())
                                 .unwrap_or_default();
                             let prompt_name = popup.prompt_name(idx).unwrap_or("");
-                            let args = Self::extract_args_from_line(first_line);
+                            let args = Self::extract_args_from_input(&raw_input);
                             let final_text =
                                 Self::substitute_prompt_args(&template, prompt_name, &args);
                             maybe_submission = Some(final_text);
-                            // Record raw slash input into local history.
+                            // For custom prompts, record the raw input as a local history entry
+                            // and also set a one-shot override for persistent history.
                             self.history.record_local_submission(&raw_input);
+                            self.set_next_history_override(raw_input);
                         }
                     }
 
@@ -756,6 +761,11 @@ impl ChatComposer {
                 code: KeyCode::Up | KeyCode::Down,
                 ..
             } => {
+                // Block history search for slash commands until custom prompts have loaded
+                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                if first_line.starts_with('/') && !self.custom_prompts_loaded {
+                    return self.handle_input_basic(key_event);
+                }
                 if self
                     .history
                     .should_handle_navigation(self.textarea.text(), self.textarea.cursor())
@@ -840,6 +850,27 @@ impl ChatComposer {
                     return (InputResult::None, true);
                 }
                 if !text.is_empty() {
+                    // If this is a typed custom prompt like "/name ..." and prompts are loaded,
+                    // expand it immediately instead of sending the literal slash text.
+                    if text.starts_with('/') && self.custom_prompts_loaded {
+                        // Extract the command token and args
+                        let first = text.lines().next().unwrap_or("");
+                        let stripped = first.trim_start_matches('/');
+                        let mut parts = stripped.split_whitespace();
+                        let cmd_token = parts.next().unwrap_or("");
+                        if let Some(prompt) =
+                            self.custom_prompts.iter().find(|p| p.name == cmd_token)
+                        {
+                            let args = Self::extract_args_from_input(&text);
+                            let final_text =
+                                Self::substitute_prompt_args(&prompt.content, cmd_token, &args);
+                            let full_text = first.to_string();
+                            self.history.record_local_submission(&full_text);
+                            self.set_next_history_override(full_text);
+                            return (InputResult::Submitted(final_text), true);
+                        }
+                    }
+                    // Otherwise, record literal text in local (in-session) history
                     self.history.record_local_submission(&text);
                 }
                 // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
@@ -1179,22 +1210,45 @@ impl ChatComposer {
 
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.custom_prompts = prompts.clone();
+        self.custom_prompts_loaded = true;
         if let ActivePopup::Command(popup) = &mut self.active_popup {
             popup.set_prompts(prompts);
         }
     }
 
-    /// Extract positional arguments from a first-line string that may contain
-    /// a slash command (e.g. "/name arg1 arg2"). Returns any tokens after the
-    /// command token as arguments.
-    fn extract_args_from_line(first_line: &str) -> Vec<String> {
+    pub(crate) fn set_next_history_override(&mut self, text: String) {
+        self.next_history_override = Some(text);
+    }
+
+    pub(crate) fn take_next_history_override(&mut self) -> Option<String> {
+        self.next_history_override.take()
+    }
+    /// Extract positional arguments from raw input that may contain a slash command.
+    /// - Parses args from the first line after the command token (e.g. "/name arg1 arg2").
+    /// - If there is multiline remainder, it is appended to the last positional argument
+    ///   with a leading '\n'. If there are no positionals, the remainder becomes a single
+    ///   argument starting with a leading '\n'. This preserves the user's exact newline
+    ///   boundary when `$ARGUMENTS` is expanded with a simple join(" ").
+    fn extract_args_from_input(raw_input: &str) -> Vec<String> {
+        let first_line = raw_input.lines().next().unwrap_or("");
         let Some(stripped) = first_line.strip_prefix('/') else {
             return Vec::new();
         };
         let token = stripped.trim_start();
         let mut parts = token.split_whitespace();
         let _cmd = parts.next();
-        parts.map(|s| s.to_string()).collect()
+        let mut args: Vec<String> = parts.map(|s| s.to_string()).collect();
+        if let Some(rest) = raw_input.splitn(2, '\n').nth(1) {
+            if !rest.is_empty() {
+                if let Some(last) = args.last_mut() {
+                    last.push('\n');
+                    last.push_str(rest);
+                } else {
+                    args.push(format!("\n{rest}"));
+                }
+            }
+        }
+        args
     }
 
     /// Substitute $ARGUMENTS and $0..$9 tokens in `template`.
@@ -1222,7 +1276,7 @@ impl ChatComposer {
                 // Try $0..$9
                 if i + 1 < bytes.len() {
                     let d = bytes[i + 1];
-                    if (b'0'..=b'9').contains(&d) {
+                    if d.is_ascii_digit() {
                         if d == b'0' {
                             out.push_str(prompt_name);
                         } else {
@@ -1242,8 +1296,13 @@ impl ChatComposer {
                 out.push('$');
                 i += 1;
             } else {
-                out.push(bytes[i] as char);
-                i += 1;
+                // Advance over a full UTF-8 character instead of a single byte.
+                if let Some(ch) = template[i..].chars().next() {
+                    out.push(ch);
+                    i += ch.len_utf8();
+                } else {
+                    break;
+                }
             }
         }
         out
@@ -2548,14 +2607,15 @@ mod tests {
             description: None,
         }]);
 
-        type_chars_humanlike(
-            &mut composer,
-            &['/', 't', 'e', 's', 't', ' ', 'C', 'l', 'a', 'u', 'd', 'e'],
-        );
+        // Provide a multiline input; the remaining lines should be appended as
+        // the last argument so that $ARGUMENTS covers the full input.
+        composer.handle_paste("/test Claude\nand a second line".to_string());
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(
-            InputResult::Submitted("Hello, Claude. My name is codex.".to_string()),
+            InputResult::Submitted(
+                "Hello, Claude\nand a second line. My name is codex.".to_string()
+            ),
             result
         );
     }
@@ -2638,5 +2698,25 @@ mod tests {
         let args = vec!["one\nline2".to_string(), "last".to_string()];
         let out = ChatComposer::substitute_prompt_args(template, prompt_name, &args);
         assert_eq!(out, "X:one\nline2 last:Y");
+    }
+
+    #[test]
+    fn substitute_prompt_args_preserves_utf8_and_expands_tokens() {
+        // Non-ASCII characters should remain intact after substitution.
+        let template = "안녕하세요 세계 — $0 — $1 — $ARGUMENTS — 끝";
+        let prompt_name = "테스트명";
+        let args = vec!["첫째".to_string(), "둘째".to_string()];
+        let out = ChatComposer::substitute_prompt_args(template, prompt_name, &args);
+        assert_eq!(out, "안녕하세요 세계 — 테스트명 — 첫째 — 첫째 둘째 — 끝");
+    }
+
+    #[test]
+    fn substitute_prompt_args_preserves_literal_when_missing() {
+        // When arguments are missing, $ARGUMENTS and $9 should be preserved literally.
+        let template = "Привет мир $ARGUMENTS $9";
+        let prompt_name = "имя";
+        let args: Vec<String> = vec![];
+        let out = ChatComposer::substitute_prompt_args(template, prompt_name, &args);
+        assert_eq!(out, "Привет мир $ARGUMENTS $9");
     }
 }

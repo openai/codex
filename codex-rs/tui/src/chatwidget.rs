@@ -202,6 +202,8 @@ pub(crate) struct ChatWidget {
 struct UserMessage {
     text: String,
     image_paths: Vec<PathBuf>,
+    // Optional override to record in persistent history instead of `text`.
+    history_override: Option<String>,
 }
 
 impl From<String> for UserMessage {
@@ -209,6 +211,7 @@ impl From<String> for UserMessage {
         Self {
             text,
             image_paths: Vec::new(),
+            history_override: None,
         }
     }
 }
@@ -217,7 +220,11 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
     if text.is_empty() && image_paths.is_empty() {
         None
     } else {
-        Some(UserMessage { text, image_paths })
+        Some(UserMessage {
+            text,
+            image_paths,
+            history_override: None,
+        })
     }
 }
 
@@ -906,6 +913,7 @@ impl ChatWidget {
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
+                            history_override: self.bottom_pane.take_next_history_override(),
                         };
                         if self.bottom_pane.is_task_running() {
                             self.queued_user_messages.push_back(user_message);
@@ -1087,7 +1095,11 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
+        let UserMessage {
+            text,
+            image_paths,
+            history_override,
+        } = user_message;
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
@@ -1110,8 +1122,11 @@ impl ChatWidget {
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {
+            let history_text = history_override
+                .or_else(|| self.bottom_pane.take_next_history_override())
+                .unwrap_or_else(|| text.clone());
             self.codex_op_tx
-                .send(Op::AddToHistory { text: text.clone() })
+                .send(Op::AddToHistory { text: history_text })
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
