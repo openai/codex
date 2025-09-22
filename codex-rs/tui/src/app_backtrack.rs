@@ -471,7 +471,8 @@ mod tests {
         trim_transcript_cells_to_nth_user(&mut cells, 1);
 
         assert_eq!(cells.len(), 3);
-        let agent_intro = cells[0].as_any()
+        let agent_intro = cells[0]
+            .as_any()
             .downcast_ref::<AgentMessageCell>()
             .expect("intro agent");
         let intro_lines = agent_intro.display_lines(u16::MAX);
