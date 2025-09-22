@@ -238,6 +238,11 @@ impl BottomPaneView for ListSelectionView {
                 self.apply_filter();
             }
             KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.on_ctrl_c(_pane);
+            }
+            KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
                 ..

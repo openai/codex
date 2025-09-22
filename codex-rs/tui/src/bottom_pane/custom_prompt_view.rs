@@ -66,6 +66,11 @@ impl BottomPaneView for CustomPromptView {
     fn handle_key_event(&mut self, _pane: &mut super::BottomPane, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.on_ctrl_c(_pane);
+            }
+            KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..

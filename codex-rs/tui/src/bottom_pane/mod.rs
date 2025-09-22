@@ -161,88 +161,69 @@ impl BottomPane {
 
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
-        // If a modal/view is active, handle it here; otherwise forward to composer.
         if let Some(mut view) = self.active_view.take() {
-            if key_event.code == KeyCode::Esc {
-                match view.on_ctrl_c(self) {
-                    CancellationEvent::Handled => {
-                        if view.is_complete() {
-                            // Dismiss the entire view (no back navigation).
-                            self.on_active_view_complete();
-                        } else {
-                            // Keep the current view active if not complete.
-                            self.active_view = Some(view);
-                        }
-                    }
-                    CancellationEvent::NotHandled => {
-                        // View did not consume; keep it active.
-                        self.active_view = Some(view);
-                    }
-                }
+            view.handle_key_event(self, key_event);
+            if !view.is_complete() {
+                self.active_view = Some(view);
             } else {
-                view.handle_key_event(self, key_event);
-                if view.is_complete() {
-                    // Completing a view dismisses it entirely.
-                    self.on_active_view_complete();
-                } else {
-                    self.active_view = Some(view);
-                }
+                self.on_active_view_complete();
             }
-
             self.request_redraw();
-            return InputResult::None;
+            InputResult::None
+        } else {
+            // If a task is running and a status line is visible, allow Esc to
+            // send an interrupt even while the composer has focus.
+            if matches!(key_event.code, crossterm::event::KeyCode::Esc)
+                && self.is_task_running
+                && let Some(status) = &self.status
+            {
+                // Send Op::Interrupt
+                status.interrupt();
+                self.request_redraw();
+                return InputResult::None;
+            }
+            let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
+            if needs_redraw {
+                self.request_redraw();
+            }
+            if self.composer.is_in_paste_burst() {
+                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
+            }
+            input_result
         }
-
-        // If a task is running and a status line is visible, allow Esc to
-        // send an interrupt even while the composer has focus.
-        if matches!(key_event.code, crossterm::event::KeyCode::Esc)
-            && self.is_task_running
-            && let Some(status) = &self.status
-        {
-            // Send Op::Interrupt
-            status.interrupt();
-            self.request_redraw();
-            return InputResult::None;
-        }
-
-        let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
-        if needs_redraw {
-            self.request_redraw();
-        }
-        if self.composer.is_in_paste_burst() {
-            self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
-        }
-        input_result
     }
 
     /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
     /// chance to consume the event (e.g. to dismiss itself).
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
-        if let Some(mut view) = self.active_view.take() {
-            let event = view.on_ctrl_c(self);
-            match event {
-                CancellationEvent::Handled => {
-                    if view.is_complete() {
-                        self.on_active_view_complete();
-                    } else {
-                        self.active_view = Some(view);
-                    }
+        let mut view = match self.active_view.take() {
+            Some(view) => view,
+            None => {
+                return if self.composer_is_empty() {
+                    CancellationEvent::NotHandled
+                } else {
+                    self.set_composer_text(String::new());
                     self.show_ctrl_c_quit_hint();
-                }
-                CancellationEvent::NotHandled => {
-                    self.active_view = Some(view);
-                }
+                    CancellationEvent::Handled
+                };
             }
-            return event;
-        }
+        };
 
-        if self.composer_is_empty() {
-            CancellationEvent::NotHandled
-        } else {
-            self.set_composer_text(String::new());
-            self.show_ctrl_c_quit_hint();
-            CancellationEvent::Handled
+        let event = view.on_ctrl_c(self);
+        match event {
+            CancellationEvent::Handled => {
+                if !view.is_complete() {
+                    self.active_view = Some(view);
+                } else {
+                    self.on_active_view_complete();
+                }
+                self.show_ctrl_c_quit_hint();
+            }
+            CancellationEvent::NotHandled => {
+                self.active_view = Some(view);
+            }
         }
+        event
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
@@ -415,7 +396,7 @@ impl BottomPane {
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
         self.pause_status_timer_for_modal();
         self.active_view = Some(Box::new(modal));
-        self.request_redraw();
+        self.request_redraw()
     }
 
     fn on_active_view_complete(&mut self) {
