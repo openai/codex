@@ -561,10 +561,10 @@ mod tests_windows {
 
         for (shell, input, expected_cmd) in cases {
             let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(str::to_string).collect());
+                .format_default_shell_invocation(input.iter().map(str::to_owned).collect());
             assert_eq!(
                 actual_cmd,
-                Some(expected_cmd.iter().map(str::to_string).collect())
+                Some(expected_cmd.iter().map(str::to_owned).collect())
             );
         }
     }
