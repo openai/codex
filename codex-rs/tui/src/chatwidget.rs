@@ -1266,7 +1266,7 @@ impl ChatWidget {
         if let Some(output) = review.review_output {
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
-            self.flush_active_exec_cell();
+            self.flush_active_cell();
 
             if output.findings.is_empty() {
                 let explanation = output.overall_explanation.trim().to_string();
