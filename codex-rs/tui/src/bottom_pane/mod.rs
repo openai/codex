@@ -172,16 +172,12 @@ impl BottomPane {
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if let Some(view) = self.view_stack.last_mut() {
-            if key_event.code == KeyCode::Esc {
-                match view.on_ctrl_c() {
-                    CancellationEvent::Handled => {
-                        if view.is_complete() {
-                            self.view_stack.pop();
-                            self.on_active_view_complete();
-                        }
-                    }
-                    CancellationEvent::NotHandled => {}
-                }
+            if key_event.code == KeyCode::Esc
+                && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
+                && view.is_complete()
+            {
+                self.view_stack.pop();
+                self.on_active_view_complete();
             } else {
                 view.handle_key_event(key_event);
                 if view.is_complete() {

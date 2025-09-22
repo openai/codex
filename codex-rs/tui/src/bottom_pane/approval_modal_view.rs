@@ -74,6 +74,7 @@ impl BottomPaneView for ApprovalModalView {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::bottom_pane::BottomPane;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn make_exec_request() -> ApprovalRequest {
