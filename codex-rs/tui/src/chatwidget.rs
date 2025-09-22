@@ -128,7 +128,7 @@ impl RateLimitWarningState {
         {
             let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.weekly_index];
             warnings.push(format!(
-                "Weekly usage exceeded {threshold:.0}% of the limit. Check /status to review usage."
+                "Heads up, you've used over {threshold:.0}% of your weekly limit. Run /status for a breakdown."
             ));
             self.weekly_index += 1;
         }
@@ -138,7 +138,7 @@ impl RateLimitWarningState {
         {
             let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.hourly_index];
             warnings.push(format!(
-                "Hourly usage exceeded {threshold:.0}% of the limit. Check /status to review usage."
+                "Heads up, you've used over {threshold:.0}% of your 5h limit. Run /status for a breakdown."
             ));
             self.hourly_index += 1;
         }
