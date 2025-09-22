@@ -163,7 +163,8 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.base_id = self.chat_widget.conversation_id();
         self.backtrack.overlay_preview_active = true;
-        if let Some(last) = last_user_position(&self.transcript_cells) {
+        let count = user_count(&self.transcript_cells);
+        if let Some(last) = count.checked_sub(1) {
             self.apply_backtrack_selection(last);
         }
         tui.frame_requester().schedule_frame();
