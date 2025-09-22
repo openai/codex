@@ -390,15 +390,14 @@ impl ExecCell {
                 .iter()
                 .all(|c| matches!(c, ParsedCommand::Read { .. }))
             {
-                let names: Vec<String> = call
+                let names = call
                     .parsed
                     .iter()
                     .map(|c| match c {
                         ParsedCommand::Read { name, .. } => name.clone(),
                         _ => unreachable!(),
                     })
-                    .unique()
-                    .collect();
+                    .unique();
                 vec![(
                     "Read",
                     itertools::Itertools::intersperse(
