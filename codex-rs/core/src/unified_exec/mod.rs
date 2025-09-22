@@ -404,6 +404,7 @@ async fn create_unified_exec_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::skip_if_sandbox;
 
     #[test]
