@@ -761,10 +761,10 @@ async fn token_count_includes_rate_limits_snapshot() {
     let response = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .insert_header("x-codex-primary-used-percent", "12.5")
-        .insert_header("x-codex-secondry-used-percent", "40.0")
-        .insert_header("x-codex-primary-over-secondry-limit-percent", "75.0")
+        .insert_header("x-codex-secondary-used-percent", "40.0")
+        .insert_header("x-codex-primary-over-secondary-limit-percent", "75.0")
         .insert_header("x-codex-primary-window-minutes", "10")
-        .insert_header("x-codex-secondry-window-minutes", "60")
+        .insert_header("x-codex-secondary-window-minutes", "60")
         .set_body_raw(sse_body, "text/event-stream");
 
     Mock::given(method("POST"))

@@ -486,11 +486,11 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
 
 fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshotEvent> {
     let primary_used_percent = parse_header_f64(headers, "x-codex-primary-used-percent")?;
-    let secondary_used_percent = parse_header_f64(headers, "x-codex-secondry-used-percent")?;
+    let secondary_used_percent = parse_header_f64(headers, "x-codex-secondary-used-percent")?;
     let primary_to_secondary_ratio_percent =
-        parse_header_f64(headers, "x-codex-primary-over-secondry-limit-percent")?;
+        parse_header_f64(headers, "x-codex-primary-over-secondary-limit-percent")?;
     let primary_window_minutes = parse_header_u64(headers, "x-codex-primary-window-minutes")?;
-    let secondary_window_minutes = parse_header_u64(headers, "x-codex-secondry-window-minutes")?;
+    let secondary_window_minutes = parse_header_u64(headers, "x-codex-secondary-window-minutes")?;
 
     Some(RateLimitSnapshotEvent {
         primary_used_percent,
