@@ -21,12 +21,16 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use eventsource_stream::Eventsource;
+use futures::StreamExt;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::InitializeRequest;
 use mcp_types::InitializeRequestParams;
 use mcp_types::InitializedNotification;
 use mcp_types::JSONRPC_VERSION;
+use mcp_types::JSONRPCError;
+use mcp_types::JSONRPCErrorError;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
@@ -37,6 +41,12 @@ use mcp_types::ListToolsResult;
 use mcp_types::ModelContextProtocolNotification;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
+use reqwest::Url;
+use reqwest::header::ACCEPT;
+use reqwest::header::CONTENT_TYPE;
+use reqwest::header::HeaderMap;
+use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncBufReadExt;
@@ -59,13 +69,14 @@ const CHANNEL_CAPACITY: usize = 128;
 /// Internal representation of a pending request sender.
 type PendingSender = oneshot::Sender<JSONRPCMessage>;
 
+enum TransportHandle {
+    Stdio(tokio::process::Child),
+    Network,
+}
+
 /// A running MCP client instance.
 pub struct McpClient {
-    /// Retain this child process until the client is dropped. The Tokio runtime
-    /// will make a "best effort" to reap the process after it exits, but it is
-    /// not a guarantee. See the `kill_on_drop` documentation for details.
-    #[allow(dead_code)]
-    child: tokio::process::Child,
+    transport: TransportHandle,
 
     /// Channel for sending JSON-RPC messages *to* the background writer task.
     outgoing_tx: mpsc::Sender<JSONRPCMessage>,
@@ -177,7 +188,109 @@ impl McpClient {
         let _ = (writer_handle, reader_handle);
 
         Ok(Self {
-            child,
+            transport: TransportHandle::Stdio(child),
+            outgoing_tx,
+            pending,
+            id_counter: AtomicI64::new(1),
+        })
+    }
+
+    /// Establish an MCP session over an SSE transport.
+    pub async fn new_sse_client(
+        stream_url: &str,
+        messages_url: Option<&str>,
+        headers: Option<HashMap<String, String>>,
+    ) -> Result<Self> {
+        let stream_url = Url::parse(stream_url)
+            .with_context(|| format!("invalid SSE stream URL: {stream_url}"))?;
+        let post_url = match messages_url {
+            Some(url) => {
+                Url::parse(url).with_context(|| format!("invalid SSE messages URL: {url}"))?
+            }
+            None => stream_url.clone(),
+        };
+
+        let header_map = Arc::new(build_header_map(headers.as_ref())?);
+        let client = reqwest::Client::builder()
+            .build()
+            .context("failed to construct HTTP client")?;
+
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
+        let pending: Arc<Mutex<HashMap<i64, PendingSender>>> = Arc::new(Mutex::new(HashMap::new()));
+
+        let writer_client = client.clone();
+        let writer_headers = Arc::clone(&header_map);
+        let writer_post_url = post_url;
+        let pending_for_writer = Arc::clone(&pending);
+        tokio::spawn(async move {
+            while let Some(message) = outgoing_rx.recv().await {
+                match post_json_message(&writer_client, &writer_post_url, &writer_headers, &message)
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(err) => handle_send_failure(&message, &pending_for_writer, err).await,
+                }
+            }
+        });
+
+        spawn_sse_reader(client, stream_url, header_map, Arc::clone(&pending));
+
+        Ok(Self {
+            transport: TransportHandle::Network,
+            outgoing_tx,
+            pending,
+            id_counter: AtomicI64::new(1),
+        })
+    }
+
+    /// Establish an MCP session over the MCP HTTP (streamable) transport.
+    pub async fn new_http_client(
+        stream_url: &str,
+        messages_url: Option<&str>,
+        headers: Option<HashMap<String, String>>,
+    ) -> Result<Self> {
+        let stream_url = Url::parse(stream_url)
+            .with_context(|| format!("invalid HTTP stream URL: {stream_url}"))?;
+        let post_url = match messages_url {
+            Some(url) => {
+                Url::parse(url).with_context(|| format!("invalid HTTP messages URL: {url}"))?
+            }
+            None => stream_url.clone(),
+        };
+
+        let header_map = Arc::new(build_header_map(headers.as_ref())?);
+        let client = reqwest::Client::builder()
+            .build()
+            .context("failed to construct HTTP client")?;
+
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
+        let pending: Arc<Mutex<HashMap<i64, PendingSender>>> = Arc::new(Mutex::new(HashMap::new()));
+
+        let writer_client = client.clone();
+        let writer_headers = Arc::clone(&header_map);
+        let writer_post_url = post_url;
+        let pending_for_writer = Arc::clone(&pending);
+        tokio::spawn(async move {
+            while let Some(message) = outgoing_rx.recv().await {
+                match post_json_message(&writer_client, &writer_post_url, &writer_headers, &message)
+                    .await
+                {
+                    Ok(response) => {
+                        if let Err(err) =
+                            process_ndjson_stream(response, Arc::clone(&pending_for_writer)).await
+                        {
+                            handle_send_failure(&message, &pending_for_writer, err).await;
+                        }
+                    }
+                    Err(err) => handle_send_failure(&message, &pending_for_writer, err).await,
+                }
+            }
+        });
+
+        spawn_http_stream_reader(client, stream_url, header_map, Arc::clone(&pending));
+
+        Ok(Self {
+            transport: TransportHandle::Network,
             outgoing_tx,
             pending,
             id_counter: AtomicI64::new(1),
@@ -394,13 +507,241 @@ impl McpClient {
     }
 }
 
+fn build_header_map(headers: Option<&HashMap<String, String>>) -> anyhow::Result<HeaderMap> {
+    let mut header_map = HeaderMap::new();
+    if let Some(headers) = headers {
+        for (key, value) in headers {
+            let name = HeaderName::from_bytes(key.as_bytes())
+                .with_context(|| format!("invalid header name: {key}"))?;
+            let value = HeaderValue::from_str(value)
+                .with_context(|| format!("invalid header value for {key}"))?;
+            header_map.insert(name, value);
+        }
+    }
+    Ok(header_map)
+}
+
+async fn post_json_message(
+    client: &reqwest::Client,
+    url: &Url,
+    headers: &HeaderMap,
+    message: &JSONRPCMessage,
+) -> anyhow::Result<reqwest::Response> {
+    let mut request = client.post(url.clone());
+    if !headers.is_empty() {
+        request = request.headers(headers.clone());
+    }
+    let body = serde_json::to_vec(message)?;
+    let response = request
+        .header(CONTENT_TYPE, "application/json")
+        .body(body)
+        .send()
+        .await?;
+    Ok(response.error_for_status()?)
+}
+
+fn spawn_sse_reader(
+    client: reqwest::Client,
+    stream_url: Url,
+    headers: Arc<HeaderMap>,
+    pending: Arc<Mutex<HashMap<i64, PendingSender>>>,
+) {
+    tokio::spawn(async move {
+        loop {
+            let mut request = client.get(stream_url.clone());
+            if !headers.is_empty() {
+                request = request.headers((*headers).clone());
+            }
+            request = request.header(ACCEPT, "text/event-stream");
+
+            match request.send().await {
+                Ok(response) => {
+                    if let Err(err) = process_sse_stream(response, Arc::clone(&pending)).await {
+                        warn!("SSE stream error: {err:#}");
+                    }
+                }
+                Err(err) => warn!("failed to establish SSE stream: {err:#}"),
+            }
+
+            time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+}
+
+fn spawn_http_stream_reader(
+    client: reqwest::Client,
+    stream_url: Url,
+    headers: Arc<HeaderMap>,
+    pending: Arc<Mutex<HashMap<i64, PendingSender>>>,
+) {
+    tokio::spawn(async move {
+        loop {
+            let mut request = client.get(stream_url.clone());
+            if !headers.is_empty() {
+                request = request.headers((*headers).clone());
+            }
+            request = request.header(ACCEPT, "application/x-ndjson");
+
+            match request.send().await {
+                Ok(response) => {
+                    if let Err(err) = process_ndjson_stream(response, Arc::clone(&pending)).await {
+                        warn!("HTTP stream error: {err:#}");
+                    }
+                }
+                Err(err) => warn!("failed to establish HTTP stream: {err:#}"),
+            }
+
+            time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+}
+
+async fn process_sse_stream(
+    response: reqwest::Response,
+    pending: Arc<Mutex<HashMap<i64, PendingSender>>>,
+) -> anyhow::Result<()> {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("SSE stream returned {status}: {body}");
+    }
+
+    let mut events = response.bytes_stream().eventsource();
+    while let Some(event) = events.next().await {
+        match event {
+            Ok(event) => {
+                let data = event.data.trim();
+                if data.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<JSONRPCMessage>(data) {
+                    Ok(message) => handle_incoming_message(message, &pending).await,
+                    Err(err) => {
+                        warn!("failed to decode SSE payload as JSON-RPC: {err}; payload={data}")
+                    }
+                }
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    Ok(())
+}
+
+async fn process_ndjson_stream(
+    response: reqwest::Response,
+    pending: Arc<Mutex<HashMap<i64, PendingSender>>>,
+) -> anyhow::Result<()> {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("HTTP stream returned {status}: {body}");
+    }
+
+    let mut buffer = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buffer.extend_from_slice(&chunk);
+
+        while let Some(pos) = buffer.iter().position(|b| *b == b'\n') {
+            let mut line = buffer.drain(..=pos).collect::<Vec<u8>>();
+            if let Some(last) = line.last()
+                && *last == b'\n'
+            {
+                line.pop();
+            }
+            if let Some(last) = line.last()
+                && *last == b'\r'
+            {
+                line.pop();
+            }
+            if line.is_empty() {
+                continue;
+            }
+            let text = String::from_utf8(line)
+                .map_err(|err| anyhow!("invalid UTF-8 in NDJSON stream: {err}"))?;
+            match serde_json::from_str::<JSONRPCMessage>(&text) {
+                Ok(message) => handle_incoming_message(message, &pending).await,
+                Err(err) => {
+                    warn!("failed to decode NDJSON payload as JSON-RPC: {err}; payload={text}")
+                }
+            }
+        }
+    }
+
+    if !buffer.is_empty() {
+        let text = String::from_utf8(buffer)
+            .map_err(|err| anyhow!("invalid UTF-8 in NDJSON tail: {err}"))?;
+        if !text.trim().is_empty() {
+            match serde_json::from_str::<JSONRPCMessage>(&text) {
+                Ok(message) => handle_incoming_message(message, &pending).await,
+                Err(err) => {
+                    warn!("failed to decode NDJSON tail as JSON-RPC: {err}; payload={text}")
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_incoming_message(
+    message: JSONRPCMessage,
+    pending: &Arc<Mutex<HashMap<i64, PendingSender>>>,
+) {
+    match message {
+        JSONRPCMessage::Response(resp) => McpClient::dispatch_response(resp, pending).await,
+        JSONRPCMessage::Error(err) => McpClient::dispatch_error(err, pending).await,
+        JSONRPCMessage::Notification(notification) => {
+            info!("<- notification: {}", notification.method);
+        }
+        JSONRPCMessage::Request(request) => {
+            info!("<- server-initiated request ignored: {}", request.method);
+        }
+    }
+}
+
+async fn handle_send_failure(
+    message: &JSONRPCMessage,
+    pending: &Arc<Mutex<HashMap<i64, PendingSender>>>,
+    error: anyhow::Error,
+) {
+    warn!("failed to send MCP message: {error:#}");
+
+    let request_id = match message {
+        JSONRPCMessage::Request(req) => match &req.id {
+            RequestId::Integer(id) => Some(*id),
+            RequestId::String(_) => None,
+        },
+        _ => None,
+    };
+
+    if let Some(id) = request_id {
+        let mut guard = pending.lock().await;
+        if let Some(tx) = guard.remove(&id) {
+            let err = JSONRPCError {
+                jsonrpc: JSONRPC_VERSION.to_owned(),
+                id: RequestId::Integer(id),
+                error: JSONRPCErrorError {
+                    code: -32000,
+                    message: format!("failed to send request: {error:#}"),
+                    data: None,
+                },
+            };
+            let _ = tx.send(JSONRPCMessage::Error(err));
+        }
+    }
+}
 impl Drop for McpClient {
     fn drop(&mut self) {
-        // Even though we have already tagged this process with
-        // `kill_on_drop(true)` above, this extra check has the benefit of
-        // forcing the process to be reaped immediately if it has already exited
-        // instead of waiting for the Tokio runtime to reap it later.
-        let _ = self.child.try_wait();
+        if let TransportHandle::Stdio(child) = &mut self.transport {
+            // Even though we have already tagged this process with
+            // `kill_on_drop(true)` above, this extra check has the benefit of
+            // forcing the process to be reaped immediately if it has already exited
+            // instead of waiting for the Tokio runtime to reap it later.
+            let _ = child.try_wait();
+        }
     }
 }
 
@@ -463,6 +804,7 @@ fn create_env_for_mcp_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_create_env_for_mcp_server() {
