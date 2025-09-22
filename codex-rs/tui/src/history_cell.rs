@@ -95,12 +95,6 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     }
 }
 
-impl dyn HistoryCell {
-    pub(crate) fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
     pub message: String,
