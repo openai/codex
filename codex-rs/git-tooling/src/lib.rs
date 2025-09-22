@@ -1,14 +1,15 @@
 use std::fmt;
 
 mod errors;
+mod ghost_commits;
 mod operations;
 mod platform;
 
 pub use errors::GitToolingError;
-pub use operations::CreateGhostCommitOptions;
-pub use operations::create_ghost_commit;
-pub use operations::restore_ghost_commit;
-pub use operations::restore_to_commit;
+pub use ghost_commits::CreateGhostCommitOptions;
+pub use ghost_commits::create_ghost_commit;
+pub use ghost_commits::restore_ghost_commit;
+pub use ghost_commits::restore_to_commit;
 pub use platform::create_symlink;
 
 /// Details of a ghost commit created from a repository state.

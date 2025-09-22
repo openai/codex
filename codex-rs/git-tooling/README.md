@@ -1,6 +1,6 @@
 # codex-git-tooling
 
-Helpers for capturing and restoring lightweight Git snapshots.
+Helpers for interacting with git.
 
 ```rust,no_run
 use std::path::Path;
