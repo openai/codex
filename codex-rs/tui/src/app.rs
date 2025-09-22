@@ -354,6 +354,18 @@ impl App {
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
             }
+            AppEvent::OpenReviewBranchPicker(cwd) => {
+                self.chat_widget.show_review_branch_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCommitPicker(cwd) => {
+                self.chat_widget.show_review_commit_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCustomPrompt => {
+                self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::OpenReviewPopup => {
+                self.chat_widget.open_review_popup();
+            }
         }
         Ok(true)
     }

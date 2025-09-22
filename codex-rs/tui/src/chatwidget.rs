@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_core::config_types::Notifications;
+use codex_core::git_info::current_branch_name;
+use codex_core::git_info::local_git_branches;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -63,6 +65,9 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::custom_prompt_view::CustomPromptView;
+use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
 use crate::get_git_diff::get_git_diff;
@@ -87,6 +92,7 @@ mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+//
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
@@ -97,6 +103,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use std::path::Path;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -941,13 +948,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
             }
             SlashCommand::Review => {
-                // Simplified flow: directly send a review op for current changes.
-                self.submit_op(Op::Review {
-                    review_request: ReviewRequest {
-                        prompt: "review current changes".to_string(),
-                        user_facing_hint: "current changes".to_string(),
-                    },
-                });
+                self.open_review_popup();
             }
             SlashCommand::Model => {
                 self.open_model_popup();
@@ -1417,15 +1418,20 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                dismiss_on_select: true,
+                search_value: None,
             });
         }
 
-        self.bottom_pane.show_selection_view(
-            "Select model and reasoning level".to_string(),
-            Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
-            Some("Press Enter to confirm or Esc to go back".to_string()),
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select model and reasoning level".to_string(),
+            subtitle: Some(
+                "Switch between OpenAI models for this and future Codex CLI session".to_string(),
+            ),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
-        );
+            ..Default::default()
+        });
     }
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
@@ -1458,15 +1464,17 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                dismiss_on_select: true,
+                search_value: None,
             });
         }
 
-        self.bottom_pane.show_selection_view(
-            "Select Approval Mode".to_string(),
-            None,
-            Some("Press Enter to confirm or Esc to go back".to_string()),
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select Approval Mode".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
-        );
+            ..Default::default()
+        });
     }
 
     /// Set the approval policy in the widget's config copy.
@@ -1573,6 +1581,181 @@ impl ChatWidget {
         debug!("received {len} custom prompts");
         // Forward to bottom pane so the slash popup can show them now.
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
+    }
+
+    pub(crate) fn open_review_popup(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        items.push(SelectionItem {
+            name: "Review uncommitted changes".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(
+                move |tx: &AppEventSender| {
+                    tx.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
+                            user_facing_hint: "current changes".to_string(),
+                        },
+                    }));
+                },
+            )],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        // New: Review a specific commit (opens commit picker)
+        items.push(SelectionItem {
+            name: "Review a commit".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        items.push(SelectionItem {
+            name: "Review against a base branch".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        items.push(SelectionItem {
+            name: "Custom review instructions".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenReviewCustomPrompt);
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a review preset".into(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            on_escape: None,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn show_review_branch_picker(&mut self, cwd: &Path) {
+        let branches = local_git_branches(cwd).await;
+        let current_branch = current_branch_name(cwd)
+            .await
+            .unwrap_or_else(|| "(detached HEAD)".to_string());
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(branches.len());
+
+        for option in branches {
+            let branch = option.clone();
+            items.push(SelectionItem {
+                name: format!("{current_branch} -> {branch}"),
+                description: None,
+                is_current: false,
+                actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    tx3.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt: format!(
+                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch} e.g. (git merge-base HEAD {branch}), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
+                            ),
+                            user_facing_hint: format!("changes against '{branch}'"),
+                        },
+                    }));
+                })],
+                dismiss_on_select: true,
+                search_value: Some(option),
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a base branch".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search branches".to_string()),
+            on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
+        let commits = codex_core::git_info::recent_commits(cwd, 100).await;
+
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
+        for entry in commits {
+            let subject = entry.subject.clone();
+            let sha = entry.sha.clone();
+            let short = sha.chars().take(7).collect::<String>();
+            let search_val = format!("{subject} {sha}");
+
+            items.push(SelectionItem {
+                name: subject.clone(),
+                description: None,
+                is_current: false,
+                actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    let hint = format!("commit {short}");
+                    let prompt = format!(
+                        "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
+                    );
+                    tx3.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt,
+                            user_facing_hint: hint,
+                        },
+                    }));
+                })],
+                dismiss_on_select: true,
+                search_value: Some(search_val),
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a commit to review".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search commits".to_string()),
+            on_escape: Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn show_review_custom_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Custom review instructions".to_string(),
+            "Type instructions and press Enter".to_string(),
+            None,
+            self.app_event_tx.clone(),
+            Some(Box::new(|tx| tx.send(AppEvent::OpenReviewPopup))),
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        prompt: trimmed.clone(),
+                        user_facing_hint: trimmed,
+                    },
+                }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     /// Programmatically submit a user text message as if typed in the
@@ -1729,6 +1912,49 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+#[cfg(test)]
+pub(crate) fn show_review_commit_picker_with_entries(
+    chat: &mut ChatWidget,
+    entries: Vec<codex_core::git_info::CommitLogEntry>,
+) {
+    let mut items: Vec<SelectionItem> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let subject = entry.subject.clone();
+        let sha = entry.sha.clone();
+        let short = sha.chars().take(7).collect::<String>();
+        let search_val = format!("{subject} {sha}");
+
+        items.push(SelectionItem {
+            name: subject.clone(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(move |tx3: &AppEventSender| {
+                let hint = format!("commit {short}");
+                let prompt = format!(
+                    "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
+                );
+                tx3.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                    },
+                }));
+            })],
+            dismiss_on_select: true,
+            search_value: Some(search_val),
+        });
+    }
+
+    chat.bottom_pane.show_selection_view(SelectionViewParams {
+        title: "Select a commit to review".to_string(),
+        footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+        items,
+        is_searchable: true,
+        search_placeholder: Some("Type to search commits".to_string()),
+        ..Default::default()
+    });
 }
 
 #[cfg(test)]
