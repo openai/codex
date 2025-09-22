@@ -411,7 +411,7 @@ mod tests {
         // `user_messages_text` exceeds the truncation threshold used by
         // `build_compacted_history` (80k bytes).
         let big = "X".repeat(200_000);
-        let history = build_compacted_history(Vec::new(), &[big.clone()], "SUMMARY");
+        let history = build_compacted_history(Vec::new(), std::slice::from_ref(&big), "SUMMARY");
 
         // Expect exactly one bridge message added to history (plus any initial context we provided, which is none).
         assert_eq!(history.len(), 1);
