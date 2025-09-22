@@ -128,7 +128,7 @@ impl RateLimitWarningState {
         {
             let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.weekly_index];
             warnings.push(format!(
-                "Weekly usage exceeded {threshold:.0}% of the limit. Run /limits for detailed usage."
+                "Weekly usage exceeded {threshold:.0}% of the limit. Check /status to review usage."
             ));
             self.weekly_index += 1;
         }
@@ -138,7 +138,7 @@ impl RateLimitWarningState {
         {
             let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.hourly_index];
             warnings.push(format!(
-                "Hourly usage exceeded {threshold:.0}% of the limit. Run /limits for detailed usage."
+                "Hourly usage exceeded {threshold:.0}% of the limit. Check /status to review usage."
             ));
             self.hourly_index += 1;
         }
@@ -996,9 +996,6 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
-            SlashCommand::Limits => {
-                self.add_limits_output();
-            }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
@@ -1352,15 +1349,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_diff_complete(&mut self) {
-        self.request_redraw();
-    }
-
-    pub(crate) fn add_limits_output(&mut self) {
-        if let Some(snapshot) = &self.rate_limit_snapshot {
-            self.add_to_history(history_cell::new_limits_output(snapshot));
-        } else {
-            self.add_to_history(history_cell::new_limits_unavailable());
-        }
         self.request_redraw();
     }
 

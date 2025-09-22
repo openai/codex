@@ -2,9 +2,6 @@ use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
-use crate::rate_limits_view::DEFAULT_GRID_CONFIG;
-use crate::rate_limits_view::LimitsView;
-use crate::rate_limits_view::build_limits_view;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -226,20 +223,6 @@ pub(crate) struct PlainHistoryCell {
 impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct LimitsHistoryCell {
-    display: LimitsView,
-}
-
-impl HistoryCell for LimitsHistoryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = self.display.summary_lines.clone();
-        lines.extend(self.display.gauge_lines(width));
-        lines.extend(self.display.legend_lines.clone());
-        lines
     }
 }
 
@@ -1094,26 +1077,6 @@ pub(crate) fn new_completed_mcp_tool_call(
     };
 
     Box::new(PlainHistoryCell { lines })
-}
-
-pub(crate) fn new_limits_output(snapshot: &RateLimitSnapshotEvent) -> LimitsHistoryCell {
-    LimitsHistoryCell {
-        display: build_limits_view(snapshot, DEFAULT_GRID_CONFIG),
-    }
-}
-
-pub(crate) fn new_limits_unavailable() -> PlainHistoryCell {
-    PlainHistoryCell {
-        lines: vec![
-            "/limits".magenta().into(),
-            "".into(),
-            vec!["Rate limit usage snapshot".bold()].into(),
-            vec!["  Tip: run `/limits` right after Codex replies for freshest numbers.".dim()]
-                .into(),
-            vec!["  Real usage data is not available yet.".into()].into(),
-            vec!["  Send a message to Codex, then run /limits again.".dim()].into(),
-        ],
-    }
 }
 
 #[allow(clippy::disallowed_methods)]
