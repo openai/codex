@@ -416,6 +416,15 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
+                    // Capture the current first line before we clear the textarea
+                    let first_line = self
+                        .textarea
+                        .text()
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+
                     // Clear textarea so no residual text remains.
                     self.textarea.set_text("");
                     // Capture any needed data from popup before clearing it.
@@ -430,6 +439,26 @@ impl ChatComposer {
 
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            // Special-case: allow `/resume <SESSION_ID>` in the composer to resume by id directly.
+                            if cmd == SlashCommand::Resume {
+                                // Extract everything after the first token `/resume` on the first line.
+                                if let Some(rest) = first_line
+                                    .trim_start()
+                                    .strip_prefix("/resume")
+                                    .map(str::trim)
+                                    && !rest.is_empty()
+                                {
+                                    // Support special `/resume last` to resume the most recent session.
+                                    if rest.eq_ignore_ascii_case("last") {
+                                        self.app_event_tx.send(AppEvent::ResumeLast);
+                                    } else {
+                                        // Forward to App directly; avoid an extra hop through ChatWidget.
+                                        self.app_event_tx
+                                            .send(AppEvent::ResumeById(rest.to_string()));
+                                    }
+                                    return (InputResult::None, true);
+                                }
+                            }
                             return (InputResult::Command(cmd), true);
                         }
                         CommandItem::UserPrompt(_) => {

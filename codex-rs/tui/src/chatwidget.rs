@@ -952,6 +952,9 @@ impl ChatWidget {
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
+            SlashCommand::Resume => {
+                self.app_event_tx.send(AppEvent::OpenResumePicker);
+            }
             SlashCommand::Init => {
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_text_message(INIT_PROMPT.to_string());

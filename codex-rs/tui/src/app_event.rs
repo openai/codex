@@ -21,6 +21,15 @@ pub(crate) enum AppEvent {
     /// Request to exit the application gracefully.
     ExitRequest,
 
+    /// Open the resume picker to select a previous recorded session.
+    OpenResumePicker,
+
+    /// Resume the most recent recorded session.
+    ResumeLast,
+
+    /// Resume a recorded session by id (UUID string).
+    ResumeById(String),
+
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_core::protocol::Op),

@@ -29,6 +29,16 @@ codex resume --last
 codex resume 7f9f9a2e-1b3c-4c7a-9b0e-123456789abc
 ```
 
+TUI equivalents using slash commands:
+
+```text
+/resume          # open the session picker
+/resume last     # resume the most recent session
+/resume <ID>     # resume by UUID
+```
+
+See more in docs/slash-commands.md.
+
 ### Running with a prompt as input
 
 You can also run Codex CLI with a prompt as input:
