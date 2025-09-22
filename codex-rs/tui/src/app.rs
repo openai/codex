@@ -364,6 +364,9 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::OpenReviewPopup => {
+                self.chat_widget.open_review_popup();
+            }
         }
         Ok(true)
     }

@@ -41,6 +41,10 @@ pub(crate) struct SelectionViewParams {
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
     pub empty_message: Option<String>,
+    /// Optional callback invoked on Esc/Ctrl-C to allow parent flows to
+    /// react (e.g., reopen the review popup). If set, the view will emit this
+    /// action and then mark itself complete.
+    pub on_escape: Option<SelectionAction>,
 }
 
 pub(crate) struct ListSelectionView {
@@ -51,6 +55,7 @@ pub(crate) struct ListSelectionView {
     state: ScrollState,
     complete: bool,
     app_event_tx: AppEventSender,
+    on_escape: Option<SelectionAction>,
     is_searchable: bool,
     search_query: String,
     search_placeholder: Option<String>,
@@ -77,6 +82,7 @@ impl ListSelectionView {
             state: ScrollState::new(),
             complete: false,
             app_event_tx,
+            on_escape: params.on_escape,
             is_searchable: params.is_searchable,
             search_query: String::new(),
             search_placeholder: if params.is_searchable {
@@ -263,6 +269,9 @@ impl BottomPaneView for ListSelectionView {
 
     fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
         self.complete = true;
+        if let Some(cb) = &self.on_escape {
+            cb(&self.app_event_tx);
+        }
         CancellationEvent::Handled
     }
 
