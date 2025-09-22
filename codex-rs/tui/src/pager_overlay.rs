@@ -18,7 +18,9 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 pub(crate) enum Overlay {
@@ -98,6 +100,7 @@ impl PagerView {
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
         self.render_header(area, buf);
         let content_area = self.scroll_area(area);
         self.update_last_content_height(content_area.height);
@@ -139,6 +142,7 @@ impl PagerView {
     // Removed unused render_content_page (replaced by render_content_page_prepared)
 
     fn render_content_page_prepared(&self, area: Rect, buf: &mut Buffer, page: &[Line<'static>]) {
+        Clear.render(area, buf);
         Paragraph::new(page.to_vec()).render_ref(area, buf);
 
         let visible = page.len();
@@ -547,6 +551,17 @@ impl StaticOverlay {
 mod tests {
     use super::*;
     use insta::assert_snapshot;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::history_cell::CommandOutput;
+    use crate::history_cell::HistoryCell;
+    use crate::history_cell::PatchEventType;
+    use crate::history_cell::new_patch_event;
+    use codex_core::protocol::FileChange;
+    use codex_protocol::parse_command::ParsedCommand;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -608,6 +623,99 @@ mod tests {
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    fn buffer_to_text(buf: &Buffer, area: Rect) -> String {
+        let mut out = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                let symbol = buf[(x, y)].symbol();
+                if symbol.is_empty() {
+                    out.push(' ');
+                } else {
+                    out.push(symbol.chars().next().unwrap_or(' '));
+                }
+            }
+            // Trim trailing spaces for stability.
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn transcript_overlay_apply_patch_scroll_vt100_clears_previous_page() {
+        let cwd = PathBuf::from("/repo");
+        let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
+
+        let mut approval_changes = HashMap::new();
+        approval_changes.insert(
+            PathBuf::from("foo.txt"),
+            FileChange::Add {
+                content: "hello\nworld\n".to_string(),
+            },
+        );
+        let approval_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(
+            PatchEventType::ApprovalRequest,
+            approval_changes,
+            &cwd,
+        ));
+        cells.push(approval_cell);
+
+        let mut apply_changes = HashMap::new();
+        apply_changes.insert(
+            PathBuf::from("foo.txt"),
+            FileChange::Add {
+                content: "hello\nworld\n".to_string(),
+            },
+        );
+        let apply_begin_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(
+            PatchEventType::ApplyBegin {
+                auto_approved: false,
+            },
+            apply_changes,
+            &cwd,
+        ));
+        cells.push(apply_begin_cell);
+
+        let apply_end_cell: Arc<dyn HistoryCell> =
+            Arc::new(crate::history_cell::new_user_approval_decision(vec![
+                "✓ Patch applied".green().bold().into(),
+                "src/foo.txt".dim().into(),
+            ]));
+        cells.push(apply_end_cell);
+
+        let mut exec_cell = crate::history_cell::new_active_exec_command(
+            "exec-1".into(),
+            vec!["bash".into(), "-lc".into(), "ls".into()],
+            vec![ParsedCommand::Unknown { cmd: "ls".into() }],
+        );
+        exec_cell.complete_call(
+            "exec-1",
+            CommandOutput {
+                exit_code: 0,
+                stdout: "src\nREADME.md\n".into(),
+                stderr: String::new(),
+                formatted_output: "src\nREADME.md\n".into(),
+            },
+            Duration::from_millis(420),
+        );
+        let exec_cell: Arc<dyn HistoryCell> = Arc::new(exec_cell);
+        cells.push(exec_cell);
+
+        let mut overlay = TranscriptOverlay::new(cells);
+        let area = Rect::new(0, 0, 80, 12);
+        let mut buf = Buffer::empty(area);
+
+        overlay.render(area, &mut buf);
+        overlay.view.scroll_offset = 0;
+        overlay.view.wrap_cache = None;
+        overlay.render(area, &mut buf);
+
+        let snapshot = buffer_to_text(&buf, area);
+        assert_snapshot!("transcript_overlay_apply_patch_scroll_vt100", snapshot);
     }
 
     #[test]
