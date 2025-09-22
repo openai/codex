@@ -9,8 +9,8 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-codex-common = { path = "../common", features = ["cli"] }
-codex-core = { path = "../core" }
+codex-common = { workspace = true, features = ["cli"] }
+codex-core = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

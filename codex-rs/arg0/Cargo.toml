@@ -12,9 +12,9 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-codex-apply-patch = { path = "../apply-patch" }
-codex-core = { path = "../core" }
-codex-linux-sandbox = { path = "../linux-sandbox" }
+codex-apply-patch = { workspace = true }
+codex-core = { workspace = true }
+codex-linux-sandbox = { workspace = true }
 dotenvy = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }

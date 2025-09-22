@@ -18,15 +18,15 @@ workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-codex-arg0 = { path = "../arg0" }
-codex-common = { path = "../common", features = [
+codex-arg0 = { workspace = true }
+codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
     "sandbox_summary",
 ] }
-codex-core = { path = "../core" }
-codex-ollama = { path = "../ollama" }
-codex-protocol = { path = "../protocol" }
+codex-core = { workspace = true }
+codex-ollama = { workspace = true }
+codex-protocol = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }
 shlex = { workspace = true }
@@ -42,7 +42,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
-core_test_support = { path = "../core/tests/common" }
+core_test_support = { workspace = true }
 libc = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }

@@ -8,7 +8,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-mcp-types = { path = "../mcp-types" }
+mcp-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true, features = ["log"] }

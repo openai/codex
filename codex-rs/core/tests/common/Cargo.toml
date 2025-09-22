@@ -7,7 +7,7 @@ edition = "2024"
 path = "lib.rs"
 
 [dependencies]
-codex-core = { path = "../.." }
+codex-core = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["time"] }

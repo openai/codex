@@ -26,18 +26,18 @@ async-stream = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
-codex-ansi-escape = { path = "../ansi-escape" }
-codex-arg0 = { path = "../arg0" }
-codex-common = { path = "../common", features = [
+codex-ansi-escape = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
     "sandbox_summary",
 ] }
-codex-core = { path = "../core" }
-codex-file-search = { path = "../file-search" }
-codex-login = { path = "../login" }
-codex-ollama = { path = "../ollama" }
-codex-protocol = { path = "../protocol" }
+codex-core = { workspace = true }
+codex-file-search = { workspace = true }
+codex-login = { workspace = true }
+codex-ollama = { workspace = true }
+codex-protocol = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = [
     "bracketed-paste",
@@ -51,7 +51,7 @@ image = { workspace = true, features = [
 ] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
-mcp-types = { path = "../mcp-types" }
+mcp-types = { workspace = true }
 once_cell = { workspace = true }
 path-clean = { workspace = true }
 rand = { workspace = true }

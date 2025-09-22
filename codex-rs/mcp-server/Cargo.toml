@@ -16,12 +16,12 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-codex-arg0 = { path = "../arg0" }
-codex-common = { path = "../common", features = ["cli"] }
-codex-core = { path = "../core" }
-codex-login = { path = "../login" }
-codex-protocol = { path = "../protocol" }
-mcp-types = { path = "../mcp-types" }
+codex-arg0 = { workspace = true }
+codex-common = { workspace = true, features = ["cli"] }
+codex-core = { workspace = true }
+codex-login = { workspace = true }
+codex-protocol = { workspace = true }
+mcp-types = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -41,7 +41,7 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 base64 = { workspace = true }
-mcp_test_support = { path = "tests/common" }
+mcp_test_support = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
