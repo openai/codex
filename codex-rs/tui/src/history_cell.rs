@@ -1619,7 +1619,7 @@ fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotEvent>) -> Vec<Li
         Some(snapshot) => {
             let rows = [
                 ("5h limit".to_string(), snapshot.primary_used_percent),
-                ("Weekly limit".to_string(), snapshot.weekly_used_percent),
+                ("Weekly limit".to_string(), snapshot.secondary_used_percent),
             ];
             let label_width = rows
                 .iter()

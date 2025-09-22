@@ -115,32 +115,36 @@ const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [50.0, 75.0, 90.0];
 
 #[derive(Default)]
 struct RateLimitWarningState {
-    weekly_index: usize,
-    hourly_index: usize,
+    secondary_index: usize,
+    primary_index: usize,
 }
 
 impl RateLimitWarningState {
-    fn take_warnings(&mut self, weekly_used_percent: f64, hourly_used_percent: f64) -> Vec<String> {
+    fn take_warnings(
+        &mut self,
+        secondary_used_percent: f64,
+        primary_used_percent: f64,
+    ) -> Vec<String> {
         let mut warnings = Vec::new();
 
-        while self.weekly_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-            && weekly_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.weekly_index]
+        while self.secondary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+            && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
         {
-            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.weekly_index];
+            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index];
             warnings.push(format!(
                 "Heads up, you've used over {threshold:.0}% of your weekly limit. Run /status for a breakdown."
             ));
-            self.weekly_index += 1;
+            self.secondary_index += 1;
         }
 
-        while self.hourly_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-            && hourly_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.hourly_index]
+        while self.primary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+            && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
         {
-            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.hourly_index];
+            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index];
             warnings.push(format!(
                 "Heads up, you've used over {threshold:.0}% of your 5h limit. Run /status for a breakdown."
             ));
-            self.hourly_index += 1;
+            self.primary_index += 1;
         }
 
         warnings
@@ -339,9 +343,10 @@ impl ChatWidget {
 
     fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshotEvent>) {
         if let Some(snapshot) = snapshot {
-            let warnings = self
-                .rate_limit_warnings
-                .take_warnings(snapshot.weekly_used_percent, snapshot.primary_used_percent);
+            let warnings = self.rate_limit_warnings.take_warnings(
+                snapshot.secondary_used_percent,
+                snapshot.primary_used_percent,
+            );
             self.rate_limit_snapshot = Some(snapshot);
             if !warnings.is_empty() {
                 for warning in warnings {
