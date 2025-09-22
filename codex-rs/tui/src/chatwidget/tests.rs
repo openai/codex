@@ -1044,7 +1044,10 @@ async fn binary_size_transcript_snapshot() {
                                     call_id: e.call_id.clone(),
                                     command: e.command,
                                     cwd: e.cwd,
-                                    parsed_cmd: parsed_cmd.into_iter().map(|c| c.into()).collect(),
+                                    parsed_cmd: parsed_cmd
+                                        .into_iter()
+                                        .map(std::convert::Into::into)
+                                        .collect(),
                                 }),
                             }
                         }
@@ -1121,7 +1124,7 @@ async fn binary_size_transcript_snapshot() {
         // Trim trailing spaces to match plain text fixture
         lines.push(s.trim_end().to_string());
     }
-    while lines.last().is_some_and(|l| l.is_empty()) {
+    while lines.last().is_some_and(std::string::String::is_empty) {
         lines.pop();
     }
     // Consider content only after the last session banner marker. Skip the transient
