@@ -31,3 +31,4 @@ webbrowser = "1.0"
 
 [dev-dependencies]
 tempfile = "3"
+core_test_support = { path = "../core/tests/common" }
