@@ -20,6 +20,7 @@ use codex_core::default_client::ORIGINATOR;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
 use rand::RngCore;
+use serde_json::Value as JsonValue;
 use tiny_http::Header;
 use tiny_http::Request;
 use tiny_http::Response;
@@ -326,7 +327,7 @@ fn build_authorize_url(
 
 fn generate_state() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
@@ -496,11 +497,11 @@ fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &s
         .unwrap_or("");
     let completed_onboarding = token_claims
         .get("completed_platform_onboarding")
-        .and_then(|v| v.as_bool())
+        .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let is_org_owner = token_claims
         .get("is_org_owner")
-        .and_then(|v| v.as_bool())
+        .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let needs_setup = (!completed_onboarding) && is_org_owner;
     let plan_type = access_claims

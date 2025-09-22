@@ -169,7 +169,7 @@ impl ProgramSpec {
             let mut options = self
                 .required_options
                 .difference(&matched_opt_names)
-                .map(|s| s.to_string())
+                .map(String::from)
                 .collect::<Vec<_>>();
             options.sort();
             return Err(Error::MissingRequiredOptions {

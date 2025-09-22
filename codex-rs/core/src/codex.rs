@@ -98,6 +98,7 @@ use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
+use crate::protocol::RateLimitSnapshotEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
 use crate::protocol::SandboxPolicy;
@@ -105,6 +106,7 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
+use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
@@ -257,6 +259,7 @@ struct State {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
+    latest_rate_limits: Option<RateLimitSnapshotEvent>,
 }
 
 /// Context for an initialized model agent
@@ -456,8 +459,6 @@ impl Session {
             client,
             tools_config: ToolsConfig::new(&ToolsConfigParams {
                 model_family: &config.model_family,
-                approval_policy,
-                sandbox_policy: sandbox_policy.clone(),
                 include_plan_tool: config.include_plan_tool,
                 include_apply_patch_tool: config.include_apply_patch_tool,
                 include_web_search_request: config.tools_web_search_request,
@@ -740,16 +741,30 @@ impl Session {
     async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
-        token_usage: &Option<TokenUsage>,
-    ) -> Option<TokenUsageInfo> {
+        token_usage: Option<&TokenUsage>,
+    ) {
         let mut state = self.state.lock().await;
-        let info = TokenUsageInfo::new_or_append(
-            &state.token_info,
-            token_usage,
-            turn_context.client.get_model_context_window(),
-        );
-        state.token_info = info.clone();
-        info
+        if let Some(token_usage) = token_usage {
+            let info = TokenUsageInfo::new_or_append(
+                &state.token_info,
+                &Some(token_usage.clone()),
+                turn_context.client.get_model_context_window(),
+            );
+            state.token_info = info;
+        }
+    }
+
+    async fn update_rate_limits(&self, new_rate_limits: RateLimitSnapshotEvent) {
+        let mut state = self.state.lock().await;
+        state.latest_rate_limits = Some(new_rate_limits);
+    }
+
+    async fn get_token_count_event(&self) -> TokenCountEvent {
+        let state = self.state.lock().await;
+        TokenCountEvent {
+            info: state.token_info.clone(),
+            rate_limits: state.latest_rate_limits.clone(),
+        }
     }
 
     /// Record a user input item to conversation history and also persist a
@@ -993,10 +1008,9 @@ impl Session {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
-        timeout: Option<Duration>,
     ) -> anyhow::Result<CallToolResult> {
         self.mcp_connection_manager
-            .call_tool(server, tool, arguments, timeout)
+            .call_tool(server, tool, arguments)
             .await
     }
 
@@ -1237,8 +1251,6 @@ async fn submission_loop(
 
                 let tools_config = ToolsConfig::new(&ToolsConfigParams {
                     model_family: &effective_family,
-                    approval_policy: new_approval_policy,
-                    sandbox_policy: new_sandbox_policy.clone(),
                     include_plan_tool: config.include_plan_tool,
                     include_apply_patch_tool: config.include_apply_patch_tool,
                     include_web_search_request: config.tools_web_search_request,
@@ -1325,8 +1337,6 @@ async fn submission_loop(
                         client,
                         tools_config: ToolsConfig::new(&ToolsConfigParams {
                             model_family: &model_family,
-                            approval_policy,
-                            sandbox_policy: sandbox_policy.clone(),
                             include_plan_tool: config.include_plan_tool,
                             include_apply_patch_tool: config.include_apply_patch_tool,
                             include_web_search_request: config.tools_web_search_request,
@@ -1553,8 +1563,6 @@ async fn spawn_review_thread(
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
-        approval_policy: parent_turn_context.approval_policy,
-        sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         include_plan_tool: false,
         include_apply_patch_tool: config.include_apply_patch_tool,
         include_web_search_request: false,
@@ -1739,7 +1747,7 @@ async fn run_task(
                     .unwrap_or(i64::MAX);
                 let total_usage_tokens = total_token_usage
                     .as_ref()
-                    .map(|usage| usage.tokens_in_context_window());
+                    .map(TokenUsage::tokens_in_context_window);
                 let token_limit_reached = total_usage_tokens
                     .map(|tokens| (tokens as i64) >= limit)
                     .unwrap_or(false);
@@ -2144,17 +2152,22 @@ async fn try_run_turn(
                     })
                     .await;
             }
+            ResponseEvent::RateLimits(snapshot) => {
+                // Update internal state with latest rate limits, but defer sending until
+                // token usage is available to avoid duplicate TokenCount events.
+                sess.update_rate_limits(snapshot).await;
+            }
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
             } => {
-                let info = sess
-                    .update_token_usage_info(turn_context, &token_usage)
+                sess.update_token_usage_info(turn_context, token_usage.as_ref())
                     .await;
+                let token_event = sess.get_token_count_event().await;
                 let _ = sess
                     .send_event(Event {
                         id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
+                        msg: EventMsg::TokenCount(token_event),
                     })
                     .await;
 
@@ -2582,12 +2595,7 @@ async fn handle_function_call(
         _ => {
             match sess.mcp_connection_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {
-                    // TODO(mbolin): Determine appropriate timeout for tool call.
-                    let timeout = None;
-                    handle_mcp_tool_call(
-                        sess, &sub_id, call_id, server, tool_name, arguments, timeout,
-                    )
-                    .await
+                    handle_mcp_tool_call(sess, &sub_id, call_id, server, tool_name, arguments).await
                 }
                 None => {
                     // Unknown function: reply with structured failure so the model can adapt.
@@ -2724,6 +2732,21 @@ async fn handle_container_exec_with_params(
     sub_id: String,
     call_id: String,
 ) -> ResponseInputItem {
+    if params.with_escalated_permissions.unwrap_or(false)
+        && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
+    {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!(
+                    "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+                    policy = turn_context.approval_policy
+                ),
+                success: None,
+            },
+        };
+    }
+
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
@@ -3345,6 +3368,7 @@ mod tests {
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
+    use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -3594,8 +3618,6 @@ mod tests {
         );
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &config.model_family,
-            approval_policy: config.approval_policy,
-            sandbox_policy: config.sandbox_policy.clone(),
             include_plan_tool: config.include_plan_tool,
             include_apply_patch_tool: config.include_apply_patch_tool,
             include_web_search_request: config.tools_web_search_request,
@@ -3734,5 +3756,106 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
         (rollout_items, live_history.contents())
+    }
+
+    #[tokio::test]
+    async fn rejects_escalated_permissions_when_policy_not_on_request() {
+        use crate::exec::ExecParams;
+        use crate::protocol::AskForApproval;
+        use crate::protocol::SandboxPolicy;
+        use crate::turn_diff_tracker::TurnDiffTracker;
+        use std::collections::HashMap;
+
+        let (session, mut turn_context) = make_session_and_context();
+        // Ensure policy is NOT OnRequest so the early rejection path triggers
+        turn_context.approval_policy = AskForApproval::OnFailure;
+
+        let params = ExecParams {
+            command: if cfg!(windows) {
+                vec![
+                    "cmd.exe".to_string(),
+                    "/C".to_string(),
+                    "echo hi".to_string(),
+                ]
+            } else {
+                vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "echo hi".to_string(),
+                ]
+            },
+            cwd: turn_context.cwd.clone(),
+            timeout_ms: Some(1000),
+            env: HashMap::new(),
+            with_escalated_permissions: Some(true),
+            justification: Some("test".to_string()),
+        };
+
+        let params2 = ExecParams {
+            with_escalated_permissions: Some(false),
+            ..params.clone()
+        };
+
+        let mut turn_diff_tracker = TurnDiffTracker::new();
+
+        let sub_id = "test-sub".to_string();
+        let call_id = "test-call".to_string();
+
+        let resp = handle_container_exec_with_params(
+            params,
+            &session,
+            &turn_context,
+            &mut turn_diff_tracker,
+            sub_id,
+            call_id,
+        )
+        .await;
+
+        let ResponseInputItem::FunctionCallOutput { output, .. } = resp else {
+            panic!("expected FunctionCallOutput");
+        };
+
+        let expected = format!(
+            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+            policy = turn_context.approval_policy
+        );
+
+        pretty_assertions::assert_eq!(output.content, expected);
+
+        // Now retry the same command WITHOUT escalated permissions; should succeed.
+        // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
+        turn_context.sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+        let resp2 = handle_container_exec_with_params(
+            params2,
+            &session,
+            &turn_context,
+            &mut turn_diff_tracker,
+            "test-sub".to_string(),
+            "test-call-2".to_string(),
+        )
+        .await;
+
+        let ResponseInputItem::FunctionCallOutput { output, .. } = resp2 else {
+            panic!("expected FunctionCallOutput on retry");
+        };
+
+        #[derive(Deserialize, PartialEq, Eq, Debug)]
+        struct ResponseExecMetadata {
+            exit_code: i32,
+        }
+
+        #[derive(Deserialize)]
+        struct ResponseExecOutput {
+            output: String,
+            metadata: ResponseExecMetadata,
+        }
+
+        let exec_output: ResponseExecOutput =
+            serde_json::from_str(&output.content).expect("valid exec output json");
+
+        pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
+        assert!(exec_output.output.contains("hi"));
+        pretty_assertions::assert_eq!(output.success, Some(true));
     }
 }

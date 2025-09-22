@@ -13,8 +13,10 @@ use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthChar;
 
 use super::scroll_state::ScrollState;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 
 /// A generic representation of a display row for selection popups.
 pub(crate) struct GenericDisplayRow {
@@ -54,10 +56,24 @@ fn compute_desc_col(
 /// at `desc_col`. Applies fuzzy-match bolding when indices are present and
 /// dims the description.
 fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
+    // Enforce single-line name: allow at most desc_col - 2 cells for name,
+    // reserving two spaces before the description column.
+    let name_limit = desc_col.saturating_sub(2);
+
     let mut name_spans: Vec<Span> = Vec::with_capacity(row.name.len());
+    let mut used_width = 0usize;
+    let mut truncated = false;
+
     if let Some(idxs) = row.match_indices.as_ref() {
         let mut idx_iter = idxs.iter().peekable();
         for (char_idx, ch) in row.name.chars().enumerate() {
+            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used_width + ch_w > name_limit {
+                truncated = true;
+                break;
+            }
+            used_width += ch_w;
+
             if idx_iter.peek().is_some_and(|next| **next == char_idx) {
                 idx_iter.next();
                 name_spans.push(ch.to_string().bold());
@@ -66,7 +82,21 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
             }
         }
     } else {
-        name_spans.push(row.name.clone().into());
+        for ch in row.name.chars() {
+            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used_width + ch_w > name_limit {
+                truncated = true;
+                break;
+            }
+            used_width += ch_w;
+            name_spans.push(ch.to_string().into());
+        }
+    }
+
+    if truncated {
+        // If there is at least one cell available, add an ellipsis.
+        // When name_limit is 0, we still show an ellipsis to indicate truncation.
+        name_spans.push("…".into());
     }
 
     let this_name_width = Line::from(name_spans.clone()).width();
@@ -99,13 +129,33 @@ pub(crate) fn render_rows(
         .border_style(Style::default().add_modifier(Modifier::DIM));
     block.render(area, buf);
 
-    // Content renders to the right of the border.
+    // Content renders to the right of the border with the same live prefix
+    // padding used by the composer so the popup aligns with the input text.
+    let prefix_cols = LIVE_PREFIX_COLS;
     let content_area = Rect {
-        x: area.x.saturating_add(1),
+        x: area.x.saturating_add(prefix_cols),
         y: area.y,
-        width: area.width.saturating_sub(1),
+        width: area.width.saturating_sub(prefix_cols),
         height: area.height,
     };
+
+    // Clear the padding column(s) so stale characters never peek between the
+    // border and the popup contents.
+    let padding_cols = prefix_cols.saturating_sub(1);
+    if padding_cols > 0 {
+        let pad_start = area.x.saturating_add(1);
+        let pad_end = pad_start
+            .saturating_add(padding_cols)
+            .min(area.x.saturating_add(area.width));
+        let pad_bottom = area.y.saturating_add(area.height);
+        for x in pad_start..pad_end {
+            for y in area.y..pad_bottom {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_symbol(" ");
+                }
+            }
+        }
+    }
 
     if rows_all.is_empty() {
         if content_area.height > 0 {
