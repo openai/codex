@@ -365,7 +365,15 @@ impl BottomPaneView for ListSelectionView {
 
         let rows = self.build_rows();
         if rows_area.height > 0 {
-            render_rows(rows_area, buf, &rows, &self.state, MAX_POPUP_ROWS, true);
+            render_rows(
+                rows_area,
+                buf,
+                &rows,
+                &self.state,
+                MAX_POPUP_ROWS,
+                true,
+                "no matches",
+            );
         }
 
         if let Some(hint) = &self.footer_hint {

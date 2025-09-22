@@ -52,7 +52,7 @@ pub(crate) struct BottomPane {
     /// input state is retained when the view is closed.
     composer: ChatComposer,
 
-    /// Active view displayed instead of the composer (e.g. popups/modals).
+    /// If present, this is displayed instead of the `composer` (e.g. modals).
     active_view: Option<Box<dyn BottomPaneView>>,
 
     app_event_tx: AppEventSender,
@@ -102,21 +102,12 @@ impl BottomPane {
         }
     }
 
-    fn active_view(&self) -> Option<&dyn BottomPaneView> {
-        self.active_view.as_deref()
-    }
-
-    fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
-        self.active_view = Some(view);
-        self.request_redraw();
-    }
-
     pub fn desired_height(&self, width: u16) -> u16 {
         // Always reserve one blank row above the pane for visual spacing.
         let top_margin = 1;
 
         // Base height depends on whether a modal/overlay is active.
-        let base = match self.active_view() {
+        let base = match self.active_view.as_ref() {
             Some(view) => view.desired_height(width),
             None => self.composer.desired_height(width).saturating_add(
                 self.status
@@ -143,7 +134,7 @@ impl BottomPane {
             width: area.width,
             height: area.height - top_margin - bottom_margin,
         };
-        match self.active_view() {
+        match self.active_view.as_ref() {
             Some(_) => [Rect::ZERO, area],
             None => {
                 let status_height = self
@@ -161,7 +152,7 @@ impl BottomPane {
         // In these states the textarea is not interactable, so we should not
         // show its caret.
         let [_, content] = self.layout(area);
-        if let Some(view) = self.active_view() {
+        if let Some(view) = self.active_view.as_ref() {
             view.cursor_pos(content)
         } else {
             self.composer.cursor_pos(content)
@@ -361,7 +352,7 @@ impl BottomPane {
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
-        self.push_view(Box::new(view));
+        self.active_view = Some(Box::new(view));
     }
 
     /// Update the queued messages shown under the status header.
@@ -402,7 +393,8 @@ impl BottomPane {
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
-        self.push_view(view);
+        self.active_view = Some(view);
+        self.request_redraw();
     }
 
     /// Called when the agent requests user approval.
@@ -422,7 +414,8 @@ impl BottomPane {
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
         self.pause_status_timer_for_modal();
-        self.push_view(Box::new(modal));
+        self.active_view = Some(Box::new(modal));
+        self.request_redraw();
     }
 
     fn on_active_view_complete(&mut self) {
@@ -508,7 +501,7 @@ impl WidgetRef for &BottomPane {
         let [status_area, content] = self.layout(area);
 
         // When a modal view is active, it owns the whole content area.
-        if let Some(view) = self.active_view() {
+        if let Some(view) = &self.active_view {
             view.render(content, buf);
         } else {
             // No active modal:
@@ -618,7 +611,7 @@ mod tests {
         // After denial, since the task is still running, the status indicator should be
         // visible above the composer. The modal should be gone.
         assert!(
-            pane.active_view().is_none(),
+            pane.active_view.is_none(),
             "no active modal view after denial"
         );
 
