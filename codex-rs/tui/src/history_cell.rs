@@ -2,6 +2,9 @@ use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
+use crate::rate_limits_view::DEFAULT_GRID_CONFIG;
+use crate::rate_limits_view::LimitsView;
+use crate::rate_limits_view::build_limits_view;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -24,6 +27,7 @@ use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::project_doc::discover_project_doc_paths;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::RateLimitSnapshotEvent;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
@@ -103,7 +107,7 @@ impl dyn HistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
-    message: String,
+    pub message: String,
 }
 
 impl HistoryCell for UserHistoryCell {
@@ -226,6 +230,20 @@ impl HistoryCell for PlainHistoryCell {
 }
 
 #[derive(Debug)]
+pub(crate) struct LimitsHistoryCell {
+    display: LimitsView,
+}
+
+impl HistoryCell for LimitsHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = self.display.summary_lines.clone();
+        lines.extend(self.display.gauge_lines(width));
+        lines.extend(self.display.legend_lines.clone());
+        lines
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct TranscriptOnlyHistoryCell {
     lines: Vec<Line<'static>>,
 }
@@ -237,6 +255,13 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+}
+
+/// Cyan history cell line showing the current review status.
+pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![Line::from(message.cyan())],
     }
 }
 
@@ -1169,6 +1194,105 @@ fn try_new_completed_mcp_tool_call_with_image_output(
     }
 }
 
+pub(crate) fn new_completed_mcp_tool_call(
+    num_cols: usize,
+    invocation: McpInvocation,
+    duration: Duration,
+    success: bool,
+    result: Result<mcp_types::CallToolResult, String>,
+) -> Box<dyn HistoryCell> {
+    if let Some(cell) = try_new_completed_mcp_tool_call_with_image_output(&result) {
+        return Box::new(cell);
+    }
+
+    let duration = format_duration(duration);
+    let status_str = if success { "success" } else { "failed" };
+    let title_line = Line::from(vec![
+        "tool".magenta(),
+        " ".into(),
+        if success {
+            status_str.green()
+        } else {
+            status_str.red()
+        },
+        format!(", duration: {duration}").dim(),
+    ]);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(title_line);
+    lines.push(format_mcp_invocation(invocation));
+
+    match result {
+        Ok(mcp_types::CallToolResult { content, .. }) => {
+            if !content.is_empty() {
+                lines.push(Line::from(""));
+
+                for tool_call_result in content {
+                    let line_text = match tool_call_result {
+                        mcp_types::ContentBlock::TextContent(text) => {
+                            format_and_truncate_tool_result(
+                                &text.text,
+                                TOOL_CALL_MAX_LINES,
+                                num_cols,
+                            )
+                        }
+                        mcp_types::ContentBlock::ImageContent(_) => {
+                            // TODO show images even if they're not the first result, will require a refactor of `CompletedMcpToolCall`
+                            "<image content>".to_string()
+                        }
+                        mcp_types::ContentBlock::AudioContent(_) => "<audio content>".to_string(),
+                        mcp_types::ContentBlock::EmbeddedResource(resource) => {
+                            let uri = match resource.resource {
+                                EmbeddedResourceResource::TextResourceContents(text) => text.uri,
+                                EmbeddedResourceResource::BlobResourceContents(blob) => blob.uri,
+                            };
+                            format!("embedded resource: {uri}")
+                        }
+                        mcp_types::ContentBlock::ResourceLink(ResourceLink { uri, .. }) => {
+                            format!("link: {uri}")
+                        }
+                    };
+                    lines.push(Line::styled(
+                        line_text,
+                        Style::default().add_modifier(Modifier::DIM),
+                    ));
+                }
+            }
+        }
+        Err(e) => {
+            lines.push(vec!["Error: ".red().bold(), e.into()].into());
+        }
+    };
+
+    Box::new(PlainHistoryCell { lines })
+}
+
+pub(crate) fn new_limits_output(snapshot: &RateLimitSnapshotEvent) -> LimitsHistoryCell {
+    LimitsHistoryCell {
+        display: build_limits_view(snapshot, DEFAULT_GRID_CONFIG),
+    }
+}
+
+pub(crate) fn new_limits_unavailable() -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![
+            "/limits".magenta().into(),
+            "".into(),
+            vec!["Rate limit usage snapshot".bold()].into(),
+            vec!["  Tip: run `/limits` right after Codex replies for freshest numbers.".dim()]
+                .into(),
+            vec!["  Real usage data is not available yet.".into()].into(),
+            vec!["  Send a message to Codex, then run /limits again.".dim()].into(),
+        ],
+    }
+}
+
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![vec![format!("⚠ {message}").yellow()].into()],
+    }
+}
 pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,

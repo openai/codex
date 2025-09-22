@@ -20,10 +20,12 @@ mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
+pub mod custom_prompt_view;
 mod file_search_popup;
 mod list_selection_view;
+pub(crate) use list_selection_view::SelectionViewParams;
 mod paste_burst;
-mod popup_consts;
+pub mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
@@ -148,10 +150,10 @@ impl BottomPane {
         // status indicator shown while a task is running, or approval modal).
         // In these states the textarea is not interactable, so we should not
         // show its caret.
-        if self.active_view.is_some() {
-            None
+        let [_, content] = self.layout(area);
+        if let Some(view) = self.active_view.as_ref() {
+            view.cursor_pos(content)
         } else {
-            let [_, content] = self.layout(area);
             self.composer.cursor_pos(content)
         }
     }
@@ -224,7 +226,17 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
-        if self.active_view.is_none() {
+        if let Some(mut view) = self.active_view.take() {
+            let needs_redraw = view.handle_paste(self, pasted);
+            if view.is_complete() {
+                self.on_active_view_complete();
+            } else {
+                self.active_view = Some(view);
+            }
+            if needs_redraw {
+                self.request_redraw();
+            }
+        } else {
             let needs_redraw = self.composer.handle_paste(pasted);
             if needs_redraw {
                 self.request_redraw();
@@ -318,22 +330,9 @@ impl BottomPane {
     }
 
     /// Show a generic list selection view with the provided items.
-    pub(crate) fn show_selection_view(
-        &mut self,
-        title: String,
-        subtitle: Option<String>,
-        footer_hint: Option<String>,
-        items: Vec<SelectionItem>,
-    ) {
-        let view = list_selection_view::ListSelectionView::new(
-            title,
-            subtitle,
-            footer_hint,
-            items,
-            self.app_event_tx.clone(),
-        );
+    pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
+        let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
         self.active_view = Some(Box::new(view));
-        self.request_redraw();
     }
 
     /// Update the queued messages shown under the status header.
@@ -370,6 +369,11 @@ impl BottomPane {
     /// is forwarded directly to the underlying `ChatComposer`.
     pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
         self.composer.set_token_usage(token_info);
+        self.request_redraw();
+    }
+
+    pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
+        self.active_view = Some(view);
         self.request_redraw();
     }
 
