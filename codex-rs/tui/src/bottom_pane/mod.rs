@@ -217,6 +217,7 @@ impl BottomPane {
             let event = view.on_ctrl_c();
             if matches!(event, CancellationEvent::Handled) {
                 if view.is_complete() {
+                    self.view_stack.pop();
                     self.on_active_view_complete();
                 }
                 self.show_ctrl_c_quit_hint();
@@ -225,6 +226,7 @@ impl BottomPane {
         } else if self.composer_is_empty() {
             CancellationEvent::NotHandled
         } else {
+            self.view_stack.pop();
             self.set_composer_text(String::new());
             self.show_ctrl_c_quit_hint();
             CancellationEvent::Handled
