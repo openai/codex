@@ -30,17 +30,20 @@
           inherit monorepo-deps;
         };
       in
-      rec {
+      {
         packages = {
           codex-rs = codex-rs.package;
+          default = codex-rs.package;
         };
 
         devShells = {
           codex-rs = codex-rs.devShell;
+          default = codex-rs.devShell;
         };
 
         apps = {
           codex-rs = codex-rs.app;
+          default = codex-rs.app;
         };
       }
     );
