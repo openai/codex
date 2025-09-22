@@ -58,6 +58,11 @@ use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
 
+const STATUS_HOURLY_LIMIT_HOURS: f64 = 5.0;
+const STATUS_LIMIT_BAR_SEGMENTS: usize = 40;
+const STATUS_LIMIT_BAR_FILLED: &str = "█";
+const STATUS_LIMIT_BAR_EMPTY: &str = " ";
+
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
@@ -753,6 +758,65 @@ pub(crate) fn new_user_approval_decision(lines: Vec<Line<'static>>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
+fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotEvent>) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> =
+        vec![vec![padded_emoji("⏱️").into(), "Usage Limits".bold()].into()];
+
+    match snapshot {
+        Some(snapshot) => {
+            let rows = [
+                (
+                    format!("{:.0}h limit", STATUS_HOURLY_LIMIT_HOURS),
+                    snapshot.primary_used_percent,
+                ),
+                ("Weekly limit".to_string(), snapshot.weekly_used_percent),
+            ];
+            let label_width = rows
+                .iter()
+                .map(|(label, _)| UnicodeWidthStr::width(label.as_str()))
+                .max()
+                .unwrap_or(0);
+            for (label, percent) in rows {
+                lines.push(build_status_limit_line(&label, percent, label_width));
+            }
+        }
+        None => lines.push("  • Rate limit data not available yet.".dim().into()),
+    }
+
+    lines
+}
+
+fn build_status_limit_line(label: &str, percent_used: f64, label_width: usize) -> Line<'static> {
+    let clamped_percent = percent_used.clamp(0.0, 100.0);
+    let progress = render_status_limit_progress_bar(clamped_percent);
+    let summary = format_status_limit_summary(clamped_percent);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(5);
+    let padded_label = format!("{label:<width$}", width = label_width);
+    spans.push(format!("  • {padded_label}: ").into());
+    spans.push(progress.into());
+    spans.push(" ".into());
+    spans.push(summary.into());
+
+    Line::from(spans)
+}
+
+fn render_status_limit_progress_bar(percent_used: f64) -> String {
+    let ratio = (percent_used / 100.0).clamp(0.0, 1.0);
+    let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
+    let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
+    let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
+    format!(
+        "[{}{}]",
+        STATUS_LIMIT_BAR_FILLED.repeat(filled),
+        STATUS_LIMIT_BAR_EMPTY.repeat(empty)
+    )
+}
+
+fn format_status_limit_summary(percent_used: f64) -> String {
+    format!("{percent_used:.0}% used")
+}
+
 pub(crate) fn new_active_exec_command(
     call_id: String,
     command: Vec<String>,
@@ -1124,6 +1188,7 @@ pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
     session_id: &Option<ConversationId>,
+    rate_limits: Option<&RateLimitSnapshotEvent>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("/status".magenta().into());
@@ -1283,6 +1348,9 @@ pub(crate) fn new_status_output(
         "  • Total: ".into(),
         format_with_separators(usage.blended_total()).into(),
     ]));
+
+    lines.push("".into());
+    lines.extend(build_status_limit_lines(rate_limits));
 
     PlainHistoryCell { lines }
 }
@@ -1673,6 +1741,45 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines())
+    }
+
+    fn sample_rate_limits(hourly: f64, weekly: f64) -> RateLimitSnapshotEvent {
+        RateLimitSnapshotEvent {
+            primary_used_percent: hourly,
+            weekly_used_percent: weekly,
+            primary_to_weekly_ratio_percent: 20.0,
+            primary_window_minutes: 300,
+            weekly_window_minutes: 10_080,
+        }
+    }
+
+    fn capture_status_usage_snapshot(hourly: f64, weekly: f64) -> String {
+        let snapshot = sample_rate_limits(hourly, weekly);
+        let cell = new_status_output(
+            &test_config(),
+            &TokenUsage::default(),
+            &None,
+            Some(&snapshot),
+        );
+        render_lines(&cell.display_lines(80)).join("\n")
+    }
+
+    #[test]
+    fn status_usage_limits_empty_snapshot() {
+        let visual = capture_status_usage_snapshot(0.0, 0.0);
+        insta::assert_snapshot!(visual);
+    }
+
+    #[test]
+    fn status_usage_limits_partial_snapshot() {
+        let visual = capture_status_usage_snapshot(16.0, 56.0);
+        insta::assert_snapshot!(visual);
+    }
+
+    #[test]
+    fn status_usage_limits_full_snapshot() {
+        let visual = capture_status_usage_snapshot(100.0, 100.0);
+        insta::assert_snapshot!(visual);
     }
 
     #[test]
