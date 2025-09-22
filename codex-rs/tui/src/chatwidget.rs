@@ -1368,6 +1368,7 @@ impl ChatWidget {
             &self.config,
             usage_ref,
             &self.conversation_id,
+            self.rate_limit_snapshot.as_ref(),
         ));
     }
 
