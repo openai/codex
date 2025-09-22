@@ -100,3 +100,49 @@ pub use codex_protocol::models::LocalShellExecAction;
 pub use codex_protocol::models::LocalShellStatus;
 pub use codex_protocol::models::ReasoningItemContent;
 pub use codex_protocol::models::ResponseItem;
+
+#[macro_export]
+macro_rules! skip_if_sandbox {
+    () => {
+        if std::env::var($crate::spawn::CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+            eprintln!(
+                "{} is set to 'seatbelt', skipping test.",
+                $crate::spawn::CODEX_SANDBOX_ENV_VAR
+            );
+            return;
+        }
+    };
+    ($return_value:expr $(,)?) => {
+        if std::env::var($crate::spawn::CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+            eprintln!(
+                "{} is set to 'seatbelt', skipping test.",
+                $crate::spawn::CODEX_SANDBOX_ENV_VAR
+            );
+            return $return_value;
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! skip_if_no_network {
+    () => {
+        $crate::skip_if_sandbox!();
+        if std::env::var($crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            eprintln!(
+                "{} is set; network access disabled, skipping test.",
+                $crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+            );
+            return;
+        }
+    };
+    ($return_value:expr $(,)?) => {
+        $crate::skip_if_sandbox!($return_value);
+        if std::env::var($crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            eprintln!(
+                "{} is set; network access disabled, skipping test.",
+                $crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+            );
+            return $return_value;
+        }
+    };
+}

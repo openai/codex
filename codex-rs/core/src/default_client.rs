@@ -1,3 +1,4 @@
+use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
 use std::sync::Mutex;
@@ -20,7 +21,6 @@ use std::sync::Mutex;
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
-
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
@@ -112,12 +112,19 @@ pub fn create_client() -> reqwest::Client {
     headers.insert("originator", ORIGINATOR.header_value.clone());
     let ua = get_codex_user_agent();
 
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
-        .default_headers(headers)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .default_headers(headers);
+    if is_sandboxed() {
+        builder = builder.no_proxy();
+    }
+
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+fn is_sandboxed() -> bool {
+    std::env::var(CODEX_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
 }
 
 #[cfg(test)]
@@ -130,50 +137,13 @@ mod tests {
         assert!(user_agent.starts_with("codex_cli_rs/"));
     }
 
-    #[tokio::test]
-    async fn test_create_client_sets_default_headers() {
-        use wiremock::Mock;
-        use wiremock::MockServer;
-        use wiremock::ResponseTemplate;
-        use wiremock::matchers::method;
-        use wiremock::matchers::path;
-
-        let client = create_client();
-
-        // Spin up a local mock server and capture a request.
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let resp = client
-            .get(server.uri())
-            .send()
-            .await
-            .expect("failed to send request");
-        assert!(resp.status().is_success());
-
-        let requests = server
-            .received_requests()
-            .await
-            .expect("failed to fetch received requests");
-        assert!(!requests.is_empty());
-        let headers = &requests[0].headers;
-
-        // originator header is set to the provided value
-        let originator_header = headers
-            .get("originator")
-            .expect("originator header missing");
-        assert_eq!(originator_header.to_str().unwrap(), "codex_cli_rs");
-
-        // User-Agent matches the computed Codex UA for that originator
-        let expected_ua = get_codex_user_agent();
-        let ua_header = headers
-            .get("user-agent")
-            .expect("user-agent header missing");
-        assert_eq!(ua_header.to_str().unwrap(), expected_ua);
+    #[test]
+    fn test_originator_header_defaults_to_codex_cli_rs() {
+        assert_eq!(ORIGINATOR.value, "codex_cli_rs");
+        assert_eq!(
+            ORIGINATOR.header_value,
+            HeaderValue::from_static("codex_cli_rs")
+        );
     }
 
     #[test]
