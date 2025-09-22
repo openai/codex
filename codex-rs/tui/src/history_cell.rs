@@ -58,7 +58,6 @@ use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
 
-const STATUS_HOURLY_LIMIT_HOURS: f64 = 5.0;
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 40;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
 const STATUS_LIMIT_BAR_EMPTY: &str = " ";
@@ -765,10 +764,7 @@ fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotEvent>) -> Vec<Li
     match snapshot {
         Some(snapshot) => {
             let rows = [
-                (
-                    format!("{:.0}h limit", STATUS_HOURLY_LIMIT_HOURS),
-                    snapshot.primary_used_percent,
-                ),
+                ("5h limit".to_string(), snapshot.primary_used_percent),
                 ("Weekly limit".to_string(), snapshot.weekly_used_percent),
             ];
             let label_width = rows
@@ -792,7 +788,7 @@ fn build_status_limit_line(label: &str, percent_used: f64, label_width: usize) -
     let summary = format_status_limit_summary(clamped_percent);
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(5);
-    let padded_label = format!("{label:<width$}", width = label_width);
+    let padded_label = format!("{label:<label_width$}");
     spans.push(format!("  • {padded_label}: ").into());
     spans.push(progress.into());
     spans.push(" ".into());
