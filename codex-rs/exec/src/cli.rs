@@ -52,6 +52,10 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
+    /// Path to a JSON Schema file describing the model's final response shape.
+    #[arg(long = "output-schema", value_name = "FILE")]
+    pub output_schema: Option<PathBuf>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
