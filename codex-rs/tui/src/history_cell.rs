@@ -663,14 +663,12 @@ fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
             .sum();
         let span_count = line.spans.len();
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 4);
-        spans.push(Span::from("│").dim());
-        spans.push(Span::from(" ").dim());
+        spans.push(Span::from("│ ").dim());
         spans.extend(line.into_iter());
         if used_width < content_width {
             spans.push(Span::from(" ".repeat(content_width - used_width)).dim());
         }
-        spans.push(Span::from(" ").dim());
-        spans.push(Span::from("│").dim());
+        spans.push(Span::from(" │").dim());
         out.push(Line::from(spans));
     }
 
