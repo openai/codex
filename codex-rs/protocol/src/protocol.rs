@@ -592,11 +592,11 @@ impl TokenUsageInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
-    pub rate_limits: Option<RateLimitSnapshotEvent>,
+    pub rate_limits: Option<RateLimitSnapshot>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
-pub struct RateLimitSnapshotEvent {
+pub struct RateLimitSnapshot {
     /// Percentage (0-100) of the primary window that has been consumed.
     pub primary_used_percent: f64,
     /// Percentage (0-100) of the secondary window that has been consumed.

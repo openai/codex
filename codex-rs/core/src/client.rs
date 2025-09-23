@@ -42,7 +42,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
-use crate::protocol::RateLimitSnapshotEvent;
+use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
@@ -330,6 +330,7 @@ impl ModelClient {
                     }
 
                     if status == StatusCode::TOO_MANY_REQUESTS {
+                        let rate_limit_snapshot = parse_rate_limit_snapshot(res.headers());
                         let body = res.json::<ErrorResponse>().await.ok();
                         if let Some(ErrorResponse { error }) = body {
                             if error.r#type.as_deref() == Some("usage_limit_reached") {
@@ -343,6 +344,7 @@ impl ModelClient {
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
                                     resets_in_seconds,
+                                    rate_limits: rate_limit_snapshot,
                                 }));
                             } else if error.r#type.as_deref() == Some("usage_not_included") {
                                 return Err(CodexErr::UsageNotIncluded);
@@ -485,7 +487,7 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
     }
 }
 
-fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshotEvent> {
+fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
     let primary_used_percent = parse_header_f64(headers, "x-codex-primary-used-percent")?;
     let secondary_used_percent = parse_header_f64(headers, "x-codex-secondary-used-percent")?;
     let primary_to_secondary_ratio_percent =
@@ -493,7 +495,7 @@ fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshotEve
     let primary_window_minutes = parse_header_u64(headers, "x-codex-primary-window-minutes")?;
     let secondary_window_minutes = parse_header_u64(headers, "x-codex-secondary-window-minutes")?;
 
-    Some(RateLimitSnapshotEvent {
+    Some(RateLimitSnapshot {
         primary_used_percent,
         secondary_used_percent,
         primary_to_secondary_ratio_percent,

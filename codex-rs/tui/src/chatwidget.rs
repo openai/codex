@@ -30,7 +30,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::RateLimitSnapshotEvent;
+use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
@@ -132,6 +132,10 @@ impl RateLimitWarningState {
         secondary_used_percent: f64,
         primary_used_percent: f64,
     ) -> Vec<String> {
+        if secondary_used_percent == 100.0 || primary_used_percent == 100.0 {
+            return Vec::new();
+        }
+
         let mut warnings = Vec::new();
 
         let mut highest_secondary: Option<f64> = None;
@@ -185,7 +189,7 @@ pub(crate) struct ChatWidget {
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
-    rate_limit_snapshot: Option<RateLimitSnapshotEvent>,
+    rate_limit_snapshot: Option<RateLimitSnapshot>,
     rate_limit_warnings: RateLimitWarningState,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
@@ -353,11 +357,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        self.bottom_pane.set_token_usage(info.clone());
-        self.token_info = info;
+        if info.is_some() {
+            self.bottom_pane.set_token_usage(info.clone());
+            self.token_info = info;
+        }
     }
 
-    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshotEvent>) {
+    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(snapshot) = snapshot {
             let warnings = self.rate_limit_warnings.take_warnings(
                 snapshot.secondary_used_percent,
