@@ -82,5 +82,20 @@ impl SlashCommand {
 
 /// Return all built-in commands in a Vec paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
-    SlashCommand::iter().map(|c| (c.command(), c)).collect()
+    let show_beta_features = beta_features_enabled();
+
+    SlashCommand::iter()
+        .filter(|cmd| {
+            if *cmd == SlashCommand::Undo {
+                show_beta_features
+            } else {
+                true
+            }
+        })
+        .map(|c| (c.command(), c))
+        .collect()
+}
+
+fn beta_features_enabled() -> bool {
+    std::env::var_os("BETA_FEATURE").is_some()
 }
