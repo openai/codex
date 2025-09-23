@@ -167,16 +167,14 @@ mod tests {
     use std::sync::Arc;
 
     use super::Readiness;
-    use super::errors::ReadinessError;
     use super::ReadinessFlag;
     use super::Token;
+    use super::errors::ReadinessError;
 
     #[tokio::test]
     async fn subscribe_and_mark_ready_roundtrip() -> Result<(), ReadinessError> {
         let flag = ReadinessFlag::new();
-        let token = flag
-            .subscribe()
-            .await?;
+        let token = flag.subscribe().await?;
 
         assert!(flag.mark_ready(token).await?);
         assert!(flag.is_ready());
@@ -186,9 +184,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_after_ready_returns_none() -> Result<(), ReadinessError> {
         let flag = ReadinessFlag::new();
-        let token = flag
-            .subscribe()
-            .await?;
+        let token = flag.subscribe().await?;
         assert!(flag.mark_ready(token).await?);
 
         assert!(flag.subscribe().await.is_err());
@@ -206,9 +202,7 @@ mod tests {
     #[tokio::test]
     async fn wait_ready_unblocks_after_mark_ready() -> Result<(), ReadinessError> {
         let flag = Arc::new(ReadinessFlag::new());
-        let token = flag
-            .subscribe()
-            .await?;
+        let token = flag.subscribe().await?;
 
         let waiter = {
             let flag = Arc::clone(&flag);
@@ -225,9 +219,7 @@ mod tests {
     #[tokio::test]
     async fn mark_ready_twice_uses_single_token() -> Result<(), ReadinessError> {
         let flag = ReadinessFlag::new();
-        let token = flag
-            .subscribe()
-            .await?;
+        let token = flag.subscribe().await?;
 
         assert!(flag.mark_ready(token).await?);
         assert!(!flag.mark_ready(token).await?);
