@@ -533,14 +533,13 @@ impl ChatWidget {
     /// animating the output.
     pub(crate) fn on_commit_tick(&mut self) {
         if let Some(controller) = self.stream_controller.as_mut() {
-            let (cell, finished) = controller.on_commit_tick();
+            let (cell, is_idle) = controller.on_commit_tick();
             if let Some(cell) = cell {
                 self.bottom_pane.set_task_running(false);
                 self.add_boxed_history(cell);
             }
-            if finished {
+            if is_idle {
                 self.app_event_tx.send(AppEvent::StopCommitAnimation);
-                self.handle_stream_finished();
             }
         }
     }
