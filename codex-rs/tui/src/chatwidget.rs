@@ -118,7 +118,7 @@ struct RunningCommand {
     parsed_cmd: Vec<ParsedCommand>,
 }
 
-const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [50.0, 75.0, 90.0];
+const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 
 #[derive(Default)]
 struct RateLimitWarningState {
@@ -134,24 +134,30 @@ impl RateLimitWarningState {
     ) -> Vec<String> {
         let mut warnings = Vec::new();
 
+        let mut highest_secondary: Option<f64> = None;
         while self.secondary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
             && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
         {
-            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index];
+            highest_secondary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]);
+            self.secondary_index += 1;
+        }
+        if let Some(threshold) = highest_secondary {
             warnings.push(format!(
                 "Heads up, you've used over {threshold:.0}% of your weekly limit. Run /status for a breakdown."
             ));
-            self.secondary_index += 1;
         }
 
+        let mut highest_primary: Option<f64> = None;
         while self.primary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
             && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
         {
-            let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index];
+            highest_primary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]);
+            self.primary_index += 1;
+        }
+        if let Some(threshold) = highest_primary {
             warnings.push(format!(
                 "Heads up, you've used over {threshold:.0}% of your 5h limit. Run /status for a breakdown."
             ));
-            self.primary_index += 1;
         }
 
         warnings
