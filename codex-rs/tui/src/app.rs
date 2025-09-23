@@ -232,7 +232,13 @@ impl App {
                 // Esc -> StartFresh (start a new chat), Ctrl-C -> Exit (cancel).
                 match resume_picker::run_resume_picker(tui, &self.config.codex_home).await? {
                     ResumeSelection::Resume(path) => {
-                        self.resume_from_path(tui, path).await?;
+                        if let Err(e) = self.resume_from_path(tui, path).await {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                crate::history_cell::new_error_event(format!(
+                                    "Failed to resume session: {e}"
+                                )),
+                            )));
+                        }
                     }
                     ResumeSelection::StartFresh => {
                         // Start a new blank session (same as /new).
@@ -247,7 +253,13 @@ impl App {
                 match RolloutRecorder::list_conversations(&self.config.codex_home, 1, None).await {
                     Ok(page) => {
                         if let Some(item) = page.items.first() {
-                            self.resume_from_path(tui, item.path.clone()).await?;
+                            if let Err(e) = self.resume_from_path(tui, item.path.clone()).await {
+                                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                    crate::history_cell::new_error_event(format!(
+                                        "Failed to resume session: {e}"
+                                    )),
+                                )));
+                            }
                         } else {
                             self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                                 crate::history_cell::new_error_event(
@@ -268,7 +280,13 @@ impl App {
             AppEvent::ResumeById(id_str) => {
                 match find_conversation_path_by_id_str(&self.config.codex_home, &id_str).await? {
                     Some(path) => {
-                        self.resume_from_path(tui, path).await?;
+                        if let Err(e) = self.resume_from_path(tui, path).await {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                crate::history_cell::new_error_event(format!(
+                                    "Failed to resume session: {e}"
+                                )),
+                            )));
+                        }
                     }
                     None => {
                         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
