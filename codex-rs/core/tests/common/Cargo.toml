@@ -7,8 +7,8 @@ edition = "2024"
 path = "lib.rs"
 
 [dependencies]
-codex-core = { path = "../.." }
-serde_json = "1"
-tempfile = "3"
-tokio = { version = "1", features = ["time"] }
-wiremock = "0.6"
+codex-core = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+wiremock = { workspace = true }

@@ -134,7 +134,7 @@ fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
     }
 
     let mut content =
-        String::with_capacity(HEADER.len() + entries.iter().map(|s| s.len()).sum::<usize>());
+        String::with_capacity(HEADER.len() + entries.iter().map(String::len).sum::<usize>());
     content.push_str(HEADER);
     for line in &entries {
         content.push_str(line);
