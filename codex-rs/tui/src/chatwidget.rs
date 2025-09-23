@@ -132,6 +132,10 @@ impl RateLimitWarningState {
         secondary_used_percent: f64,
         primary_used_percent: f64,
     ) -> Vec<String> {
+        if secondary_used_percent == 100.0 || primary_used_percent == 100.0 {
+            return Vec::new();
+        }
+
         let mut warnings = Vec::new();
 
         let mut highest_secondary: Option<f64> = None;
