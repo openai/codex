@@ -39,6 +39,14 @@ You can enable notifications by configuring a script that is run whenever the ag
 
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 
+When targeting GPT‑5 responses you can require structured JSON output by passing a schema file:
+
+```shell
+codex exec --output-schema path/to/schema.json -m gpt-5 "Summarize today's progress"
+```
+
+Codex validates the schema file locally and asks the model to respond using that schema with strict enforcement.
+
 ### Use `@` for file search
 
 Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.

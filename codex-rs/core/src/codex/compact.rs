@@ -121,6 +121,7 @@ async fn run_compact_task_inner(
         input: turn_input,
         tools: Vec::new(),
         base_instructions_override: Some(instructions_override),
+        output_schema: None,
     };
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();

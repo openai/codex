@@ -24,6 +24,7 @@ use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
@@ -87,6 +88,8 @@ pub enum Op {
 
         /// Will only be honored if the model is configured to use reasoning.
         summary: ReasoningSummaryConfig,
+        // The JSON schema to use for the final assistant message
+        final_output_json_schema: Option<Value>,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
