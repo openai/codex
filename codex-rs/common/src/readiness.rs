@@ -1,7 +1,4 @@
 //! Readiness flag with token-based authorization and async waiting (Tokio).
-//! - No UUIDs: compact `u64` tokens via an atomic counter.
-//! - `mark_ready(token)` requires a live subscription token.
-//! - `wait_ready()` is async and efficient via `tokio::sync::watch`.
 
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
