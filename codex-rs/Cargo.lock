@@ -805,6 +805,7 @@ dependencies = [
 name = "codex-login"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "base64",
  "chrono",
  "codex-core",
@@ -885,6 +886,7 @@ dependencies = [
 name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "base64",
  "icu_decimal",
  "icu_locale_core",
