@@ -637,12 +637,12 @@ fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
     if width < 4 {
         return None;
     }
-    let inner_width = std::cmp::min(width.saturating_sub(2) as usize, max_inner_width);
+    let inner_width = std::cmp::min(width.saturating_sub(4) as usize, max_inner_width);
     Some(inner_width)
 }
 
 fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    let inner_width = lines
+    let content_width = lines
         .iter()
         .map(|line| {
             line.iter()
@@ -653,7 +653,8 @@ fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .unwrap_or(0);
 
     let mut out = Vec::with_capacity(lines.len() + 2);
-    out.push(vec![Span::from(format!("╭{}╮", "─".repeat(inner_width))).dim()].into());
+    let border_inner_width = content_width + 2;
+    out.push(vec![Span::from(format!("╭{}╮", "─".repeat(border_inner_width))).dim()].into());
 
     for line in lines.into_iter() {
         let used_width: usize = line
@@ -661,17 +662,19 @@ fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
             .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
             .sum();
         let span_count = line.spans.len();
-        let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 3);
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 4);
         spans.push(Span::from("│").dim());
+        spans.push(Span::from(" ").dim());
         spans.extend(line.into_iter());
-        if used_width < inner_width {
-            spans.push(Span::from(" ".repeat(inner_width - used_width)).dim());
+        if used_width < content_width {
+            spans.push(Span::from(" ".repeat(content_width - used_width)).dim());
         }
+        spans.push(Span::from(" ").dim());
         spans.push(Span::from("│").dim());
         out.push(Line::from(spans));
     }
 
-    out.push(vec![Span::from(format!("╰{}╯", "─".repeat(inner_width))).dim()].into());
+    out.push(vec![Span::from(format!("╰{}╯", "─".repeat(border_inner_width))).dim()].into());
 
     out
 }
@@ -874,9 +877,8 @@ impl HistoryCell for SessionHeaderHistoryCell {
             Line::from(spans)
         };
 
-        // Title line rendered inside the box: " >_ OpenAI Codex (vX)"
+        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
         let title_spans: Vec<Span<'static>> = vec![
-            Span::from(" ").dim(),
             Span::from(">_ ").dim(),
             Span::from("OpenAI Codex").bold(),
             Span::from(" ").dim(),
@@ -894,7 +896,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         );
         let reasoning_label = self.reasoning_label();
         let mut model_spans: Vec<Span<'static>> = vec![
-            Span::from(format!(" {model_label} ")).dim(),
+            Span::from(format!("{model_label} ")).dim(),
             Span::from(self.model.clone()),
         ];
         if let Some(reasoning) = reasoning_label {
@@ -906,7 +908,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         model_spans.push(Span::from(CHANGE_MODEL_HINT_EXPLANATION).dim());
 
         let dir_label = format!("{DIR_LABEL:<label_width$}");
-        let dir_prefix = format!(" {dir_label} ");
+        let dir_prefix = format!("{dir_label} ");
         let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
         let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
         let dir = self.format_directory(Some(dir_max_width));
