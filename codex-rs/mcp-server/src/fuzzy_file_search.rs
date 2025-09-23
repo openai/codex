@@ -31,7 +31,7 @@ pub(crate) async fn run_fuzzy_file_search(
         let search_dir = PathBuf::from(&root);
         let query = query.clone();
         let cancel_flag = cancellation_flag.clone();
-        join_set.spawn(async move {
+        join_set.spawn_blocking(move || {
             match file_search::run(
                 query.as_str(),
                 limit_per_root,
