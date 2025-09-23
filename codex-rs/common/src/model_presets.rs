@@ -1,4 +1,3 @@
-use codex_core::config::GPT_5_CODEX_MEDIUM_MODEL;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_protocol::mcp_protocol::AuthMode;
 
@@ -69,13 +68,6 @@ const PRESETS: &[ModelPreset] = &[
     },
 ];
 
-pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    match auth_mode {
-        Some(AuthMode::ApiKey) => PRESETS
-            .iter()
-            .copied()
-            .filter(|p| p.model != GPT_5_CODEX_MEDIUM_MODEL)
-            .collect(),
-        _ => PRESETS.to_vec(),
-    }
+pub fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
+    PRESETS.to_vec()
 }

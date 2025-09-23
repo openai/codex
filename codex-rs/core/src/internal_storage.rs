@@ -7,12 +7,25 @@ use std::path::PathBuf;
 
 pub(crate) const INTERNAL_STORAGE_FILE: &str = "internal_storage.json";
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InternalStorage {
     #[serde(skip)]
     storage_path: PathBuf,
-    #[serde(default)]
+    #[serde(default = "default_gpt_5_codex_model_prompt_seen")]
     pub gpt_5_codex_model_prompt_seen: bool,
+}
+
+const fn default_gpt_5_codex_model_prompt_seen() -> bool {
+    true
+}
+
+impl Default for InternalStorage {
+    fn default() -> Self {
+        Self {
+            storage_path: PathBuf::new(),
+            gpt_5_codex_model_prompt_seen: default_gpt_5_codex_model_prompt_seen(),
+        }
+    }
 }
 
 // TODO(jif) generalise all the file writers and build proper async channel inserters.
