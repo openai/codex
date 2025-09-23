@@ -32,32 +32,8 @@ impl ConversationHistory {
         }
     }
 
-    pub(crate) fn keep_last_messages(&mut self, n: usize) {
-        if n == 0 {
-            self.items.clear();
-            return;
-        }
-
-        // Collect the last N message items (assistant/user), newest to oldest.
-        let mut kept: Vec<ResponseItem> = Vec::with_capacity(n);
-        for item in self.items.iter().rev() {
-            if let ResponseItem::Message { role, content, .. } = item {
-                kept.push(ResponseItem::Message {
-                    // we need to remove the id or the model will complain that messages are sent without
-                    // their reasonings
-                    id: None,
-                    role: role.clone(),
-                    content: content.clone(),
-                });
-                if kept.len() == n {
-                    break;
-                }
-            }
-        }
-
-        // Preserve chronological order (oldest to newest) within the kept slice.
-        kept.reverse();
-        self.items = kept;
+    pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
+        self.items = items;
     }
 }
 
@@ -71,8 +47,9 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::Reasoning { .. } => true,
-        ResponseItem::WebSearchCall { .. } | ResponseItem::Other => false,
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::Other => false,
     }
 }
 

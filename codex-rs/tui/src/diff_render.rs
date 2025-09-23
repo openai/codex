@@ -1,3 +1,4 @@
+use diffy::Hunk;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -265,7 +266,7 @@ fn render_changes_block(
     out
 }
 
-fn display_path_for(path: &Path, cwd: &Path) -> String {
+pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
     let path_in_same_repo = match (get_git_repo_root(cwd), get_git_repo_root(path)) {
         (Some(cwd_repo), Some(path_repo)) => cwd_repo == path_repo,
         _ => false,
@@ -283,7 +284,7 @@ fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
         patch
             .hunks()
             .iter()
-            .flat_map(|h| h.lines())
+            .flat_map(Hunk::lines)
             .fold((0, 0), |(a, d), l| match l {
                 diffy::Line::Insert(_) => (a + 1, d),
                 diffy::Line::Delete(_) => (a, d + 1),
@@ -737,10 +738,10 @@ mod tests {
 
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(
-            abs_old.clone(),
+            abs_old,
             FileChange::Update {
                 unified_diff: patch,
-                move_path: Some(abs_new.clone()),
+                move_path: Some(abs_new),
             },
         );
 

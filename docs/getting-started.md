@@ -10,16 +10,23 @@
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
-Resume options:
+### Resuming interactive sessions
 
-- `--resume`: open an interactive picker of recent sessions (shows a preview of the first real user message). Conflicts with `--continue`.
-- `--continue`: resume the most recent session without showing the picker (falls back to starting fresh if none exist). Conflicts with `--resume`.
+- Run `codex resume` to display the session picker UI
+- Resume most recent: `codex resume --last`
+- Resume by id: `codex resume <SESSION_ID>` (You can get session ids from /status or `~/.codex/sessions/`)
 
 Examples:
 
 ```shell
-codex --resume
-codex --continue
+# Open a picker of recent sessions
+codex resume
+
+# Resume the most recent session
+codex resume --last
+
+# Resume a specific session by id
+codex resume 7f9f9a2e-1b3c-4c7a-9b0e-123456789abc
 ```
 
 ### Running with a prompt as input
@@ -40,7 +47,7 @@ they'll be committed to your working directory.
 
 ### Example prompts
 
-Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
+Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task.
 
 | ✨  | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |

@@ -11,22 +11,20 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-async-stream = "0.3"
-bytes = "1.10.1"
-codex-core = { path = "../core" }
-futures = "0.3"
-reqwest = { version = "0.12", features = ["json", "stream"] }
-serde_json = "1"
-tokio = { version = "1", features = [
+async-stream = { workspace = true }
+bytes = { workspace = true }
+codex-core = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
 ] }
-toml = "0.9.5"
-tracing = { version = "0.1.41", features = ["log"] }
-wiremock = "0.6"
+tracing = { workspace = true, features = ["log"] }
+wiremock = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"

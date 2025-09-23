@@ -159,6 +159,44 @@ async fn read_only_forbids_all_writes() {
         .await;
 }
 
+/// Verify that user lookups via `pwd.getpwuid(os.getuid())` work under the
+/// seatbelt sandbox. Prior to allowing the necessary mach‑lookup for
+/// OpenDirectory libinfo, this would fail with `KeyError: getpwuid(): uid not found`.
+#[tokio::test]
+async fn python_getpwuid_works_under_seatbelt() {
+    if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+        return;
+    }
+
+    // ReadOnly is sufficient here since we are only exercising user lookup.
+    let policy = SandboxPolicy::ReadOnly;
+    let command_cwd = std::env::current_dir().expect("getcwd");
+    let sandbox_cwd = command_cwd.clone();
+
+    let mut child = spawn_command_under_seatbelt(
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            // Print the passwd struct; success implies lookup worked.
+            "import pwd, os; print(pwd.getpwuid(os.getuid()))".to_string(),
+        ],
+        command_cwd,
+        &policy,
+        sandbox_cwd.as_path(),
+        StdioPolicy::RedirectForShellTool,
+        HashMap::new(),
+    )
+    .await
+    .expect("should be able to spawn python under seatbelt");
+
+    let status = child
+        .wait()
+        .await
+        .expect("should be able to wait for child process");
+    assert!(status.success(), "python exited with {status:?}");
+}
+
 #[expect(clippy::expect_used)]
 fn create_test_scenario(tmp: &TempDir) -> TestScenario {
     let repo_parent = tmp.path().to_path_buf();
@@ -181,13 +219,16 @@ fn create_test_scenario(tmp: &TempDir) -> TestScenario {
 /// Note that `path` must be absolute.
 async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
     assert!(path.is_absolute(), "Path must be absolute: {path:?}");
+    let command_cwd = std::env::current_dir().expect("getcwd");
+    let sandbox_cwd = command_cwd.clone();
     let mut child = spawn_command_under_seatbelt(
         vec![
             "/usr/bin/touch".to_string(),
             path.to_string_lossy().to_string(),
         ],
+        command_cwd,
         policy,
-        std::env::current_dir().expect("should be able to get current dir"),
+        sandbox_cwd.as_path(),
         StdioPolicy::RedirectForShellTool,
         HashMap::new(),
     )

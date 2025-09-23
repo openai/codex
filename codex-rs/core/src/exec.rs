@@ -3,6 +3,7 @@ use std::os::unix::process::ExitStatusExt;
 
 use std::collections::HashMap;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::time::Duration;
@@ -34,6 +35,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
+const EXEC_TIMEOUT_EXIT_CODE: i32 = 124; // conventional timeout exit code
 
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
@@ -43,7 +45,7 @@ const AGGREGATE_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024; // 8 KiB
 /// Aggregation still collects full output; only the live event stream is capped.
 pub(crate) const MAX_EXEC_OUTPUT_DELTAS_PER_CALL: usize = 10_000;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ExecParams {
     pub command: Vec<String>,
     pub cwd: PathBuf,
@@ -81,33 +83,41 @@ pub async fn process_exec_tool_call(
     params: ExecParams,
     sandbox_type: SandboxType,
     sandbox_policy: &SandboxPolicy,
+    sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
     let start = Instant::now();
 
+    let timeout_duration = params.timeout_duration();
+
     let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
     {
         SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
         SandboxType::MacosSeatbelt => {
-            let timeout = params.timeout_duration();
             let ExecParams {
-                command, cwd, env, ..
+                command,
+                cwd: command_cwd,
+                env,
+                ..
             } = params;
             let child = spawn_command_under_seatbelt(
                 command,
+                command_cwd,
                 sandbox_policy,
-                cwd,
+                sandbox_cwd,
                 StdioPolicy::RedirectForShellTool,
                 env,
             )
             .await?;
-            consume_truncated_output(child, timeout, stdout_stream.clone()).await
+            consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
         }
         SandboxType::LinuxSeccomp => {
-            let timeout = params.timeout_duration();
             let ExecParams {
-                command, cwd, env, ..
+                command,
+                cwd: command_cwd,
+                env,
+                ..
             } = params;
 
             let codex_linux_sandbox_exe = codex_linux_sandbox_exe
@@ -116,48 +126,64 @@ pub async fn process_exec_tool_call(
             let child = spawn_command_under_linux_sandbox(
                 codex_linux_sandbox_exe,
                 command,
+                command_cwd,
                 sandbox_policy,
-                cwd,
+                sandbox_cwd,
                 StdioPolicy::RedirectForShellTool,
                 env,
             )
             .await?;
 
-            consume_truncated_output(child, timeout, stdout_stream).await
+            consume_truncated_output(child, timeout_duration, stdout_stream).await
         }
     };
     let duration = start.elapsed();
     match raw_output_result {
         Ok(raw_output) => {
-            let stdout = raw_output.stdout.from_utf8_lossy();
-            let stderr = raw_output.stderr.from_utf8_lossy();
+            #[allow(unused_mut)]
+            let mut timed_out = raw_output.timed_out;
 
             #[cfg(target_family = "unix")]
-            match raw_output.exit_status.signal() {
-                Some(TIMEOUT_CODE) => return Err(CodexErr::Sandbox(SandboxErr::Timeout)),
-                Some(signal) => {
-                    return Err(CodexErr::Sandbox(SandboxErr::Signal(signal)));
+            {
+                if let Some(signal) = raw_output.exit_status.signal() {
+                    if signal == TIMEOUT_CODE {
+                        timed_out = true;
+                    } else {
+                        return Err(CodexErr::Sandbox(SandboxErr::Signal(signal)));
+                    }
                 }
-                None => {}
             }
 
-            let exit_code = raw_output.exit_status.code().unwrap_or(-1);
-
-            if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
-                return Err(CodexErr::Sandbox(SandboxErr::Denied(
-                    exit_code,
-                    stdout.text,
-                    stderr.text,
-                )));
+            let mut exit_code = raw_output.exit_status.code().unwrap_or(-1);
+            if timed_out {
+                exit_code = EXEC_TIMEOUT_EXIT_CODE;
             }
 
-            Ok(ExecToolCallOutput {
+            let stdout = raw_output.stdout.from_utf8_lossy();
+            let stderr = raw_output.stderr.from_utf8_lossy();
+            let aggregated_output = raw_output.aggregated_output.from_utf8_lossy();
+            let exec_output = ExecToolCallOutput {
                 exit_code,
                 stdout,
                 stderr,
-                aggregated_output: raw_output.aggregated_output.from_utf8_lossy(),
+                aggregated_output,
                 duration,
-            })
+                timed_out,
+            };
+
+            if timed_out {
+                return Err(CodexErr::Sandbox(SandboxErr::Timeout {
+                    output: Box::new(exec_output),
+                }));
+            }
+
+            if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
+                return Err(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(exec_output),
+                }));
+            }
+
+            Ok(exec_output)
         }
         Err(err) => {
             tracing::error!("exec error: {err}");
@@ -197,6 +223,7 @@ struct RawExecToolCallOutput {
     pub stdout: StreamOutput<Vec<u8>>,
     pub stderr: StreamOutput<Vec<u8>>,
     pub aggregated_output: StreamOutput<Vec<u8>>,
+    pub timed_out: bool,
 }
 
 impl StreamOutput<String> {
@@ -229,6 +256,7 @@ pub struct ExecToolCallOutput {
     pub stderr: StreamOutput<String>,
     pub aggregated_output: StreamOutput<String>,
     pub duration: Duration,
+    pub timed_out: bool,
 }
 
 async fn exec(
@@ -298,22 +326,24 @@ async fn consume_truncated_output(
         Some(agg_tx.clone()),
     ));
 
-    let exit_status = tokio::select! {
+    let (exit_status, timed_out) = tokio::select! {
         result = tokio::time::timeout(timeout, child.wait()) => {
             match result {
-                Ok(Ok(exit_status)) => exit_status,
-                Ok(e) => e?,
+                Ok(status_result) => {
+                    let exit_status = status_result?;
+                    (exit_status, false)
+                }
                 Err(_) => {
                     // timeout
                     child.start_kill()?;
                     // Debatable whether `child.wait().await` should be called here.
-                    synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE)
+                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
                 }
             }
         }
         _ = tokio::signal::ctrl_c() => {
             child.start_kill()?;
-            synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE)
+            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
         }
     };
 
@@ -336,6 +366,7 @@ async fn consume_truncated_output(
         stdout,
         stderr,
         aggregated_output,
+        timed_out,
     })
 }
 

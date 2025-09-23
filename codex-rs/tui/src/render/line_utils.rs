@@ -34,3 +34,26 @@ pub fn is_blank_line_spaces_only(line: &Line<'_>) -> bool {
         .iter()
         .all(|s| s.content.is_empty() || s.content.chars().all(|c| c == ' '))
 }
+
+/// Prefix each line with `initial_prefix` for the first line and
+/// `subsequent_prefix` for following lines. Returns a new Vec of owned lines.
+pub fn prefix_lines(
+    lines: Vec<Line<'static>>,
+    initial_prefix: Span<'static>,
+    subsequent_prefix: Span<'static>,
+) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let mut spans = Vec::with_capacity(l.spans.len() + 1);
+            spans.push(if i == 0 {
+                initial_prefix.clone()
+            } else {
+                subsequent_prefix.clone()
+            });
+            spans.extend(l.spans);
+            Line::from(spans)
+        })
+        .collect()
+}

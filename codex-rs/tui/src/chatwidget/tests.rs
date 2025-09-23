@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -18,13 +19,21 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::InputMessageKind;
+use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::ReviewCodeLocation;
+use codex_core::protocol::ReviewFinding;
+use codex_core::protocol::ReviewLineRange;
+use codex_core::protocol::ReviewOutputEvent;
+use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_protocol::mcp_protocol::ConversationId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -34,12 +43,12 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 use tokio::sync::mpsc::unbounded_channel;
-use uuid::Uuid;
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
-    codex_core::config::Config::load_from_base_config_with_overrides(
+    Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
         std::env::temp_dir(),
@@ -78,8 +87,10 @@ fn final_answer_without_newline_is_flushed_immediately() {
 
     // Set up a VT100 test terminal to capture ANSI visual output
     let width: u16 = 80;
-    let height: u16 = 2000;
-    let viewport = ratatui::layout::Rect::new(0, height - 1, width, 1);
+    // Increased height to keep the initial banner/help lines in view even if
+    // the session renders an extra header line or minor layout changes occur.
+    let height: u16 = 2500;
+    let viewport = Rect::new(0, height - 1, width, 1);
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
         .expect("failed to construct terminal");
@@ -132,20 +143,25 @@ fn final_answer_without_newline_is_flushed_immediately() {
 fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
 
+    let conversation_id = ConversationId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_core::protocol::SessionConfiguredEvent {
-        session_id: Uuid::nil(),
+        session_id: conversation_id,
         model: "test-model".to_string(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: Some(vec![
-            EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+            EventMsg::UserMessage(UserMessageEvent {
                 message: "hello from user".to_string(),
                 kind: Some(InputMessageKind::Plain),
+                images: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
             }),
         ]),
+        rollout_path: rollout_file.path().to_path_buf(),
     };
 
     chat.handle_codex_event(Event {
@@ -175,6 +191,83 @@ fn resumed_initial_messages_render_history() {
     );
 }
 
+/// Entering review mode uses the hint provided by the review request.
+#[test]
+fn entered_review_mode_uses_request_hint() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            prompt: "Review the latest changes".to_string(),
+            user_facing_hint: "feature branch".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("review banner"));
+    assert_eq!(banner, ">> Code review started: feature branch <<\n");
+    assert!(chat.is_review_mode);
+}
+
+/// Entering review mode renders the current changes banner when requested.
+#[test]
+fn entered_review_mode_defaults_to_current_changes_banner() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            prompt: "Review the current changes".to_string(),
+            user_facing_hint: "current changes".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("review banner"));
+    assert_eq!(banner, ">> Code review started: current changes <<\n");
+    assert!(chat.is_review_mode);
+}
+
+/// Completing review with findings shows the selection popup and finishes with
+/// the closing banner while clearing review mode state.
+#[test]
+fn exited_review_mode_emits_results_and_finishes() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    let review = ReviewOutputEvent {
+        findings: vec![ReviewFinding {
+            title: "[P1] Fix bug".to_string(),
+            body: "Something went wrong".to_string(),
+            confidence_score: 0.9,
+            priority: 1,
+            code_location: ReviewCodeLocation {
+                absolute_file_path: PathBuf::from("src/lib.rs"),
+                line_range: ReviewLineRange { start: 10, end: 12 },
+            },
+        }],
+        overall_correctness: "needs work".to_string(),
+        overall_explanation: "Investigate the failure".to_string(),
+        overall_confidence_score: 0.5,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "review-end".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(review),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("finished banner"));
+    assert_eq!(banner, "\n<< Code review finished >>\n");
+    assert!(!chat.is_review_mode);
+}
+
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "system configuration APIs are blocked under macOS seatbelt"
+)]
 #[tokio::test(flavor = "current_thread")]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -183,13 +276,15 @@ async fn helpers_are_available_and_do_not_panic() {
     let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
         "test",
     )));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
-        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
         initial_prompt: None,
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
+        auth_manager,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -208,34 +303,51 @@ fn make_chatwidget_manual() -> (
     let cfg = test_config();
     let bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
-        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        frame_requester: FrameRequester::test_dummy(),
         has_input_focus: true,
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
     });
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_exec_cell: None,
         config: cfg.clone(),
+        auth_manager,
+        session_header: SessionHeader::new(cfg.model),
         initial_user_message: None,
-        total_token_usage: TokenUsage::default(),
-        last_token_usage: TokenUsage::default(),
-        stream: StreamController::new(cfg),
+        token_info: None,
+        rate_limit_snapshot: None,
+        rate_limit_warnings: RateLimitWarningState::default(),
+        stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
-        session_id: None,
-        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        conversation_id: None,
+        frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
-        queued_user_messages: std::collections::VecDeque::new(),
+        queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
+        pending_notification: None,
+        is_review_mode: false,
     };
     (widget, rx, op_rx)
+}
+
+pub(crate) fn make_chatwidget_manual_with_sender() -> (
+    ChatWidget,
+    AppEventSender,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
+    let (widget, rx, op_rx) = make_chatwidget_manual();
+    let app_event_tx = widget.app_event_tx.clone();
+    (widget, app_event_tx, rx, op_rx)
 }
 
 fn drain_insert_history(
@@ -265,16 +377,156 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     s
 }
 
+#[test]
+fn rate_limit_warnings_emit_thresholds() {
+    let mut state = RateLimitWarningState::default();
+    let mut warnings: Vec<String> = Vec::new();
+
+    warnings.extend(state.take_warnings(10.0, 55.0));
+    warnings.extend(state.take_warnings(55.0, 10.0));
+    warnings.extend(state.take_warnings(10.0, 80.0));
+    warnings.extend(state.take_warnings(80.0, 10.0));
+    warnings.extend(state.take_warnings(10.0, 95.0));
+    warnings.extend(state.take_warnings(95.0, 10.0));
+
+    assert_eq!(
+        warnings.len(),
+        6,
+        "expected one warning per threshold per limit"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Heads up, you've used over 50% of your 5h limit.")),
+        "expected hourly 50% warning (new copy)"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Heads up, you've used over 50% of your weekly limit.")),
+        "expected weekly 50% warning (new copy)"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Heads up, you've used over 90% of your 5h limit.")),
+        "expected hourly 90% warning (new copy)"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Heads up, you've used over 90% of your weekly limit.")),
+        "expected weekly 90% warning (new copy)"
+    );
+}
+
+// (removed experimental resize snapshot test)
+
+#[test]
+fn exec_approval_emits_proposed_command_and_decision_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Trigger an exec approval request with a short, single-line command
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-short".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-short".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    // Snapshot the Proposed Command cell emitted into history
+    let proposed = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected proposed command cell");
+    assert_snapshot!(
+        "exec_approval_history_proposed_short",
+        lines_to_single_string(&proposed)
+    );
+
+    // Approve via keyboard and verify a concise decision history line is added
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let decision = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected decision cell in history");
+    assert_snapshot!(
+        "exec_approval_history_decision_approved_short",
+        lines_to_single_string(&decision)
+    );
+}
+
+#[test]
+fn exec_approval_decision_truncates_multiline_and_long_commands() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Multiline command: should render proposed command fully in history with prefixes
+    let ev_multi = ExecApprovalRequestEvent {
+        call_id: "call-multi".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-multi".into(),
+        msg: EventMsg::ExecApprovalRequest(ev_multi),
+    });
+    let proposed_multi = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected proposed multiline command cell");
+    assert_snapshot!(
+        "exec_approval_history_proposed_multiline",
+        lines_to_single_string(&proposed_multi)
+    );
+
+    // Deny via keyboard; decision snippet should be single-line and elided with " ..."
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    let aborted_multi = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected aborted decision cell (multiline)");
+    assert_snapshot!(
+        "exec_approval_history_decision_aborted_multiline",
+        lines_to_single_string(&aborted_multi)
+    );
+
+    // Very long single-line command: decision snippet should be truncated <= 80 chars with trailing ...
+    let long = format!("echo {}", "a".repeat(200));
+    let ev_long = ExecApprovalRequestEvent {
+        call_id: "call-long".into(),
+        command: vec!["bash".into(), "-lc".into(), long],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: None,
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-long".into(),
+        msg: EventMsg::ExecApprovalRequest(ev_long),
+    });
+    drain_insert_history(&mut rx); // proposed cell not needed for this assertion
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    let aborted_long = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected aborted decision cell (long)");
+    assert_snapshot!(
+        "exec_approval_history_decision_aborted_long",
+        lines_to_single_string(&aborted_long)
+    );
+}
+
 // --- Small helpers to tersely drive exec begin/end and snapshot active cell ---
 fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<codex_protocol::parse_command::ParsedCommand> =
-        codex_core::parse_command::parse_command(&command)
-            .into_iter()
-            .map(Into::into)
-            .collect();
+    let parsed_cmd: Vec<ParsedCommand> = codex_core::parse_command::parse_command(&command)
+        .into_iter()
+        .map(Into::into)
+        .collect();
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -315,7 +567,7 @@ fn active_blob(chat: &ChatWidget) -> String {
     lines_to_single_string(&lines)
 }
 
-fn open_fixture(name: &str) -> std::fs::File {
+fn open_fixture(name: &str) -> File {
     // 1) Prefer fixtures within this crate
     {
         let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -437,6 +689,135 @@ fn exec_history_cell_shows_working_then_failed() {
     assert!(blob.to_lowercase().contains("bloop"), "expected error text");
 }
 
+/// Selecting the custom prompt option from the review popup sends
+/// OpenReviewCustomPrompt to the app event channel.
+#[test]
+fn review_popup_custom_prompt_action_sends_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the preset selection popup
+    chat.open_review_popup();
+
+    // Move selection down to the fourth item: "Custom review instructions"
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    // Activate
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Drain events and ensure we saw the OpenReviewCustomPrompt request
+    let mut found = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::OpenReviewCustomPrompt = ev {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "expected OpenReviewCustomPrompt event to be sent");
+}
+
+/// The commit picker shows only commit subjects (no timestamps).
+#[test]
+fn review_commit_picker_shows_subjects_without_timestamps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Show commit picker with synthetic entries.
+    let entries = vec![
+        codex_core::git_info::CommitLogEntry {
+            sha: "1111111deadbeef".to_string(),
+            timestamp: 0,
+            subject: "Add new feature X".to_string(),
+        },
+        codex_core::git_info::CommitLogEntry {
+            sha: "2222222cafebabe".to_string(),
+            timestamp: 0,
+            subject: "Fix bug Y".to_string(),
+        },
+    ];
+    super::show_review_commit_picker_with_entries(&mut chat, entries);
+
+    // Render the bottom pane and inspect the lines for subjects and absence of time words.
+    let width = 72;
+    let height = chat.desired_height(width);
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    (&chat).render_ref(area, &mut buf);
+
+    let mut blob = String::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let s = buf[(x, y)].symbol();
+            if s.is_empty() {
+                blob.push(' ');
+            } else {
+                blob.push_str(s);
+            }
+        }
+        blob.push('\n');
+    }
+
+    assert!(
+        blob.contains("Add new feature X"),
+        "expected subject in output"
+    );
+    assert!(blob.contains("Fix bug Y"), "expected subject in output");
+
+    // Ensure no relative-time phrasing is present.
+    let lowered = blob.to_lowercase();
+    assert!(
+        !lowered.contains("ago")
+            && !lowered.contains(" second")
+            && !lowered.contains(" minute")
+            && !lowered.contains(" hour")
+            && !lowered.contains(" day"),
+        "expected no relative time in commit picker output: {blob:?}"
+    );
+}
+
+/// Submitting the custom prompt view sends Op::Review with the typed prompt
+/// and uses the same text for the user-facing hint.
+#[test]
+fn custom_prompt_submit_sends_review_op() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.show_review_custom_prompt();
+    // Paste prompt text via ChatWidget handler, then submit
+    chat.handle_paste("  please audit dependencies  ".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Expect AppEvent::CodexOp(Op::Review { .. }) with trimmed prompt
+    let evt = rx.try_recv().expect("expected one app event");
+    match evt {
+        AppEvent::CodexOp(Op::Review { review_request }) => {
+            assert_eq!(
+                review_request.prompt,
+                "please audit dependencies".to_string()
+            );
+            assert_eq!(
+                review_request.user_facing_hint,
+                "please audit dependencies".to_string()
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+/// Hitting Enter on an empty custom prompt view does not submit.
+#[test]
+fn custom_prompt_enter_empty_does_not_send() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.show_review_custom_prompt();
+    // Enter without any text
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // No AppEvent::CodexOp should be sent
+    assert!(rx.try_recv().is_err(), "no app event should be sent");
+}
+
 // Snapshot test: interrupting a running exec finalizes the active cell with a red ✗
 // marker (replacing the spinner) and flushes it into history.
 #[test]
@@ -464,6 +845,96 @@ fn interrupt_exec_marks_failed_snapshot() {
     // The first inserted cell should be the finalized exec; snapshot its text.
     let exec_blob = lines_to_single_string(&cells[0]);
     assert_snapshot!("interrupt_exec_marks_failed", exec_blob);
+}
+
+/// Opening custom prompt from the review popup, pressing Esc returns to the
+/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
+#[test]
+fn review_custom_prompt_escape_navigates_back_then_dismisses() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Open the custom prompt submenu (child view) directly.
+    chat.show_review_custom_prompt();
+
+    // Verify child view is on top.
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Custom review instructions"),
+        "expected custom prompt view header: {header:?}"
+    );
+
+    // Esc once: child view closes, parent (review presets) remains.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a review preset"),
+        "expected to return to parent review popup: {header:?}"
+    );
+
+    // Esc again: parent closes; back to normal composer state.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        chat.is_normal_backtrack_mode(),
+        "expected to be back in normal composer mode"
+    );
+}
+
+/// Opening base-branch picker from the review popup, pressing Esc returns to the
+/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
+#[tokio::test(flavor = "current_thread")]
+async fn review_branch_picker_escape_navigates_back_then_dismisses() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Open the branch picker submenu (child view). Using a temp cwd with no git repo is fine.
+    let cwd = std::env::temp_dir();
+    chat.show_review_branch_picker(&cwd).await;
+
+    // Verify child view header.
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a base branch"),
+        "expected branch picker header: {header:?}"
+    );
+
+    // Esc once: child view closes, parent remains.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a review preset"),
+        "expected to return to parent review popup: {header:?}"
+    );
+
+    // Esc again: parent closes; back to normal composer state.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        chat.is_normal_backtrack_mode(),
+        "expected to be back in normal composer mode"
+    );
+}
+
+fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
+    let height = chat.desired_height(width);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    (chat).render_ref(area, &mut buf);
+    let mut row = String::new();
+    // Row 0 is the top spacer for the bottom pane; row 1 contains the header line
+    let y = 1u16.min(height.saturating_sub(1));
+    for x in 0..area.width {
+        let s = buf[(x, y)].symbol();
+        if s.is_empty() {
+            row.push(' ');
+        } else {
+            row.push_str(s);
+        }
+    }
+    row
 }
 
 #[test]
@@ -523,7 +994,7 @@ async fn binary_size_transcript_snapshot() {
     // Set up a VT100 test terminal to capture ANSI visual output
     let width: u16 = 80;
     let height: u16 = 2000;
-    let viewport = ratatui::layout::Rect::new(0, height - 1, width, 1);
+    let viewport = Rect::new(0, height - 1, width, 1);
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
         .expect("failed to construct terminal");
@@ -573,7 +1044,10 @@ async fn binary_size_transcript_snapshot() {
                                     call_id: e.call_id.clone(),
                                     command: e.command,
                                     cwd: e.cwd,
-                                    parsed_cmd: parsed_cmd.into_iter().map(|c| c.into()).collect(),
+                                    parsed_cmd: parsed_cmd
+                                        .into_iter()
+                                        .map(std::convert::Into::into)
+                                        .collect(),
                                 }),
                             }
                         }
@@ -650,16 +1124,16 @@ async fn binary_size_transcript_snapshot() {
         // Trim trailing spaces to match plain text fixture
         lines.push(s.trim_end().to_string());
     }
-    while lines.last().is_some_and(|l| l.is_empty()) {
+    while lines.last().is_some_and(std::string::String::is_empty) {
         lines.pop();
     }
     // Consider content only after the last session banner marker. Skip the transient
     // 'thinking' header if present, and start from the first non-empty content line
     // that follows. This keeps the snapshot stable across sessions.
-    const MARKER_PREFIX: &str = ">_ You are using OpenAI Codex in ";
+    const MARKER_PREFIX: &str = "To get started, describe a task or try one of these commands:";
     let last_marker_line_idx = lines
         .iter()
-        .rposition(|l| l.starts_with(MARKER_PREFIX))
+        .rposition(|l| l.trim_start().starts_with(MARKER_PREFIX))
         .expect("marker not found in visible output");
     // Prefer the first assistant content line (blockquote '>' prefix) after the marker;
     // fallback to the first non-empty, non-'thinking' line.
@@ -708,13 +1182,15 @@ fn approval_modal_exec_snapshot() {
     // Build a chat widget with manual channels to avoid spawning the agent.
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     // Ensure policy allows surfacing approvals explicitly (not strictly required for direct event).
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
     // Inject an exec approval request to display the approval modal.
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        reason: Some("Model wants to run a command".into()),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
     };
     chat.handle_codex_event(Event {
         id: "sub-approve".into(),
@@ -736,7 +1212,7 @@ fn approval_modal_exec_snapshot() {
 #[test]
 fn approval_modal_exec_without_reason_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
 
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-noreason".into(),
@@ -762,10 +1238,10 @@ fn approval_modal_exec_without_reason_snapshot() {
 #[test]
 fn approval_modal_patch_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
 
     // Build a small changeset and a reason/grant_root to exercise the prompt text.
-    let mut changes = std::collections::HashMap::new();
+    let mut changes = HashMap::new();
     changes.insert(
         PathBuf::from("README.md"),
         FileChange::Add {
@@ -811,7 +1287,7 @@ fn interrupt_restores_queued_messages_into_composer() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            reason: codex_core::protocol::TurnAbortReason::Interrupted,
+            reason: TurnAbortReason::Interrupted,
         }),
     });
 
@@ -907,7 +1383,9 @@ fn status_widget_and_approval_modal_snapshot() {
         call_id: "call-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
         cwd: std::path::PathBuf::from("/tmp"),
-        reason: Some("Codex wants to run a command".into()),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-exec".into(),
@@ -1243,7 +1721,7 @@ fn apply_patch_full_flow_integration_like() {
 fn apply_patch_untrusted_shows_approval_modal() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     // Ensure approval policy is untrusted (OnRequest)
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
 
     // Simulate a patch approval request from backend
     let mut changes = HashMap::new();
@@ -1262,8 +1740,8 @@ fn apply_patch_untrusted_shows_approval_modal() {
     });
 
     // Render and ensure the approval modal title is present
-    let area = ratatui::layout::Rect::new(0, 0, 80, 12);
-    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
     (&chat).render_ref(area, &mut buf);
 
     let mut contains_title = false;
@@ -1288,7 +1766,7 @@ fn apply_patch_request_shows_diff_summary() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Ensure we are in OnRequest so an approval is surfaced
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
 
     // Simulate backend asking to apply a patch adding two lines to README.md
     let mut changes = HashMap::new();
@@ -1532,8 +2010,12 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
 // then the exec block, another blank line, the status line, a blank line, and the composer.
 #[test]
 fn chatwidget_exec_and_status_layout_vt100_snapshot() {
-    // Setup identical scenario
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+    });
+
     chat.handle_codex_event(Event {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -1581,16 +2063,12 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     });
     chat.bottom_pane
         .set_composer_text("Summarize recent commits".to_string());
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
-    });
 
     // Dimensions
     let width: u16 = 80;
     let ui_height: u16 = chat.desired_height(width);
     let vt_height: u16 = 40;
-    let viewport = ratatui::layout::Rect::new(0, vt_height - ui_height, width, ui_height);
+    let viewport = Rect::new(0, vt_height - ui_height, width, ui_height);
 
     // Use TestBackend for the terminal (no real ANSI emitted by drawing),
     // but capture VT100 escape stream for history insertion with a separate writer.
@@ -1605,7 +2083,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     }
 
     // 2) Render the ChatWidget UI into an off-screen buffer using WidgetRef directly
-    let mut ui_buf = ratatui::buffer::Buffer::empty(viewport);
+    let mut ui_buf = Buffer::empty(viewport);
     (&chat).render_ref(viewport, &mut ui_buf);
 
     // 3) Build VT100 visual from the captured ANSI
@@ -1644,6 +2122,126 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         vt_lines[y as usize] = line.trim_end().to_string();
     }
 
+    let visual = vt_lines.join("\n");
+    assert_snapshot!(visual);
+}
+
+// E2E vt100 snapshot for complex markdown with indented and nested fenced code blocks
+#[test]
+fn chatwidget_markdown_code_blocks_vt100_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Simulate a final agent message via streaming deltas instead of a single message
+
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    // Build a vt100 visual from the history insertions only (no UI overlay)
+    let width: u16 = 80;
+    let height: u16 = 50;
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    // Place viewport at the last line so that history lines insert above it
+    term.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+    let mut ansi: Vec<u8> = Vec::new();
+
+    // Simulate streaming via AgentMessageDelta in 2-character chunks (no final AgentMessage).
+    let source: &str = r#"
+
+    -- Indented code block (4 spaces)
+    SELECT *
+    FROM "users"
+    WHERE "email" LIKE '%@example.com';
+
+````markdown
+```sh
+printf 'fenced within fenced\n'
+```
+````
+
+```jsonc
+{
+  // comment allowed in jsonc
+  "path": "C:\\Program Files\\App",
+  "regex": "^foo.*(bar)?$"
+}
+```
+"#;
+
+    let mut it = source.chars();
+    loop {
+        let mut delta = String::new();
+        match it.next() {
+            Some(c) => delta.push(c),
+            None => break,
+        }
+        if let Some(c2) = it.next() {
+            delta.push(c2);
+        }
+
+        chat.handle_codex_event(Event {
+            id: "t1".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+        });
+        // Drive commit ticks and drain emitted history lines into the vt100 buffer.
+        loop {
+            chat.on_commit_tick();
+            let mut inserted_any = false;
+            while let Ok(app_ev) = rx.try_recv() {
+                if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                    let lines = cell.display_lines(width);
+                    crate::insert_history::insert_history_lines_to_writer(
+                        &mut term, &mut ansi, lines,
+                    );
+                    inserted_any = true;
+                }
+            }
+            if !inserted_any {
+                break;
+            }
+        }
+    }
+
+    // Finalize the stream without sending a final AgentMessage, to flush any tail.
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+    }
+
+    let mut parser = vt100::Parser::new(height, width, 0);
+    parser.process(&ansi);
+
+    let mut vt_lines: Vec<String> = (0..height)
+        .map(|row| {
+            let mut s = String::with_capacity(width as usize);
+            for col in 0..width {
+                if let Some(cell) = parser.screen().cell(row, col) {
+                    if let Some(ch) = cell.contents().chars().next() {
+                        s.push(ch);
+                    } else {
+                        s.push(' ');
+                    }
+                } else {
+                    s.push(' ');
+                }
+            }
+            s.trim_end().to_string()
+        })
+        .collect();
+
+    // Compact trailing blank rows for a stable snapshot
+    while matches!(vt_lines.last(), Some(l) if l.trim().is_empty()) {
+        vt_lines.pop();
+    }
     let visual = vt_lines.join("\n");
     assert_snapshot!(visual);
 }

@@ -1,5 +1,6 @@
 ---
 source: tui/src/history_cell.rs
+assertion_line: 1797
 expression: rendered
 ---
 • Ran

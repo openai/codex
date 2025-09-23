@@ -7,6 +7,7 @@ use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
+use ratatui::style::Color;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
@@ -34,6 +35,7 @@ enum Step {
 
 pub(crate) trait KeyboardHandler {
     fn handle_key_event(&mut self, key_event: KeyEvent);
+    fn handle_paste(&mut self, _pasted: String) {}
 }
 
 pub(crate) enum StepState {
@@ -69,12 +71,12 @@ impl OnboardingScreen {
             auth_manager,
             config,
         } = args;
-        let preferred_auth_method = config.preferred_auth_method;
         let cwd = config.cwd.clone();
-        let codex_home = config.codex_home.clone();
-        let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
-            is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
-        })];
+        let codex_home = config.codex_home;
+        let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget::new(
+            !matches!(login_status, LoginStatus::NotAuthenticated),
+            tui.frame_requester(),
+        ))];
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {
                 request_frame: tui.frame_requester(),
@@ -84,8 +86,6 @@ impl OnboardingScreen {
                 codex_home: codex_home.clone(),
                 login_status,
                 auth_manager,
-                preferred_auth_method,
-                config,
             }))
         }
         let is_git_repo = get_git_repo_root(&cwd).is_some();
@@ -188,11 +188,29 @@ impl KeyboardHandler for OnboardingScreen {
                 self.is_done = true;
             }
             _ => {
+                if let Some(Step::Welcome(widget)) = self
+                    .steps
+                    .iter_mut()
+                    .find(|step| matches!(step, Step::Welcome(_)))
+                {
+                    widget.handle_key_event(key_event);
+                }
                 if let Some(active_step) = self.current_steps_mut().into_iter().last() {
                     active_step.handle_key_event(key_event);
                 }
             }
         };
+        self.request_frame.schedule_frame();
+    }
+
+    fn handle_paste(&mut self, pasted: String) {
+        if pasted.is_empty() {
+            return;
+        }
+
+        if let Some(active_step) = self.current_steps_mut().into_iter().last() {
+            active_step.handle_paste(pasted);
+        }
         self.request_frame.schedule_frame();
     }
 }
@@ -214,8 +232,12 @@ impl WidgetRef for &OnboardingScreen {
             for yy in 0..height {
                 let mut any = false;
                 for xx in 0..width {
-                    let sym = tmp[(xx, yy)].symbol();
-                    if !sym.trim().is_empty() {
+                    let cell = &tmp[(xx, yy)];
+                    let has_symbol = !cell.symbol().trim().is_empty();
+                    let has_style = cell.fg != Color::Reset
+                        || cell.bg != Color::Reset
+                        || !cell.modifier.is_empty();
+                    if has_symbol || has_style {
                         any = true;
                         break;
                     }
@@ -259,9 +281,17 @@ impl WidgetRef for &OnboardingScreen {
 impl KeyboardHandler for Step {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
-            Step::Welcome(_) => (),
+            Step::Welcome(widget) => widget.handle_key_event(key_event),
             Step::Auth(widget) => widget.handle_key_event(key_event),
             Step::TrustDirectory(widget) => widget.handle_key_event(key_event),
+        }
+    }
+
+    fn handle_paste(&mut self, pasted: String) {
+        match self {
+            Step::Welcome(_) => {}
+            Step::Auth(widget) => widget.handle_paste(pasted),
+            Step::TrustDirectory(widget) => widget.handle_paste(pasted),
         }
     }
 }
@@ -299,6 +329,8 @@ pub(crate) async fn run_onboarding_app(
     use tokio_stream::StreamExt;
 
     let mut onboarding_screen = OnboardingScreen::new(tui, args);
+    // One-time guard to fully clear the screen after ChatGPT login success message is shown
+    let mut did_full_clear_after_success = false;
 
     tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&onboarding_screen, frame.area());
@@ -313,12 +345,44 @@ pub(crate) async fn run_onboarding_app(
                 TuiEvent::Key(key_event) => {
                     onboarding_screen.handle_key_event(key_event);
                 }
+                TuiEvent::Paste(text) => {
+                    onboarding_screen.handle_paste(text);
+                }
                 TuiEvent::Draw => {
+                    if !did_full_clear_after_success
+                        && onboarding_screen.steps.iter().any(|step| {
+                            if let Step::Auth(w) = step {
+                                w.sign_in_state.read().is_ok_and(|g| {
+                                    matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+                                })
+                            } else {
+                                false
+                            }
+                        })
+                    {
+                        // Reset any lingering SGR (underline/color) before clearing
+                        let _ = ratatui::crossterm::execute!(
+                            std::io::stdout(),
+                            ratatui::crossterm::style::SetAttribute(
+                                ratatui::crossterm::style::Attribute::Reset
+                            ),
+                            ratatui::crossterm::style::SetAttribute(
+                                ratatui::crossterm::style::Attribute::NoUnderline
+                            ),
+                            ratatui::crossterm::style::SetForegroundColor(
+                                ratatui::crossterm::style::Color::Reset
+                            ),
+                            ratatui::crossterm::style::SetBackgroundColor(
+                                ratatui::crossterm::style::Color::Reset
+                            )
+                        );
+                        let _ = tui.terminal.clear();
+                        did_full_clear_after_success = true;
+                    }
                     let _ = tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&onboarding_screen, frame.area());
                     });
                 }
-                _ => {}
             }
         }
     }

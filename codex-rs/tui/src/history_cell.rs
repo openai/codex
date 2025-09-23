@@ -2,8 +2,14 @@ use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
-use crate::slash_command::SlashCommand;
+use crate::render::line_utils::line_to_static;
+use crate::render::line_utils::prefix_lines;
+use crate::render::line_utils::push_owned_lines;
 use crate::text_formatting::format_and_truncate_tool_result;
+use crate::ui_consts::LIVE_PREFIX_COLS;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
+use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
@@ -18,9 +24,13 @@ use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::project_doc::discover_project_doc_paths;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::RateLimitSnapshotEvent;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::num_format::format_with_separators;
 use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
@@ -35,6 +45,7 @@ use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use std::any::Any;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
@@ -43,7 +54,10 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
-use uuid::Uuid;
+
+const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
+const STATUS_LIMIT_BAR_FILLED: &str = "█";
+const STATUS_LIMIT_BAR_EMPTY: &str = " ";
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
@@ -62,7 +76,7 @@ pub(crate) enum PatchEventType {
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
-pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
+pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
@@ -82,9 +96,15 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
     }
 }
 
+impl dyn HistoryCell {
+    pub(crate) fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
-    message: String,
+    pub message: String,
 }
 
 impl HistoryCell for UserHistoryCell {
@@ -92,16 +112,15 @@ impl HistoryCell for UserHistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         // Wrap the content first, then prefix each wrapped line with the marker.
-        let wrap_width = width.saturating_sub(1); // account for the ▌ prefix
+        let wrap_width = width.saturating_sub(LIVE_PREFIX_COLS); // account for the ▌ prefix and trailing space
         let wrapped = textwrap::wrap(
             &self.message,
             textwrap::Options::new(wrap_width as usize)
-                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit) // Match textarea wrap
-                .word_splitter(textwrap::WordSplitter::NoHyphenation),
+                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit), // Match textarea wrap
         );
 
         for line in wrapped {
-            lines.push(vec!["▌".cyan().dim(), line.to_string().dim()].into());
+            lines.push(vec!["▌ ".cyan().dim(), line.to_string().dim()].into());
         }
         lines
     }
@@ -111,6 +130,45 @@ impl HistoryCell for UserHistoryCell {
         lines.push("user".cyan().bold().into());
         lines.extend(self.message.lines().map(|l| l.to_string().into()));
         lines
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ReasoningSummaryCell {
+    _header: Vec<Line<'static>>,
+    content: Vec<Line<'static>>,
+}
+
+impl ReasoningSummaryCell {
+    pub(crate) fn new(header: Vec<Line<'static>>, content: Vec<Line<'static>>) -> Self {
+        Self {
+            _header: header,
+            content,
+        }
+    }
+}
+
+impl HistoryCell for ReasoningSummaryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let summary_lines = self
+            .content
+            .iter()
+            .map(|l| l.clone().dim().italic())
+            .collect::<Vec<_>>();
+
+        word_wrap_lines(
+            &summary_lines,
+            RtOptions::new(width as usize)
+                .initial_indent("• ".into())
+                .subsequent_indent("  ".into()),
+        )
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        out.push("thinking".magenta().bold().into());
+        out.extend(self.content.clone());
+        out
     }
 }
 
@@ -131,28 +189,16 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut out: Vec<Line<'static>> = Vec::new();
-        // We want:
-        // - First visual line: "> " prefix (collapse with header logic)
-        // - All subsequent visual lines: two-space prefix
-        let mut is_first_visual = true;
-        let wrap_width = width.saturating_sub(2); // account for prefix
-        for line in &self.lines {
-            let wrapped =
-                crate::insert_history::word_wrap_lines(std::slice::from_ref(line), wrap_width);
-            for (i, piece) in wrapped.into_iter().enumerate() {
-                let mut spans = Vec::with_capacity(piece.spans.len() + 1);
-                spans.push(if is_first_visual && i == 0 && self.is_first_line {
+        word_wrap_lines(
+            &self.lines,
+            RtOptions::new(width as usize)
+                .initial_indent(if self.is_first_line {
                     "> ".into()
                 } else {
                     "  ".into()
-                });
-                spans.extend(piece.spans.into_iter());
-                out.push(spans.into());
-            }
-            is_first_visual = false;
-        }
-        out
+                })
+                .subsequent_indent("  ".into()),
+        )
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
@@ -192,6 +238,13 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+}
+
+/// Cyan history cell line showing the current review status.
+pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![Line::from(message.cyan())],
     }
 }
 
@@ -277,13 +330,13 @@ impl ExecCell {
     }
 
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut out: Vec<Line<'static>> = Vec::new();
         let active_start_time = self
             .calls
             .iter()
             .find(|c| c.output.is_none())
             .and_then(|c| c.start_time);
-        lines.push(Line::from(vec![
+        out.push(Line::from(vec![
             if self.is_active() {
                 // Show an animated spinner while exploring
                 spinner(active_start_time)
@@ -298,7 +351,7 @@ impl ExecCell {
             },
         ]));
         let mut calls = self.calls.clone();
-        let mut first = true;
+        let mut out_indented = Vec::new();
         while !calls.is_empty() {
             let mut call = calls.remove(0);
             if call
@@ -324,19 +377,18 @@ impl ExecCell {
                 .iter()
                 .all(|c| matches!(c, ParsedCommand::Read { .. }))
             {
-                let names: Vec<String> = call
+                let names = call
                     .parsed
                     .iter()
                     .map(|c| match c {
                         ParsedCommand::Read { name, .. } => name.clone(),
                         _ => unreachable!(),
                     })
-                    .unique()
-                    .collect();
+                    .unique();
                 vec![(
                     "Read",
                     itertools::Itertools::intersperse(
-                        names.into_iter().map(|n| n.into()),
+                        names.into_iter().map(Into::into),
                         ", ".dim(),
                     )
                     .collect(),
@@ -371,39 +423,24 @@ impl ExecCell {
                 lines
             };
             for (title, line) in call_lines {
-                let prefix_len = 4 + title.len() + 1; // "  └ " + title + " "
-                let wrapped = crate::insert_history::word_wrap_lines(
-                    &[line.into()],
-                    width.saturating_sub(prefix_len as u16),
+                let line = Line::from(line);
+                let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
+                let subsequent_indent = " ".repeat(initial_indent.width()).into();
+                let wrapped = word_wrap_line(
+                    &line,
+                    RtOptions::new(width as usize)
+                        .initial_indent(initial_indent)
+                        .subsequent_indent(subsequent_indent),
                 );
-                let mut first_sub = true;
-                for mut line in wrapped {
-                    let mut spans = Vec::with_capacity(line.spans.len() + 1);
-                    spans.push(if first {
-                        first = false;
-                        "  └ ".dim()
-                    } else {
-                        "    ".into()
-                    });
-                    if first_sub {
-                        first_sub = false;
-                        spans.push(title.cyan());
-                        spans.push(" ".into());
-                    } else {
-                        spans.push(" ".repeat(title.width() + 1).into());
-                    }
-                    spans.extend(line.spans.into_iter());
-                    line.spans = spans;
-                    lines.push(line);
-                }
+                push_owned_lines(&wrapped, &mut out_indented);
             }
         }
-        lines
+        out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
+        out
     }
 
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         use textwrap::Options as TwOptions;
-        use textwrap::WordSplitter;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         let [call] = &self.calls.as_slice() else {
@@ -423,67 +460,52 @@ impl ExecCell {
         // "• Running " (including trailing space) as the reserved prefix width.
         // If the command contains newlines, always use the multi-line variant.
         let reserved = "• Running ".width();
-        let mut branch_consumed = false;
 
-        if !cmd_display.contains('\n')
-            && cmd_display.width() < (width as usize).saturating_sub(reserved)
+        let mut body_lines: Vec<Line<'static>> = Vec::new();
+
+        let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd_display);
+
+        if highlighted_lines.len() == 1
+            && highlighted_lines[0].width() < (width as usize).saturating_sub(reserved)
         {
-            lines.push(Line::from(vec![
-                bullet,
-                " ".into(),
-                title.bold(),
-                " ".into(),
-                cmd_display.clone().into(),
-            ]));
+            let mut line = Line::from(vec![bullet, " ".into(), title.bold(), " ".into()]);
+            line.extend(highlighted_lines[0].clone());
+            lines.push(line);
         } else {
-            branch_consumed = true;
             lines.push(vec![bullet, " ".into(), title.bold()].into());
 
-            // Wrap the command line.
-            for (i, line) in cmd_display.lines().enumerate() {
-                let wrapped = textwrap::wrap(
-                    line,
-                    TwOptions::new(width as usize)
-                        .initial_indent("    ")
-                        .subsequent_indent("        ")
-                        .word_splitter(WordSplitter::NoHyphenation),
-                );
-                lines.extend(wrapped.into_iter().enumerate().map(|(j, l)| {
-                    if i == 0 && j == 0 {
-                        vec!["  └ ".dim(), l[4..].to_string().into()].into()
-                    } else {
-                        l.to_string().into()
-                    }
-                }));
+            for hl_line in highlighted_lines.iter() {
+                let opts = crate::wrapping::RtOptions::new((width as usize).saturating_sub(4))
+                    .initial_indent("".into())
+                    .subsequent_indent("    ".into())
+                    // Hyphenation likes to break words on hyphens, which is bad for bash scripts --because-of-flags.
+                    .word_splitter(textwrap::WordSplitter::NoHyphenation);
+                let wrapped_borrowed = crate::wrapping::word_wrap_line(hl_line, opts);
+                body_lines.extend(wrapped_borrowed.iter().map(|l| line_to_static(l)));
             }
         }
         if let Some(output) = call.output.as_ref()
             && output.exit_code != 0
         {
-            let out = output_lines(Some(output), false, false, false)
-                .into_iter()
-                .join("\n");
+            let out = output_lines(
+                Some(output),
+                OutputLinesParams {
+                    only_err: false,
+                    include_angle_pipe: false,
+                    include_prefix: false,
+                },
+            )
+            .into_iter()
+            .join("\n");
             if !out.trim().is_empty() {
                 // Wrap the output.
-                for (i, line) in out.lines().enumerate() {
-                    let wrapped = textwrap::wrap(
-                        line,
-                        TwOptions::new(width as usize - 4)
-                            .word_splitter(WordSplitter::NoHyphenation),
-                    );
-                    lines.extend(wrapped.into_iter().map(|l| {
-                        Line::from(vec![
-                            if i == 0 && !branch_consumed {
-                                "  └ ".dim()
-                            } else {
-                                "    ".dim()
-                            },
-                            l.to_string().dim(),
-                        ])
-                    }));
+                for line in out.lines() {
+                    let wrapped = textwrap::wrap(line, TwOptions::new(width as usize - 4));
+                    body_lines.extend(wrapped.into_iter().map(|l| Line::from(l.to_string().dim())));
                 }
             }
         }
+        lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
         lines
     }
 }
@@ -609,6 +631,7 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
+const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
 fn title_case(s: &str) -> String {
     if s.is_empty() {
@@ -641,67 +664,70 @@ pub(crate) fn new_session_info(
     config: &Config,
     event: SessionConfiguredEvent,
     is_first_event: bool,
-) -> PlainHistoryCell {
+) -> CompositeHistoryCell {
     let SessionConfiguredEvent {
         model,
+        reasoning_effort,
         session_id: _,
         history_log_id: _,
         history_entry_count: _,
         initial_messages: _,
+        rollout_path: _,
     } = event;
     if is_first_event {
-        let cwd_str = match relativize_to_home(&config.cwd) {
-            Some(rel) if !rel.as_os_str().is_empty() => {
-                let sep = std::path::MAIN_SEPARATOR;
-                format!("~{sep}{}", rel.display())
-            }
-            Some(_) => "~".to_string(),
-            None => config.cwd.display().to_string(),
-        };
-        // Discover AGENTS.md files to decide whether to suggest `/init`.
-        let has_agents_md = discover_project_doc_paths(config)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
+        // Header box rendered as history (so it appears at the very top)
+        let header = SessionHeaderHistoryCell::new(
+            model,
+            reasoning_effort,
+            config.cwd.clone(),
+            crate::version::CODEX_CLI_VERSION,
+        );
 
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(vec![
-            ">_ ".dim(),
-            "You are using OpenAI Codex in".bold(),
-            format!(" {cwd_str}").dim(),
-        ]));
-        lines.push(Line::from("".dim()));
-        lines.push(Line::from(
-            " To get started, describe a task or try one of these commands:".dim(),
-        ));
-        lines.push(Line::from("".dim()));
-        if !has_agents_md {
-            lines.push(Line::from(vec![
-                " /init".bold(),
-                format!(" - {}", SlashCommand::Init.description()).dim(),
-            ]));
+        // Help lines below the header (new copy and list)
+        let help_lines: Vec<Line<'static>> = vec![
+            "  To get started, describe a task or try one of these commands:"
+                .dim()
+                .into(),
+            Line::from(""),
+            Line::from(vec![
+                "  ".into(),
+                "/init".into(),
+                " - create an AGENTS.md file with instructions for Codex".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/status".into(),
+                " - show current session configuration".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/approvals".into(),
+                " - choose what Codex can do without approval".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/model".into(),
+                " - choose what model and reasoning effort to use".dim(),
+            ]),
+        ];
+
+        CompositeHistoryCell {
+            parts: vec![
+                Box::new(header),
+                Box::new(PlainHistoryCell { lines: help_lines }),
+            ],
         }
-        lines.push(Line::from(vec![
-            " /status".bold(),
-            format!(" - {}", SlashCommand::Status.description()).dim(),
-        ]));
-        lines.push(Line::from(vec![
-            " /approvals".bold(),
-            format!(" - {}", SlashCommand::Approvals.description()).dim(),
-        ]));
-        lines.push(Line::from(vec![
-            " /model".bold(),
-            format!(" - {}", SlashCommand::Model.description()).dim(),
-        ]));
-        PlainHistoryCell { lines }
     } else if config.model == model {
-        PlainHistoryCell { lines: Vec::new() }
+        CompositeHistoryCell { parts: vec![] }
     } else {
         let lines = vec![
             "model changed:".magenta().bold().into(),
             format!("requested: {}", config.model).into(),
             format!("used: {model}").into(),
         ];
-        PlainHistoryCell { lines }
+        CompositeHistoryCell {
+            parts: vec![Box::new(PlainHistoryCell { lines })],
+        }
     }
 }
 
@@ -728,6 +754,197 @@ pub(crate) fn new_active_exec_command(
     })
 }
 
+#[derive(Debug)]
+struct SessionHeaderHistoryCell {
+    version: &'static str,
+    model: String,
+    reasoning_effort: Option<ReasoningEffortConfig>,
+    directory: PathBuf,
+}
+
+impl SessionHeaderHistoryCell {
+    fn new(
+        model: String,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+        directory: PathBuf,
+        version: &'static str,
+    ) -> Self {
+        Self {
+            version,
+            model,
+            reasoning_effort,
+            directory,
+        }
+    }
+
+    fn format_directory(&self, max_width: Option<usize>) -> String {
+        Self::format_directory_inner(&self.directory, max_width)
+    }
+
+    fn format_directory_inner(directory: &Path, max_width: Option<usize>) -> String {
+        let formatted = if let Some(rel) = relativize_to_home(directory) {
+            if rel.as_os_str().is_empty() {
+                "~".to_string()
+            } else {
+                format!("~{}{}", std::path::MAIN_SEPARATOR, rel.display())
+            }
+        } else {
+            directory.display().to_string()
+        };
+
+        if let Some(max_width) = max_width {
+            if max_width == 0 {
+                return String::new();
+            }
+            if UnicodeWidthStr::width(formatted.as_str()) > max_width {
+                return crate::text_formatting::center_truncate_path(&formatted, max_width);
+            }
+        }
+
+        formatted
+    }
+
+    fn reasoning_label(&self) -> Option<&'static str> {
+        self.reasoning_effort.map(|effort| match effort {
+            ReasoningEffortConfig::Minimal => "minimal",
+            ReasoningEffortConfig::Low => "low",
+            ReasoningEffortConfig::Medium => "medium",
+            ReasoningEffortConfig::High => "high",
+        })
+    }
+}
+
+impl HistoryCell for SessionHeaderHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        if width < 4 {
+            return out;
+        }
+
+        let inner_width = std::cmp::min(
+            width.saturating_sub(2) as usize,
+            SESSION_HEADER_MAX_INNER_WIDTH,
+        );
+        // Top border without a title on the border
+        let mut top = String::with_capacity(inner_width + 2);
+        top.push('╭');
+        top.push_str(&"─".repeat(inner_width));
+        top.push('╮');
+        out.push(Line::from(top.dim()));
+
+        // Title line rendered inside the box: " >_ OpenAI Codex (vX)"
+        let title_text = format!(" >_ OpenAI Codex (v{})", self.version);
+        let title_w = UnicodeWidthStr::width(title_text.as_str());
+        let pad_w = inner_width.saturating_sub(title_w);
+        let mut title_spans: Vec<Span<'static>> = vec![
+            Span::from("│").dim(),
+            Span::from(" ").dim(),
+            Span::from(">_ ").dim(),
+            Span::from("OpenAI Codex").bold(),
+            Span::from(" ").dim(),
+            Span::from(format!("(v{})", self.version)).dim(),
+        ];
+        if pad_w > 0 {
+            title_spans.push(Span::from(" ".repeat(pad_w)).dim());
+        }
+        title_spans.push(Span::from("│").dim());
+        out.push(Line::from(title_spans));
+
+        // Spacer row between title and details
+        out.push(Line::from(vec![
+            Span::from(format!("│{}│", " ".repeat(inner_width))).dim(),
+        ]));
+
+        // Model line: " model: <model> <reasoning_label> (change with /model)"
+        const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
+        const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
+        const DIR_LABEL: &str = "directory:";
+        let label_width = DIR_LABEL.len();
+        let model_label = format!(
+            "{model_label:<label_width$}",
+            model_label = "model:",
+            label_width = label_width
+        );
+        let reasoning_label = self.reasoning_label();
+        let mut model_value_for_width = self.model.clone();
+        if let Some(reasoning) = reasoning_label {
+            model_value_for_width.push(' ');
+            model_value_for_width.push_str(reasoning);
+        }
+        let model_text_for_width_calc = format!(
+            " {model_label} {model_value_for_width}   {CHANGE_MODEL_HINT_COMMAND}{CHANGE_MODEL_HINT_EXPLANATION}",
+        );
+        let model_w = UnicodeWidthStr::width(model_text_for_width_calc.as_str());
+        let pad_w = inner_width.saturating_sub(model_w);
+        let mut spans: Vec<Span<'static>> = vec![
+            Span::from(format!("│ {model_label} ")).dim(),
+            Span::from(self.model.clone()),
+        ];
+        if let Some(reasoning) = reasoning_label {
+            spans.push(Span::from(" "));
+            spans.push(Span::from(reasoning));
+        }
+        spans.push(Span::from("   ").dim());
+        spans.push(Span::from(CHANGE_MODEL_HINT_COMMAND).cyan());
+        spans.push(Span::from(CHANGE_MODEL_HINT_EXPLANATION).dim());
+        if pad_w > 0 {
+            spans.push(Span::from(" ".repeat(pad_w)).dim());
+        }
+        spans.push(Span::from("│").dim());
+        out.push(Line::from(spans));
+
+        // Directory line: " Directory: <cwd>"
+        let dir_label = format!("{DIR_LABEL:<label_width$}");
+        let dir_prefix = format!(" {dir_label} ");
+        let dir_max_width = inner_width.saturating_sub(UnicodeWidthStr::width(dir_prefix.as_str()));
+        let dir = self.format_directory(Some(dir_max_width));
+        let dir_text = format!(" {dir_label} {dir}");
+        let dir_w = UnicodeWidthStr::width(dir_text.as_str());
+        let pad_w = inner_width.saturating_sub(dir_w);
+        let mut spans: Vec<Span<'static>> = vec![
+            Span::from("│").dim(),
+            Span::from(" ").dim(),
+            Span::from(dir_label).dim(),
+            Span::from(" ").dim(),
+            Span::from(dir),
+        ];
+        if pad_w > 0 {
+            spans.push(Span::from(" ".repeat(pad_w)).dim());
+        }
+        spans.push(Span::from("│").dim());
+        out.push(Line::from(spans));
+
+        // Bottom border
+        let bottom = format!("╰{}╯", "─".repeat(inner_width));
+        out.push(Line::from(bottom.dim()));
+
+        out
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CompositeHistoryCell {
+    parts: Vec<Box<dyn HistoryCell>>,
+}
+
+impl HistoryCell for CompositeHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let mut first = true;
+        for part in &self.parts {
+            let mut lines = part.display_lines(width);
+            if !lines.is_empty() {
+                if !first {
+                    out.push(Line::from(""));
+                }
+                out.append(&mut lines);
+                first = false;
+            }
+        }
+        out
+    }
+}
+
 fn spinner(start_time: Option<Instant>) -> Span<'static> {
     const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     let idx = start_time
@@ -739,7 +956,7 @@ fn spinner(start_time: Option<Instant>) -> Span<'static> {
 
 pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> PlainHistoryCell {
     let title_line = Line::from(vec!["tool".magenta(), " running...".dim()]);
-    let lines: Vec<Line> = vec![title_line, format_mcp_invocation(invocation.clone())];
+    let lines: Vec<Line> = vec![title_line, format_mcp_invocation(invocation)];
 
     PlainHistoryCell { lines }
 }
@@ -862,10 +1079,18 @@ pub(crate) fn new_completed_mcp_tool_call(
     Box::new(PlainHistoryCell { lines })
 }
 
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![vec![format!("⚠ {message}").yellow()].into()],
+    }
+}
+
 pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
-    session_id: &Option<Uuid>,
+    session_id: &Option<ConversationId>,
+    rate_limits: Option<&RateLimitSnapshotEvent>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("/status".magenta().into());
@@ -994,6 +1219,12 @@ pub(crate) fn new_status_output(
 
     lines.push("".into());
 
+    // 💻 Client
+    let cli_version = crate::version::CODEX_CLI_VERSION;
+    lines.push(vec![padded_emoji("💻").into(), "Client".bold()].into());
+    lines.push(vec!["  • CLI Version: ".into(), cli_version.into()].into());
+    lines.push("".into());
+
     // 📊 Token Usage
     lines.push(vec!["📊 ".into(), "Token Usage".bold()].into());
     if let Some(session_id) = session_id {
@@ -1002,24 +1233,26 @@ pub(crate) fn new_status_output(
     // Input: <input> [+ <cached> cached]
     let mut input_line_spans: Vec<Span<'static>> = vec![
         "  • Input: ".into(),
-        usage.non_cached_input().to_string().into(),
+        format_with_separators(usage.non_cached_input()).into(),
     ];
-    if let Some(cached) = usage.cached_input_tokens
-        && cached > 0
-    {
+    if usage.cached_input_tokens > 0 {
+        let cached = usage.cached_input_tokens;
         input_line_spans.push(format!(" (+ {cached} cached)").into());
     }
     lines.push(Line::from(input_line_spans));
     // Output: <output>
     lines.push(Line::from(vec![
         "  • Output: ".into(),
-        usage.output_tokens.to_string().into(),
+        format_with_separators(usage.output_tokens).into(),
     ]));
     // Total: <total>
     lines.push(Line::from(vec![
         "  • Total: ".into(),
-        usage.blended_total().to_string().into(),
+        format_with_separators(usage.blended_total()).into(),
     ]));
+
+    lines.push("".into());
+    lines.extend(build_status_limit_lines(rate_limits));
 
     PlainHistoryCell { lines }
 }
@@ -1089,12 +1322,21 @@ pub(crate) fn new_mcp_tools_output(
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
+    let mut line = vec!["> ".into(), message.into()];
+    if let Some(hint) = hint {
+        line.push(" ".into());
+        line.push(hint.dark_gray());
+    }
+    let lines: Vec<Line<'static>> = vec![line.into()];
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
-    let lines: Vec<Line<'static>> =
-        vec![vec![padded_emoji("🖐").red().bold(), " ".into(), message.into()].into()];
+    let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
     PlainHistoryCell { lines }
 }
 
@@ -1140,32 +1382,8 @@ impl HistoryCell for PlanUpdateCell {
                 .into_iter()
                 .map(|s| s.to_string().set_style(step_style).into())
                 .collect();
-            prefix_lines(step_text, &box_str.into(), &"  ".into())
+            prefix_lines(step_text, box_str.into(), "  ".into())
         };
-
-        fn prefix_lines(
-            lines: Vec<Line<'static>>,
-            initial_prefix: &Span<'static>,
-            subsequent_prefix: &Span<'static>,
-        ) -> Vec<Line<'static>> {
-            lines
-                .into_iter()
-                .enumerate()
-                .map(|(i, l)| {
-                    Line::from(
-                        [
-                            vec![if i == 0 {
-                                initial_prefix.clone()
-                            } else {
-                                subsequent_prefix.clone()
-                            }],
-                            l.spans,
-                        ]
-                        .concat(),
-                    )
-                })
-                .collect()
-        }
 
         let mut lines: Vec<Line<'static>> = vec![];
         lines.push(vec!["• ".into(), "Updated Plan".bold()].into());
@@ -1187,7 +1405,7 @@ impl HistoryCell for PlanUpdateCell {
                 indented_lines.extend(render_step(status, step));
             }
         }
-        lines.extend(prefix_lines(indented_lines, &"  └ ".into(), &"    ".into()));
+        lines.extend(prefix_lines(indented_lines, "  └ ".into(), "    ".into()));
 
         lines
     }
@@ -1222,11 +1440,34 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
                 stderr,
                 formatted_output: String::new(),
             }),
-            true,
-            true,
-            true,
+            OutputLinesParams {
+                only_err: true,
+                include_angle_pipe: true,
+                include_prefix: true,
+            },
         ));
     }
+
+    PlainHistoryCell { lines }
+}
+
+/// Create a new history cell for a proposed command approval.
+/// Renders a header and the command preview similar to how proposed patches
+/// show a header and summary.
+pub(crate) fn new_proposed_command(command: &[String]) -> PlainHistoryCell {
+    let cmd = strip_bash_lc_and_escape(command);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(vec!["• ".into(), "Proposed Command".bold()]));
+
+    let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd);
+    let initial_prefix: Span<'static> = "  └ ".dim();
+    let subsequent_prefix: Span<'static> = "    ".into();
+    lines.extend(prefix_lines(
+        highlighted_lines,
+        initial_prefix,
+        subsequent_prefix,
+    ));
 
     PlainHistoryCell { lines }
 }
@@ -1244,7 +1485,7 @@ pub(crate) fn new_reasoning_block(
 pub(crate) fn new_reasoning_summary_block(
     full_reasoning_buffer: String,
     config: &Config,
-) -> Vec<Box<dyn HistoryCell>> {
+) -> Box<dyn HistoryCell> {
     if config.model_family.reasoning_summary_format == ReasoningSummaryFormat::Experimental {
         // Experimental format is following:
         // ** header **
@@ -1261,35 +1502,33 @@ pub(crate) fn new_reasoning_summary_block(
                 // then we don't have a summary to inject into history
                 if after_close_idx < full_reasoning_buffer.len() {
                     let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                    let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-
-                    let mut header_lines: Vec<Line<'static>> = Vec::new();
-                    header_lines.push(Line::from("Thinking".magenta().italic()));
+                    let mut header_lines = Vec::new();
                     append_markdown(&header_buffer, &mut header_lines, config);
 
-                    let mut summary_lines: Vec<Line<'static>> = Vec::new();
-                    summary_lines.push(Line::from("Thinking".magenta().bold()));
+                    let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                    let mut summary_lines = Vec::new();
                     append_markdown(&summary_buffer, &mut summary_lines, config);
 
-                    return vec![
-                        Box::new(TranscriptOnlyHistoryCell {
-                            lines: header_lines,
-                        }),
-                        Box::new(AgentMessageCell::new(summary_lines, true)),
-                    ];
+                    return Box::new(ReasoningSummaryCell::new(header_lines, summary_lines));
                 }
             }
         }
     }
-    vec![Box::new(new_reasoning_block(full_reasoning_buffer, config))]
+    Box::new(new_reasoning_block(full_reasoning_buffer, config))
 }
 
-fn output_lines(
-    output: Option<&CommandOutput>,
+struct OutputLinesParams {
     only_err: bool,
     include_angle_pipe: bool,
     include_prefix: bool,
-) -> Vec<Line<'static>> {
+}
+
+fn output_lines(output: Option<&CommandOutput>, params: OutputLinesParams) -> Vec<Line<'static>> {
+    let OutputLinesParams {
+        only_err,
+        include_angle_pipe,
+        include_prefix,
+    } = params;
     let CommandOutput {
         exit_code,
         stdout,
@@ -1364,12 +1603,68 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     let invocation_spans = vec![
         invocation.server.clone().cyan(),
         ".".into(),
-        invocation.tool.clone().cyan(),
+        invocation.tool.cyan(),
         "(".into(),
         args_str.dim(),
         ")".into(),
     ];
     invocation_spans.into()
+}
+
+fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotEvent>) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> =
+        vec![vec![padded_emoji("⏱️").into(), "Usage Limits".bold()].into()];
+
+    match snapshot {
+        Some(snapshot) => {
+            let rows = [
+                ("5h limit".to_string(), snapshot.primary_used_percent),
+                ("Weekly limit".to_string(), snapshot.secondary_used_percent),
+            ];
+            let label_width = rows
+                .iter()
+                .map(|(label, _)| UnicodeWidthStr::width(label.as_str()))
+                .max()
+                .unwrap_or(0);
+            for (label, percent) in rows {
+                lines.push(build_status_limit_line(&label, percent, label_width));
+            }
+        }
+        None => lines.push("  • Rate limit data not available yet.".dim().into()),
+    }
+
+    lines
+}
+
+fn build_status_limit_line(label: &str, percent_used: f64, label_width: usize) -> Line<'static> {
+    let clamped_percent = percent_used.clamp(0.0, 100.0);
+    let progress = render_status_limit_progress_bar(clamped_percent);
+    let summary = format_status_limit_summary(clamped_percent);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(5);
+    let padded_label = format!("{label:<label_width$}");
+    spans.push(format!("  • {padded_label}: ").into());
+    spans.push(progress.into());
+    spans.push(" ".into());
+    spans.push(summary.into());
+
+    Line::from(spans)
+}
+
+fn render_status_limit_progress_bar(percent_used: f64) -> String {
+    let ratio = (percent_used / 100.0).clamp(0.0, 1.0);
+    let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
+    let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
+    let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
+    format!(
+        "[{}{}]",
+        STATUS_LIMIT_BAR_FILLED.repeat(filled),
+        STATUS_LIMIT_BAR_EMPTY.repeat(empty)
+    )
+}
+
+fn format_status_limit_summary(percent_used: f64) -> String {
+    format!("{percent_used:.0}% used")
 }
 
 #[cfg(test)]
@@ -1378,6 +1673,8 @@ mod tests {
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
+    use dirs::home_dir;
+    use pretty_assertions::assert_eq;
 
     fn test_config() -> Config {
         Config::load_from_base_config_with_overrides(
@@ -1402,6 +1699,49 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines())
+    }
+
+    #[test]
+    fn session_header_includes_reasoning_level_when_present() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-4o".to_string(),
+            Some(ReasoningEffortConfig::High),
+            std::env::temp_dir(),
+            "test",
+        );
+
+        let lines = render_lines(&cell.display_lines(80));
+        let model_line = lines
+            .into_iter()
+            .find(|line| line.contains("model:"))
+            .expect("model line");
+
+        assert!(model_line.contains("gpt-4o high"));
+        assert!(model_line.contains("/model to change"));
+    }
+
+    #[test]
+    fn session_header_directory_center_truncates() {
+        let mut dir = home_dir().expect("home directory");
+        for part in ["hello", "the", "fox", "is", "very", "fast"] {
+            dir.push(part);
+        }
+
+        let formatted = SessionHeaderHistoryCell::format_directory_inner(&dir, Some(24));
+        let sep = std::path::MAIN_SEPARATOR;
+        let expected = format!("~{sep}hello{sep}the{sep}…{sep}very{sep}fast");
+        assert_eq!(formatted, expected);
+    }
+
+    #[test]
+    fn session_header_directory_front_truncates_long_segment() {
+        let mut dir = home_dir().expect("home directory");
+        dir.push("supercalifragilisticexpialidocious");
+
+        let formatted = SessionHeaderHistoryCell::format_directory_inner(&dir, Some(18));
+        let sep = std::path::MAIN_SEPARATOR;
+        let expected = format!("~{sep}…cexpialidocious");
+        assert_eq!(formatted, expected);
     }
 
     #[test]
@@ -1793,7 +2133,7 @@ mod tests {
             message: msg.to_string(),
         };
 
-        // Small width to force wrapping more clearly. Effective wrap width is width-1 due to the ▌ prefix.
+        // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.
         let width: u16 = 12;
         let lines = cell.display_lines(width);
         let rendered = render_lines(&lines).join("\n");
@@ -1853,17 +2193,35 @@ mod tests {
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
+    #[test]
+    fn reasoning_summary_block() {
+        let mut config = test_config();
+        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
+
+        let cell = new_reasoning_summary_block(
+            "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            &config,
+        );
+
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(rendered_display, vec!["• Detailed reasoning goes here."]);
+
+        let rendered_transcript = render_transcript(cell.as_ref());
+        assert_eq!(
+            rendered_transcript,
+            vec!["thinking", "Detailed reasoning goes here."]
+        );
+    }
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
         let mut config = test_config();
         config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
-        let cells =
+        let cell =
             new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &config);
 
-        assert_eq!(cells.len(), 1);
-        let rendered = render_transcript(cells[0].as_ref());
+        let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["thinking", "Detailed reasoning goes here."]);
     }
 
@@ -1872,13 +2230,12 @@ mod tests {
         let mut config = test_config();
         config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
-        let cells = new_reasoning_summary_block(
+        let cell = new_reasoning_summary_block(
             "**High level reasoning without closing".to_string(),
             &config,
         );
 
-        assert_eq!(cells.len(), 1);
-        let rendered = render_transcript(cells[0].as_ref());
+        let rendered = render_transcript(cell.as_ref());
         assert_eq!(
             rendered,
             vec!["thinking", "**High level reasoning without closing"]
@@ -1890,25 +2247,23 @@ mod tests {
         let mut config = test_config();
         config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
-        let cells = new_reasoning_summary_block(
+        let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**".to_string(),
             &config,
         );
 
-        assert_eq!(cells.len(), 1);
-        let rendered = render_transcript(cells[0].as_ref());
+        let rendered = render_transcript(cell.as_ref());
         assert_eq!(
             rendered,
             vec!["thinking", "High level reasoning without closing"]
         );
 
-        let cells = new_reasoning_summary_block(
+        let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
             &config,
         );
 
-        assert_eq!(cells.len(), 1);
-        let rendered = render_transcript(cells[0].as_ref());
+        let rendered = render_transcript(cell.as_ref());
         assert_eq!(
             rendered,
             vec!["thinking", "High level reasoning without closing"]
@@ -1920,21 +2275,18 @@ mod tests {
         let mut config = test_config();
         config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
-        let cells = new_reasoning_summary_block(
+        let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
             &config,
         );
 
-        assert_eq!(cells.len(), 2);
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(rendered_display, vec!["• We should fix the bug next."]);
 
-        let header_lines = render_transcript(cells[0].as_ref());
-        assert_eq!(header_lines, vec!["Thinking", "High level plan"]);
-
-        let summary_lines = render_transcript(cells[1].as_ref());
-
+        let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(
-            summary_lines,
-            vec!["codex", "Thinking", "We should fix the bug next."]
-        )
+            rendered_transcript,
+            vec!["thinking", "We should fix the bug next."]
+        );
     }
 }

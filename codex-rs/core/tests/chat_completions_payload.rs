@@ -11,11 +11,11 @@ use codex_core::ReasoningItemContent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::mcp_protocol::ConversationId;
 use core_test_support::load_default_config_for_test;
 use futures::StreamExt;
 use serde_json::Value;
 use tempfile::TempDir;
-use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -76,7 +76,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         provider,
         effort,
         summary,
-        Uuid::new_v4(),
+        ConversationId::new(),
     );
 
     let mut prompt = Prompt::default();
