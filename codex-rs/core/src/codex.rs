@@ -740,21 +740,25 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
-        let mut state = self.state.lock().await;
-        if let Some(token_usage) = token_usage {
-            let info = TokenUsageInfo::new_or_append(
-                &state.token_info,
-                &Some(token_usage.clone()),
-                turn_context.client.get_model_context_window(),
-            );
-            state.token_info = info;
+        {
+            let mut state = self.state.lock().await;
+            if let Some(token_usage) = token_usage {
+                let info = TokenUsageInfo::new_or_append(
+                    &state.token_info,
+                    &Some(token_usage.clone()),
+                    turn_context.client.get_model_context_window(),
+                );
+                state.token_info = info;
+            }
         }
         self.send_token_count_event(sub_id).await;
     }
 
     async fn update_rate_limits(&self, sub_id: &str, new_rate_limits: RateLimitSnapshot) {
-        let mut state = self.state.lock().await;
-        state.latest_rate_limits = Some(new_rate_limits);
+        {
+            let mut state = self.state.lock().await;
+            state.latest_rate_limits = Some(new_rate_limits);
+        }
         self.send_token_count_event(sub_id).await;
     }
 

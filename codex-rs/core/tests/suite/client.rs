@@ -13,7 +13,6 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
-use codex_core::error::CodexErr;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -886,15 +885,14 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         "secondary_window_minutes": 60
     });
 
-    let err = codex
+    let submission_id = codex
         .submit(Op::UserInput {
             items: vec![InputItem::Text {
                 text: "hello".into(),
             }],
         })
         .await
-        .expect_err("expected usage limit error");
-    assert!(matches!(err, CodexErr::UsageLimitReached(_)));
+        .expect("submission should succeed while emitting usage limit error events");
 
     let token_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
     let EventMsg::TokenCount(event) = token_event else {
@@ -908,6 +906,16 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             "info": null,
             "rate_limits": expected_limits
         })
+    );
+
+    let error_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::Error(_))).await;
+    let EventMsg::Error(error_event) = error_event else {
+        unreachable!();
+    };
+    assert!(
+        error_event.message.to_lowercase().contains("usage limit"),
+        "unexpected error message for submission {submission_id}: {}",
+        error_event.message
     );
 
     Ok(())
