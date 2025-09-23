@@ -849,7 +849,7 @@ async fn token_count_includes_rate_limits_snapshot() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn usage_limit_error_emits_rate_limit_event() {
+async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
     let server = MockServer::start().await;
 
     let response = ResponseTemplate::new(429)
@@ -875,10 +875,7 @@ async fn usage_limit_error_emits_rate_limit_event() {
         .await;
 
     let mut builder = test_codex();
-    let codex_fixture = builder
-        .build(&server)
-        .await
-        .expect("build codex conversation");
+    let codex_fixture = builder.build(&server).await?;
     let codex = codex_fixture.codex.clone();
 
     let expected_limits = json!({
@@ -912,6 +909,8 @@ async fn usage_limit_error_emits_rate_limit_event() {
             "rate_limits": expected_limits
         })
     );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

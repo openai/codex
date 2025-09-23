@@ -759,20 +759,15 @@ impl Session {
     }
 
     async fn send_token_count_event(&self, sub_id: &str) {
-        let token_event = self.get_token_count_event().await;
+        let (info, rate_limits) = {
+            let state = self.state.lock().await;
+            (state.token_info.clone(), state.latest_rate_limits.clone())
+        };
         let event = Event {
             id: sub_id.to_string(),
-            msg: EventMsg::TokenCount(token_event),
+            msg: EventMsg::TokenCount(TokenCountEvent { info, rate_limits }),
         };
         self.send_event(event).await;
-    }
-
-    async fn get_token_count_event(&self) -> TokenCountEvent {
-        let state = self.state.lock().await;
-        TokenCountEvent {
-            info: state.token_info.clone(),
-            rate_limits: state.latest_rate_limits.clone(),
-        }
     }
 
     /// Record a user input item to conversation history and also persist a
