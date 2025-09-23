@@ -317,10 +317,12 @@ fn make_chatwidget_manual() -> (
         active_exec_cell: None,
         config: cfg.clone(),
         auth_manager,
-        session_header: SessionHeader::new(cfg.model.clone()),
+        session_header: SessionHeader::new(cfg.model),
         initial_user_message: None,
         token_info: None,
-        stream: StreamController::new(cfg),
+        rate_limit_snapshot: None,
+        rate_limit_warnings: RateLimitWarningState::default(),
+        stream_controller: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
@@ -373,6 +375,49 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+#[test]
+fn rate_limit_warnings_emit_thresholds() {
+    let mut state = RateLimitWarningState::default();
+    let mut warnings: Vec<String> = Vec::new();
+
+    warnings.extend(state.take_warnings(10.0, 55.0));
+    warnings.extend(state.take_warnings(55.0, 10.0));
+    warnings.extend(state.take_warnings(10.0, 80.0));
+    warnings.extend(state.take_warnings(80.0, 10.0));
+    warnings.extend(state.take_warnings(10.0, 95.0));
+    warnings.extend(state.take_warnings(95.0, 10.0));
+
+    assert_eq!(
+        warnings.len(),
+        6,
+        "expected one warning per threshold per limit"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Heads up, you've used over 50% of your 5h limit.")),
+        "expected hourly 50% warning (new copy)"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Heads up, you've used over 50% of your weekly limit.")),
+        "expected weekly 50% warning (new copy)"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Heads up, you've used over 90% of your 5h limit.")),
+        "expected hourly 90% warning (new copy)"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("Heads up, you've used over 90% of your weekly limit.")),
+        "expected weekly 90% warning (new copy)"
+    );
 }
 
 // (removed experimental resize snapshot test)
@@ -644,6 +689,135 @@ fn exec_history_cell_shows_working_then_failed() {
     assert!(blob.to_lowercase().contains("bloop"), "expected error text");
 }
 
+/// Selecting the custom prompt option from the review popup sends
+/// OpenReviewCustomPrompt to the app event channel.
+#[test]
+fn review_popup_custom_prompt_action_sends_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the preset selection popup
+    chat.open_review_popup();
+
+    // Move selection down to the fourth item: "Custom review instructions"
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    // Activate
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Drain events and ensure we saw the OpenReviewCustomPrompt request
+    let mut found = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::OpenReviewCustomPrompt = ev {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "expected OpenReviewCustomPrompt event to be sent");
+}
+
+/// The commit picker shows only commit subjects (no timestamps).
+#[test]
+fn review_commit_picker_shows_subjects_without_timestamps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Show commit picker with synthetic entries.
+    let entries = vec![
+        codex_core::git_info::CommitLogEntry {
+            sha: "1111111deadbeef".to_string(),
+            timestamp: 0,
+            subject: "Add new feature X".to_string(),
+        },
+        codex_core::git_info::CommitLogEntry {
+            sha: "2222222cafebabe".to_string(),
+            timestamp: 0,
+            subject: "Fix bug Y".to_string(),
+        },
+    ];
+    super::show_review_commit_picker_with_entries(&mut chat, entries);
+
+    // Render the bottom pane and inspect the lines for subjects and absence of time words.
+    let width = 72;
+    let height = chat.desired_height(width);
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    (&chat).render_ref(area, &mut buf);
+
+    let mut blob = String::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let s = buf[(x, y)].symbol();
+            if s.is_empty() {
+                blob.push(' ');
+            } else {
+                blob.push_str(s);
+            }
+        }
+        blob.push('\n');
+    }
+
+    assert!(
+        blob.contains("Add new feature X"),
+        "expected subject in output"
+    );
+    assert!(blob.contains("Fix bug Y"), "expected subject in output");
+
+    // Ensure no relative-time phrasing is present.
+    let lowered = blob.to_lowercase();
+    assert!(
+        !lowered.contains("ago")
+            && !lowered.contains(" second")
+            && !lowered.contains(" minute")
+            && !lowered.contains(" hour")
+            && !lowered.contains(" day"),
+        "expected no relative time in commit picker output: {blob:?}"
+    );
+}
+
+/// Submitting the custom prompt view sends Op::Review with the typed prompt
+/// and uses the same text for the user-facing hint.
+#[test]
+fn custom_prompt_submit_sends_review_op() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.show_review_custom_prompt();
+    // Paste prompt text via ChatWidget handler, then submit
+    chat.handle_paste("  please audit dependencies  ".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Expect AppEvent::CodexOp(Op::Review { .. }) with trimmed prompt
+    let evt = rx.try_recv().expect("expected one app event");
+    match evt {
+        AppEvent::CodexOp(Op::Review { review_request }) => {
+            assert_eq!(
+                review_request.prompt,
+                "please audit dependencies".to_string()
+            );
+            assert_eq!(
+                review_request.user_facing_hint,
+                "please audit dependencies".to_string()
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+/// Hitting Enter on an empty custom prompt view does not submit.
+#[test]
+fn custom_prompt_enter_empty_does_not_send() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.show_review_custom_prompt();
+    // Enter without any text
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // No AppEvent::CodexOp should be sent
+    assert!(rx.try_recv().is_err(), "no app event should be sent");
+}
+
 // Snapshot test: interrupting a running exec finalizes the active cell with a red ✗
 // marker (replacing the spinner) and flushes it into history.
 #[test]
@@ -671,6 +845,96 @@ fn interrupt_exec_marks_failed_snapshot() {
     // The first inserted cell should be the finalized exec; snapshot its text.
     let exec_blob = lines_to_single_string(&cells[0]);
     assert_snapshot!("interrupt_exec_marks_failed", exec_blob);
+}
+
+/// Opening custom prompt from the review popup, pressing Esc returns to the
+/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
+#[test]
+fn review_custom_prompt_escape_navigates_back_then_dismisses() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Open the custom prompt submenu (child view) directly.
+    chat.show_review_custom_prompt();
+
+    // Verify child view is on top.
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Custom review instructions"),
+        "expected custom prompt view header: {header:?}"
+    );
+
+    // Esc once: child view closes, parent (review presets) remains.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a review preset"),
+        "expected to return to parent review popup: {header:?}"
+    );
+
+    // Esc again: parent closes; back to normal composer state.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        chat.is_normal_backtrack_mode(),
+        "expected to be back in normal composer mode"
+    );
+}
+
+/// Opening base-branch picker from the review popup, pressing Esc returns to the
+/// parent popup, pressing Esc again dismisses all panels (back to normal mode).
+#[tokio::test(flavor = "current_thread")]
+async fn review_branch_picker_escape_navigates_back_then_dismisses() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Open the Review presets parent popup.
+    chat.open_review_popup();
+
+    // Open the branch picker submenu (child view). Using a temp cwd with no git repo is fine.
+    let cwd = std::env::temp_dir();
+    chat.show_review_branch_picker(&cwd).await;
+
+    // Verify child view header.
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a base branch"),
+        "expected branch picker header: {header:?}"
+    );
+
+    // Esc once: child view closes, parent remains.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let header = render_bottom_first_row(&chat, 60);
+    assert!(
+        header.contains("Select a review preset"),
+        "expected to return to parent review popup: {header:?}"
+    );
+
+    // Esc again: parent closes; back to normal composer state.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        chat.is_normal_backtrack_mode(),
+        "expected to be back in normal composer mode"
+    );
+}
+
+fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
+    let height = chat.desired_height(width);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    (chat).render_ref(area, &mut buf);
+    let mut row = String::new();
+    // Row 0 is the top spacer for the bottom pane; row 1 contains the header line
+    let y = 1u16.min(height.saturating_sub(1));
+    for x in 0..area.width {
+        let s = buf[(x, y)].symbol();
+        if s.is_empty() {
+            row.push(' ');
+        } else {
+            row.push_str(s);
+        }
+    }
+    row
 }
 
 #[test]
@@ -780,7 +1044,10 @@ async fn binary_size_transcript_snapshot() {
                                     call_id: e.call_id.clone(),
                                     command: e.command,
                                     cwd: e.cwd,
-                                    parsed_cmd: parsed_cmd.into_iter().map(|c| c.into()).collect(),
+                                    parsed_cmd: parsed_cmd
+                                        .into_iter()
+                                        .map(std::convert::Into::into)
+                                        .collect(),
                                 }),
                             }
                         }
@@ -857,7 +1124,7 @@ async fn binary_size_transcript_snapshot() {
         // Trim trailing spaces to match plain text fixture
         lines.push(s.trim_end().to_string());
     }
-    while lines.last().is_some_and(|l| l.is_empty()) {
+    while lines.last().is_some_and(std::string::String::is_empty) {
         lines.pop();
     }
     // Consider content only after the last session banner marker. Skip the transient
@@ -1743,8 +2010,12 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
 // then the exec block, another blank line, the status line, a blank line, and the composer.
 #[test]
 fn chatwidget_exec_and_status_layout_vt100_snapshot() {
-    // Setup identical scenario
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+    });
+
     chat.handle_codex_event(Event {
         id: "c1".into(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -1792,10 +2063,6 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     });
     chat.bottom_pane
         .set_composer_text("Summarize recent commits".to_string());
-    chat.handle_codex_event(Event {
-        id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
-    });
 
     // Dimensions
     let width: u16 = 80;

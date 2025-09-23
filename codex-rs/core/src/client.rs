@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::auth::CodexAuth;
 use bytes::Bytes;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -11,6 +12,7 @@ use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -40,6 +42,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
+use crate::protocol::RateLimitSnapshotEvent;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
@@ -274,6 +277,15 @@ impl ModelClient {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
+                    if let Some(snapshot) = parse_rate_limit_snapshot(resp.headers())
+                        && tx_event
+                            .send(Ok(ResponseEvent::RateLimits(snapshot)))
+                            .await
+                            .is_err()
+                    {
+                        debug!("receiver dropped rate limit snapshot event");
+                    }
+
                     // spawn task to process SSE
                     let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
                     tokio::spawn(process_sse(
@@ -326,7 +338,7 @@ impl ModelClient {
                                 // token.
                                 let plan_type = error
                                     .plan_type
-                                    .or_else(|| auth.as_ref().and_then(|a| a.get_plan_type()));
+                                    .or_else(|| auth.as_ref().and_then(CodexAuth::get_plan_type));
                                 let resets_in_seconds = error.resets_in_seconds;
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
@@ -471,6 +483,38 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
             }
         }
     }
+}
+
+fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshotEvent> {
+    let primary_used_percent = parse_header_f64(headers, "x-codex-primary-used-percent")?;
+    let secondary_used_percent = parse_header_f64(headers, "x-codex-secondary-used-percent")?;
+    let primary_to_secondary_ratio_percent =
+        parse_header_f64(headers, "x-codex-primary-over-secondary-limit-percent")?;
+    let primary_window_minutes = parse_header_u64(headers, "x-codex-primary-window-minutes")?;
+    let secondary_window_minutes = parse_header_u64(headers, "x-codex-secondary-window-minutes")?;
+
+    Some(RateLimitSnapshotEvent {
+        primary_used_percent,
+        secondary_used_percent,
+        primary_to_secondary_ratio_percent,
+        primary_window_minutes,
+        secondary_window_minutes,
+    })
+}
+
+fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
+    parse_header_str(headers, name)?
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
+fn parse_header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
+    parse_header_str(headers, name)?.parse::<u64>().ok()
+}
+
+fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name)?.to_str().ok()
 }
 
 async fn process_sse<S>(

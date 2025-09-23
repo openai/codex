@@ -24,6 +24,7 @@ use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::project_doc::discover_project_doc_paths;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::RateLimitSnapshotEvent;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
@@ -53,6 +54,10 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
+
+const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
+const STATUS_LIMIT_BAR_FILLED: &str = "█";
+const STATUS_LIMIT_BAR_EMPTY: &str = " ";
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
@@ -372,19 +377,18 @@ impl ExecCell {
                 .iter()
                 .all(|c| matches!(c, ParsedCommand::Read { .. }))
             {
-                let names: Vec<String> = call
+                let names = call
                     .parsed
                     .iter()
                     .map(|c| match c {
                         ParsedCommand::Read { name, .. } => name.clone(),
                         _ => unreachable!(),
                     })
-                    .unique()
-                    .collect();
+                    .unique();
                 vec![(
                     "Read",
                     itertools::Itertools::intersperse(
-                        names.into_iter().map(|n| n.into()),
+                        names.into_iter().map(Into::into),
                         ", ".dim(),
                     )
                     .collect(),
@@ -1075,10 +1079,18 @@ pub(crate) fn new_completed_mcp_tool_call(
     Box::new(PlainHistoryCell { lines })
 }
 
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![vec![format!("⚠ {message}").yellow()].into()],
+    }
+}
+
 pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
     session_id: &Option<ConversationId>,
+    rate_limits: Option<&RateLimitSnapshotEvent>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("/status".magenta().into());
@@ -1238,6 +1250,9 @@ pub(crate) fn new_status_output(
         "  • Total: ".into(),
         format_with_separators(usage.blended_total()).into(),
     ]));
+
+    lines.push("".into());
+    lines.extend(build_status_limit_lines(rate_limits));
 
     PlainHistoryCell { lines }
 }
@@ -1594,6 +1609,62 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         ")".into(),
     ];
     invocation_spans.into()
+}
+
+fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotEvent>) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> =
+        vec![vec![padded_emoji("⏱️").into(), "Usage Limits".bold()].into()];
+
+    match snapshot {
+        Some(snapshot) => {
+            let rows = [
+                ("5h limit".to_string(), snapshot.primary_used_percent),
+                ("Weekly limit".to_string(), snapshot.secondary_used_percent),
+            ];
+            let label_width = rows
+                .iter()
+                .map(|(label, _)| UnicodeWidthStr::width(label.as_str()))
+                .max()
+                .unwrap_or(0);
+            for (label, percent) in rows {
+                lines.push(build_status_limit_line(&label, percent, label_width));
+            }
+        }
+        None => lines.push("  • Rate limit data not available yet.".dim().into()),
+    }
+
+    lines
+}
+
+fn build_status_limit_line(label: &str, percent_used: f64, label_width: usize) -> Line<'static> {
+    let clamped_percent = percent_used.clamp(0.0, 100.0);
+    let progress = render_status_limit_progress_bar(clamped_percent);
+    let summary = format_status_limit_summary(clamped_percent);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(5);
+    let padded_label = format!("{label:<label_width$}");
+    spans.push(format!("  • {padded_label}: ").into());
+    spans.push(progress.into());
+    spans.push(" ".into());
+    spans.push(summary.into());
+
+    Line::from(spans)
+}
+
+fn render_status_limit_progress_bar(percent_used: f64) -> String {
+    let ratio = (percent_used / 100.0).clamp(0.0, 1.0);
+    let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
+    let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
+    let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
+    format!(
+        "[{}{}]",
+        STATUS_LIMIT_BAR_FILLED.repeat(filled),
+        STATUS_LIMIT_BAR_EMPTY.repeat(empty)
+    )
+}
+
+fn format_status_limit_summary(percent_used: f64) -> String {
+    format!("{percent_used:.0}% used")
 }
 
 #[cfg(test)]
