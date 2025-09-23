@@ -146,7 +146,8 @@ mod tests {
     use super::*;
     use crate::MatchedArg;
     use crate::PolicyParser;
-    use anyhow::{anyhow, Result};
+    use anyhow::Result;
+    use anyhow::anyhow;
 
     fn setup(fake_cp: &Path) -> ExecvChecker {
         let source = format!(
@@ -200,10 +201,7 @@ system_path=[{fake_cp:?}]
             program: "cp".into(),
             args: vec![source, dest.clone()],
         };
-        let valid_exec = match checker
-            .r#match(&exec_call)
-            .map_err(|e| anyhow!("{e:?}"))?
-        {
+        let valid_exec = match checker.r#match(&exec_call).map_err(|e| anyhow!("{e:?}"))? {
             MatchedExec::Match { exec } => exec,
             unexpected => panic!("Expected a safe exec but got {unexpected:?}"),
         };
@@ -275,8 +273,7 @@ system_path=[{fake_cp:?}]
                     root_path.parent().unwrap().to_str().unwrap(),
                 )
                 .map_err(|e| anyhow!("{e:?}"))?,
-                MatchedArg::new(1, ArgType::WriteableFile, &dest)
-                    .map_err(|e| anyhow!("{e:?}"))?,
+                MatchedArg::new(1, ArgType::WriteableFile, &dest).map_err(|e| anyhow!("{e:?}"))?,
             ],
             ..Default::default()
         };
