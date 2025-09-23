@@ -93,15 +93,21 @@ impl Readiness for ReadinessFlag {
         // Generate a token; ensure it's not 0.
         let token = Token(self.next_id.fetch_add(1, Ordering::Relaxed));
 
-        // If it became ready in between, don't store the token.
-        if self.is_ready() {
+        // Recheck readiness while holding the lock so mark_ready can't flip the flag between the
+        // check above and inserting the token.
+        let inserted = self
+            .with_tokens(|tokens| {
+                if self.is_ready() {
+                    return false;
+                }
+                tokens.insert(token);
+                true
+            })
+            .await?;
+
+        if !inserted {
             return Err(errors::ReadinessError::FlagAlreadyReady);
         }
-
-        self.with_tokens(|tokens| {
-            tokens.insert(token);
-        })
-        .await?;
 
         Ok(token)
     }
