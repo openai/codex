@@ -688,6 +688,14 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
+    pub include_plan_tool: Option<bool>,
+
+    /// Include the `apply_patch` tool for models that benefit from invoking
+    /// file edits as a structured tool call. When unset, this falls back to the
+    /// model family's default preference.
+    pub include_apply_patch_tool: Option<bool>,
+
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
 
@@ -1034,8 +1042,10 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
-            include_plan_tool: include_plan_tool.unwrap_or(false),
-            include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
+            include_plan_tool: include_plan_tool.or(cfg.include_plan_tool).unwrap_or(false),
+            include_apply_patch_tool: include_apply_patch_tool
+                .or(cfg.include_apply_patch_tool)
+                .unwrap_or(false),
             tools_web_search_request,
             use_experimental_streamable_shell_tool: cfg
                 .experimental_use_exec_command_tool
@@ -1944,6 +1954,57 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exec_mode_config_override_behavior() -> std::io::Result<()> {
+        // This test verifies that exec mode properly respects config.toml values
+        // for include_plan_tool and include_apply_patch_tool when CLI overrides are None.
+        // This is a regression test for a bug where exec mode would always default these
+        // to false, ignoring config.toml settings.
+
+        let tmp = TempDir::new()?;
+        let config_path = tmp.path().join("config.toml");
+
+        // Write a config with the tools enabled
+        std::fs::write(
+            &config_path,
+            r#"
+include_plan_tool = true
+include_apply_patch_tool = true
+"#,
+        )?;
+
+        // Load and parse the config file
+        let config_str = std::fs::read_to_string(&config_path)?;
+        let cfg: ConfigToml = toml::from_str(&config_str)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        // Simulate exec mode's ConfigOverrides (see exec/src/lib.rs lines 160-161)
+        // Exec mode sets these to None, relying on config.toml values
+        let exec_mode_overrides = ConfigOverrides {
+            include_plan_tool: None,        // exec mode sets this to None
+            include_apply_patch_tool: None, // exec mode sets this to None
+            cwd: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            exec_mode_overrides,
+            tmp.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.include_plan_tool, true,
+            "include_plan_tool should respect config.toml value when CLI override is None"
+        );
+        assert_eq!(
+            config.include_apply_patch_tool, true,
+            "include_apply_patch_tool should respect config.toml value when CLI override is None"
+        );
 
         Ok(())
     }
