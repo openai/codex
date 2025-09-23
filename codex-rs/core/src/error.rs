@@ -2,6 +2,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
@@ -138,6 +139,7 @@ pub enum CodexErr {
 pub struct UsageLimitReachedError {
     pub(crate) plan_type: Option<PlanType>,
     pub(crate) resets_in_seconds: Option<u64>,
+    pub(crate) rate_limits: Option<RateLimitSnapshot>,
 }
 
 impl std::fmt::Display for UsageLimitReachedError {
@@ -266,11 +268,22 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 mod tests {
     use super::*;
 
+    fn rate_limit_snapshot() -> RateLimitSnapshot {
+        RateLimitSnapshot {
+            primary_used_percent: 0.5,
+            secondary_used_percent: 0.3,
+            primary_to_secondary_ratio_percent: 0.7,
+            primary_window_minutes: 60,
+            secondary_window_minutes: 120,
+        }
+    }
+
     #[test]
     fn usage_limit_reached_error_formats_plus_plan() {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Plus)),
             resets_in_seconds: None,
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -283,6 +296,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Free)),
             resets_in_seconds: Some(3600),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -295,6 +309,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: None,
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -307,6 +322,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Team)),
             resets_in_seconds: Some(3600),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -319,6 +335,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Business)),
             resets_in_seconds: None,
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -331,6 +348,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Pro)),
             resets_in_seconds: None,
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -343,6 +361,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: Some(5 * 60),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -355,6 +374,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Plus)),
             resets_in_seconds: Some(3 * 3600 + 32 * 60),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -367,6 +387,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: Some(2 * 86_400 + 3 * 3600 + 5 * 60),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -379,6 +400,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: Some(30),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),

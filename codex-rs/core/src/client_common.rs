@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::openai_tools::OpenAiTool;
-use crate::protocol::RateLimitSnapshotEvent;
+use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -83,7 +83,7 @@ pub enum ResponseEvent {
     WebSearchCallBegin {
         call_id: String,
     },
-    RateLimits(RateLimitSnapshotEvent),
+    RateLimits(RateLimitSnapshot),
 }
 
 #[derive(Debug, Serialize)]
