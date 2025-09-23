@@ -103,7 +103,7 @@ impl BottomPane {
     }
 
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
-        self.view_stack.last().map(|view| view.as_ref())
+        self.view_stack.last().map(std::convert::AsRef::as_ref)
     }
 
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {

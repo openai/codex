@@ -35,6 +35,7 @@ codex-common = { workspace = true, features = [
 ] }
 codex-core = { workspace = true }
 codex-file-search = { workspace = true }
+codex-git-tooling = { workspace = true }
 codex-login = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
@@ -85,7 +86,6 @@ unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
 pathdiff = { workspace = true }
-owo-colors = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

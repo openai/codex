@@ -761,10 +761,10 @@ async fn token_count_includes_rate_limits_snapshot() {
     let response = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .insert_header("x-codex-primary-used-percent", "12.5")
-        .insert_header("x-codex-protection-used-percent", "40.0")
-        .insert_header("x-codex-primary-over-protection-limit-percent", "75.0")
+        .insert_header("x-codex-secondary-used-percent", "40.0")
+        .insert_header("x-codex-primary-over-secondary-limit-percent", "75.0")
         .insert_header("x-codex-primary-window-minutes", "10")
-        .insert_header("x-codex-protection-window-minutes", "60")
+        .insert_header("x-codex-secondary-window-minutes", "60")
         .set_body_raw(sse_body, "text/event-stream");
 
     Mock::given(method("POST"))
@@ -822,15 +822,15 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "reasoning_output_tokens": 0,
                     "total_tokens": 123
                 },
-                // Default model is gpt-5 in tests → 272000 context window
+                // Default model is gpt-5-codex in tests → 272000 context window
                 "model_context_window": 272000
             },
             "rate_limits": {
                 "primary_used_percent": 12.5,
-                "weekly_used_percent": 40.0,
-                "primary_to_weekly_ratio_percent": 75.0,
+                "secondary_used_percent": 40.0,
+                "primary_to_secondary_ratio_percent": 75.0,
                 "primary_window_minutes": 10,
-                "weekly_window_minutes": 60
+                "secondary_window_minutes": 60
             }
         })
     );

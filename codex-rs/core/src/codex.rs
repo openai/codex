@@ -1117,16 +1117,13 @@ impl AgentTask {
         turn_context: Arc<TurnContext>,
         sub_id: String,
         input: Vec<InputItem>,
-        compact_instructions: String,
     ) -> Self {
         let handle = {
             let sess = sess.clone();
             let sub_id = sub_id.clone();
             let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move {
-                compact::run_compact_task(sess, tc, sub_id, input, compact_instructions).await
-            })
-            .abort_handle()
+            tokio::spawn(async move { compact::run_compact_task(sess, tc, sub_id, input).await })
+                .abort_handle()
         };
         Self {
             sess,
@@ -1434,7 +1431,7 @@ async fn submission_loop(
                 // Attempt to inject input into current task
                 if let Err(items) = sess
                     .inject_input(vec![InputItem::Text {
-                        text: compact::COMPACT_TRIGGER_TEXT.to_string(),
+                        text: compact::SUMMARIZATION_PROMPT.to_string(),
                     }])
                     .await
                 {
@@ -1718,7 +1715,7 @@ async fn run_task(
                     .unwrap_or(i64::MAX);
                 let total_usage_tokens = total_token_usage
                     .as_ref()
-                    .map(|usage| usage.tokens_in_context_window());
+                    .map(TokenUsage::tokens_in_context_window);
                 let token_limit_reached = total_usage_tokens
                     .map(|tokens| (tokens as i64) >= limit)
                     .unwrap_or(false);

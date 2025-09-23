@@ -1,3 +1,4 @@
+use diffy::Hunk;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -283,7 +284,7 @@ fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
         patch
             .hunks()
             .iter()
-            .flat_map(|h| h.lines())
+            .flat_map(Hunk::lines)
             .fold((0, 0), |(a, d), l| match l {
                 diffy::Line::Insert(_) => (a + 1, d),
                 diffy::Line::Delete(_) => (a, d + 1),
