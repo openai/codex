@@ -133,7 +133,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .to_string();
     let user_turn_1 = json!(
     {
-      "model": "gpt-5",
+      "model": "gpt-5-codex",
       "instructions": prompt,
       "input": [
         {
@@ -182,7 +182,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     });
     let compact_1 = json!(
     {
-      "model": "gpt-5",
+      "model": "gpt-5-codex",
       "instructions": "You have exceeded the maximum number of tokens, please stop coding and instead write a short memento message for the next agent. Your note should:
 - Summarize what you finished and what still needs work. If there was a recent update_plan call, repeat its steps verbatim.
 - List outstanding TODOs with file paths / line numbers so they're easy to find.
@@ -255,7 +255,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     });
     let user_turn_2_after_compact = json!(
     {
-      "model": "gpt-5",
+      "model": "gpt-5-codex",
       "instructions": prompt,
       "input": [
         {
@@ -320,7 +320,7 @@ SUMMARY_ONLY_CONTEXT"
     });
     let usert_turn_3_after_resume = json!(
     {
-      "model": "gpt-5",
+      "model": "gpt-5-codex",
       "instructions": prompt,
       "input": [
         {
@@ -405,7 +405,7 @@ SUMMARY_ONLY_CONTEXT"
     });
     let user_turn_3_after_fork = json!(
     {
-      "model": "gpt-5",
+      "model": "gpt-5-codex",
       "instructions": prompt,
       "input": [
         {

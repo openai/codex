@@ -126,3 +126,21 @@ where
         }
     }
 }
+
+#[macro_export]
+macro_rules! non_sandbox_test {
+    // For tests that return ()
+    () => {{
+        if ::std::env::var("CODEX_SANDBOX_NETWORK_DISABLED").is_ok() {
+            println!("Skipping test because it cannot execute when network is disabled in a Codex sandbox.");
+            return;
+        }
+    }};
+    // For tests that return Result<(), _>
+    (result $(,)?) => {{
+        if ::std::env::var("CODEX_SANDBOX_NETWORK_DISABLED").is_ok() {
+            println!("Skipping test because it cannot execute when network is disabled in a Codex sandbox.");
+            return ::core::result::Result::Ok(());
+        }
+    }};
+}

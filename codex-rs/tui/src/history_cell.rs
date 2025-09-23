@@ -2,9 +2,6 @@ use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
-use crate::rate_limits_view::DEFAULT_GRID_CONFIG;
-use crate::rate_limits_view::LimitsView;
-use crate::rate_limits_view::build_limits_view;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -57,6 +54,10 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
+
+const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
+const STATUS_LIMIT_BAR_FILLED: &str = "█";
+const STATUS_LIMIT_BAR_EMPTY: &str = " ";
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
@@ -226,20 +227,6 @@ impl HistoryCell for PlainHistoryCell {
 }
 
 #[derive(Debug)]
-pub(crate) struct LimitsHistoryCell {
-    display: LimitsView,
-}
-
-impl HistoryCell for LimitsHistoryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = self.display.summary_lines.clone();
-        lines.extend(self.display.gauge_lines(width));
-        lines.extend(self.display.legend_lines.clone());
-        lines
-    }
-}
-
-#[derive(Debug)]
 pub(crate) struct TranscriptOnlyHistoryCell {
     lines: Vec<Line<'static>>,
 }
@@ -390,19 +377,18 @@ impl ExecCell {
                 .iter()
                 .all(|c| matches!(c, ParsedCommand::Read { .. }))
             {
-                let names: Vec<String> = call
+                let names = call
                     .parsed
                     .iter()
                     .map(|c| match c {
                         ParsedCommand::Read { name, .. } => name.clone(),
                         _ => unreachable!(),
                     })
-                    .unique()
-                    .collect();
+                    .unique();
                 vec![(
                     "Read",
                     itertools::Itertools::intersperse(
-                        names.into_iter().map(|n| n.into()),
+                        names.into_iter().map(Into::into),
                         ", ".dim(),
                     )
                     .collect(),
@@ -1093,26 +1079,6 @@ pub(crate) fn new_completed_mcp_tool_call(
     Box::new(PlainHistoryCell { lines })
 }
 
-pub(crate) fn new_limits_output(snapshot: &RateLimitSnapshotEvent) -> LimitsHistoryCell {
-    LimitsHistoryCell {
-        display: build_limits_view(snapshot, DEFAULT_GRID_CONFIG),
-    }
-}
-
-pub(crate) fn new_limits_unavailable() -> PlainHistoryCell {
-    PlainHistoryCell {
-        lines: vec![
-            "/limits".magenta().into(),
-            "".into(),
-            vec!["Rate limit usage snapshot".bold()].into(),
-            vec!["  Tip: run `/limits` right after Codex replies for freshest numbers.".dim()]
-                .into(),
-            vec!["  Real usage data is not available yet.".into()].into(),
-            vec!["  Send a message to Codex, then run /limits again.".dim()].into(),
-        ],
-    }
-}
-
 #[allow(clippy::disallowed_methods)]
 pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell {
@@ -1124,6 +1090,7 @@ pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
     session_id: &Option<ConversationId>,
+    rate_limits: Option<&RateLimitSnapshotEvent>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("/status".magenta().into());
@@ -1283,6 +1250,9 @@ pub(crate) fn new_status_output(
         "  • Total: ".into(),
         format_with_separators(usage.blended_total()).into(),
     ]));
+
+    lines.push("".into());
+    lines.extend(build_status_limit_lines(rate_limits));
 
     PlainHistoryCell { lines }
 }
@@ -1639,6 +1609,62 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         ")".into(),
     ];
     invocation_spans.into()
+}
+
+fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotEvent>) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> =
+        vec![vec![padded_emoji("⏱️").into(), "Usage Limits".bold()].into()];
+
+    match snapshot {
+        Some(snapshot) => {
+            let rows = [
+                ("5h limit".to_string(), snapshot.primary_used_percent),
+                ("Weekly limit".to_string(), snapshot.secondary_used_percent),
+            ];
+            let label_width = rows
+                .iter()
+                .map(|(label, _)| UnicodeWidthStr::width(label.as_str()))
+                .max()
+                .unwrap_or(0);
+            for (label, percent) in rows {
+                lines.push(build_status_limit_line(&label, percent, label_width));
+            }
+        }
+        None => lines.push("  • Rate limit data not available yet.".dim().into()),
+    }
+
+    lines
+}
+
+fn build_status_limit_line(label: &str, percent_used: f64, label_width: usize) -> Line<'static> {
+    let clamped_percent = percent_used.clamp(0.0, 100.0);
+    let progress = render_status_limit_progress_bar(clamped_percent);
+    let summary = format_status_limit_summary(clamped_percent);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(5);
+    let padded_label = format!("{label:<label_width$}");
+    spans.push(format!("  • {padded_label}: ").into());
+    spans.push(progress.into());
+    spans.push(" ".into());
+    spans.push(summary.into());
+
+    Line::from(spans)
+}
+
+fn render_status_limit_progress_bar(percent_used: f64) -> String {
+    let ratio = (percent_used / 100.0).clamp(0.0, 1.0);
+    let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
+    let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
+    let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
+    format!(
+        "[{}{}]",
+        STATUS_LIMIT_BAR_FILLED.repeat(filled),
+        STATUS_LIMIT_BAR_EMPTY.repeat(empty)
+    )
+}
+
+fn format_status_limit_summary(percent_used: f64) -> String {
+    format!("{percent_used:.0}% used")
 }
 
 #[cfg(test)]

@@ -21,84 +21,83 @@ debug-logs = []
 workspace = true
 
 [dependencies]
-anyhow = "1"
-async-stream = "0.3.6"
-base64 = "0.22.1"
-chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4", features = ["derive"] }
-codex-ansi-escape = { path = "../ansi-escape" }
-codex-arg0 = { path = "../arg0" }
-codex-common = { path = "../common", features = [
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
+codex-ansi-escape = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
     "sandbox_summary",
 ] }
-codex-core = { path = "../core" }
-codex-file-search = { path = "../file-search" }
-codex-login = { path = "../login" }
-codex-ollama = { path = "../ollama" }
-codex-protocol = { path = "../protocol" }
-color-eyre = "0.6.3"
-crossterm = { version = "0.28.1", features = [
+codex-core = { workspace = true }
+codex-file-search = { workspace = true }
+codex-login = { workspace = true }
+codex-ollama = { workspace = true }
+codex-protocol = { workspace = true }
+color-eyre = { workspace = true }
+crossterm = { workspace = true, features = [
     "bracketed-paste",
     "event-stream",
 ] }
-dirs = "6"
-diffy = "0.4.2"
-image = { version = "^0.25.8", default-features = false, features = [
+dirs = { workspace = true }
+diffy = { workspace = true }
+image = { workspace = true, features = [
     "jpeg",
     "png",
 ] }
-itertools = "0.14.0"
-lazy_static = "1"
-mcp-types = { path = "../mcp-types" }
-once_cell = "1"
-path-clean = "1.0.1"
-rand = "0.9"
-ratatui = { version = "0.29.0", features = [
+itertools = { workspace = true }
+lazy_static = { workspace = true }
+mcp-types = { workspace = true }
+once_cell = { workspace = true }
+path-clean = { workspace = true }
+rand = { workspace = true }
+ratatui = { workspace = true, features = [
     "scrolling-regions",
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
-regex-lite = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-shlex = "1.3.0"
-strum = "0.27.2"
-strum_macros = "0.27.2"
-supports-color = "3.0.2"
-tempfile = "3"
-textwrap = "0.16.2"
-tokio = { version = "1", features = [
+regex-lite = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+shlex = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+supports-color = { workspace = true }
+tempfile = { workspace = true }
+textwrap = { workspace = true }
+tokio = { workspace = true, features = [
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
 ] }
-tokio-stream = "0.1.17"
-tracing = { version = "0.1.41", features = ["log"] }
-tracing-appender = "0.2.3"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
-pulldown-cmark = "0.10"
-unicode-segmentation = "1.12.0"
-unicode-width = "0.1"
-url = "2"
-pathdiff = "0.2"
-owo-colors = "4.2.0"
+tokio-stream = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+pulldown-cmark = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
+url = { workspace = true }
+pathdiff = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = { workspace = true }
 
 # Clipboard support via `arboard` is not available on Android/Termux.
 # Only include it for non-Android targets so the crate builds on Android.
 [target.'cfg(not(target_os = "android"))'.dependencies]
-arboard = "3"
+arboard = { workspace = true }
 
 
 [dev-dependencies]
-chrono = { version = "0.4", features = ["serde"] }
-insta = "1.43.2"
-pretty_assertions = "1"
-rand = "0.9"
-vt100 = "0.16.2"
+chrono = { workspace = true, features = ["serde"] }
+insta = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+vt100 = { workspace = true }

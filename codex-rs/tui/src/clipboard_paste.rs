@@ -241,7 +241,7 @@ pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
     match path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|s| s.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .as_deref()
     {
         Some("png") => EncodedImageFormat::Png,
