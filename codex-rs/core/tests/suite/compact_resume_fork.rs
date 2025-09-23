@@ -484,13 +484,14 @@ SUMMARY_ONLY_CONTEXT"
       ],
       "prompt_cache_key": fork_prompt_cache_key
     });
-    let expected = json!([
+    let mut expected = json!([
         user_turn_1,
         compact_1,
         user_turn_2_after_compact,
         usert_turn_3_after_resume,
         user_turn_3_after_fork
     ]);
+    normalize_line_endings(&mut expected);
     assert_eq!(requests.len(), 5);
     assert_eq!(json!(requests), expected);
 }
@@ -576,7 +577,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         .unwrap_or_default()
         .to_string();
 
-    let expected = json!([
+    let mut expected = json!([
       {
         "instructions": prompt,
         "input": [
@@ -633,6 +634,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         ],
       }
     ]);
+    normalize_line_endings(&mut expected);
     let last_request_after_2_compacts = json!([{
         "instructions": requests[requests.len() -1]["instructions"],
         "input": requests[requests.len() -1]["input"],
