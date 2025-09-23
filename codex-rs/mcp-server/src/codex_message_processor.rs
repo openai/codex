@@ -1,5 +1,6 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::json_to_toml::json_to_toml;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
@@ -33,7 +34,6 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
-use codex_file_search as file_search;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -55,7 +55,6 @@ use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
 use codex_protocol::mcp_protocol::FuzzyFileSearchParams;
 use codex_protocol::mcp_protocol::FuzzyFileSearchResponse;
-use codex_protocol::mcp_protocol::FuzzyFileSearchResult;
 use codex_protocol::mcp_protocol::GetUserAgentResponse;
 use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
@@ -90,15 +89,14 @@ use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
-use tokio::task::JoinSet;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -129,6 +127,7 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
+    fuzzy_search_tokens: HashMap<String, Arc<AtomicBool>>,
 }
 
 impl CodexMessageProcessor {
@@ -148,6 +147,7 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
+            fuzzy_search_tokens: HashMap::new(),
         }
     }
 
@@ -1178,68 +1178,33 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn fuzzy_file_search(&self, request_id: RequestId, params: FuzzyFileSearchParams) {
-        let FuzzyFileSearchParams { query, roots } = params;
+    async fn fuzzy_file_search(&mut self, request_id: RequestId, params: FuzzyFileSearchParams) {
+        let FuzzyFileSearchParams {
+            query,
+            roots,
+            cancellation_token,
+        } = params;
 
-        let mut files: Vec<FuzzyFileSearchResult> = Vec::new();
-        #[expect(clippy::expect_used)]
-        let limit_per_root = NonZero::new(50).expect("50 is a valid non-zero usize");
-        #[expect(clippy::expect_used)]
-        let threads = NonZero::new(2).expect("2 is a valid non-zero usize");
-        let compute_indices = true;
-
-        // TODO: offer a way to cancel outdated requests in the interface
-        let cancel_flag = std::sync::Arc::new(AtomicBool::new(false));
-        let mut join_set = JoinSet::new();
-
-        for root in roots {
-            let search_dir = PathBuf::from(&root);
-            let query = query.clone();
-            let cancel_flag = cancel_flag.clone();
-
-            join_set.spawn(async move {
-                match file_search::run(
-                    query.as_str(),
-                    limit_per_root,
-                    &search_dir,
-                    Vec::new(),
-                    threads,
-                    cancel_flag,
-                    compute_indices,
-                ) {
-                    Ok(res) => Ok((root, res)),
-                    Err(e) => Err((root, e)),
-                }
-            });
-        }
-
-        while let Some(res) = join_set.join_next().await {
-            match res {
-                Ok(Ok((root, res))) => {
-                    for m in res.matches {
-                        let result = FuzzyFileSearchResult {
-                            root: root.clone(),
-                            path: m.path,
-                            score: m.score,
-                            indices: m.indices,
-                        };
-                        files.push(result);
-                    }
-                }
-                Ok(Err((root, e))) => {
-                    tracing::warn!("fuzzy-file-search in dir '{}' failed: {}", root, e);
-                }
-                Err(e) => {
-                    tracing::warn!("fuzzy-file-search join_next failed: {}", e);
-                }
+        let (cancel_flag, active_token) = if let Some(token) = cancellation_token {
+            if let Some(existing) = self.fuzzy_search_tokens.get(&token) {
+                existing.store(true, Ordering::Relaxed);
             }
+            let flag = Arc::new(AtomicBool::new(false));
+            self.fuzzy_search_tokens.insert(token.clone(), flag.clone());
+            (flag, Some(token))
+        } else {
+            (Arc::new(AtomicBool::new(false)), None)
+        };
+
+        let files = run_fuzzy_file_search(query, roots, cancel_flag.clone()).await;
+
+        if let Some(token) = active_token
+            && let Some(current_flag) = self.fuzzy_search_tokens.get(&token)
+            && Arc::ptr_eq(current_flag, &cancel_flag)
+        {
+            self.fuzzy_search_tokens.remove(&token);
         }
 
-        files.sort_by(file_search::cmp_by_score_desc_then_path_asc::<
-            FuzzyFileSearchResult,
-            _,
-            _,
-        >(|f| f.score, |f| f.path.as_str()));
         let response = FuzzyFileSearchResponse { files };
         self.outgoing.send_response(request_id, response).await;
     }

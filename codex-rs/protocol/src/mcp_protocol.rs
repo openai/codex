@@ -668,9 +668,13 @@ pub struct ApplyPatchApprovalResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchParams {
     pub query: String,
     pub roots: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancellation_token: Option<String>,
 }
 
 /// Superset of [`codex_file_search::FileMatch`]

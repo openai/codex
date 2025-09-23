@@ -362,12 +362,16 @@ impl McpProcess {
         &mut self,
         query: &str,
         roots: Vec<String>,
+        cancellation_token: Option<&str>,
     ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::json!({
+        let mut params = serde_json::json!({
             "query": query,
             "roots": roots,
-        }));
-        self.send_request("fuzzyFileSearch", params).await
+        });
+        if let Some(token) = cancellation_token {
+            params["cancellationToken"] = serde_json::json!(token);
+        }
+        self.send_request("fuzzyFileSearch", Some(params)).await
     }
 
     async fn send_request(

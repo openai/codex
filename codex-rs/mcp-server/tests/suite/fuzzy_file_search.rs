@@ -30,7 +30,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() {
     let root_path = root.path().to_string_lossy().to_string();
     // Send fuzzyFileSearch request.
     let request_id = mcp
-        .send_fuzzy_file_search_request("abe", vec![root_path.clone()])
+        .send_fuzzy_file_search_request("abe", vec![root_path.clone()], None)
         .await
         .expect("send fuzzyFileSearch");
 
@@ -53,4 +53,44 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() {
             ]
         })
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_fuzzy_file_search_accepts_cancellation_token() {
+    let codex_home = TempDir::new().expect("create temp codex home");
+    let root = TempDir::new().expect("create temp search root");
+
+    std::fs::write(root.path().join("alpha.txt"), "contents").expect("write alpha");
+
+    let mut mcp = McpProcess::new(codex_home.path()).await.expect("spawn mcp");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init failed");
+
+    let root_path = root.path().to_string_lossy().to_string();
+    let token = "search-token";
+    let request_id = mcp
+        .send_fuzzy_file_search_request("alp", vec![root_path.clone()], Some(token))
+        .await
+        .expect("send fuzzyFileSearch");
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .expect("fuzzyFileSearch timeout")
+    .expect("fuzzyFileSearch resp");
+
+    let files = resp
+        .result
+        .get("files")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("files array");
+
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["root"], root_path);
+    assert_eq!(files[0]["path"], "alpha.txt");
 }
