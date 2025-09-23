@@ -633,54 +633,47 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
 const TOOL_CALL_MAX_LINES: usize = 5;
 const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
-#[derive(Debug, Clone, Copy)]
-struct CodexCardLayout {
-    inner_width: usize,
+fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
+    if width < 4 {
+        return None;
+    }
+    let inner_width = std::cmp::min(width.saturating_sub(2) as usize, max_inner_width);
+    Some(inner_width)
 }
 
-impl CodexCardLayout {
-    fn new(width: u16, max_inner_width: usize) -> Option<Self> {
-        if width < 4 {
-            return None;
-        }
-        let inner_width = std::cmp::min(width.saturating_sub(2) as usize, max_inner_width);
-        Some(Self { inner_width })
-    }
+fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let inner_width = lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
 
-    fn inner_width(&self) -> usize {
-        self.inner_width
-    }
+    let mut out = Vec::with_capacity(lines.len() + 2);
+    out.push(vec![Span::from(format!("╭{}╮", "─".repeat(inner_width))).dim()].into());
 
-    fn top_border(&self) -> Line<'static> {
-        vec![Span::from(format!("╭{}╮", "─".repeat(self.inner_width))).dim()].into()
-    }
-
-    fn bottom_border(&self) -> Line<'static> {
-        vec![Span::from(format!("╰{}╯", "─".repeat(self.inner_width))).dim()].into()
-    }
-
-    fn blank_row(&self) -> Line<'static> {
-        self.row(Vec::new())
-    }
-
-    fn row(&self, mut content: Vec<Span<'static>>) -> Line<'static> {
-        let used_width: usize = content
+    for line in lines.into_iter() {
+        let used_width: usize = line
             .iter()
             .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
             .sum();
-
-        if used_width < self.inner_width {
-            let padding = self.inner_width - used_width;
-            content.push(Span::from(" ".repeat(padding)).dim());
+        let span_count = line.spans.len();
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 3);
+        spans.push(Span::from("│").dim());
+        spans.extend(line.into_iter());
+        if used_width < inner_width {
+            spans.push(Span::from(" ".repeat(inner_width - used_width)).dim());
         }
-
-        let mut spans: Vec<Span<'static>> = Vec::with_capacity(content.len() + 2);
         spans.push(Span::from("│").dim());
-        spans.extend(content);
-        spans.push(Span::from("│").dim());
-
-        Line::from(spans)
+        out.push(Line::from(spans));
     }
+
+    out.push(vec![Span::from(format!("╰{}╯", "─".repeat(inner_width))).dim()].into());
+
+    out
 }
 
 fn title_case(s: &str) -> String {
@@ -866,12 +859,20 @@ impl SessionHeaderHistoryCell {
 
 impl HistoryCell for SessionHeaderHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let Some(layout) = CodexCardLayout::new(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
+        let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
             return Vec::new();
         };
 
-        let mut out: Vec<Line<'static>> = Vec::new();
-        out.push(layout.top_border());
+        let make_row = |mut spans: Vec<Span<'static>>| {
+            let used_width: usize = spans
+                .iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum();
+            if used_width < inner_width {
+                spans.push(Span::from(" ".repeat(inner_width - used_width)).dim());
+            }
+            Line::from(spans)
+        };
 
         // Title line rendered inside the box: " >_ OpenAI Codex (vX)"
         let title_spans: Vec<Span<'static>> = vec![
@@ -881,8 +882,6 @@ impl HistoryCell for SessionHeaderHistoryCell {
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];
-        out.push(layout.row(title_spans));
-        out.push(layout.blank_row());
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
@@ -905,19 +904,22 @@ impl HistoryCell for SessionHeaderHistoryCell {
         model_spans.push(Span::from("   ").dim());
         model_spans.push(Span::from(CHANGE_MODEL_HINT_COMMAND).cyan());
         model_spans.push(Span::from(CHANGE_MODEL_HINT_EXPLANATION).dim());
-        out.push(layout.row(model_spans));
 
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!(" {dir_label} ");
         let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
-        let dir_max_width = layout.inner_width().saturating_sub(dir_prefix_width);
+        let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
-        out.push(layout.row(dir_spans));
 
-        out.push(layout.bottom_border());
+        let lines = vec![
+            make_row(title_spans),
+            make_row(Vec::new()),
+            make_row(model_spans),
+            make_row(dir_spans),
+        ];
 
-        out
+        with_border(lines)
     }
 }
 
