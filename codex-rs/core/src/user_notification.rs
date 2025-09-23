@@ -62,9 +62,10 @@ pub(crate) enum UserNotification {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
 
     #[test]
-    fn test_user_notification() {
+    fn test_user_notification() -> Result<()> {
         let notification = UserNotification::AgentTurnComplete {
             turn_id: "12345".to_string(),
             input_messages: vec!["Rename `foo` to `bar` and update the callsites.".to_string()],
@@ -72,10 +73,11 @@ mod tests {
                 "Rename complete and verified `cargo build` succeeds.".to_string(),
             ),
         };
-        let serialized = serde_json::to_string(&notification).unwrap();
+        let serialized = serde_json::to_string(&notification)?;
         assert_eq!(
             serialized,
             r#"{"type":"agent-turn-complete","turn-id":"12345","input-messages":["Rename `foo` to `bar` and update the callsites."],"last-assistant-message":"Rename complete and verified `cargo build` succeeds."}"#
         );
+        Ok(())
     }
 }

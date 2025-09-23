@@ -31,6 +31,7 @@ use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
+use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
@@ -302,6 +303,7 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
+    pub(crate) final_output_json_schema: Option<Value>,
 }
 
 impl TurnContext {
@@ -469,6 +471,7 @@ impl Session {
             shell_environment_policy: config.shell_environment_policy.clone(),
             cwd,
             is_review_mode: false,
+            final_output_json_schema: None,
         };
         let sess = Arc::new(Session {
             conversation_id,
@@ -1237,6 +1240,7 @@ async fn submission_loop(
                     shell_environment_policy: prev.shell_environment_policy.clone(),
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
+                    final_output_json_schema: None,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1271,6 +1275,7 @@ async fn submission_loop(
                 model,
                 effort,
                 summary,
+                final_output_json_schema,
             } => {
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
@@ -1321,6 +1326,7 @@ async fn submission_loop(
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
                         is_review_mode: false,
+                        final_output_json_schema,
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1575,6 +1581,7 @@ async fn spawn_review_thread(
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
+        final_output_json_schema: None,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1941,6 +1948,7 @@ async fn run_turn(
         input,
         tools,
         base_instructions_override: turn_context.base_instructions.clone(),
+        output_schema: turn_context.final_output_json_schema.clone(),
     };
 
     let mut retries = 0;
@@ -3604,6 +3612,7 @@ mod tests {
             shell_environment_policy: config.shell_environment_policy.clone(),
             tools_config,
             is_review_mode: false,
+            final_output_json_schema: None,
         };
         let session = Session {
             conversation_id,
