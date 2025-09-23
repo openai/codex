@@ -793,7 +793,7 @@ impl ChatWidget {
             pending_notification: None,
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
-            ghost_snapshots_disabled: false,
+            ghost_snapshots_disabled: true,
         }
     }
 
@@ -854,7 +854,7 @@ impl ChatWidget {
             pending_notification: None,
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
-            ghost_snapshots_disabled: false,
+            ghost_snapshots_disabled: true,
         }
     }
 
