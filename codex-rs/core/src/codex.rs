@@ -99,7 +99,7 @@ use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
-use crate::protocol::RateLimitSnapshotEvent;
+use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
 use crate::protocol::SandboxPolicy;
@@ -260,7 +260,7 @@ struct State {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
-    latest_rate_limits: Option<RateLimitSnapshotEvent>,
+    latest_rate_limits: Option<RateLimitSnapshot>,
 }
 
 /// Context for an initialized model agent
@@ -750,7 +750,7 @@ impl Session {
         }
     }
 
-    async fn update_rate_limits(&self, new_rate_limits: RateLimitSnapshotEvent) {
+    async fn update_rate_limits(&self, new_rate_limits: RateLimitSnapshot) {
         let mut state = self.state.lock().await;
         state.latest_rate_limits = Some(new_rate_limits);
     }
@@ -1949,9 +1949,20 @@ async fn run_turn(
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
-            Err(e @ (CodexErr::UsageLimitReached(_) | CodexErr::UsageNotIncluded)) => {
-                return Err(e);
+            Err(CodexErr::UsageLimitReached(e)) => {
+                let rate_limits = e.rate_limits.clone();
+                if let Some(rate_limits) = rate_limits {
+                    sess.update_rate_limits(rate_limits).await;
+                    let token_event = sess.get_token_count_event().await;
+                    let event = Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::TokenCount(token_event),
+                    };
+                    sess.send_event(event).await;
+                }
+                return Err(CodexErr::UsageLimitReached(e));
             }
+            Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
