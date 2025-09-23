@@ -650,7 +650,7 @@ fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
                 .sum::<usize>()
         })
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
 
     let mut out = Vec::with_capacity(lines.len() + 2);
     let border_inner_width = content_width + 2;
