@@ -798,7 +798,33 @@ async fn token_count_includes_rate_limits_snapshot() {
         .await
         .unwrap();
 
-    let token_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let first_token_event =
+        wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let rate_limit_only = match first_token_event {
+        EventMsg::TokenCount(ev) => ev,
+        _ => unreachable!(),
+    };
+
+    let rate_limit_json = serde_json::to_value(&rate_limit_only).unwrap();
+    pretty_assertions::assert_eq!(
+        rate_limit_json,
+        json!({
+            "info": null,
+            "rate_limits": {
+                "primary_used_percent": 12.5,
+                "secondary_used_percent": 40.0,
+                "primary_to_secondary_ratio_percent": 75.0,
+                "primary_window_minutes": 10,
+                "secondary_window_minutes": 60
+            }
+        })
+    );
+
+    let token_event = wait_for_event(
+        &codex,
+        |msg| matches!(msg, EventMsg::TokenCount(ev) if ev.info.is_some()),
+    )
+    .await;
     let final_payload = match token_event {
         EventMsg::TokenCount(ev) => ev,
         _ => unreachable!(),
