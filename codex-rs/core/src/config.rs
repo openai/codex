@@ -1531,7 +1531,7 @@ model = "o3"
 model_provider = "openai"
 approval_policy = "on-failure"
 
-[profiles.gpt5]
+[profiles.gpt5_codex]
 model = "gpt-5-codex"
 model_provider = "openai"
 approval_policy = "on-failure"
