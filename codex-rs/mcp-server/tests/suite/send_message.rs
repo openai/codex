@@ -136,7 +136,7 @@ async fn test_send_message_session_not_found() {
         .expect("timeout")
         .expect("init");
 
-    let unknown = ConversationId(uuid::Uuid::new_v4());
+    let unknown = ConversationId::new();
     let req_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id: unknown,

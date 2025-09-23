@@ -3,10 +3,8 @@
 
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 
 // Small helper macro to assert a collection contains an item with a clearer
 // failure message.
@@ -80,7 +78,7 @@ fn basic_insertion_no_wrap() {
     let area = Rect::new(0, 5, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
 
-    let lines = vec![Line::from("first"), Line::from("second")];
+    let lines = vec!["first".into(), "second".into()];
     let buf = scenario.run_insert(lines);
     let rows = scenario.screen_rows_from_bytes(&buf);
     assert_contains!(rows, String::from("first"));
@@ -102,7 +100,7 @@ fn long_token_wraps() {
     let mut scenario = TestScenario::new(20, 6, area);
 
     let long = "A".repeat(45); // > 2 lines at width 20
-    let lines = vec![Line::from(long.clone())];
+    let lines = vec![long.clone().into()];
     let buf = scenario.run_insert(lines);
     let mut parser = vt100::Parser::new(6, 20, 0);
     parser.process(&buf);
@@ -134,7 +132,7 @@ fn emoji_and_cjk() {
     let mut scenario = TestScenario::new(20, 6, area);
 
     let text = String::from("😀😀😀😀😀 你好世界");
-    let lines = vec![Line::from(text.clone())];
+    let lines = vec![text.clone().into()];
     let buf = scenario.run_insert(lines);
     let rows = scenario.screen_rows_from_bytes(&buf);
     let reconstructed: String = rows.join("").chars().filter(|c| *c != ' ').collect();
@@ -151,10 +149,7 @@ fn mixed_ansi_spans() {
     let area = Rect::new(0, 5, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
 
-    let line = Line::from(vec![
-        Span::styled("red", Style::default().fg(Color::Red)),
-        Span::raw("+plain"),
-    ]);
+    let line = vec!["red".red(), "+plain".into()].into();
     let buf = scenario.run_insert(vec![line]);
     let rows = scenario.screen_rows_from_bytes(&buf);
     assert_contains!(rows, String::from("red+plain"));
@@ -165,7 +160,7 @@ fn cursor_restoration() {
     let area = Rect::new(0, 5, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
 
-    let lines = vec![Line::from("x")];
+    let lines = vec!["x".into()];
     let buf = scenario.run_insert(lines);
     let s = String::from_utf8_lossy(&buf);
     // CUP to 1;1 (ANSI: ESC[1;1H)
@@ -187,7 +182,7 @@ fn word_wrap_no_mid_word_split() {
     let mut scenario = TestScenario::new(40, 10, area);
 
     let sample = "Years passed, and Willowmere thrived in peace and friendship. Mira’s herb garden flourished with both ordinary and enchanted plants, and travelers spoke of the kindness of the woman who tended them.";
-    let buf = scenario.run_insert(vec![Line::from(sample)]);
+    let buf = scenario.run_insert(vec![sample.into()]);
     let rows = scenario.screen_rows_from_bytes(&buf);
     let joined = rows.join("\n");
     assert!(
@@ -203,7 +198,7 @@ fn em_dash_and_space_word_wrap() {
     let mut scenario = TestScenario::new(40, 10, area);
 
     let sample = "Mara found an old key on the shore. Curious, she opened a tarnished box half-buried in sand—and inside lay a single, glowing seed.";
-    let buf = scenario.run_insert(vec![Line::from(sample)]);
+    let buf = scenario.run_insert(vec![sample.into()]);
     let rows = scenario.screen_rows_from_bytes(&buf);
     let joined = rows.join("\n");
     assert!(
@@ -218,7 +213,7 @@ fn pre_scroll_region_down() {
     let area = Rect::new(0, 3, 20, 1);
     let mut scenario = TestScenario::new(20, 6, area);
 
-    let lines = vec![Line::from("first"), Line::from("second")];
+    let lines = vec!["first".into(), "second".into()];
     let buf = scenario.run_insert(lines);
     let s = String::from_utf8_lossy(&buf);
     // Expect we limited scroll region to [top+1 .. screen_height] => [4 .. 6] (1-based)

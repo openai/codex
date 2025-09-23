@@ -8,19 +8,19 @@ use std::io::Read;
 use std::path::PathBuf;
 
 pub use cli::Cli;
+use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
-use codex_core::util::is_inside_git_repo;
-use codex_login::AuthManager;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -30,11 +30,14 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
+        command,
         images,
         model: model_cli_arg,
         oss,
@@ -51,8 +54,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_overrides,
     } = cli;
 
-    // Determine the prompt based on CLI arg and/or stdin.
-    let prompt = match prompt {
+    // Determine the prompt source (parent or subcommand) and read from stdin if needed.
+    let prompt_arg = match &command {
+        // Allow prompt before the subcommand by falling back to the parent-level prompt
+        // when the Resume subcommand did not provide its own prompt.
+        Some(ExecCommand::Resume(args)) => args.prompt.clone().or(prompt),
+        None => prompt,
+    };
+
+    let prompt = match prompt_arg {
         Some(p) if p != "-" => p,
         // Either `-` was passed or no positional arg.
         maybe_dash => {
@@ -137,6 +147,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
         model,
+        review_model: None,
         config_profile,
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
@@ -149,7 +160,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_plan_tool: None,
         include_apply_patch_tool: None,
         include_view_image_tool: None,
-        disable_response_storage: oss.then_some(true),
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
     };
@@ -183,20 +193,36 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // is using.
     event_processor.print_config_summary(&config, &prompt);
 
-    if !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf()) {
+    if !skip_git_repo_check && get_git_repo_root(&config.cwd.to_path_buf()).is_none() {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }
 
-    let conversation_manager = ConversationManager::new(AuthManager::shared(
-        config.codex_home.clone(),
-        config.preferred_auth_method,
-    ));
+    let conversation_manager =
+        ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
+
+    // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewConversation {
         conversation_id: _,
         conversation,
         session_configured,
-    } = conversation_manager.new_conversation(config).await?;
+    } = if let Some(ExecCommand::Resume(args)) = command {
+        let resume_path = resolve_resume_path(&config, &args).await?;
+
+        if let Some(path) = resume_path {
+            conversation_manager
+                .resume_conversation_from_rollout(
+                    config.clone(),
+                    path,
+                    AuthManager::shared(config.codex_home.clone()),
+                )
+                .await?
+        } else {
+            conversation_manager.new_conversation(config).await?
+        }
+    } else {
+        conversation_manager.new_conversation(config).await?
+    };
     info!("Codex initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
@@ -280,4 +306,24 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     Ok(())
+}
+
+async fn resolve_resume_path(
+    config: &Config,
+    args: &crate::cli::ResumeArgs,
+) -> anyhow::Result<Option<PathBuf>> {
+    if args.last {
+        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
+            Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
+            Err(e) => {
+                error!("Error listing conversations: {e}");
+                Ok(None)
+            }
+        }
+    } else if let Some(id_str) = args.session_id.as_deref() {
+        let path = find_conversation_path_by_id_str(&config.codex_home, id_str).await?;
+        Ok(path)
+    } else {
+        Ok(None)
+    }
 }

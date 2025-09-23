@@ -20,7 +20,7 @@ CODEX_CLI_ROOT=""
 # Until we start publishing stable GitHub releases, we have to grab the binaries
 # from the GitHub Action that created them. Update the URL below to point to the
 # appropriate workflow run:
-WORKFLOW_URL="https://github.com/openai/codex/actions/runs/16840150768" # rust-v0.20.0-alpha.2
+WORKFLOW_URL="https://github.com/openai/codex/actions/runs/17417194663" # rust-v0.28.0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -87,5 +87,8 @@ zstd -d "$ARTIFACTS_DIR/aarch64-apple-darwin/codex-aarch64-apple-darwin.zst" \
 # x64 Windows
 zstd -d "$ARTIFACTS_DIR/x86_64-pc-windows-msvc/codex-x86_64-pc-windows-msvc.exe.zst" \
     -o "$BIN_DIR/codex-x86_64-pc-windows-msvc.exe"
+# ARM64 Windows
+zstd -d "$ARTIFACTS_DIR/aarch64-pc-windows-msvc/codex-aarch64-pc-windows-msvc.exe.zst" \
+    -o "$BIN_DIR/codex-aarch64-pc-windows-msvc.exe"
 
 echo "Installed native dependencies into $BIN_DIR"

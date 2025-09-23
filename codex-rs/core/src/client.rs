@@ -1,13 +1,18 @@
 use std::io::BufRead;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::AuthManager;
+use crate::auth::CodexAuth;
 use bytes::Bytes;
-use codex_login::AuthManager;
-use codex_login::AuthMode;
+use codex_protocol::mcp_protocol::AuthMode;
+use codex_protocol::mcp_protocol::ConversationId;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
+use regex_lite::Regex;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -17,7 +22,6 @@ use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
 use tracing::warn;
-use uuid::Uuid;
 
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
@@ -28,6 +32,7 @@ use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
+use crate::default_client::create_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::UsageLimitReachedError;
@@ -37,8 +42,9 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
+use crate::protocol::RateLimitSnapshotEvent;
 use crate::protocol::TokenUsage;
-use crate::user_agent::get_codex_user_agent;
+use crate::token_data::PlanType;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -53,10 +59,12 @@ struct ErrorResponse {
 #[derive(Debug, Deserialize)]
 struct Error {
     r#type: Option<String>,
+    #[allow(dead_code)]
+    code: Option<String>,
     message: Option<String>,
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
-    plan_type: Option<String>,
+    plan_type: Option<PlanType>,
     resets_in_seconds: Option<u64>,
 }
 
@@ -66,8 +74,8 @@ pub struct ModelClient {
     auth_manager: Option<Arc<AuthManager>>,
     client: reqwest::Client,
     provider: ModelProviderInfo,
-    session_id: Uuid,
-    effort: ReasoningEffortConfig,
+    conversation_id: ConversationId,
+    effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
 }
 
@@ -76,16 +84,18 @@ impl ModelClient {
         config: Arc<Config>,
         auth_manager: Option<Arc<AuthManager>>,
         provider: ModelProviderInfo,
-        effort: ReasoningEffortConfig,
+        effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
-        session_id: Uuid,
+        conversation_id: ConversationId,
     ) -> Self {
+        let client = create_client();
+
         Self {
             config,
             auth_manager,
-            client: reqwest::Client::new(),
+            client,
             provider,
-            session_id,
+            conversation_id,
             effort,
             summary,
         }
@@ -95,6 +105,12 @@ impl ModelClient {
         self.config
             .model_context_window
             .or_else(|| get_model_info(&self.config.model_family).map(|info| info.context_window))
+    }
+
+    pub fn get_auto_compact_token_limit(&self) -> Option<i64> {
+        self.config.model_auto_compact_token_limit.or_else(|| {
+            get_model_info(&self.config.model_family).and_then(|info| info.auto_compact_token_limit)
+        })
     }
 
     /// Dispatches to either the Responses or Chat implementation depending on
@@ -151,14 +167,6 @@ impl ModelClient {
 
         let auth_manager = self.auth_manager.clone();
 
-        let auth_mode = auth_manager
-            .as_ref()
-            .and_then(|m| m.auth())
-            .as_ref()
-            .map(|a| a.mode);
-
-        let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
-
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
         let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = create_reasoning_param_for_request(
@@ -167,9 +175,7 @@ impl ModelClient {
             self.summary,
         );
 
-        // Request encrypted COT if we are not storing responses,
-        // otherwise reasoning items will be referenced by ID
-        let include: Vec<String> = if !store && reasoning.is_some() {
+        let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             vec![]
@@ -190,6 +196,15 @@ impl ModelClient {
             None
         };
 
+        // In general, we want to explicitly send `store: false` when using the Responses API,
+        // but in practice, the Azure Responses API rejects `store: false`:
+        //
+        // - If store = false and id is sent an error is thrown that ID is not found
+        // - If store = false and id is not sent an error is thrown that ID is required
+        //
+        // For Azure, we send `store: true` and preserve reasoning item IDs.
+        let azure_workaround = self.provider.is_azure_responses_endpoint();
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
@@ -198,12 +213,18 @@ impl ModelClient {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning,
-            store,
+            store: azure_workaround,
             stream: true,
             include,
-            prompt_cache_key: Some(self.session_id.to_string()),
+            prompt_cache_key: Some(self.conversation_id.to_string()),
             text,
         };
+
+        let mut payload_json = serde_json::to_value(&payload)?;
+        if azure_workaround {
+            attach_item_ids(&mut payload_json, &input_with_instructions);
+        }
+        let payload_body = serde_json::to_string(&payload_json)?;
 
         let mut attempt = 0;
         let max_retries = self.provider.request_max_retries();
@@ -217,7 +238,7 @@ impl ModelClient {
             trace!(
                 "POST to {}: {}",
                 self.provider.get_full_url(&auth),
-                serde_json::to_string(&payload)?
+                payload_body.as_str()
             );
 
             let mut req_builder = self
@@ -227,9 +248,11 @@ impl ModelClient {
 
             req_builder = req_builder
                 .header("OpenAI-Beta", "responses=experimental")
-                .header("session_id", self.session_id.to_string())
+                // Send session_id for compatibility.
+                .header("conversation_id", self.conversation_id.to_string())
+                .header("session_id", self.conversation_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
-                .json(&payload);
+                .json(&payload_json);
 
             if let Some(auth) = auth.as_ref()
                 && auth.mode == AuthMode::ChatGPT
@@ -238,17 +261,13 @@ impl ModelClient {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
 
-            let originator = &self.config.responses_originator_header;
-            req_builder = req_builder.header("originator", originator);
-            req_builder = req_builder.header("User-Agent", get_codex_user_agent(Some(originator)));
-
             let res = req_builder.send().await;
             if let Ok(resp) = &res {
                 trace!(
-                    "Response status: {}, request-id: {}",
+                    "Response status: {}, cf-ray: {}",
                     resp.status(),
                     resp.headers()
-                        .get("x-request-id")
+                        .get("cf-ray")
                         .map(|v| v.to_str().unwrap_or_default())
                         .unwrap_or_default()
                 );
@@ -257,6 +276,15 @@ impl ModelClient {
             match res {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+
+                    if let Some(snapshot) = parse_rate_limit_snapshot(resp.headers())
+                        && tx_event
+                            .send(Ok(ResponseEvent::RateLimits(snapshot)))
+                            .await
+                            .is_err()
+                    {
+                        debug!("receiver dropped rate limit snapshot event");
+                    }
 
                     // spawn task to process SSE
                     let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
@@ -310,7 +338,7 @@ impl ModelClient {
                                 // token.
                                 let plan_type = error
                                     .plan_type
-                                    .or_else(|| auth.and_then(|a| a.get_plan_type()));
+                                    .or_else(|| auth.as_ref().and_then(CodexAuth::get_plan_type));
                                 let resets_in_seconds = error.resets_in_seconds;
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
@@ -361,7 +389,7 @@ impl ModelClient {
     }
 
     /// Returns the current reasoning effort setting.
-    pub fn get_reasoning_effort(&self) -> ReasoningEffortConfig {
+    pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         self.effort
     }
 
@@ -406,9 +434,15 @@ impl From<ResponseCompletedUsage> for TokenUsage {
     fn from(val: ResponseCompletedUsage) -> Self {
         TokenUsage {
             input_tokens: val.input_tokens,
-            cached_input_tokens: val.input_tokens_details.map(|d| d.cached_tokens),
+            cached_input_tokens: val
+                .input_tokens_details
+                .map(|d| d.cached_tokens)
+                .unwrap_or(0),
             output_tokens: val.output_tokens,
-            reasoning_output_tokens: val.output_tokens_details.map(|d| d.reasoning_tokens),
+            reasoning_output_tokens: val
+                .output_tokens_details
+                .map(|d| d.reasoning_tokens)
+                .unwrap_or(0),
             total_tokens: val.total_tokens,
         }
     }
@@ -422,6 +456,65 @@ struct ResponseCompletedInputTokensDetails {
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedOutputTokensDetails {
     reasoning_tokens: u64,
+}
+
+fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
+    let Some(input_value) = payload_json.get_mut("input") else {
+        return;
+    };
+    let serde_json::Value::Array(items) = input_value else {
+        return;
+    };
+
+    for (value, item) in items.iter_mut().zip(original_items.iter()) {
+        if let ResponseItem::Reasoning { id, .. }
+        | ResponseItem::Message { id: Some(id), .. }
+        | ResponseItem::WebSearchCall { id: Some(id), .. }
+        | ResponseItem::FunctionCall { id: Some(id), .. }
+        | ResponseItem::LocalShellCall { id: Some(id), .. }
+        | ResponseItem::CustomToolCall { id: Some(id), .. } = item
+        {
+            if id.is_empty() {
+                continue;
+            }
+
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("id".to_string(), Value::String(id.clone()));
+            }
+        }
+    }
+}
+
+fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshotEvent> {
+    let primary_used_percent = parse_header_f64(headers, "x-codex-primary-used-percent")?;
+    let secondary_used_percent = parse_header_f64(headers, "x-codex-secondary-used-percent")?;
+    let primary_to_secondary_ratio_percent =
+        parse_header_f64(headers, "x-codex-primary-over-secondary-limit-percent")?;
+    let primary_window_minutes = parse_header_u64(headers, "x-codex-primary-window-minutes")?;
+    let secondary_window_minutes = parse_header_u64(headers, "x-codex-secondary-window-minutes")?;
+
+    Some(RateLimitSnapshotEvent {
+        primary_used_percent,
+        secondary_used_percent,
+        primary_to_secondary_ratio_percent,
+        primary_window_minutes,
+        secondary_window_minutes,
+    })
+}
+
+fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
+    parse_header_str(headers, name)?
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
+fn parse_header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
+    parse_header_str(headers, name)?.parse::<u64>().ok()
+}
+
+fn parse_header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name)?.to_str().ok()
 }
 
 async fn process_sse<S>(
@@ -564,8 +657,9 @@ async fn process_sse<S>(
                     if let Some(error) = error {
                         match serde_json::from_value::<Error>(error.clone()) {
                             Ok(error) => {
+                                let delay = try_parse_retry_after(&error);
                                 let message = error.message.unwrap_or_default();
-                                response_error = Some(CodexErr::Stream(message, None));
+                                response_error = Some(CodexErr::Stream(message, delay));
                             }
                             Err(e) => {
                                 debug!("failed to parse ErrorResponse: {e}");
@@ -649,6 +743,40 @@ async fn stream_from_fixture(
         provider.stream_idle_timeout(),
     ));
     Ok(ResponseStream { rx_event })
+}
+
+fn rate_limit_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+
+    #[expect(clippy::unwrap_used)]
+    RE.get_or_init(|| Regex::new(r"Please try again in (\d+(?:\.\d+)?)(s|ms)").unwrap())
+}
+
+fn try_parse_retry_after(err: &Error) -> Option<Duration> {
+    if err.code != Some("rate_limit_exceeded".to_string()) {
+        return None;
+    }
+
+    // parse the Please try again in 1.898s format using regex
+    let re = rate_limit_regex();
+    if let Some(message) = &err.message
+        && let Some(captures) = re.captures(message)
+    {
+        let seconds = captures.get(1);
+        let unit = captures.get(2);
+
+        if let (Some(value), Some(unit)) = (seconds, unit) {
+            let value = value.as_str().parse::<f64>().ok()?;
+            let unit = unit.as_str();
+
+            if unit == "s" {
+                return Some(Duration::from_secs_f64(value));
+            } else if unit == "ms" {
+                return Some(Duration::from_millis(value as u64));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -871,7 +999,7 @@ mod tests {
                     msg,
                     "Rate limit reached for gpt-5 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more."
                 );
-                assert_eq!(*delay, None);
+                assert_eq!(*delay, Some(Duration::from_secs_f64(11.054)));
             }
             other => panic!("unexpected second event: {other:?}"),
         }
@@ -974,5 +1102,65 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn test_try_parse_retry_after() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit reached for gpt-5 in organization org- on tokens per min (TPM): Limit 1, Used 1, Requested 19304. Please try again in 28ms. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+            plan_type: None,
+            resets_in_seconds: None
+        };
+
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_millis(28)));
+    }
+
+    #[test]
+    fn test_try_parse_retry_after_no_delay() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit reached for gpt-5 in organization <ORG> on tokens per min (TPM): Limit 30000, Used 6899, Requested 24050. Please try again in 1.898s. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+            plan_type: None,
+            resets_in_seconds: None
+        };
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
+    }
+
+    #[test]
+    fn error_response_deserializes_old_schema_known_plan_type_and_serializes_back() {
+        use crate::token_data::KnownPlan;
+        use crate::token_data::PlanType;
+
+        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_in_seconds":3600}}"#;
+        let resp: ErrorResponse =
+            serde_json::from_str(json).expect("should deserialize old schema");
+
+        assert!(matches!(
+            resp.error.plan_type,
+            Some(PlanType::Known(KnownPlan::Pro))
+        ));
+
+        let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
+        assert_eq!(plan_json, "\"pro\"");
+    }
+
+    #[test]
+    fn error_response_deserializes_old_schema_unknown_plan_type_and_serializes_back() {
+        use crate::token_data::PlanType;
+
+        let json =
+            r#"{"error":{"type":"usage_limit_reached","plan_type":"vip","resets_in_seconds":60}}"#;
+        let resp: ErrorResponse =
+            serde_json::from_str(json).expect("should deserialize old schema");
+
+        assert!(matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip"));
+
+        let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
+        assert_eq!(plan_json, "\"vip\"");
     }
 }

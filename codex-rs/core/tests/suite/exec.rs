@@ -1,6 +1,7 @@
 #![cfg(target_os = "macos")]
 
 use std::collections::HashMap;
+use std::string::ToString;
 
 use codex_core::exec::ExecParams;
 use codex_core::exec::ExecToolCallOutput;
@@ -29,7 +30,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
 
     let params = ExecParams {
-        command: cmd.iter().map(|s| s.to_string()).collect(),
+        command: cmd.iter().map(ToString::to_string).collect(),
         cwd: tmp.path().to_path_buf(),
         timeout_ms: Some(1000),
         env: HashMap::new(),
@@ -39,7 +40,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
 
     let policy = SandboxPolicy::new_read_only_policy();
 
-    process_exec_tool_call(params, sandbox_type, &policy, &None, None).await
+    process_exec_tool_call(params, sandbox_type, &policy, tmp.path(), &None, None).await
 }
 
 /// Command succeeds with exit code 0 normally

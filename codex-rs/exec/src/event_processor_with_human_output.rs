@@ -26,6 +26,7 @@ use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -189,8 +190,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 return CodexStatus::InitiateShutdown;
             }
-            EventMsg::TokenCount(token_usage) => {
-                ts_println!(self, "tokens used: {}", token_usage.blended_total());
+            EventMsg::TokenCount(ev) => {
+                if let Some(usage_info) = ev.info {
+                    ts_println!(
+                        self,
+                        "tokens used: {}",
+                        format_with_separators(usage_info.total_token_usage.blended_total())
+                    );
+                }
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
@@ -273,7 +280,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 parsed_cmd: _,
             }) => {
                 self.call_id_to_command.insert(
-                    call_id.clone(),
+                    call_id,
                     ExecCommandBegin {
                         command: command.clone(),
                     },
@@ -375,7 +382,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Store metadata so we can calculate duration later when we
                 // receive the corresponding PatchApplyEnd event.
                 self.call_id_to_patch.insert(
-                    call_id.clone(),
+                    call_id,
                     PatchApplyBegin {
                         start_time: Instant::now(),
                         auto_approved,
@@ -404,13 +411,16 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                                 println!("{}", line.style(self.green));
                             }
                         }
-                        FileChange::Delete => {
+                        FileChange::Delete { content } => {
                             let header = format!(
                                 "{} {}",
                                 format_file_change(change),
                                 path.to_string_lossy()
                             );
                             println!("{}", header.style(self.magenta));
+                            for line in content.lines() {
+                                println!("{}", line.style(self.red));
+                            }
                         }
                         FileChange::Update {
                             unified_diff,
@@ -508,17 +518,20 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {
-                    session_id,
+                    session_id: conversation_id,
                     model,
+                    reasoning_effort: _,
                     history_log_id: _,
                     history_entry_count: _,
+                    initial_messages: _,
+                    rollout_path: _,
                 } = session_configured_event;
 
                 ts_println!(
                     self,
                     "{} {}",
                     "codex session".style(self.magenta).style(self.bold),
-                    session_id.to_string().style(self.dimmed)
+                    conversation_id.to_string().style(self.dimmed)
                 );
 
                 ts_println!(self, "model: {}", model);
@@ -545,22 +558,28 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 TurnAbortReason::Replaced => {
                     ts_println!(self, "task aborted: replaced by a new task");
                 }
+                TurnAbortReason::ReviewEnded => {
+                    ts_println!(self, "task aborted: review ended");
+                }
             },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
-            EventMsg::ConversationHistory(_) => {}
+            EventMsg::ConversationPath(_) => {}
+            EventMsg::UserMessage(_) => {}
+            EventMsg::EnteredReviewMode(_) => {}
+            EventMsg::ExitedReviewMode(_) => {}
         }
         CodexStatus::Running
     }
 }
 
 fn escape_command(command: &[String]) -> String {
-    try_join(command.iter().map(|s| s.as_str())).unwrap_or_else(|_| command.join(" "))
+    try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
 
 fn format_file_change(change: &FileChange) -> &'static str {
     match change {
         FileChange::Add { .. } => "A",
-        FileChange::Delete => "D",
+        FileChange::Delete { .. } => "D",
         FileChange::Update {
             move_path: Some(_), ..
         } => "R",

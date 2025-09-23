@@ -24,10 +24,7 @@ fn live_001_commit_on_overflow() {
 
     // Keep the last 3 in the live ring; commit the first 2.
     let commit_rows = rb.drain_commit_ready(3);
-    let lines: Vec<Line<'static>> = commit_rows
-        .into_iter()
-        .map(|r| Line::from(r.text))
-        .collect();
+    let lines: Vec<Line<'static>> = commit_rows.into_iter().map(|r| r.text.into()).collect();
 
     let mut buf: Vec<u8> = Vec::new();
     codex_tui::insert_history::insert_history_lines_to_writer(&mut term, &mut buf, lines);
@@ -80,10 +77,7 @@ fn live_002_pre_scroll_and_commit() {
 
     // Keep 3, commit 1.
     let commit_rows = rb.drain_commit_ready(3);
-    let lines: Vec<Line<'static>> = commit_rows
-        .into_iter()
-        .map(|r| Line::from(r.text))
-        .collect();
+    let lines: Vec<Line<'static>> = commit_rows.into_iter().map(|r| r.text.into()).collect();
 
     let mut buf: Vec<u8> = Vec::new();
     codex_tui::insert_history::insert_history_lines_to_writer(&mut term, &mut buf, lines);

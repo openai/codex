@@ -240,11 +240,11 @@ impl TextArea {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.cursor_pos_with_state(area, &TextAreaState::default())
+        self.cursor_pos_with_state(area, TextAreaState::default())
     }
 
     /// Compute the on-screen cursor position taking scrolling into account.
-    pub fn cursor_pos_with_state(&self, area: Rect, state: &TextAreaState) -> Option<(u16, u16)> {
+    pub fn cursor_pos_with_state(&self, area: Rect, state: TextAreaState) -> Option<(u16, u16)> {
         let lines = self.wrapped_lines(area.width);
         let effective_scroll = self.effective_scroll(area.height, &lines, state.scroll);
         let i = Self::wrapped_line_index_by_start(&lines, self.cursor_pos)?;
@@ -414,21 +414,21 @@ impl TextArea {
         let mut start = start;
         while start > 0 {
             let prev = self.prev_atomic_boundary(start);
-            if let Some(ch) = self.text[prev..].chars().next() {
-                if Self::is_word_char(ch) {
-                    start = prev;
-                    continue;
-                }
+            if let Some(ch) = self.text[prev..].chars().next()
+                && Self::is_word_char(ch)
+            {
+                start = prev;
+                continue;
             }
             break;
         }
         let mut end = self.next_atomic_boundary(start);
         while end < self.text.len() {
-            if let Some(ch) = self.text[end..].chars().next() {
-                if Self::is_word_char(ch) {
-                    end = self.next_atomic_boundary(end);
-                    continue;
-                }
+            if let Some(ch) = self.text[end..].chars().next()
+                && Self::is_word_char(ch)
+            {
+                end = self.next_atomic_boundary(end);
+                continue;
             }
             break;
         }
@@ -447,20 +447,19 @@ impl TextArea {
         let mut pos = pos.min(len);
         pos = self.clamp_to_char_boundary(pos);
 
-        if pos < len {
-            if let Some(ch) = self.text[pos..].chars().next() {
-                if Self::is_word_char(ch) {
-                    return Some(self.expand_word_at(pos));
-                }
-            }
+        if pos < len
+            && let Some(ch) = self.text[pos..].chars().next()
+            && Self::is_word_char(ch)
+        {
+            return Some(self.expand_word_at(pos));
         }
 
         if pos > 0 {
             let prev = self.prev_atomic_boundary(pos);
-            if let Some(ch) = self.text[prev..].chars().next() {
-                if Self::is_word_char(ch) {
-                    return Some(self.expand_word_at(prev));
-                }
+            if let Some(ch) = self.text[prev..].chars().next()
+                && Self::is_word_char(ch)
+            {
+                return Some(self.expand_word_at(prev));
             }
         }
 
@@ -470,10 +469,10 @@ impl TextArea {
             if iter >= len {
                 break;
             }
-            if let Some(ch) = self.text[iter..].chars().next() {
-                if Self::is_word_char(ch) {
-                    return Some(self.expand_word_at(iter));
-                }
+            if let Some(ch) = self.text[iter..].chars().next()
+                && Self::is_word_char(ch)
+            {
+                return Some(self.expand_word_at(iter));
             }
         }
         None
@@ -582,7 +581,7 @@ impl TextArea {
         self.vim_replaying_dot = true;
         let cmds = self.vim_last_command.clone();
         for evt in cmds {
-            let _ = self.input(evt);
+            self.input(evt);
         }
         self.vim_replaying_dot = false;
     }
@@ -609,9 +608,11 @@ impl TextArea {
             return;
         }
         let snapshot = self.snapshot();
-        if self.undo_stack.last().map_or(false, |last| {
-            last.text == snapshot.text && last.cursor == snapshot.cursor
-        }) {
+        if self
+            .undo_stack
+            .last()
+            .is_some_and(|last| last.text == snapshot.text && last.cursor == snapshot.cursor)
+        {
             return;
         }
         if self.undo_stack.len() >= Self::UNDO_STACK_LIMIT {
@@ -747,7 +748,7 @@ impl TextArea {
         self.text[pos..]
             .chars()
             .next()
-            .map(|c| c.len_utf8())
+            .map(char::len_utf8)
             .unwrap_or(0)
     }
 
@@ -777,12 +778,12 @@ impl TextArea {
         let mut remaining = count;
         let mut pos = self.prev_atomic_boundary(from);
         while pos >= line_start {
-            if let Some(ch) = self.text[pos..].chars().next() {
-                if ch == target {
-                    remaining = remaining.saturating_sub(1);
-                    if remaining == 0 {
-                        return Some(pos);
-                    }
+            if let Some(ch) = self.text[pos..].chars().next()
+                && ch == target
+            {
+                remaining = remaining.saturating_sub(1);
+                if remaining == 0 {
+                    return Some(pos);
                 }
             }
             if pos == line_start {
@@ -986,40 +987,38 @@ impl TextArea {
                         if self.vim_recording_command {
                             self.push_vim_command_event(event);
                         }
-                        match event {
-                            KeyEvent {
-                                code: KeyCode::Char('w'),
-                                modifiers: KeyModifiers::NONE,
-                                ..
-                            } => {
-                                let range = match obj {
-                                    VimPendingTextObject::Inner => self.vim_inner_word_range(),
-                                    VimPendingTextObject::Around => self.vim_around_word_range(),
-                                };
-                                if let Some((start, end)) = range {
-                                    match self.vim_pending_op.take() {
-                                        Some(VimPendingOperator::Delete) => {
-                                            self.vim_store_range(start, end);
-                                            self.replace_range(start..end, "");
-                                            self.set_cursor(start);
-                                            self.finish_vim_command();
-                                        }
-                                        Some(VimPendingOperator::Change) => {
-                                            self.vim_store_range(start, end);
-                                            self.replace_range(start..end, "");
-                                            self.set_cursor(start);
-                                            self.vim_enter_insert_mode();
-                                        }
-                                        Some(VimPendingOperator::Yank) => {
-                                            self.vim_store_range(start, end);
-                                            self.vim_pending_op = None;
-                                        }
-                                        None => {}
+                        if let KeyEvent {
+                            code: KeyCode::Char('w'),
+                            modifiers: KeyModifiers::NONE,
+                            ..
+                        } = event
+                        {
+                            let range = match obj {
+                                VimPendingTextObject::Inner => self.vim_inner_word_range(),
+                                VimPendingTextObject::Around => self.vim_around_word_range(),
+                            };
+                            if let Some((start, end)) = range {
+                                match self.vim_pending_op.take() {
+                                    Some(VimPendingOperator::Delete) => {
+                                        self.vim_store_range(start, end);
+                                        self.replace_range(start..end, "");
+                                        self.set_cursor(start);
+                                        self.finish_vim_command();
                                     }
+                                    Some(VimPendingOperator::Change) => {
+                                        self.vim_store_range(start, end);
+                                        self.replace_range(start..end, "");
+                                        self.set_cursor(start);
+                                        self.vim_enter_insert_mode();
+                                    }
+                                    Some(VimPendingOperator::Yank) => {
+                                        self.vim_store_range(start, end);
+                                        self.vim_pending_op = None;
+                                    }
+                                    None => {}
                                 }
-                                return;
                             }
-                            _ => {}
+                            return;
                         }
                         self.vim_pending_textobj = None;
                         self.mark_unhandled_vim_key(event);
@@ -1914,7 +1913,6 @@ impl TextArea {
             } => self.delete_backward_word(),
             KeyEvent {
                 code: KeyCode::Backspace,
-                modifiers: KeyModifiers::NONE,
                 ..
             }
             | KeyEvent {
@@ -1922,6 +1920,11 @@ impl TextArea {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => self.delete_backward(1),
+            KeyEvent {
+                code: KeyCode::Delete,
+                modifiers: KeyModifiers::ALT,
+                ..
+            }  => self.delete_forward_word(),
             KeyEvent {
                 code: KeyCode::Delete,
                 ..
@@ -2214,6 +2217,18 @@ impl TextArea {
         self.replace_range(start..self.cursor_pos, "");
     }
 
+    /// Delete text to the right of the cursor using "word" semantics.
+    ///
+    /// Deletes from the current cursor position through the end of the next word as determined
+    /// by `end_of_next_word()`. Any whitespace (including newlines) between the cursor and that
+    /// word is included in the deletion.
+    pub fn delete_forward_word(&mut self) {
+        let end = self.end_of_next_word();
+        if end > self.cursor_pos {
+            self.replace_range(self.cursor_pos..end, "");
+        }
+    }
+
     pub fn kill_to_end_of_line(&mut self) {
         let eol = self.end_of_current_line();
         if self.cursor_pos == eol {
@@ -2415,9 +2430,7 @@ impl TextArea {
     }
 
     fn add_element(&mut self, range: Range<usize>) {
-        let elem = TextElement {
-            range: range.clone(),
-        };
+        let elem = TextElement { range };
         self.elements.push(elem);
         self.elements.sort_by_key(|e| e.range.start);
     }
@@ -2613,7 +2626,7 @@ impl TextArea {
                 offset += 1;
             }
             let pos = (self.cursor_pos + offset).min(self.text.len());
-            return self.adjust_pos_out_of_elements(pos, true);
+            self.adjust_pos_out_of_elements(pos, true)
         } else {
             // Inside a word: skip to its end, then skip following whitespace to next word start.
             // Find end of current word
@@ -2629,7 +2642,7 @@ impl TextArea {
                 Some(non_ws) => after_word + non_ws,
                 None => self.text.len(),
             };
-            return self.adjust_pos_out_of_elements(pos, true);
+            self.adjust_pos_out_of_elements(pos, true)
         }
     }
 
@@ -2656,25 +2669,10 @@ impl TextArea {
                 None => true,
             };
             if needs_recalc {
-                let mut lines: Vec<Range<usize>> = Vec::new();
-                for line in textwrap::wrap(
+                let lines = crate::wrapping::wrap_ranges(
                     &self.text,
                     Options::new(width as usize).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-                )
-                .iter()
-                {
-                    match line {
-                        std::borrow::Cow::Borrowed(slice) => {
-                            let start =
-                                unsafe { slice.as_ptr().offset_from(self.text.as_ptr()) as usize };
-                            let end = start + slice.len();
-                            let trailing_spaces =
-                                self.text[end..].chars().take_while(|c| *c == ' ').count();
-                            lines.push(start..end + trailing_spaces + 1);
-                        }
-                        std::borrow::Cow::Owned(_) => unreachable!(),
-                    }
-                }
+                );
                 *cache = Some(WrapCache { width, lines });
             }
         }
@@ -2943,6 +2941,79 @@ mod tests {
         t.kill_to_beginning_of_line();
         assert_eq!(t.text(), "abcdef");
         assert_eq!(t.cursor(), 3);
+    }
+
+    #[test]
+    fn delete_forward_word_variants() {
+        let mut t = ta_with("hello   world ");
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "   world ");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = ta_with("hello   world ");
+        t.set_cursor(1);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "h   world ");
+        assert_eq!(t.cursor(), 1);
+
+        let mut t = ta_with("hello   world");
+        t.set_cursor(t.text().len());
+        t.delete_forward_word();
+        assert_eq!(t.text(), "hello   world");
+        assert_eq!(t.cursor(), t.text().len());
+
+        let mut t = ta_with("foo   \nbar");
+        t.set_cursor(3);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "foo");
+        assert_eq!(t.cursor(), 3);
+
+        let mut t = ta_with("foo\nbar");
+        t.set_cursor(3);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "foo");
+        assert_eq!(t.cursor(), 3);
+
+        let mut t = ta_with("hello   world ");
+        t.set_cursor(t.text().len() + 10);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "hello   world ");
+        assert_eq!(t.cursor(), t.text().len());
+    }
+
+    #[test]
+    fn delete_forward_word_handles_atomic_elements() {
+        let mut t = TextArea::new();
+        t.insert_element("<element>");
+        t.insert_str(" tail");
+
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), " tail");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = TextArea::new();
+        t.insert_str("   ");
+        t.insert_element("<element>");
+        t.insert_str(" tail");
+
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), " tail");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = TextArea::new();
+        t.insert_str("prefix ");
+        t.insert_element("<element>");
+        t.insert_str(" tail");
+
+        // cursor in the middle of the element, delete_forward_word deletes the element
+        let elem_range = t.elements[0].range.clone();
+        t.cursor_pos = elem_range.start + (elem_range.len() / 2);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "prefix  tail");
+        assert_eq!(t.cursor(), elem_range.start);
     }
 
     #[test]
@@ -3584,6 +3655,21 @@ bar"
     }
 
     #[test]
+    fn delete_forward_word_with_without_alt_modifier() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::ALT));
+        assert_eq!(t.text(), " world");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = ta_with("hello");
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        assert_eq!(t.text(), "ello");
+        assert_eq!(t.cursor(), 0);
+    }
+
+    #[test]
     fn control_h_backspace() {
         // Test Ctrl+H as backspace
         let mut t = ta_with("12345");
@@ -3714,7 +3800,7 @@ bar"
         let mut state = TextAreaState::default();
         let small_area = Rect::new(0, 0, 6, 1);
         // First call: cursor not visible -> effective scroll ensures it is
-        let (_x, y) = t.cursor_pos_with_state(small_area, &state).unwrap();
+        let (_x, y) = t.cursor_pos_with_state(small_area, state).unwrap();
         assert_eq!(y, 0);
 
         // Render with state to update actual scroll value
@@ -3735,7 +3821,7 @@ bar"
         // effective scroll is 0 and the cursor position matches cursor_pos.
         let bad_state = TextAreaState { scroll: 999 };
         let (x1, y1) = t.cursor_pos(area).unwrap();
-        let (x2, y2) = t.cursor_pos_with_state(area, &bad_state).unwrap();
+        let (x2, y2) = t.cursor_pos_with_state(area, bad_state).unwrap();
         assert_eq!((x2, y2), (x1, y1));
 
         // Case 2: Cursor below the current window — y should be clamped to the
@@ -3748,7 +3834,7 @@ bar"
         t.set_cursor(t.text().len().saturating_sub(2));
         let small_area = Rect::new(0, 0, wrap_width, 2);
         let state = TextAreaState { scroll: 0 };
-        let (_x, y) = t.cursor_pos_with_state(small_area, &state).unwrap();
+        let (_x, y) = t.cursor_pos_with_state(small_area, state).unwrap();
         assert_eq!(y, small_area.y + small_area.height - 1);
 
         // Case 3: Cursor above the current window — y should be top row (0)
@@ -3762,7 +3848,7 @@ bar"
         let state = TextAreaState {
             scroll: lines.saturating_mul(2),
         };
-        let (_x, y) = t.cursor_pos_with_state(area, &state).unwrap();
+        let (_x, y) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!(y, area.y);
     }
 
@@ -3786,7 +3872,7 @@ bar"
         // With state and small height, cursor should be visible at row 0, col 0
         let small_area = Rect::new(0, 0, 4, 1);
         let state = TextAreaState::default();
-        let (x, y) = t.cursor_pos_with_state(small_area, &state).unwrap();
+        let (x, y) = t.cursor_pos_with_state(small_area, state).unwrap();
         assert_eq!((x, y), (0, 0));
 
         // Place cursor in the middle of the second wrapped line ("efgh"), at 'g'
@@ -3816,35 +3902,35 @@ bar"
         // Start at beginning
         t.set_cursor(0);
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
-        let (x, y) = t.cursor_pos_with_state(area, &state).unwrap();
+        let (x, y) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x, y), (0, 0));
 
         // Move down to second visual line; should be at bottom row (row 1) within 2-line viewport
         t.move_cursor_down();
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
-        let (x, y) = t.cursor_pos_with_state(area, &state).unwrap();
+        let (x, y) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x, y), (0, 1));
 
         // Move down to third visual line; viewport scrolls and keeps cursor on bottom row
         t.move_cursor_down();
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
-        let (x, y) = t.cursor_pos_with_state(area, &state).unwrap();
+        let (x, y) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x, y), (0, 1));
 
         // Move up to second visual line; with current scroll, it appears on top row
         t.move_cursor_up();
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
-        let (x, y) = t.cursor_pos_with_state(area, &state).unwrap();
+        let (x, y) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x, y), (0, 0));
 
         // Column preservation across moves: set to col 2 on first line, move down
         t.set_cursor(2);
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
-        let (x0, y0) = t.cursor_pos_with_state(area, &state).unwrap();
+        let (x0, y0) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x0, y0), (2, 0));
         t.move_cursor_down();
         ratatui::widgets::StatefulWidgetRef::render_ref(&(&t), area, &mut buf, &mut state);
-        let (x1, y1) = t.cursor_pos_with_state(area, &state).unwrap();
+        let (x1, y1) = t.cursor_pos_with_state(area, state).unwrap();
         assert_eq!((x1, y1), (2, 1));
     }
 
@@ -4102,7 +4188,7 @@ bar"
 
                 // cursor_pos_with_state: always within viewport rows
                 let (_x, _y) = ta
-                    .cursor_pos_with_state(area, &state)
+                    .cursor_pos_with_state(area, state)
                     .unwrap_or((area.x, area.y));
 
                 // Stateful render should not panic, and updates scroll

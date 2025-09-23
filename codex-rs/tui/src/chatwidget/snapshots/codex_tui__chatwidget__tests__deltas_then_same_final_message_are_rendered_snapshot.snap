@@ -2,5 +2,4 @@
 source: tui/src/chatwidget/tests.rs
 expression: combined
 ---
-codex
-Here is the result.
+> Here is the result.

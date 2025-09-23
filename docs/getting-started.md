@@ -10,6 +10,25 @@
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
+### Resuming interactive sessions
+
+- Run `codex resume` to display the session picker UI
+- Resume most recent: `codex resume --last`
+- Resume by id: `codex resume <SESSION_ID>` (You can get session ids from /status or `~/.codex/sessions/`)
+
+Examples:
+
+```shell
+# Open a picker of recent sessions
+codex resume
+
+# Resume the most recent session
+codex resume --last
+
+# Resume a specific session by id
+codex resume 7f9f9a2e-1b3c-4c7a-9b0e-123456789abc
+```
+
 ### Running with a prompt as input
 
 You can also run Codex CLI with a prompt as input:
@@ -28,7 +47,7 @@ they'll be committed to your working directory.
 
 ### Example prompts
 
-Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
+Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task.
 
 | ✨  | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -48,7 +67,7 @@ You can give Codex extra instructions and guidance using `AGENTS.md` files. Code
 2. `AGENTS.md` at repo root - shared project notes
 3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
 
-For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](./agents.md).
+For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](https://agents.md/).
 
 ### Tips & shortcuts
 

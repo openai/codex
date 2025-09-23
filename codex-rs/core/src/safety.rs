@@ -53,6 +53,13 @@ pub fn assess_patch_safety(
         // paths outside the project.
         match get_platform_sandbox() {
             Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
+            None if sandbox_policy == &SandboxPolicy::DangerFullAccess => {
+                // If the user has explicitly requested DangerFullAccess, then
+                // we can auto-approve even without a sandbox.
+                SafetyCheck::AutoApprove {
+                    sandbox_type: SandboxType::None,
+                }
+            }
             None => SafetyCheck::AskUser,
         }
     } else if policy == AskForApproval::Never {
@@ -222,7 +229,7 @@ fn is_write_patch_constrained_to_writable_paths(
 
     for (path, change) in action.changes() {
         match change {
-            ApplyPatchFileChange::Add { .. } | ApplyPatchFileChange::Delete => {
+            ApplyPatchFileChange::Add { .. } | ApplyPatchFileChange::Delete { .. } => {
                 if !is_path_writable(path) {
                     return false;
                 }
@@ -286,7 +293,7 @@ mod tests {
         // With the parent dir explicitly added as a writable root, the
         // outside write should be permitted.
         let policy_with_parent = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![parent.clone()],
+            writable_roots: vec![parent],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

@@ -7,11 +7,11 @@ version = { workspace = true }
 workspace = true
 
 [dependencies]
-clap = { version = "4", features = ["derive", "wrap_help"], optional = true }
-codex-core = { path = "../core" }
-codex-protocol = { path = "../protocol" }
-serde = { version = "1", optional = true }
-toml = { version = "0.9", optional = true }
+clap = { workspace = true, features = ["derive", "wrap_help"], optional = true }
+codex-core = { workspace = true }
+codex-protocol = { workspace = true }
+serde = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
 
 [features]
 # Separate feature so that `clap` is not a mandatory dependency.

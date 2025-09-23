@@ -1,9 +1,9 @@
 ---
 source: tui/src/diff_render.rs
+assertion_line: 765
 expression: terminal.backend()
 ---
-"proposed patch to 1 file (+2 -2)                                                "
-"  └ example.txt                                                                 "
+"• Proposed Change example.txt (+2 -2)                                           "
 "    1      line 1                                                               "
 "    2     -line 2                                                               "
 "    2     +line two changed                                                     "
@@ -17,4 +17,5 @@ expression: terminal.backend()
 "    9     -line 9                                                               "
 "    9     +line nine changed                                                    "
 "    10     line 10                                                              "
+"                                                                                "
 "                                                                                "

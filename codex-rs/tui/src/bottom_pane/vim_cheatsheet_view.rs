@@ -9,7 +9,6 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-use super::BottomPane;
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 
@@ -89,7 +88,7 @@ impl VimCheatsheetView {
 }
 
 impl BottomPaneView for VimCheatsheetView {
-    fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
                 self.complete = true;
@@ -102,7 +101,7 @@ impl BottomPaneView for VimCheatsheetView {
         self.complete
     }
 
-    fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
+    fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.complete = true;
         CancellationEvent::Handled
     }

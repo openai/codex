@@ -18,19 +18,20 @@ const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 
 pub async fn spawn_command_under_seatbelt(
     command: Vec<String>,
+    command_cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
-    cwd: PathBuf,
+    sandbox_policy_cwd: &Path,
     stdio_policy: StdioPolicy,
     mut env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    let args = create_seatbelt_command_args(command, sandbox_policy, &cwd);
+    let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd);
     let arg0 = None;
     env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
     spawn_child_async(
         PathBuf::from(MACOS_PATH_TO_SEATBELT_EXECUTABLE),
         args,
         arg0,
-        cwd,
+        command_cwd,
         sandbox_policy,
         stdio_policy,
         env,
@@ -41,7 +42,7 @@ pub async fn spawn_command_under_seatbelt(
 fn create_seatbelt_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
-    cwd: &Path,
+    sandbox_policy_cwd: &Path,
 ) -> Vec<String> {
     let (file_write_policy, extra_cli_args) = {
         if sandbox_policy.has_full_disk_write_access() {
@@ -51,7 +52,7 @@ fn create_seatbelt_command_args(
                 Vec::<String>::new(),
             )
         } else {
-            let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+            let writable_roots = sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
 
             let mut writable_folder_policies: Vec<String> = Vec::new();
             let mut cli_args: Vec<String> = Vec::new();
@@ -153,7 +154,7 @@ mod tests {
         // Build a policy that only includes the two test roots as writable and
         // does not automatically include defaults TMPDIR or /tmp.
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![root_with_git.clone(), root_without_git.clone()],
+            writable_roots: vec![root_with_git, root_without_git],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -246,23 +247,29 @@ mod tests {
             .and_then(|p| p.canonicalize().ok())
             .map(|p| p.to_string_lossy().to_string());
 
-        let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-            r#" (subpath (param "WRITABLE_ROOT_2"))"#
+        let slash_tmp_canon = PathBuf::from("/tmp")
+            .canonicalize()
+            .expect("canonicalize /tmp");
+        let slash_tmp_git = slash_tmp_canon.join(".git");
+        let slash_tmp_policy = if slash_tmp_git.is_dir() {
+            "(require-all (subpath (param \"WRITABLE_ROOT_1\")) (require-not (subpath (param \"WRITABLE_ROOT_1_RO_0\"))) )"
+                .to_string()
         } else {
-            ""
+            "(subpath (param \"WRITABLE_ROOT_1\"))".to_string()
         };
 
+        let tempdir_policy_entry = tmpdir_env_var.as_deref().map_or_else(
+            || "".to_string(),
+            |_| " (subpath (param \"WRITABLE_ROOT_2\"))".to_string(),
+        );
+
         // Build the expected policy text using a raw string for readability.
-        // Note that the policy includes:
-        // - the base policy,
-        // - read-only access to the filesystem,
-        // - write access to WRITABLE_ROOT_0 (but not its .git) and WRITABLE_ROOT_1.
         let expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) ) {slash_tmp_policy}{tempdir_policy_entry}
 )
 "#,
         );
@@ -278,14 +285,15 @@ mod tests {
                 "-DWRITABLE_ROOT_0_RO_0={}",
                 root_with_git_git_canon.to_string_lossy()
             ),
-            format!(
-                "-DWRITABLE_ROOT_1={}",
-                PathBuf::from("/tmp")
-                    .canonicalize()
-                    .expect("canonicalize /tmp")
-                    .to_string_lossy()
-            ),
+            format!("-DWRITABLE_ROOT_1={}", slash_tmp_canon.to_string_lossy()),
         ];
+
+        if slash_tmp_git.is_dir() {
+            expected_args.push(format!(
+                "-DWRITABLE_ROOT_1_RO_0={}",
+                slash_tmp_git.to_string_lossy()
+            ));
+        }
 
         if let Some(p) = tmpdir_env_var {
             expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
