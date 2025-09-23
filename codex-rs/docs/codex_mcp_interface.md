@@ -51,7 +51,7 @@ Start a new session with optional overrides:
 
 Request `newConversation` params (subset):
 
-- `model`: string model id (e.g. "o3", "gpt-5")
+- `model`: string model id (e.g. "o3", "gpt-5-codex")
 - `profile`: optional named profile
 - `cwd`: optional working directory
 - `approvalPolicy`: `untrusted` | `on-request` | `on-failure` | `never`
@@ -100,13 +100,13 @@ For ChatGPT or API‑key based auth flows, the server exposes helpers:
 ## Example: start and send a message
 
 ```json
-{ "jsonrpc": "2.0", "id": 1, "method": "newConversation", "params": { "model": "gpt-5", "approvalPolicy": "on-request" } }
+{ "jsonrpc": "2.0", "id": 1, "method": "newConversation", "params": { "model": "gpt-5-codex", "approvalPolicy": "on-request" } }
 ```
 
 Server responds:
 
 ```json
-{ "jsonrpc": "2.0", "id": 1, "result": { "conversationId": "c7b0…", "model": "gpt-5", "rolloutPath": "/path/to/rollout.jsonl" } }
+{ "jsonrpc": "2.0", "id": 1, "result": { "conversationId": "c7b0…", "model": "gpt-5-codex", "rolloutPath": "/path/to/rollout.jsonl" } }
 ```
 
 Then send input:
@@ -120,4 +120,3 @@ While processing, the server emits `codex/event` notifications containing agent 
 ## Compatibility and stability
 
 This interface is experimental. Method names, fields, and event shapes may evolve. For the authoritative schema, consult `protocol/src/mcp_protocol.rs` and the corresponding server wiring in `mcp-server/`.
-
