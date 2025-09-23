@@ -275,8 +275,6 @@ pub(crate) struct Session {
     session_manager: ExecSessionManager,
     unified_exec_manager: UnifiedExecSessionManager,
 
-    /// External notifier command (will be passed as args to exec()). When
-    /// `None` this feature is disabled.
     notifier: UserNotifier,
 
     /// Optional rollout recorder for persisting the conversation transcript so
@@ -2816,7 +2814,7 @@ async fn handle_container_exec_with_params(
     let sandbox_type = match safety {
         SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
         SafetyCheck::AskUser => {
-            let decesion = sess
+            let decision = sess
                 .request_command_approval(
                     sub_id.clone(),
                     call_id.clone(),
@@ -2825,7 +2823,7 @@ async fn handle_container_exec_with_params(
                     params.justification.clone(),
                 )
                 .await;
-            match decesion {
+            match decision {
                 ReviewDecision::Approved => (),
                 ReviewDecision::ApprovedForSession => {
                     sess.add_approved_command(params.command.clone()).await;
@@ -2986,7 +2984,7 @@ async fn handle_sandbox_error(
     sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
         .await;
 
-    let decesion = sess
+    let decision = sess
         .request_command_approval(
             sub_id.clone(),
             call_id.clone(),
@@ -2996,7 +2994,7 @@ async fn handle_sandbox_error(
         )
         .await;
 
-    match decesion {
+    match decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
             // Persist this command as pre‑approved for the
             // remainder of the session so future
