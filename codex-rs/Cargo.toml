@@ -9,6 +9,7 @@ members = [
     "exec",
     "execpolicy",
     "file-search",
+    "git-tooling",
     "linux-sandbox",
     "login",
     "mcp-client",
@@ -39,6 +40,7 @@ codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
 codex-file-search = { path = "file-search" }
+codex-git-tooling = { path = "git-tooling" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-login = { path = "login" }
 codex-mcp-client = { path = "mcp-client" }
