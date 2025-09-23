@@ -16,6 +16,7 @@ use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::RateLimitSnapshotEvent;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
@@ -844,6 +845,87 @@ async fn token_count_includes_rate_limits_snapshot() {
     assert_eq!(final_snapshot.primary_used_percent, 12.5);
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn usage_limit_reached_updates_rate_limits() {
+    let server = MockServer::start().await;
+
+    let response = ResponseTemplate::new(429)
+        .insert_header("content-type", "application/json")
+        .insert_header("x-codex-primary-used-percent", "95.5")
+        .insert_header("x-codex-secondary-used-percent", "82.1")
+        .insert_header("x-codex-primary-over-secondary-limit-percent", "100.0")
+        .insert_header("x-codex-primary-window-minutes", "300")
+        .insert_header("x-codex-secondary-window-minutes", "10080")
+        .set_body_json(json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "plan_type": "plus",
+                "resets_in_seconds": 3600
+            }
+        }));
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(response)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut provider = built_in_model_providers()["openai"].clone();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = provider;
+
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("test"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create conversation")
+        .conversation;
+
+    let _submission_id = codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .expect("submission enqueued");
+
+    let mut usage_limit_error: Option<String> = None;
+    let mut latest_snapshot: Option<RateLimitSnapshotEvent> = None;
+    let mut saw_task_complete = false;
+    for _ in 0..10 {
+        let event = wait_for_event(&codex, |_| true).await;
+        match event {
+            EventMsg::Error(err) => usage_limit_error = Some(err.message),
+            EventMsg::TokenCount(ev) => {
+                if ev.rate_limits.is_some() {
+                    latest_snapshot = ev.rate_limits;
+                }
+            }
+            EventMsg::TaskComplete(_) => {
+                saw_task_complete = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let usage_limit_error = usage_limit_error.expect("usage limit error event");
+    assert_eq!(
+        usage_limit_error,
+        "You've hit your usage limit. 5h limit is 96% used; weekly limit is 82% used."
+    );
+
+    let snapshot = latest_snapshot.expect("snapshot propagated to token event");
+    assert_eq!(snapshot.primary_used_percent, 95.5);
+    assert_eq!(snapshot.secondary_used_percent, 82.1);
+    assert!(saw_task_complete, "task completion event observed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

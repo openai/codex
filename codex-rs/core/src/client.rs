@@ -330,6 +330,7 @@ impl ModelClient {
                     }
 
                     if status == StatusCode::TOO_MANY_REQUESTS {
+                        let headers = res.headers().clone();
                         let body = res.json::<ErrorResponse>().await.ok();
                         if let Some(ErrorResponse { error }) = body {
                             if error.r#type.as_deref() == Some("usage_limit_reached") {
@@ -340,9 +341,11 @@ impl ModelClient {
                                     .plan_type
                                     .or_else(|| auth.as_ref().and_then(CodexAuth::get_plan_type));
                                 let resets_in_seconds = error.resets_in_seconds;
+                                let rate_limits = parse_rate_limit_snapshot(&headers);
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
                                     resets_in_seconds,
+                                    rate_limits,
                                 }));
                             } else if error.r#type.as_deref() == Some("usage_not_included") {
                                 return Err(CodexErr::UsageNotIncluded);

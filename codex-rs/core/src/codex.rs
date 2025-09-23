@@ -755,6 +755,12 @@ impl Session {
         state.latest_rate_limits = Some(new_rate_limits);
     }
 
+    async fn update_rate_limits_from_error(&self, rate_limits: Option<RateLimitSnapshotEvent>) {
+        if let Some(snapshot) = rate_limits {
+            self.update_rate_limits(snapshot).await;
+        }
+    }
+
     async fn get_token_count_event(&self) -> TokenCountEvent {
         let state = self.state.lock().await;
         TokenCountEvent {
@@ -1949,7 +1955,19 @@ async fn run_turn(
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
-            Err(e @ (CodexErr::UsageLimitReached(_) | CodexErr::UsageNotIncluded)) => {
+            Err(CodexErr::UsageLimitReached(err)) => {
+                sess.update_rate_limits_from_error(err.rate_limits.clone())
+                    .await;
+                let token_event = sess.get_token_count_event().await;
+                let _ = sess
+                    .send_event(Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::TokenCount(token_event),
+                    })
+                    .await;
+                return Err(CodexErr::UsageLimitReached(err));
+            }
+            Err(e @ CodexErr::UsageNotIncluded) => {
                 return Err(e);
             }
             Err(e) => {

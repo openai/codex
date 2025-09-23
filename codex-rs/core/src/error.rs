@@ -1,4 +1,5 @@
 use crate::exec::ExecToolCallOutput;
+use crate::protocol::RateLimitSnapshotEvent;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -135,10 +136,20 @@ pub enum CodexErr {
 pub struct UsageLimitReachedError {
     pub(crate) plan_type: Option<PlanType>,
     pub(crate) resets_in_seconds: Option<u64>,
+    pub(crate) rate_limits: Option<RateLimitSnapshotEvent>,
 }
 
 impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(snapshot) = &self.rate_limits {
+            let primary = snapshot.primary_used_percent;
+            let secondary = snapshot.secondary_used_percent;
+            return write!(
+                f,
+                "You've hit your usage limit. 5h limit is {primary:.0}% used; weekly limit is {secondary:.0}% used."
+            );
+        }
+
         let message = match self.plan_type.as_ref() {
             Some(PlanType::Known(KnownPlan::Plus)) => format!(
                 "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing){}",
@@ -268,6 +279,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Plus)),
             resets_in_seconds: None,
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
@@ -280,6 +292,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Free)),
             resets_in_seconds: Some(3600),
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
@@ -292,6 +305,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: None,
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
@@ -304,6 +318,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Team)),
             resets_in_seconds: Some(3600),
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
@@ -316,6 +331,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Business)),
             resets_in_seconds: None,
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
@@ -328,6 +344,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Pro)),
             resets_in_seconds: None,
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
@@ -340,6 +357,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: Some(5 * 60),
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
@@ -352,6 +370,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: Some(PlanType::Known(KnownPlan::Plus)),
             resets_in_seconds: Some(3 * 3600 + 32 * 60),
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
@@ -364,6 +383,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: Some(2 * 86_400 + 3 * 3600 + 5 * 60),
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
@@ -376,10 +396,30 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: Some(30),
+            rate_limits: None,
         };
         assert_eq!(
             err.to_string(),
             "You've hit your usage limit. Try again in less than a minute."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_with_rate_limits_snapshot() {
+        let err = UsageLimitReachedError {
+            plan_type: None,
+            resets_in_seconds: None,
+            rate_limits: Some(RateLimitSnapshotEvent {
+                primary_used_percent: 87.3,
+                secondary_used_percent: 42.1,
+                primary_to_secondary_ratio_percent: 0.0,
+                primary_window_minutes: 300,
+                secondary_window_minutes: 1440,
+            }),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. 5h limit is 87% used; weekly limit is 42% used."
         );
     }
 }
