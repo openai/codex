@@ -46,7 +46,6 @@ sha1 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 strum_macros = { workspace = true }
-tempdir = "0.3.7"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = [
