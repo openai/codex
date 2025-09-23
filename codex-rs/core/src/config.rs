@@ -1531,8 +1531,8 @@ model = "o3"
 model_provider = "openai"
 approval_policy = "on-failure"
 
-[profiles.gpt5_codex]
-model = "gpt-5-codex"
+[profiles.gpt5]
+model = "gpt-5"
 model_provider = "openai"
 approval_policy = "on-failure"
 model_reasoning_effort = "high"
@@ -1808,9 +1808,9 @@ model_verbosity = "high"
             fixture.codex_home(),
         )?;
         let expected_gpt5_profile_config = Config {
-            model: "gpt-5-codex".to_string(),
+            model: "gpt-5".to_string(),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-5-codex").expect("known model slug"),
+            model_family: find_family_for_model("gpt-5").expect("known model slug"),
             model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
             model_auto_compact_token_limit: None,
