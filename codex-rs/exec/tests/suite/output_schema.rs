@@ -13,17 +13,17 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let workspace = TempDir::new()?;
 
-    let schema_contents = r#"{
+    let schema_contents = serde_json::json!({
         "type": "object",
         "properties": {
             "answer": { "type": "string" }
         },
         "required": ["answer"],
         "additionalProperties": false
-    }"#;
+    });
     let schema_path = workspace.path().join("schema.json");
-    std::fs::write(&schema_path, schema_contents)?;
-    let expected_schema: Value = serde_json::from_str(schema_contents)?;
+    std::fs::write(&schema_path, serde_json::to_vec_pretty(&schema_contents)?)?;
+    let expected_schema: Value = schema_contents;
 
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
@@ -63,15 +63,14 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
         .get("format")
         .expect("request missing text.format field");
     assert_eq!(
-        format.get("name"),
-        Some(&Value::String("codex_output_schema".into()))
+        format,
+        &serde_json::json!({
+            "name": "codex_output_schema",
+            "type": "json_schema",
+            "strict": true,
+            "schema": expected_schema,
+        })
     );
-    assert_eq!(
-        format.get("type"),
-        Some(&Value::String("json_schema".into()))
-    );
-    assert_eq!(format.get("strict"), Some(&Value::Bool(true)));
-    assert_eq!(format.get("schema"), Some(&expected_schema));
 
     Ok(())
 }

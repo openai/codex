@@ -184,7 +184,7 @@ pub(crate) fn create_text_param_for_request(
     }
 
     Some(TextControls {
-        verbosity: verbosity.map(|v| v.into()),
+        verbosity: verbosity.map(std::convert::Into::into),
         format: output_schema.as_ref().map(|schema| TextFormat {
             r#type: TextFormatType::JsonSchema,
             strict: true,
