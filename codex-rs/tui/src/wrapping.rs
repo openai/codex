@@ -329,6 +329,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
     use ratatui::style::Stylize;
+    use std::string::ToString;
 
     fn concat_line(line: &Line) -> String {
         line.spans
@@ -543,7 +544,7 @@ mod tests {
         let lines = [line];
         // Force small width to exercise wrapping at spaces.
         let wrapped = word_wrap_lines_borrowed(&lines, 40);
-        let joined: String = wrapped.iter().map(|l| l.to_string()).join("\n");
+        let joined: String = wrapped.iter().map(ToString::to_string).join("\n");
         assert_eq!(
             joined,
             r#"Years passed, and Willowmere thrived

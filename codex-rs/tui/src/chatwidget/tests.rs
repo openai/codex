@@ -335,6 +335,8 @@ fn make_chatwidget_manual() -> (
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
+        ghost_snapshots: Vec::new(),
+        ghost_snapshots_disabled: false,
     };
     (widget, rx, op_rx)
 }
@@ -390,33 +392,22 @@ fn rate_limit_warnings_emit_thresholds() {
     warnings.extend(state.take_warnings(95.0, 10.0));
 
     assert_eq!(
-        warnings.len(),
-        6,
-        "expected one warning per threshold per limit"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 50% of your 5h limit.")),
-        "expected hourly 50% warning (new copy)"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 50% of your weekly limit.")),
-        "expected weekly 50% warning (new copy)"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 90% of your 5h limit.")),
-        "expected hourly 90% warning (new copy)"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 90% of your weekly limit.")),
-        "expected weekly 90% warning (new copy)"
+        warnings,
+        vec![
+            String::from(
+                "Heads up, you've used over 75% of your 5h limit. Run /status for a breakdown."
+            ),
+            String::from(
+                "Heads up, you've used over 75% of your weekly limit. Run /status for a breakdown.",
+            ),
+            String::from(
+                "Heads up, you've used over 95% of your 5h limit. Run /status for a breakdown."
+            ),
+            String::from(
+                "Heads up, you've used over 95% of your weekly limit. Run /status for a breakdown.",
+            ),
+        ],
+        "expected one warning per limit for the highest crossed threshold"
     );
 }
 
@@ -1044,7 +1035,10 @@ async fn binary_size_transcript_snapshot() {
                                     call_id: e.call_id.clone(),
                                     command: e.command,
                                     cwd: e.cwd,
-                                    parsed_cmd: parsed_cmd.into_iter().map(|c| c.into()).collect(),
+                                    parsed_cmd: parsed_cmd
+                                        .into_iter()
+                                        .map(std::convert::Into::into)
+                                        .collect(),
                                 }),
                             }
                         }
@@ -1121,7 +1115,7 @@ async fn binary_size_transcript_snapshot() {
         // Trim trailing spaces to match plain text fixture
         lines.push(s.trim_end().to_string());
     }
-    while lines.last().is_some_and(|l| l.is_empty()) {
+    while lines.last().is_some_and(std::string::String::is_empty) {
         lines.pop();
     }
     // Consider content only after the last session banner marker. Skip the transient

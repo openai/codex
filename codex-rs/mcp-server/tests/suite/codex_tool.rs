@@ -173,7 +173,7 @@ fn create_expected_elicitation_request(
 ) -> anyhow::Result<JSONRPCRequest> {
     let expected_message = format!(
         "Allow Codex to run `{}` in `{}`?",
-        shlex::try_join(command.iter().map(|s| s.as_ref()))?,
+        shlex::try_join(command.iter().map(std::convert::AsRef::as_ref))?,
         workdir.to_string_lossy()
     );
     Ok(JSONRPCRequest {
