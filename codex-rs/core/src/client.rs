@@ -185,7 +185,7 @@ impl ModelClient {
 
         // Only include `text.verbosity` for GPT-5 family models
         let text = if self.config.model_family.family == "gpt-5" {
-            create_text_param_for_request(self.config.model_verbosity)
+            create_text_param_for_request(self.config.model_verbosity, &prompt.output_schema)
         } else {
             if self.config.model_verbosity.is_some() {
                 warn!(

@@ -25,6 +25,7 @@ use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
+use serde_json::Value;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -51,6 +52,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
+        output_schema: output_schema_path,
         config_overrides,
     } = cli;
 
@@ -95,6 +97,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             buffer
         }
     };
+
+    let output_schema = load_output_schema(output_schema_path);
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -193,7 +197,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // is using.
     event_processor.print_config_summary(&config, &prompt);
 
-    if !skip_git_repo_check && get_git_repo_root(&config.cwd.to_path_buf()).is_none() {
+    let default_cwd = config.cwd.to_path_buf();
+    let default_approval_policy = config.approval_policy;
+    let default_sandbox_policy = config.sandbox_policy.clone();
+    let default_model = config.model.clone();
+    let default_effort = config.model_reasoning_effort;
+    let default_summary = config.model_reasoning_summary;
+
+    if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }
@@ -288,7 +299,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Send the prompt.
     let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
-    let initial_prompt_task_id = conversation.submit(Op::UserInput { items }).await?;
+    let initial_prompt_task_id = conversation
+        .submit(Op::UserTurn {
+            items,
+            cwd: default_cwd,
+            approval_policy: default_approval_policy,
+            sandbox_policy: default_sandbox_policy,
+            model: default_model,
+            effort: default_effort,
+            summary: default_summary,
+            final_output_json_schema: output_schema,
+        })
+        .await?;
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
 
     // Run the loop until the task is complete.
@@ -325,5 +347,31 @@ async fn resolve_resume_path(
         Ok(path)
     } else {
         Ok(None)
+    }
+}
+
+fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
+    let path = path?;
+
+    let schema_str = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) => {
+            eprintln!(
+                "Failed to read output schema file {}: {err}",
+                path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+
+    match serde_json::from_str::<Value>(&schema_str) {
+        Ok(value) => Some(value),
+        Err(err) => {
+            eprintln!(
+                "Output schema file {} is not valid JSON: {err}",
+                path.display()
+            );
+            std::process::exit(1);
+        }
     }
 }
