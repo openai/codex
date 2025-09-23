@@ -1630,7 +1630,7 @@ fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotEvent>) -> Vec<Li
                 lines.push(build_status_limit_line(&label, percent, label_width));
             }
         }
-        None => lines.push("  • Rate limit data not available yet.".dim().into()),
+        None => lines.push("  • Send a message to load usage data.".into()),
     }
 
     lines
