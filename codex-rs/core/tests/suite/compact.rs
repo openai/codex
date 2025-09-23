@@ -189,8 +189,6 @@ async fn summarize_context_three_requests_and_instructions() {
         }
     }
 
-    println!("{messages:#?}");
-
     // No previous assistant messages should remain and the new user message is present.
     let assistant_count = messages.iter().filter(|(r, _)| r == "assistant").count();
     assert_eq!(assistant_count, 0, "assistant history should be cleared");
