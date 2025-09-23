@@ -654,7 +654,7 @@ fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
 
     let mut out = Vec::with_capacity(lines.len() + 2);
     let border_inner_width = content_width + 2;
-    out.push(vec![Span::from(format!("╭{}╮", "─".repeat(border_inner_width))).dim()].into());
+    out.push(vec![format!("╭{}╮", "─".repeat(border_inner_width)).dim()].into());
 
     for line in lines.into_iter() {
         let used_width: usize = line
@@ -674,7 +674,7 @@ fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
         out.push(Line::from(spans));
     }
 
-    out.push(vec![Span::from(format!("╰{}╯", "─".repeat(border_inner_width))).dim()].into());
+    out.push(vec![format!("╰{}╯", "─".repeat(border_inner_width)).dim()].into());
 
     out
 }
@@ -866,16 +866,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
             return Vec::new();
         };
 
-        let make_row = |mut spans: Vec<Span<'static>>| {
-            let used_width: usize = spans
-                .iter()
-                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-                .sum();
-            if used_width < inner_width {
-                spans.push(Span::from(" ".repeat(inner_width - used_width)).dim());
-            }
-            Line::from(spans)
-        };
+        let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
         // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
         let title_spans: Vec<Span<'static>> = vec![
@@ -903,9 +894,9 @@ impl HistoryCell for SessionHeaderHistoryCell {
             model_spans.push(Span::from(" "));
             model_spans.push(Span::from(reasoning));
         }
-        model_spans.push(Span::from("   ").dim());
-        model_spans.push(Span::from(CHANGE_MODEL_HINT_COMMAND).cyan());
-        model_spans.push(Span::from(CHANGE_MODEL_HINT_EXPLANATION).dim());
+        model_spans.push("   ".dim());
+        model_spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+        model_spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
 
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!("{dir_label} ");
