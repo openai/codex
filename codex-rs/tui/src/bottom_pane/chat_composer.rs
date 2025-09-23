@@ -200,6 +200,34 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn resume_arg_from_line(line: &str) -> Option<&str> {
+        line.trim_start()
+            .strip_prefix("/resume")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    pub(crate) fn handle_resume_with_arg(&mut self, arg: &str) -> (InputResult, bool) {
+        if self.is_task_running {
+            let msg = format!(
+                "'/{}' is disabled while a task is in progress.",
+                SlashCommand::Resume.command()
+            );
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                crate::history_cell::new_error_event(msg),
+            )));
+            return (InputResult::None, true);
+        }
+
+        if arg.eq_ignore_ascii_case("last") {
+            self.app_event_tx.send(AppEvent::ResumeLast);
+        } else {
+            self.app_event_tx
+                .send(AppEvent::ResumeById(arg.to_string()));
+        }
+        (InputResult::None, true)
+    }
+
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
@@ -439,24 +467,9 @@ impl ChatComposer {
 
                     match sel {
                         CommandItem::Builtin(cmd) => {
-                            // Special-case: allow `/resume <SESSION_ID>` in the composer to resume by id directly.
                             if cmd == SlashCommand::Resume {
-                                // Extract everything after the first token `/resume` on the first line.
-                                if let Some(rest) = first_line
-                                    .trim_start()
-                                    .strip_prefix("/resume")
-                                    .map(str::trim)
-                                    && !rest.is_empty()
-                                {
-                                    // Support special `/resume last` to resume the most recent session.
-                                    if rest.eq_ignore_ascii_case("last") {
-                                        self.app_event_tx.send(AppEvent::ResumeLast);
-                                    } else {
-                                        // Forward to App directly; avoid an extra hop through ChatWidget.
-                                        self.app_event_tx
-                                            .send(AppEvent::ResumeById(rest.to_string()));
-                                    }
-                                    return (InputResult::None, true);
+                                if let Some(arg) = Self::resume_arg_from_line(&first_line) {
+                                    return self.handle_resume_with_arg(arg);
                                 }
                             }
                             return (InputResult::Command(cmd), true);
