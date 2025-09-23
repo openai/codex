@@ -736,6 +736,7 @@ impl Session {
 
     async fn update_token_usage_info(
         &self,
+        sub_id: &str,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
@@ -748,11 +749,22 @@ impl Session {
             );
             state.token_info = info;
         }
+        self.send_token_count_event(sub_id).await;
     }
 
-    async fn update_rate_limits(&self, new_rate_limits: RateLimitSnapshot) {
+    async fn update_rate_limits(&self, sub_id: &str, new_rate_limits: RateLimitSnapshot) {
         let mut state = self.state.lock().await;
         state.latest_rate_limits = Some(new_rate_limits);
+        self.send_token_count_event(sub_id).await;
+    }
+
+    async fn send_token_count_event(&self, sub_id: &str) {
+        let token_event = self.get_token_count_event().await;
+        let event = Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::TokenCount(token_event),
+        };
+        self.send_event(event).await;
     }
 
     async fn get_token_count_event(&self) -> TokenCountEvent {
@@ -1952,13 +1964,7 @@ async fn run_turn(
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
-                    sess.update_rate_limits(rate_limits).await;
-                    let token_event = sess.get_token_count_event().await;
-                    let event = Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(token_event),
-                    };
-                    sess.send_event(event).await;
+                    sess.update_rate_limits(&sub_id, rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }
@@ -2135,20 +2141,13 @@ async fn try_run_turn(
             ResponseEvent::RateLimits(snapshot) => {
                 // Update internal state with latest rate limits, but defer sending until
                 // token usage is available to avoid duplicate TokenCount events.
-                sess.update_rate_limits(snapshot).await;
+                sess.update_rate_limits(sub_id, snapshot).await;
             }
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
             } => {
-                sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await;
-                let token_event = sess.get_token_count_event().await;
-                let _ = sess
-                    .send_event(Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(token_event),
-                    })
+                sess.update_token_usage_info(sub_id, turn_context, token_usage.as_ref())
                     .await;
 
                 let unified_diff = turn_diff_tracker.get_unified_diff();
