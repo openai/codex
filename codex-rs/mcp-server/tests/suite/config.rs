@@ -26,7 +26,7 @@ fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     std::fs::write(
         config_toml,
         r#"
-model = "gpt-5"
+model = "gpt-5-codex"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 model_reasoning_summary = "detailed"
@@ -92,7 +92,7 @@ async fn get_config_toml_parses_all_fields() {
                 exclude_tmpdir_env_var: Some(true),
                 exclude_slash_tmp: Some(true),
             }),
-            model: Some("gpt-5".into()),
+            model: Some("gpt-5-codex".into()),
             model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: Some(ReasoningSummary::Detailed),
             model_verbosity: Some(Verbosity::Medium),

@@ -9,6 +9,7 @@ members = [
     "exec",
     "execpolicy",
     "file-search",
+    "git-tooling",
     "linux-sandbox",
     "login",
     "mcp-client",
@@ -39,6 +40,7 @@ codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
 codex-file-search = { path = "file-search" }
+codex-git-tooling = { path = "git-tooling" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-login = { path = "login" }
 codex-mcp-client = { path = "mcp-client" }
@@ -60,6 +62,7 @@ askama = "0.12"
 assert_cmd = "2"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
+async-trait = "0.1.89"
 base64 = "0.22.1"
 bytes = "1.10.1"
 chrono = "0.4.40"
