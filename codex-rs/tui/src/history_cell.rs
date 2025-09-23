@@ -633,6 +633,50 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
 const TOOL_CALL_MAX_LINES: usize = 5;
 const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
+fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
+    if width < 4 {
+        return None;
+    }
+    let inner_width = std::cmp::min(width.saturating_sub(4) as usize, max_inner_width);
+    Some(inner_width)
+}
+
+fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let content_width = lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+
+    let mut out = Vec::with_capacity(lines.len() + 2);
+    let border_inner_width = content_width + 2;
+    out.push(vec![format!("╭{}╮", "─".repeat(border_inner_width)).dim()].into());
+
+    for line in lines.into_iter() {
+        let used_width: usize = line
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum();
+        let span_count = line.spans.len();
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 4);
+        spans.push(Span::from("│ ").dim());
+        spans.extend(line.into_iter());
+        if used_width < content_width {
+            spans.push(Span::from(" ".repeat(content_width - used_width)).dim());
+        }
+        spans.push(Span::from(" │").dim());
+        out.push(Line::from(spans));
+    }
+
+    out.push(vec![format!("╰{}╯", "─".repeat(border_inner_width)).dim()].into());
+
+    out
+}
+
 fn title_case(s: &str) -> String {
     if s.is_empty() {
         return String::new();
@@ -816,46 +860,20 @@ impl SessionHeaderHistoryCell {
 
 impl HistoryCell for SessionHeaderHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut out: Vec<Line<'static>> = Vec::new();
-        if width < 4 {
-            return out;
-        }
+        let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
+            return Vec::new();
+        };
 
-        let inner_width = std::cmp::min(
-            width.saturating_sub(2) as usize,
-            SESSION_HEADER_MAX_INNER_WIDTH,
-        );
-        // Top border without a title on the border
-        let mut top = String::with_capacity(inner_width + 2);
-        top.push('╭');
-        top.push_str(&"─".repeat(inner_width));
-        top.push('╮');
-        out.push(Line::from(top.dim()));
+        let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: " >_ OpenAI Codex (vX)"
-        let title_text = format!(" >_ OpenAI Codex (v{})", self.version);
-        let title_w = UnicodeWidthStr::width(title_text.as_str());
-        let pad_w = inner_width.saturating_sub(title_w);
-        let mut title_spans: Vec<Span<'static>> = vec![
-            Span::from("│").dim(),
-            Span::from(" ").dim(),
+        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
+        let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
             Span::from("OpenAI Codex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];
-        if pad_w > 0 {
-            title_spans.push(Span::from(" ".repeat(pad_w)).dim());
-        }
-        title_spans.push(Span::from("│").dim());
-        out.push(Line::from(title_spans));
 
-        // Spacer row between title and details
-        out.push(Line::from(vec![
-            Span::from(format!("│{}│", " ".repeat(inner_width))).dim(),
-        ]));
-
-        // Model line: " model: <model> <reasoning_label> (change with /model)"
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
         const DIR_LABEL: &str = "directory:";
@@ -866,59 +884,33 @@ impl HistoryCell for SessionHeaderHistoryCell {
             label_width = label_width
         );
         let reasoning_label = self.reasoning_label();
-        let mut model_value_for_width = self.model.clone();
-        if let Some(reasoning) = reasoning_label {
-            model_value_for_width.push(' ');
-            model_value_for_width.push_str(reasoning);
-        }
-        let model_text_for_width_calc = format!(
-            " {model_label} {model_value_for_width}   {CHANGE_MODEL_HINT_COMMAND}{CHANGE_MODEL_HINT_EXPLANATION}",
-        );
-        let model_w = UnicodeWidthStr::width(model_text_for_width_calc.as_str());
-        let pad_w = inner_width.saturating_sub(model_w);
-        let mut spans: Vec<Span<'static>> = vec![
-            Span::from(format!("│ {model_label} ")).dim(),
+        let mut model_spans: Vec<Span<'static>> = vec![
+            Span::from(format!("{model_label} ")).dim(),
             Span::from(self.model.clone()),
         ];
         if let Some(reasoning) = reasoning_label {
-            spans.push(Span::from(" "));
-            spans.push(Span::from(reasoning));
+            model_spans.push(Span::from(" "));
+            model_spans.push(Span::from(reasoning));
         }
-        spans.push(Span::from("   ").dim());
-        spans.push(Span::from(CHANGE_MODEL_HINT_COMMAND).cyan());
-        spans.push(Span::from(CHANGE_MODEL_HINT_EXPLANATION).dim());
-        if pad_w > 0 {
-            spans.push(Span::from(" ".repeat(pad_w)).dim());
-        }
-        spans.push(Span::from("│").dim());
-        out.push(Line::from(spans));
+        model_spans.push("   ".dim());
+        model_spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+        model_spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
 
-        // Directory line: " Directory: <cwd>"
         let dir_label = format!("{DIR_LABEL:<label_width$}");
-        let dir_prefix = format!(" {dir_label} ");
-        let dir_max_width = inner_width.saturating_sub(UnicodeWidthStr::width(dir_prefix.as_str()));
+        let dir_prefix = format!("{dir_label} ");
+        let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
+        let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
         let dir = self.format_directory(Some(dir_max_width));
-        let dir_text = format!(" {dir_label} {dir}");
-        let dir_w = UnicodeWidthStr::width(dir_text.as_str());
-        let pad_w = inner_width.saturating_sub(dir_w);
-        let mut spans: Vec<Span<'static>> = vec![
-            Span::from("│").dim(),
-            Span::from(" ").dim(),
-            Span::from(dir_label).dim(),
-            Span::from(" ").dim(),
-            Span::from(dir),
+        let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
+
+        let lines = vec![
+            make_row(title_spans),
+            make_row(Vec::new()),
+            make_row(model_spans),
+            make_row(dir_spans),
         ];
-        if pad_w > 0 {
-            spans.push(Span::from(" ".repeat(pad_w)).dim());
-        }
-        spans.push(Span::from("│").dim());
-        out.push(Line::from(spans));
 
-        // Bottom border
-        let bottom = format!("╰{}╯", "─".repeat(inner_width));
-        out.push(Line::from(bottom.dim()));
-
-        out
+        with_border(lines)
     }
 }
 
