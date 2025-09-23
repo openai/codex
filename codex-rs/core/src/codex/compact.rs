@@ -18,6 +18,7 @@ use crate::protocol::InputMessageKind;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
+use crate::truncate::truncate_middle;
 use crate::util::backoff;
 use askama::Template;
 use codex_protocol::models::ContentItem;
@@ -28,6 +29,7 @@ use futures::prelude::*;
 
 pub(super) const COMPACT_TRIGGER_TEXT: &str = "Start Summarization";
 const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
+const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 #[derive(Template)]
 #[template(path = "compact/history_bridge.md", escape = "none")]
@@ -248,11 +250,17 @@ pub(crate) fn build_compacted_history(
     summary_text: &str,
 ) -> Vec<ResponseItem> {
     let mut history = initial_context;
-    let user_messages_text = if user_messages.is_empty() {
+    let mut user_messages_text = if user_messages.is_empty() {
         "(none)".to_string()
     } else {
         user_messages.join("\n\n")
     };
+    // Truncate the concatenated prior user messages so the bridge message
+    // stays well under the context window (approx. 4 bytes/token).
+    let max_bytes = COMPACT_USER_MESSAGE_MAX_TOKENS * 4;
+    if user_messages_text.len() > max_bytes {
+        user_messages_text = truncate_middle(&user_messages_text, max_bytes).0;
+    }
     let summary_text = if summary_text.is_empty() {
         "(no summary available)".to_string()
     } else {
@@ -395,5 +403,39 @@ mod tests {
         let collected = collect_user_messages(&items);
 
         assert_eq!(vec!["real user message".to_string()], collected);
+    }
+
+    #[test]
+    fn build_compacted_history_truncates_overlong_user_messages() {
+        // Prepare a very large prior user message so the aggregated
+        // `user_messages_text` exceeds the truncation threshold used by
+        // `build_compacted_history` (80k bytes).
+        let big = "X".repeat(200_000);
+        let history = build_compacted_history(Vec::new(), std::slice::from_ref(&big), "SUMMARY");
+
+        // Expect exactly one bridge message added to history (plus any initial context we provided, which is none).
+        assert_eq!(history.len(), 1);
+
+        // Extract the text content of the bridge message.
+        let bridge_text = match &history[0] {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content_items_to_text(content).unwrap_or_default()
+            }
+            other => panic!("unexpected item in history: {other:?}"),
+        };
+
+        // The bridge should contain the truncation marker and not the full original payload.
+        assert!(
+            bridge_text.contains("tokens truncated"),
+            "expected truncation marker in bridge message"
+        );
+        assert!(
+            !bridge_text.contains(&big),
+            "bridge should not include the full oversized user text"
+        );
+        assert!(
+            bridge_text.contains("SUMMARY"),
+            "bridge should include the provided summary text"
+        );
     }
 }
