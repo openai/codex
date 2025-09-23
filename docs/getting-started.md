@@ -91,6 +91,9 @@ codex -c tui.editor_keymap=vim
 Basics: `Esc` or `Ctrl+[` toggles to Normal mode; `i/I/a/A/o/O` enter Insert; movement `h j k l 0 $ b w e`; edits `x X D`, `dd`, `dw`, `de`. Enter/Shift+Enter behavior for send/newline remains unchanged.
 
 - Runtime toggle: Type `/vim` in the composer and press Enter to switch Vim key bindings on/off without restarting.
+- Quick reference: `/vim cheatsheet` opens a built-in summary of the commands supported in Codex's Vim subset.
+- Subset note: Visual mode, macros, registers, and search (`/`) are intentionally out of scope. Pressing an unsupported Normal-mode key rings the terminal bell and shows an "Unimplemented" toast in the footer.
+- Kill switch: Set the environment variable `CODEX_VIM=0` to disable the Vim keymap regardless of configuration (the cheatsheet remains available).
 - Note on Esc: When the composer is empty, `Esc` primes backtrack (edit‑previous) instead of entering Vim Normal. Use `Ctrl+[` to enter Normal reliably, or type some text first and then press `Esc`.
 
 #### Shell completions

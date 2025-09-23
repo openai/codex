@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::AsRefStr;
 use strum_macros::EnumIter;
@@ -80,4 +81,30 @@ impl SlashCommand {
 /// Return all built-in commands in a Vec paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
     SlashCommand::iter().map(|c| (c.command(), c)).collect()
+}
+
+/// A parsed slash-command invocation containing the command and any whitespace-separated
+/// arguments that followed it on the first line of input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashCommandInvocation {
+    pub command: SlashCommand,
+    pub args: Vec<String>,
+}
+
+impl SlashCommandInvocation {
+    pub fn new(command: SlashCommand, args: Vec<String>) -> Self {
+        Self { command, args }
+    }
+
+    /// Parse an invocation from the provided input string.
+    /// Returns `None` when the string does not start with a known slash command.
+    pub fn parse(input: &str) -> Option<Self> {
+        let first_line = input.lines().next()?.trim();
+        let stripped = first_line.strip_prefix('/')?.trim_start();
+        let mut parts = stripped.split_whitespace();
+        let command_token = parts.next()?;
+        let command = SlashCommand::from_str(command_token).ok()?;
+        let args = parts.map(|s| s.to_string()).collect();
+        Some(Self { command, args })
+    }
 }

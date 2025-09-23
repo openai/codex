@@ -27,7 +27,9 @@ use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+#[cfg(test)]
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandInvocation;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::app_event::AppEvent;
@@ -39,6 +41,7 @@ use crate::clipboard_paste::pasted_image_format;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -52,7 +55,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
-    Command(SlashCommand),
+    Command(SlashCommandInvocation),
     None,
 }
 
@@ -98,6 +101,7 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    toast_message: Option<(String, Instant)>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -137,6 +141,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            toast_message: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -196,6 +201,21 @@ impl ChatComposer {
         });
     }
 
+    pub(crate) fn show_toast(&mut self, message: impl Into<String>) {
+        let text = message.into();
+        self.toast_message = Some((text, Instant::now() + Duration::from_secs(2)));
+    }
+
+    fn active_toast_message(&self) -> Option<&str> {
+        self.toast_message.as_ref().and_then(|(msg, deadline)| {
+            if Instant::now() <= *deadline {
+                Some(msg.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
     /// that the composer can navigate cross-session history.
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
@@ -232,9 +252,9 @@ impl ChatComposer {
         }
         // Explicit paste events should not trigger Enter suppression.
         self.paste_burst.clear_after_explicit_paste();
-            // Keep popup sync consistent with key handling: prefer slash popup; only
-            // sync file popup when slash popup is NOT active.
-            self.sync_command_popup();
+        // Keep popup sync consistent with key handling: prefer slash popup; only
+        // sync file popup when slash popup is NOT active.
+        self.sync_command_popup();
         if matches!(self.active_popup, ActivePopup::Command(_)) {
             self.dismissed_file_popup_token = None;
         } else {
@@ -434,6 +454,7 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
+                    let raw_input = self.textarea.text().to_string();
                     // Clear textarea so no residual text remains.
                     self.textarea.set_text("");
                     // Capture any needed data from popup before clearing it.
@@ -448,7 +469,23 @@ impl ChatComposer {
 
                     match sel {
                         CommandItem::Builtin(cmd) => {
-                            return (InputResult::Command(cmd), true);
+                            let invocation = SlashCommandInvocation::parse(&raw_input)
+                                .unwrap_or_else(|| {
+                                    let args = raw_input
+                                        .lines()
+                                        .next()
+                                        .and_then(|line| line.strip_prefix('/'))
+                                        .map(|rest| {
+                                            rest.trim_start()
+                                                .split_whitespace()
+                                                .skip(1)
+                                                .map(|s| s.to_string())
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    SlashCommandInvocation::new(cmd, args)
+                                });
+                            return (InputResult::Command(invocation), true);
                         }
                         CommandItem::UserPrompt(_) => {
                             if let Some(contents) = prompt_content {
@@ -884,6 +921,7 @@ impl ChatComposer {
                     self.handle_paste(pasted);
                 }
                 self.textarea.input(input);
+                self.handle_unhandled_vim_key();
                 let text_after = self.textarea.text();
                 self.pending_pastes
                     .retain(|(placeholder, _)| text_after.contains(placeholder));
@@ -952,6 +990,7 @@ impl ChatComposer {
 
         // Normal input handling
         self.textarea.input(input);
+        self.handle_unhandled_vim_key();
         let text_after = self.textarea.text();
 
         // Update paste-burst heuristic for plain Char (no Ctrl/Alt) events.
@@ -1003,6 +1042,62 @@ impl ChatComposer {
         }
 
         (InputResult::None, true)
+    }
+
+    fn handle_unhandled_vim_key(&mut self) {
+        if let Some(event) = self.textarea.take_last_unhandled_vim_key() {
+            let label = Self::describe_vim_key_event(event);
+            let message = format!("Unimplemented: {label}");
+            self.show_toast(message);
+            Self::emit_bell();
+            tracing::debug!(?event, "vim: unimplemented normal-mode key");
+        }
+    }
+
+    fn describe_vim_key_event(event: KeyEvent) -> String {
+        let mut modifiers = Vec::new();
+        if event.modifiers.contains(KeyModifiers::CONTROL) {
+            modifiers.push("Ctrl");
+        }
+        if event.modifiers.contains(KeyModifiers::ALT) {
+            modifiers.push("Alt");
+        }
+        if event.modifiers.contains(KeyModifiers::SHIFT) && !matches!(event.code, KeyCode::Char(_))
+        {
+            modifiers.push("Shift");
+        }
+
+        let key = match event.code {
+            KeyCode::Char(c) => c.to_string(),
+            KeyCode::Enter => "Enter".to_string(),
+            KeyCode::Esc => "Esc".to_string(),
+            KeyCode::Tab => "Tab".to_string(),
+            KeyCode::Backspace => "Backspace".to_string(),
+            KeyCode::Left => "Left".to_string(),
+            KeyCode::Right => "Right".to_string(),
+            KeyCode::Up => "Up".to_string(),
+            KeyCode::Down => "Down".to_string(),
+            KeyCode::Home => "Home".to_string(),
+            KeyCode::End => "End".to_string(),
+            KeyCode::PageUp => "PageUp".to_string(),
+            KeyCode::PageDown => "PageDown".to_string(),
+            KeyCode::Delete => "Delete".to_string(),
+            other => format!("{:?}", other),
+        };
+
+        if modifiers.is_empty() {
+            key
+        } else {
+            let mut parts = modifiers;
+            parts.push(key.as_str());
+            parts.join("+")
+        }
+    }
+
+    fn emit_bell() {
+        let mut stdout = io::stdout();
+        let _ = stdout.write_all(b"\x07");
+        let _ = stdout.flush();
     }
 
     /// Attempts to remove an image or paste placeholder if the cursor is at the end of one.
@@ -1233,9 +1328,26 @@ impl ChatComposer {
     }
 
     pub(crate) fn toggle_vim_mode(&mut self) -> bool {
-        let enabled_now = self.textarea.vim_mode_enabled();
-        self.textarea.set_vim_mode_enabled(!enabled_now);
-        !enabled_now
+        let new_state = !self.textarea.vim_mode_enabled();
+        self.textarea.set_vim_mode_enabled(new_state);
+        new_state
+    }
+
+    pub(crate) fn set_vim_mode(&mut self, enabled: bool) -> bool {
+        let already = self.textarea.vim_mode_enabled();
+        if already == enabled {
+            return false;
+        }
+        self.textarea.set_vim_mode_enabled(enabled);
+        true
+    }
+
+    pub(crate) fn vim_mode_enabled(&self) -> bool {
+        self.textarea.vim_mode_enabled()
+    }
+
+    pub(crate) fn vim_mode_state_label(&self) -> Option<String> {
+        self.textarea.vim_mode_state_label()
     }
 }
 
@@ -1285,11 +1397,13 @@ impl WidgetRef for ChatComposer {
 
                 // When Vim keymap is enabled, show the current mode on the footer.
                 if let Some(mode_label) = self.textarea.vim_mode_state_label() {
-                    let mode_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                    let mode_style = Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD);
                     // Prepend: [MODE]  before the other hints
                     let mut with_mode = Vec::with_capacity(hint.len() + 3);
                     with_mode.push(Span::from(" "));
-                    with_mode.push(mode_label.set_style(mode_style));
+                    with_mode.push(Span::styled(mode_label, mode_style));
                     with_mode.push(Span::from("  "));
                     with_mode.extend(hint.into_iter());
                     hint = with_mode;
@@ -1325,6 +1439,17 @@ impl WidgetRef for ChatComposer {
                                 .style(Style::default().add_modifier(Modifier::DIM)),
                         );
                     }
+                }
+
+                if let Some(message) = self.active_toast_message() {
+                    hint.push(Span::from("   "));
+                    hint.push(
+                        Span::from(message.to_string()).style(
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    );
                 }
 
                 Line::from(hint)
@@ -1717,8 +1842,9 @@ mod tests {
         // When a slash command is dispatched, the composer should return a
         // Command result (not submit literal text) and clear its textarea.
         match result {
-            InputResult::Command(cmd) => {
-                assert_eq!(cmd.command(), "init");
+            InputResult::Command(invocation) => {
+                assert_eq!(invocation.command, SlashCommand::Init);
+                assert!(invocation.args.is_empty());
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -1777,8 +1903,9 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         match result {
-            InputResult::Command(cmd) => {
-                assert_eq!(cmd.command(), "mention");
+            InputResult::Command(invocation) => {
+                assert_eq!(invocation.command, SlashCommand::Mention);
+                assert!(invocation.args.is_empty());
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")

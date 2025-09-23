@@ -959,6 +959,17 @@ pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_command_feedback(command: &str, message: impl Into<String>) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(2);
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        format!("/{}", command).magenta(),
+        " ".into(),
+        message.into().into(),
+    ]));
+    PlainHistoryCell { lines }
+}
+
 /// Render a user‑friendly plan update styled like a checkbox todo list.
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
     let UpdatePlanArgs { explanation, plan } = update;
