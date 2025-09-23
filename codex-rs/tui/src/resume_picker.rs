@@ -44,6 +44,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
     let mut state = PickerState::new(codex_home.to_path_buf(), alt.tui.frame_requester());
     state.load_page(None).await?;
     state.request_frame();
+    draw_picker(alt.tui, &state)?;
 
     let mut events = alt.tui.event_stream();
     while let Some(ev) = events.next().await {
