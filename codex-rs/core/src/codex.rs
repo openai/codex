@@ -11,6 +11,7 @@ use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::review_format::format_review_findings_block;
+use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
@@ -186,7 +187,7 @@ impl Codex {
             base_instructions: config.base_instructions.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
-            notify: config.notify.clone(),
+            notify: UserNotifier::new(config.notify.clone()),
             cwd: config.cwd.clone(),
         };
 
@@ -274,9 +275,7 @@ pub(crate) struct Session {
     session_manager: ExecSessionManager,
     unified_exec_manager: UnifiedExecSessionManager,
 
-    /// External notifier command (will be passed as args to exec()). When
-    /// `None` this feature is disabled.
-    notify: Option<Vec<String>>,
+    notifier: UserNotifier,
 
     /// Optional rollout recorder for persisting the conversation transcript so
     /// sessions can be replayed or inspected later.
@@ -335,10 +334,7 @@ struct ConfigureSession {
     /// How to sandbox commands executed in the system
     sandbox_policy: SandboxPolicy,
 
-    /// Optional external notifier command tokens. Present only when the
-    /// client wants the agent to spawn a program after each completed
-    /// turn.
-    notify: Option<Vec<String>>,
+    notify: UserNotifier,
 
     /// Working directory that should be treated as the *root* of the
     /// session. All relative paths supplied by the model as well as the
@@ -480,7 +476,7 @@ impl Session {
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
-            notify,
+            notifier: notify,
             state: Mutex::new(state),
             rollout: Mutex::new(Some(rollout_recorder)),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
@@ -586,7 +582,7 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
-    ) -> oneshot::Receiver<ReviewDecision> {
+    ) -> ReviewDecision {
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
@@ -608,7 +604,7 @@ impl Session {
             }),
         };
         self.send_event(event).await;
-        rx_approve
+        rx_approve.await.unwrap_or_default()
     }
 
     pub async fn request_patch_approval(
@@ -1034,33 +1030,8 @@ impl Session {
         }
     }
 
-    /// Spawn the configured notifier (if any) with the given JSON payload as
-    /// the last argument. Failures are logged but otherwise ignored so that
-    /// notification issues do not interfere with the main workflow.
-    fn maybe_notify(&self, notification: UserNotification) {
-        let Some(notify_command) = &self.notify else {
-            return;
-        };
-
-        if notify_command.is_empty() {
-            return;
-        }
-
-        let Ok(json) = serde_json::to_string(&notification) else {
-            error!("failed to serialise notification payload");
-            return;
-        };
-
-        let mut command = std::process::Command::new(&notify_command[0]);
-        if notify_command.len() > 1 {
-            command.args(&notify_command[1..]);
-        }
-        command.arg(json);
-
-        // Fire-and-forget – we do not wait for completion.
-        if let Err(e) = command.spawn() {
-            warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
-        }
+    pub(crate) fn notifier(&self) -> &UserNotifier {
+        &self.notifier
     }
 }
 
@@ -1883,11 +1854,12 @@ async fn run_task(
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
-                    sess.maybe_notify(UserNotification::AgentTurnComplete {
-                        turn_id: sub_id.clone(),
-                        input_messages: turn_input_messages,
-                        last_assistant_message: last_agent_message.clone(),
-                    });
+                    sess.notifier()
+                        .notify(&UserNotification::AgentTurnComplete {
+                            turn_id: sub_id.clone(),
+                            input_messages: turn_input_messages,
+                            last_assistant_message: last_agent_message.clone(),
+                        });
                     break;
                 }
                 continue;
@@ -2842,7 +2814,7 @@ async fn handle_container_exec_with_params(
     let sandbox_type = match safety {
         SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
         SafetyCheck::AskUser => {
-            let rx_approve = sess
+            let decision = sess
                 .request_command_approval(
                     sub_id.clone(),
                     call_id.clone(),
@@ -2851,7 +2823,7 @@ async fn handle_container_exec_with_params(
                     params.justification.clone(),
                 )
                 .await;
-            match rx_approve.await.unwrap_or_default() {
+            match decision {
                 ReviewDecision::Approved => (),
                 ReviewDecision::ApprovedForSession => {
                     sess.add_approved_command(params.command.clone()).await;
@@ -3012,7 +2984,7 @@ async fn handle_sandbox_error(
     sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
         .await;
 
-    let rx_approve = sess
+    let decision = sess
         .request_command_approval(
             sub_id.clone(),
             call_id.clone(),
@@ -3022,7 +2994,7 @@ async fn handle_sandbox_error(
         )
         .await;
 
-    match rx_approve.await.unwrap_or_default() {
+    match decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
             // Persist this command as pre‑approved for the
             // remainder of the session so future
@@ -3642,7 +3614,7 @@ mod tests {
             mcp_connection_manager: McpConnectionManager::default(),
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
-            notify: None,
+            notifier: UserNotifier::default(),
             rollout: Mutex::new(None),
             state: Mutex::new(State {
                 history: ConversationHistory::new(),
