@@ -13,6 +13,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
+use codex_core::error::CodexErr;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -23,6 +24,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::non_sandbox_test;
 use core_test_support::responses;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
 use serde_json::json;
@@ -844,6 +846,72 @@ async fn token_count_includes_rate_limits_snapshot() {
     assert_eq!(final_snapshot.primary_used_percent, 12.5);
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn usage_limit_error_emits_rate_limit_event() {
+    let server = MockServer::start().await;
+
+    let response = ResponseTemplate::new(429)
+        .insert_header("x-codex-primary-used-percent", "100.0")
+        .insert_header("x-codex-secondary-used-percent", "87.5")
+        .insert_header("x-codex-primary-over-secondary-limit-percent", "95.0")
+        .insert_header("x-codex-primary-window-minutes", "15")
+        .insert_header("x-codex-secondary-window-minutes", "60")
+        .set_body_json(json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "limit reached",
+                "resets_in_seconds": 42,
+                "plan_type": "pro"
+            }
+        }));
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(response)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut builder = test_codex();
+    let codex_fixture = builder
+        .build(&server)
+        .await
+        .expect("build codex conversation");
+    let codex = codex_fixture.codex.clone();
+
+    let expected_limits = json!({
+        "primary_used_percent": 100.0,
+        "secondary_used_percent": 87.5,
+        "primary_to_secondary_ratio_percent": 95.0,
+        "primary_window_minutes": 15,
+        "secondary_window_minutes": 60
+    });
+
+    let err = codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .expect_err("expected usage limit error");
+    assert!(matches!(err, CodexErr::UsageLimitReached(_)));
+
+    let token_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::TokenCount(_))).await;
+    let EventMsg::TokenCount(event) = token_event else {
+        unreachable!();
+    };
+
+    let event_json = serde_json::to_value(&event).expect("serialize token count event");
+    pretty_assertions::assert_eq!(
+        event_json,
+        json!({
+            "info": null,
+            "rate_limits": expected_limits
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

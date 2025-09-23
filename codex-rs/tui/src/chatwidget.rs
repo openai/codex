@@ -357,8 +357,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        self.bottom_pane.set_token_usage(info.clone());
-        self.token_info = info;
+        if info.is_some() {
+            self.bottom_pane.set_token_usage(info.clone());
+            self.token_info = info;
+        }
     }
 
     fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
