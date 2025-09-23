@@ -1175,7 +1175,13 @@ pub(crate) fn new_status_output(
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
     let auth_file = get_auth_file(&config.codex_home);
-    if let Ok(auth) = try_read_auth_json(&auth_file)
+    let auth = try_read_auth_json(&auth_file).ok();
+    let is_chatgpt_auth = auth
+        .as_ref()
+        .and_then(|auth| auth.tokens.as_ref())
+        .is_some();
+    if is_chatgpt_auth
+        && let Some(auth) = auth.as_ref()
         && let Some(tokens) = auth.tokens.clone()
     {
         lines.push(vec![padded_emoji("👤").into(), "Account".bold()].into());
@@ -1251,8 +1257,10 @@ pub(crate) fn new_status_output(
         format_with_separators(usage.blended_total()).into(),
     ]));
 
-    lines.push("".into());
-    lines.extend(build_status_limit_lines(rate_limits));
+    if is_chatgpt_auth {
+        lines.push("".into());
+        lines.extend(build_status_limit_lines(rate_limits));
+    }
 
     PlainHistoryCell { lines }
 }
@@ -1630,7 +1638,7 @@ fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotEvent>) -> Vec<Li
                 lines.push(build_status_limit_line(&label, percent, label_width));
             }
         }
-        None => lines.push("  • Rate limit data not available yet.".dim().into()),
+        None => lines.push("  • Send a message to load usage data.".into()),
     }
 
     lines
