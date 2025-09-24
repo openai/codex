@@ -595,7 +595,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
- "once_cell",
  "pretty_assertions",
  "similar",
  "tempfile",
@@ -956,7 +955,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
- "once_cell",
  "path-clean",
  "pathdiff",
  "pretty_assertions",
