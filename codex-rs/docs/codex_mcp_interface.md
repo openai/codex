@@ -51,7 +51,7 @@ Start a new session with optional overrides:
 
 Request `newConversation` params (subset):
 
-- `model`: string model id (e.g. "o3", "gpt-5")
+- `model`: string model id (e.g. "o3", "gpt-5", "gpt-5-codex")
 - `profile`: optional named profile
 - `cwd`: optional working directory
 - `approvalPolicy`: `untrusted` | `on-request` | `on-failure` | `never`
@@ -120,4 +120,3 @@ While processing, the server emits `codex/event` notifications containing agent 
 ## Compatibility and stability
 
 This interface is experimental. Method names, fields, and event shapes may evolve. For the authoritative schema, consult `protocol/src/mcp_protocol.rs` and the corresponding server wiring in `mcp-server/`.
-

@@ -19,6 +19,7 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use core_test_support::non_sandbox_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -37,7 +38,6 @@ use std::sync::atomic::Ordering;
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
 pub(super) const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
-pub(super) const SUMMARIZE_TRIGGER: &str = "Start Summarization";
 const THIRD_USER_MSG: &str = "next turn";
 const AUTO_SUMMARY_TEXT: &str = "AUTO_SUMMARY";
 const FIRST_AUTO_MSG: &str = "token limit start";
@@ -77,13 +77,13 @@ async fn summarize_context_three_requests_and_instructions() {
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"")
-            && !body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
+            && !body.contains("You have exceeded the maximum number of tokens")
     };
     mount_sse_once(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
+        body.contains("You have exceeded the maximum number of tokens")
     };
     mount_sse_once(&server, second_matcher, sse2).await;
 
@@ -121,7 +121,7 @@ async fn summarize_context_three_requests_and_instructions() {
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // 2) Summarize – second hit with summarization instructions.
+    // 2) Summarize – second hit should include the summarization prompt.
     codex.submit(Op::Compact).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
@@ -148,16 +148,12 @@ async fn summarize_context_three_requests_and_instructions() {
     let body2 = req2.body_json::<serde_json::Value>().unwrap();
     let body3 = req3.body_json::<serde_json::Value>().unwrap();
 
-    // System instructions should change for the summarization turn.
+    // Manual compact should keep the baseline developer instructions.
     let instr1 = body1.get("instructions").and_then(|v| v.as_str()).unwrap();
     let instr2 = body2.get("instructions").and_then(|v| v.as_str()).unwrap();
-    assert_ne!(
+    assert_eq!(
         instr1, instr2,
-        "summarization should override base instructions"
-    );
-    assert!(
-        instr2.contains("You have exceeded the maximum number of tokens"),
-        "summarization instructions not applied"
+        "manual compact should keep the standard developer instructions"
     );
 
     // The summarization request should include the injected user input marker.
@@ -167,14 +163,14 @@ async fn summarize_context_three_requests_and_instructions() {
     assert_eq!(last2.get("type").unwrap().as_str().unwrap(), "message");
     assert_eq!(last2.get("role").unwrap().as_str().unwrap(), "user");
     let text2 = last2["content"][0]["text"].as_str().unwrap();
-    assert!(
-        text2.contains(SUMMARIZE_TRIGGER),
+    assert_eq!(
+        text2, SUMMARIZATION_PROMPT,
         "expected summarize trigger, got `{text2}`"
     );
 
     // Third request must contain the refreshed instructions, bridge summary message and new user msg.
     let input3 = body3.get("input").and_then(|v| v.as_array()).unwrap();
-    println!("third request body: {body3}");
+
     assert!(
         input3.len() >= 3,
         "expected refreshed context and new user message in third request"
@@ -215,13 +211,13 @@ async fn summarize_context_three_requests_and_instructions() {
         "bridge should capture earlier user messages"
     );
     assert!(
-        !bridge_text.contains(SUMMARIZE_TRIGGER),
+        !bridge_text.contains(SUMMARIZATION_PROMPT),
         "bridge text should not echo the summarize trigger"
     );
     assert!(
         !messages
             .iter()
-            .any(|(_, text)| text.contains(SUMMARIZE_TRIGGER)),
+            .any(|(_, text)| text.contains(SUMMARIZATION_PROMPT)),
         "third request should not include the summarize trigger"
     );
 
@@ -395,6 +391,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         "auto compact should add a third request"
     );
 
+    let body_first = requests[0].body_json::<serde_json::Value>().unwrap();
     let body3 = requests[auto_compact_index]
         .body_json::<serde_json::Value>()
         .unwrap();
@@ -402,9 +399,32 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .get("instructions")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    assert!(
-        instructions.contains("You have exceeded the maximum number of tokens"),
-        "auto compact should reuse summarization instructions"
+    let baseline_instructions = body_first
+        .get("instructions")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(
+        instructions, baseline_instructions,
+        "auto compact should keep the standard developer instructions",
+    );
+
+    let input3 = body3.get("input").and_then(|v| v.as_array()).unwrap();
+    let last3 = input3
+        .last()
+        .expect("auto compact request should append a user message");
+    assert_eq!(last3.get("type").and_then(|v| v.as_str()), Some("message"));
+    assert_eq!(last3.get("role").and_then(|v| v.as_str()), Some("user"));
+    let last_text = last3
+        .get("content")
+        .and_then(|v| v.as_array())
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("text"))
+        .and_then(|text| text.as_str())
+        .unwrap_or_default();
+    assert_eq!(
+        last_text, SUMMARIZATION_PROMPT,
+        "auto compact should send the summarization prompt as a user message",
     );
 }
 
@@ -635,13 +655,25 @@ async fn auto_compact_stops_after_failed_attempt() {
     );
 
     let last_body = requests[2].body_json::<serde_json::Value>().unwrap();
-    let instructions = last_body
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+    let input = last_body
+        .get("input")
+        .and_then(|v| v.as_array())
+        .unwrap_or_else(|| panic!("unexpected request format: {last_body}"));
+    let contains_prompt = input.iter().any(|item| {
+        item.get("type").and_then(|v| v.as_str()) == Some("message")
+            && item.get("role").and_then(|v| v.as_str()) == Some("user")
+            && item
+                .get("content")
+                .and_then(|v| v.as_array())
+                .and_then(|items| items.first())
+                .and_then(|entry| entry.get("text"))
+                .and_then(|text| text.as_str())
+                .map(|text| text == SUMMARIZATION_PROMPT)
+                .unwrap_or(false)
+    });
     assert!(
-        !instructions.contains("You have exceeded the maximum number of tokens"),
-        "third request should be the follow-up turn, not another summarization"
+        !contains_prompt,
+        "third request should be the follow-up turn, not another summarization",
     );
 }
 
@@ -785,7 +817,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     );
     assert!(
         request_bodies[1].contains("You have exceeded the maximum number of tokens"),
-        "first auto compact request should use summarization instructions"
+        "first auto compact request should include the summarization prompt"
     );
     assert!(
         request_bodies[3].contains(&format!("unsupported call: {DUMMY_FUNCTION_NAME}")),
@@ -793,6 +825,6 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     );
     assert!(
         request_bodies[4].contains("You have exceeded the maximum number of tokens"),
-        "second auto compact request should reuse summarization instructions"
+        "second auto compact request should include the summarization prompt"
     );
 }
