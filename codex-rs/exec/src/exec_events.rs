@@ -46,7 +46,7 @@ pub enum ConversationItemDetails {
     AssistantMessage(AssistantMessageItem),
     Reasoning(ReasoningItem),
     CommandExecution(CommandExecutionItem),
-    PatchApply(FileUpdateItem),
+    FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
     WebSearch(WebSearchItem),
     Error(ErrorItem),
@@ -95,10 +95,18 @@ pub struct FileUpdateChange {
     pub kind: PatchChangeKind,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchApplyStatus {
+    Completed,
+    Failed,
+}
+
 /// Patch application payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FileUpdateItem {
+pub struct FileChangeItem {
     pub changes: Vec<FileUpdateChange>,
+    pub status: PatchApplyStatus,
 }
 
 /// Known change kinds for a patch.

@@ -10,7 +10,11 @@ use crate::exec_events::ConversationErrorEvent;
 use crate::exec_events::ConversationEvent;
 use crate::exec_events::ConversationItem;
 use crate::exec_events::ConversationItemDetails;
+use crate::exec_events::FileChangeItem;
+use crate::exec_events::FileUpdateChange;
 use crate::exec_events::ItemCompletedEvent;
+use crate::exec_events::PatchApplyStatus;
+use crate::exec_events::PatchChangeKind;
 use crate::exec_events::ReasoningItem;
 use crate::exec_events::SessionCreatedEvent;
 use codex_core::config::Config;
@@ -20,6 +24,9 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::FileChange;
+use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 
@@ -27,6 +34,7 @@ pub(crate) struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_event_id: u64,
     running_command: Option<Vec<String>>,
+    running_patch_apply: Option<PatchApplyBeginEvent>,
 }
 
 impl EventProcessorWithJsonOutput {
@@ -35,6 +43,7 @@ impl EventProcessorWithJsonOutput {
             last_message_path,
             next_event_id: 0,
             running_command: None,
+            running_patch_apply: None,
         }
     }
 
@@ -45,6 +54,8 @@ impl EventProcessorWithJsonOutput {
             EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
             EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),
             EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
+            EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
+            EventMsg::PatchApplyEnd(ev) => self.handle_patch_apply_end(ev),
             EventMsg::Error(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
                 message: ev.message.clone(),
             })],
@@ -99,6 +110,51 @@ impl EventProcessorWithJsonOutput {
     }
     fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ConversationEvent> {
         self.running_command = Some(ev.command.clone());
+
+        Vec::new()
+    }
+
+    fn handle_patch_apply_begin(&mut self, ev: &PatchApplyBeginEvent) -> Vec<ConversationEvent> {
+        self.running_patch_apply = Some(ev.clone());
+
+        Vec::new()
+    }
+
+    fn map_change_kind(&self, kind: &FileChange) -> PatchChangeKind {
+        match kind {
+            FileChange::Add { .. } => PatchChangeKind::Add,
+            FileChange::Delete { .. } => PatchChangeKind::Delete,
+            FileChange::Update { .. } => PatchChangeKind::Update,
+        }
+    }
+
+    fn handle_patch_apply_end(&mut self, ev: &PatchApplyEndEvent) -> Vec<ConversationEvent> {
+        if let Some(running_patch_apply) = self.running_patch_apply.take() {
+            let status = if ev.success {
+                PatchApplyStatus::Completed
+            } else {
+                PatchApplyStatus::Failed
+            };
+            let item = ConversationItem {
+                id: self.get_next_item_id(),
+
+                details: ConversationItemDetails::FileChange(FileChangeItem {
+                    changes: running_patch_apply
+                        .changes
+                        .iter()
+                        .map(|(path, change)| FileUpdateChange {
+                            path: path.to_str().unwrap_or("").to_string(),
+                            kind: self.map_change_kind(change),
+                        })
+                        .collect(),
+                    status,
+                }),
+            };
+
+            return vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
+                item,
+            })];
+        }
 
         Vec::new()
     }

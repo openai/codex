@@ -214,3 +214,139 @@ fn exec_command_end_failure_produces_failed_command_item() {
         })]
     );
 }
+
+#[test]
+fn patch_apply_success_produces_item_completed_patchapply() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+
+    // Prepare a patch with multiple kinds of changes
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        PathBuf::from("a/added.txt"),
+        FileChange::Add {
+            content: "+hello".to_string(),
+        },
+    );
+    changes.insert(
+        PathBuf::from("b/deleted.txt"),
+        FileChange::Delete {
+            content: "-goodbye".to_string(),
+        },
+    );
+    changes.insert(
+        PathBuf::from("c/modified.txt"),
+        FileChange::Update {
+            unified_diff: "--- c/modified.txt\n+++ c/modified.txt\n@@\n-old\n+new\n".to_string(),
+            move_path: Some(PathBuf::from("c/renamed.txt")),
+        },
+    );
+
+    // Begin -> no output
+    let begin = event(
+        "p1",
+        EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "call-1".to_string(),
+            auto_approved: true,
+            changes: changes.clone(),
+        }),
+    );
+    let out_begin = ep.collect_conversation_events(&begin);
+    assert!(out_begin.is_empty());
+
+    // End (success) -> item.completed (itm_0)
+    let end = event(
+        "p2",
+        EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+            call_id: "call-1".to_string(),
+            stdout: "applied 3 changes".to_string(),
+            stderr: String::new(),
+            success: true,
+        }),
+    );
+    let out_end = ep.collect_conversation_events(&end);
+    assert_eq!(out_end.len(), 1);
+
+    // Validate structure without relying on HashMap iteration order
+    match &out_end[0] {
+        ConversationEvent::ItemCompleted(ItemCompletedEvent { item }) => {
+            assert_eq!(&item.id, "itm_0");
+            match &item.details {
+                ConversationItemDetails::FileChange(file_update) => {
+                    assert_eq!(file_update.status, PatchApplyStatus::Completed);
+
+                    let mut actual: Vec<(String, PatchChangeKind)> = file_update
+                        .changes
+                        .iter()
+                        .map(|c| (c.path.clone(), c.kind.clone()))
+                        .collect();
+                    actual.sort_by(|a, b| a.0.cmp(&b.0));
+
+                    let mut expected = vec![
+                        ("a/added.txt".to_string(), PatchChangeKind::Add),
+                        ("b/deleted.txt".to_string(), PatchChangeKind::Delete),
+                        ("c/modified.txt".to_string(), PatchChangeKind::Update),
+                    ];
+                    expected.sort_by(|a, b| a.0.cmp(&b.0));
+
+                    assert_eq!(actual, expected);
+                }
+                other => panic!("unexpected details: {:?}", other),
+            }
+        }
+        other => panic!("unexpected event: {:?}", other),
+    }
+}
+
+#[test]
+fn patch_apply_failure_produces_item_completed_patchapply_failed() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        PathBuf::from("file.txt"),
+        FileChange::Update {
+            unified_diff: "--- file.txt\n+++ file.txt\n@@\n-old\n+new\n".to_string(),
+            move_path: None,
+        },
+    );
+
+    // Begin -> no output
+    let begin = event(
+        "p1",
+        EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "call-2".to_string(),
+            auto_approved: false,
+            changes: changes.clone(),
+        }),
+    );
+    assert!(ep.collect_conversation_events(&begin).is_empty());
+
+    // End (failure) -> item.completed (itm_0) with Failed status
+    let end = event(
+        "p2",
+        EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+            call_id: "call-2".to_string(),
+            stdout: String::new(),
+            stderr: "failed to apply".to_string(),
+            success: false,
+        }),
+    );
+    let out_end = ep.collect_conversation_events(&end);
+    assert_eq!(out_end.len(), 1);
+
+    match &out_end[0] {
+        ConversationEvent::ItemCompleted(ItemCompletedEvent { item }) => {
+            assert_eq!(&item.id, "itm_0");
+            match &item.details {
+                ConversationItemDetails::FileChange(file_update) => {
+                    assert_eq!(file_update.status, PatchApplyStatus::Failed);
+                    assert_eq!(file_update.changes.len(), 1);
+                    assert_eq!(file_update.changes[0].path, "file.txt".to_string());
+                    assert_eq!(file_update.changes[0].kind, PatchChangeKind::Update);
+                }
+                other => panic!("unexpected details: {:?}", other),
+            }
+        }
+        other => panic!("unexpected event: {:?}", other),
+    }
+}
