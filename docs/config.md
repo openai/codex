@@ -656,3 +656,5 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
 | `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |
+
+> To temporarily disable the `/edit` external editor integration in the TUI, set the environment variable `CODEX_EDIT_DISABLE=1` before launching Codex. This hides the slash command and ignores the `Ctrl+E` shortcut.

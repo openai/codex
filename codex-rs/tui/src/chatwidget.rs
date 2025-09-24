@@ -70,6 +70,10 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
+use crate::external_editor::ExternalEditorRequest;
+use crate::external_editor::ExternalEditorResponse;
+use crate::external_editor::external_editor_is_enabled;
+use crate::external_editor::run_external_editor_with_hook;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
@@ -79,6 +83,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandInvocation;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
@@ -217,6 +222,7 @@ pub(crate) struct ChatWidget {
     // List of ghost commits corresponding to each turn.
     ghost_snapshots: Vec<GhostCommit>,
     ghost_snapshots_disabled: bool,
+    external_edit_in_progress: bool,
 }
 
 struct UserMessage {
@@ -377,6 +383,157 @@ impl ChatWidget {
                 self.request_redraw();
             }
         }
+    }
+
+    fn handle_edit_command(&mut self, invocation: SlashCommandInvocation) {
+        if !external_editor_is_enabled() {
+            self.add_to_history(history_cell::new_error_event(
+                "External editor is disabled via CODEX_EDIT_DISABLE.".to_string(),
+            ));
+            self.request_redraw();
+            return;
+        }
+
+        if self.external_edit_in_progress {
+            self.add_to_history(history_cell::new_error_event(
+                "An external edit is already in progress.".to_string(),
+            ));
+            self.request_redraw();
+            return;
+        }
+
+        let options = match EditCommandOptions::parse(&invocation) {
+            Ok(opts) => opts,
+            Err(err) => {
+                self.add_to_history(history_cell::new_error_event(err));
+                self.request_redraw();
+                return;
+            }
+        };
+
+        let current_text = self.bottom_pane.composer_text();
+        let initial_text = if options.new_buffer {
+            ""
+        } else {
+            current_text.as_str()
+        };
+
+        let cwd_path = self.config.cwd.clone();
+        let request = ExternalEditorRequest {
+            initial_text,
+            working_directory: cwd_path.as_path(),
+            keep_file: options.keep_file,
+        };
+
+        let mut launch_notified = false;
+        self.external_edit_in_progress = true;
+        self.bottom_pane
+            .set_external_busy(Some("Opening external editor…".to_string()));
+        let result = run_external_editor_with_hook(request, |label, command| {
+            let hint = if command.is_empty() {
+                None
+            } else {
+                Some(command.to_string())
+            };
+            let message = if launch_notified {
+                format!("Retrying external editor ({label})…")
+            } else {
+                format!("Opening external editor ({label})…")
+            };
+            launch_notified = true;
+            self.bottom_pane
+                .set_external_busy(Some(format!("Opening external editor ({label})…")));
+            self.add_to_history(history_cell::new_info_event(message, hint));
+            self.request_redraw();
+        });
+        self.external_edit_in_progress = false;
+        self.bottom_pane.set_external_busy(None);
+
+        match result {
+            Ok(response) => {
+                let normalized_current = normalize_newlines(&current_text);
+
+                if let Some(new_text) = response.edited_text.as_ref() {
+                    if new_text == &normalized_current {
+                        self.add_info_after_edit("No changes detected.".to_string(), &response);
+                        self.request_redraw();
+                        return;
+                    }
+
+                    self.bottom_pane.replace_composer_text(new_text.clone());
+                    let line_count = new_text.lines().count().max(1);
+                    self.add_info_after_edit(
+                        format!("Loaded changes ({line_count} lines)."),
+                        &response,
+                    );
+
+                    if options.send_after {
+                        self.send_external_edit_submission(new_text.clone());
+                    }
+                } else {
+                    self.add_info_after_edit("No changes detected.".to_string(), &response);
+                }
+            }
+            Err(err) => {
+                self.add_to_history(history_cell::new_error_event(format!(
+                    "Failed to open external editor: {err:#}"
+                )));
+            }
+        }
+
+        self.request_redraw();
+    }
+
+    fn send_external_edit_submission(&mut self, text: String) {
+        let trimmed = text.trim().to_string();
+        let image_paths = self.bottom_pane.take_recent_submission_images();
+        if trimmed.is_empty() && image_paths.is_empty() {
+            self.bottom_pane.set_composer_text(String::new());
+            self.request_redraw();
+            return;
+        }
+
+        let user_message = UserMessage {
+            text: trimmed.clone(),
+            image_paths,
+        };
+
+        if self.bottom_pane.is_task_running() {
+            self.queued_user_messages.push_back(user_message);
+            self.refresh_queued_user_messages();
+            self.add_to_history(history_cell::new_info_event(
+                "Queued message to send after the active task completes.".to_string(),
+                None,
+            ));
+        } else {
+            self.submit_user_message(user_message);
+            self.add_to_history(history_cell::new_info_event(
+                "Sent message from external editor.".to_string(),
+                None,
+            ));
+        }
+
+        self.bottom_pane.set_composer_text(String::new());
+        self.request_redraw();
+    }
+
+    fn add_info_after_edit(&mut self, message: String, response: &ExternalEditorResponse) {
+        let mut hints: Vec<String> = Vec::new();
+        if !response.editor_label.is_empty() {
+            hints.push(format!("editor: {}", response.editor_label));
+        }
+        if !response.command_display.is_empty() {
+            hints.push(response.command_display.clone());
+        }
+        if let Some(path) = &response.kept_path {
+            hints.push(format!("kept at {}", path.display()));
+        }
+        let hint = if hints.is_empty() {
+            None
+        } else {
+            Some(hints.join(" · "))
+        };
+        self.add_to_history(history_cell::new_info_event(message, hint));
     }
     /// Finalize any active exec as failed and stop/clear running UI state.
     fn finalize_turn(&mut self) {
@@ -811,6 +968,7 @@ impl ChatWidget {
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
+            external_edit_in_progress: false,
         }
     }
 
@@ -872,6 +1030,7 @@ impl ChatWidget {
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
+            external_edit_in_progress: false,
         }
     }
 
@@ -902,6 +1061,25 @@ impl ChatWidget {
             } => {
                 if let Ok((path, info)) = paste_image_to_temp_png() {
                     self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                }
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if external_editor_is_enabled() {
+                    self.handle_edit_command(SlashCommandInvocation::new(
+                        SlashCommand::Edit,
+                        "/edit",
+                    ));
+                } else {
+                    self.add_to_history(history_cell::new_error_event(
+                        "External editor is disabled via CODEX_EDIT_DISABLE.".to_string(),
+                    ));
+                    self.request_redraw();
                 }
                 return;
             }
@@ -940,8 +1118,8 @@ impl ChatWidget {
                             self.submit_user_message(user_message);
                         }
                     }
-                    InputResult::Command(cmd) => {
-                        self.dispatch_command(cmd);
+                    InputResult::Command(invocation) => {
+                        self.dispatch_command(invocation);
                     }
                     InputResult::None => {}
                 }
@@ -964,17 +1142,18 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand) {
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+    fn dispatch_command(&mut self, invocation: SlashCommandInvocation) {
+        let command = invocation.command;
+        if !command.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
-                cmd.command()
+                command.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
             self.request_redraw();
             return;
         }
-        match cmd {
+        match command {
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
@@ -1032,6 +1211,9 @@ impl ChatWidget {
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
+            }
+            SlashCommand::Edit => {
+                self.handle_edit_command(invocation);
             }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
@@ -1873,6 +2055,36 @@ impl ChatWidget {
         let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
     }
+}
+
+#[derive(Debug, Default)]
+struct EditCommandOptions {
+    send_after: bool,
+    new_buffer: bool,
+    keep_file: bool,
+}
+
+impl EditCommandOptions {
+    fn parse(invocation: &SlashCommandInvocation) -> Result<Self, String> {
+        let mut opts = Self::default();
+        for arg in invocation.args() {
+            match arg.as_str() {
+                "--send" => opts.send_after = true,
+                "--new" => opts.new_buffer = true,
+                "--keep" => opts.keep_file = true,
+                other => return Err(format!("Unknown flag for /edit: {other}")),
+            }
+        }
+        Ok(opts)
+    }
+}
+
+fn normalize_newlines(input: &str) -> String {
+    let mut out = input.replace("\r\n", "\n");
+    if out.contains('\r') {
+        out = out.replace('\r', "\n");
+    }
+    out
 }
 
 impl WidgetRef for &ChatWidget {

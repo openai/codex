@@ -28,7 +28,9 @@ use super::file_search_popup::FileSearchPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
+#[cfg(test)]
 use crate::slash_command::SlashCommand;
+use crate::slash_command::SlashCommandInvocation;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::app_event::AppEvent;
@@ -55,7 +57,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
-    Command(SlashCommand),
+    Command(SlashCommandInvocation),
     None,
 }
 
@@ -263,8 +265,15 @@ impl ChatComposer {
         self.sync_file_search_popup();
     }
 
+    pub(crate) fn set_text_preserving_attachments(&mut self, text: &str) {
+        self.textarea.set_text(text);
+        self.textarea.set_cursor(text.len());
+        self.reconcile_placeholders_with_text();
+        self.sync_command_popup();
+        self.sync_file_search_popup();
+    }
+
     /// Get the current composer text.
-    #[cfg(test)]
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
     }
@@ -416,6 +425,13 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
+                    let first_line = self
+                        .textarea
+                        .text()
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
                     // Clear textarea so no residual text remains.
                     self.textarea.set_text("");
                     // Capture any needed data from popup before clearing it.
@@ -430,7 +446,8 @@ impl ChatComposer {
 
                     match sel {
                         CommandItem::Builtin(cmd) => {
-                            return (InputResult::Command(cmd), true);
+                            let invocation = SlashCommandInvocation::new(cmd, &first_line);
+                            return (InputResult::Command(invocation), true);
                         }
                         CommandItem::UserPrompt(_) => {
                             if let Some(contents) = prompt_content {
@@ -466,9 +483,7 @@ impl ChatComposer {
             self.handle_paste(pasted);
         }
         self.textarea.input(input);
-        let text_after = self.textarea.text();
-        self.pending_pastes
-            .retain(|(placeholder, _)| text_after.contains(placeholder));
+        self.reconcile_placeholders_with_text();
         (InputResult::None, true)
     }
 
@@ -946,7 +961,6 @@ impl ChatComposer {
 
         // Normal input handling
         self.textarea.input(input);
-        let text_after = self.textarea.text();
 
         // Update paste-burst heuristic for plain Char (no Ctrl/Alt) events.
         let crossterm::event::KeyEvent {
@@ -969,34 +983,39 @@ impl ChatComposer {
             }
         }
 
-        // Check if any placeholders were removed and remove their corresponding pending pastes
+        self.reconcile_placeholders_with_text();
+
+        (InputResult::None, true)
+    }
+
+    fn reconcile_placeholders_with_text(&mut self) {
+        let text_after = self.textarea.text();
+
         self.pending_pastes
             .retain(|(placeholder, _)| text_after.contains(placeholder));
 
-        // Keep attached images in proportion to how many matching placeholders exist in the text.
-        // This handles duplicate placeholders that share the same visible label.
-        if !self.attached_images.is_empty() {
-            let mut needed: HashMap<String, usize> = HashMap::new();
-            for img in &self.attached_images {
-                needed
-                    .entry(img.placeholder.clone())
-                    .or_insert_with(|| text_after.matches(&img.placeholder).count());
-            }
-
-            let mut used: HashMap<String, usize> = HashMap::new();
-            let mut kept: Vec<AttachedImage> = Vec::with_capacity(self.attached_images.len());
-            for img in self.attached_images.drain(..) {
-                let total_needed = *needed.get(&img.placeholder).unwrap_or(&0);
-                let used_count = used.entry(img.placeholder.clone()).or_insert(0);
-                if *used_count < total_needed {
-                    kept.push(img);
-                    *used_count += 1;
-                }
-            }
-            self.attached_images = kept;
+        if self.attached_images.is_empty() {
+            return;
         }
 
-        (InputResult::None, true)
+        let mut needed: HashMap<String, usize> = HashMap::new();
+        for img in &self.attached_images {
+            needed
+                .entry(img.placeholder.clone())
+                .or_insert_with(|| text_after.matches(&img.placeholder).count());
+        }
+
+        let mut used: HashMap<String, usize> = HashMap::new();
+        let mut kept: Vec<AttachedImage> = Vec::with_capacity(self.attached_images.len());
+        for img in self.attached_images.drain(..) {
+            let total_needed = *needed.get(&img.placeholder).unwrap_or(&0);
+            let used_count = used.entry(img.placeholder.clone()).or_insert(0);
+            if *used_count < total_needed {
+                kept.push(img);
+                *used_count += 1;
+            }
+        }
+        self.attached_images = kept;
     }
 
     /// Attempts to remove an image or paste placeholder if the cursor is at the end of one.
@@ -1857,8 +1876,8 @@ mod tests {
         // When a slash command is dispatched, the composer should return a
         // Command result (not submit literal text) and clear its textarea.
         match result {
-            InputResult::Command(cmd) => {
-                assert_eq!(cmd.command(), "init");
+            InputResult::Command(invocation) => {
+                assert_eq!(invocation.command.command(), "init");
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -1915,8 +1934,8 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         match result {
-            InputResult::Command(cmd) => {
-                assert_eq!(cmd.command(), "mention");
+            InputResult::Command(invocation) => {
+                assert_eq!(invocation.command.command(), "mention");
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -1926,6 +1945,39 @@ mod tests {
         assert!(composer.textarea.is_empty(), "composer should be cleared");
         composer.insert_str("@");
         assert_eq!(composer.textarea.text(), "@");
+    }
+
+    #[test]
+    fn slash_edit_preserves_flags() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'e', 'd', 'i', 't', ' ', '-', '-', 's', 'e', 'n', 'd'],
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Command(invocation) => {
+                assert_eq!(invocation.command, SlashCommand::Edit);
+                assert_eq!(invocation.args(), &["--send".to_string()]);
+            }
+            other => panic!("expected Command result for '/edit --send', got: {other:?}"),
+        }
     }
 
     #[test]

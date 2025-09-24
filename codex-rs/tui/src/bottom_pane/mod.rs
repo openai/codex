@@ -13,8 +13,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::widgets::WidgetRef;
+use ratatui::text::Line;
 use std::time::Duration;
+use crate::shimmer::shimmer_spans;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 
 mod approval_modal_view;
 mod bottom_pane_view;
@@ -67,6 +72,8 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
+    /// Message shown while awaiting an external editor to return.
+    external_busy: Option<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -99,6 +106,7 @@ impl BottomPane {
             status: None,
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
+            external_busy: None,
         }
     }
 
@@ -122,7 +130,12 @@ impl BottomPane {
                 self.status
                     .as_ref()
                     .map_or(0, |status| status.desired_height(width)),
-            ),
+            )
+            .saturating_add(if self.status.is_none() && self.external_busy.is_some() {
+                1
+            } else {
+                0
+            }),
         };
         // Account for bottom padding rows. Top spacing is handled in layout().
         base.saturating_add(Self::BOTTOM_PAD_LINES)
@@ -150,7 +163,13 @@ impl BottomPane {
                     .status
                     .as_ref()
                     .map_or(0, |status| status.desired_height(area.width));
-                Layout::vertical([Constraint::Max(status_height), Constraint::Min(1)]).areas(area)
+                let busy_height = if self.status.is_none() && self.external_busy.is_some() {
+                    1
+                } else {
+                    0
+                };
+                let top_height = status_height.max(busy_height);
+                Layout::vertical([Constraint::Length(top_height), Constraint::Min(1)]).areas(area)
             }
         }
     }
@@ -261,8 +280,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn replace_composer_text(&mut self, text: String) {
+        self.composer.set_text_preserving_attachments(&text);
+        self.request_redraw();
+    }
+
     /// Get the current composer text (for tests and programmatic checks).
-    #[cfg(test)]
     pub(crate) fn composer_text(&self) -> String {
         self.composer.current_text()
     }
@@ -317,6 +340,9 @@ impl BottomPane {
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
         self.composer.set_task_running(running);
+        if running {
+            self.external_busy = None;
+        }
 
         if running {
             if self.status.is_none() {
@@ -348,6 +374,13 @@ impl BottomPane {
             status.set_queued_messages(queued);
         }
         self.request_redraw();
+    }
+
+    pub(crate) fn set_external_busy(&mut self, message: Option<String>) {
+        if self.external_busy != message {
+            self.external_busy = message;
+            self.request_redraw();
+        }
     }
 
     /// Update custom prompts available for the slash popup.
@@ -492,6 +525,14 @@ impl WidgetRef for &BottomPane {
             // If a status indicator is active, render it above the composer.
             if let Some(status) = &self.status {
                 status.render_ref(status_area, buf);
+            } else if let Some(message) = &self.external_busy {
+                self.frame_requester
+                    .schedule_frame_in(Duration::from_millis(120));
+                let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];
+                spans.extend(shimmer_spans(message));
+                Line::from(spans)
+                    .style(Style::default().dim())
+                    .render_ref(status_area, buf);
             }
 
             // Render the composer in the remaining area.

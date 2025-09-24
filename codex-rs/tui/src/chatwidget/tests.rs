@@ -46,6 +46,21 @@ use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::unbounded_channel;
 
+#[test]
+fn edit_command_options_parse_flags() {
+    let invocation = SlashCommandInvocation::new(SlashCommand::Edit, "/edit --send --keep");
+    let opts = EditCommandOptions::parse(&invocation).expect("parse flags");
+    assert!(opts.send_after);
+    assert!(opts.keep_file);
+    assert!(!opts.new_buffer);
+}
+
+#[test]
+fn edit_command_options_unknown_flag_errors() {
+    let invocation = SlashCommandInvocation::new(SlashCommand::Edit, "/edit --bogus");
+    assert!(EditCommandOptions::parse(&invocation).is_err());
+}
+
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     Config::load_from_base_config_with_overrides(
@@ -337,6 +352,7 @@ fn make_chatwidget_manual() -> (
         is_review_mode: false,
         ghost_snapshots: Vec::new(),
         ghost_snapshots_disabled: false,
+        external_edit_in_progress: false,
     };
     (widget, rx, op_rx)
 }
@@ -966,7 +982,7 @@ fn disabled_slash_command_while_task_running_snapshot() {
     chat.bottom_pane.set_task_running(true);
 
     // Dispatch a command that is unavailable while a task runs (e.g., /model)
-    chat.dispatch_command(SlashCommand::Model);
+    chat.dispatch_command(SlashCommandInvocation::new(SlashCommand::Model, "/model"));
 
     // Drain history and snapshot the rendered error line(s)
     let cells = drain_insert_history(&mut rx);

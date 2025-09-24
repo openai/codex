@@ -43,6 +43,12 @@ To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the p
 
 Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
 
+### `/edit` or `Ctrl+E` to open the composer in your editor
+
+- Type `/edit` (or press `Ctrl+E`) to launch your external editor with the current composer contents. Codex checks `$VISUAL`, then `$EDITOR`, and finally falls back to a sensible default (`open -W -t` on macOS, `nano`/`vim` on Linux, `notepad` on Windows).
+- Use `/edit --send` to automatically send the edited prompt once you quit the editor, `/edit --new` to start from a blank buffer, and `/edit --keep` to leave the temporary file on disk for debugging.
+- Set `CODEX_EDIT_DISABLE=1` if you need to temporarily disable the feature (for example, to work around an editor that does not behave well under the TUI).
+
 ### Esc–Esc to edit a previous message
 
 When the chat composer is empty, press Esc to prime “backtrack” mode. Press Esc again to open a transcript preview highlighting the last user message; press Esc repeatedly to step to older user messages. Press Enter to confirm and Codex will fork the conversation from that point, trim the visible transcript accordingly, and pre‑fill the composer with the selected user message so you can edit and resubmit it.

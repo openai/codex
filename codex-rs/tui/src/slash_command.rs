@@ -1,3 +1,4 @@
+use crate::external_editor::external_editor_is_enabled;
 use strum::IntoEnumIterator;
 use strum_macros::AsRefStr;
 use strum_macros::EnumIter;
@@ -18,6 +19,7 @@ pub enum SlashCommand {
     New,
     Init,
     Compact,
+    Edit,
     Undo,
     Diff,
     Mention,
@@ -36,6 +38,7 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Edit => "open the current prompt in your external editor",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
             SlashCommand::Quit => "exit Codex",
@@ -69,6 +72,7 @@ impl SlashCommand {
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
+            | SlashCommand::Edit
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
@@ -83,11 +87,14 @@ impl SlashCommand {
 /// Return all built-in commands in a Vec paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
     let show_beta_features = beta_features_enabled();
+    let edit_enabled = external_editor_is_enabled();
 
     SlashCommand::iter()
         .filter(|cmd| {
             if *cmd == SlashCommand::Undo {
                 show_beta_features
+            } else if *cmd == SlashCommand::Edit {
+                edit_enabled
             } else {
                 true
             }
@@ -98,4 +105,67 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
 
 fn beta_features_enabled() -> bool {
     std::env::var_os("BETA_FEATURE").is_some()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashCommandInvocation {
+    pub command: SlashCommand,
+    raw_input: String,
+    raw_args: String,
+    args: Vec<String>,
+}
+
+impl SlashCommandInvocation {
+    pub fn new(command: SlashCommand, composer_line: &str) -> Self {
+        let first_line = composer_line.lines().next().unwrap_or("");
+        let trimmed_line = first_line.trim_start();
+        let mut raw_args = String::new();
+        let mut args = Vec::new();
+
+        if let Some(stripped) = trimmed_line.strip_prefix('/') {
+            let trimmed = stripped.trim_start();
+            if let Some(rest) = trimmed.strip_prefix(command.command()) {
+                raw_args = rest.trim_start().to_string();
+                if !raw_args.is_empty() {
+                    args = raw_args
+                        .split_whitespace()
+                        .map(|part| part.to_string())
+                        .collect();
+                }
+            }
+        }
+
+        Self {
+            command,
+            raw_input: trimmed_line.to_string(),
+            raw_args,
+            args,
+        }
+    }
+
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_args_for_edit_command() {
+        let invocation = SlashCommandInvocation::new(SlashCommand::Edit, "/edit --send --keep");
+        assert_eq!(invocation.command, SlashCommand::Edit);
+        assert_eq!(
+            invocation.args(),
+            &["--send".to_string(), "--keep".to_string()]
+        );
+    }
+
+    #[test]
+    fn trims_leading_whitespace() {
+        let invocation = SlashCommandInvocation::new(SlashCommand::Edit, "   /edit   --new");
+        assert_eq!(invocation.command, SlashCommand::Edit);
+        assert_eq!(invocation.args(), &["--new".to_string()]);
+    }
 }
