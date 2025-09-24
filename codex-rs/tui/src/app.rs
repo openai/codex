@@ -231,7 +231,8 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+                let mut display =
+                    cell.display_lines_with_bg(tui.terminal.last_known_screen_size.width, tui.bg());
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
                     // part of an ongoing stream. Streaming continuations should not

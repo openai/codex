@@ -84,6 +84,10 @@ pub(crate) enum PatchEventType {
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
+    fn display_lines_with_bg(&self, width: u16, _bg: Option<(u8, u8, u8)>) -> Vec<Line<'static>> {
+        self.display_lines(width)
+    }
+
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         self.display_lines(u16::MAX)
     }
@@ -116,21 +120,64 @@ pub(crate) struct UserHistoryCell {
     pub message: String,
 }
 
+fn is_light(bg: Option<(u8, u8, u8)>) -> bool {
+    match bg {
+        Some((r, g, b)) => {
+            let y = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+            y > 128.0
+        }
+        None => false,
+    }
+}
+
+fn blend(fg: (u8, u8, u8), bg: (u8, u8, u8), alpha: f32) -> (u8, u8, u8) {
+    let r = (fg.0 as f32 * alpha + bg.0 as f32 * (1.0 - alpha)) as u8;
+    let g = (fg.1 as f32 * alpha + bg.1 as f32 * (1.0 - alpha)) as u8;
+    let b = (fg.2 as f32 * alpha + bg.2 as f32 * (1.0 - alpha)) as u8;
+    (r, g, b)
+}
+
+fn user_message_bg(terminal_bg: (u8, u8, u8)) -> (u8, u8, u8) {
+    let top = if is_light(Some(terminal_bg)) {
+        (0, 0, 0)
+    } else {
+        (255, 255, 255)
+    };
+    let bottom = terminal_bg;
+    blend(top, bottom, 0.15)
+}
+
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.display_lines_with_bg(width, None)
+    }
+
+    fn display_lines_with_bg(&self, width: u16, bg: Option<(u8, u8, u8)>) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        // Wrap the content first, then prefix each wrapped line with the marker.
+        // Use ratatui-aware word wrapping and prefixing to avoid lifetime issues.
         let wrap_width = width.saturating_sub(LIVE_PREFIX_COLS); // account for the ▌ prefix and trailing space
-        let wrapped = textwrap::wrap(
-            &self.message,
-            textwrap::Options::new(wrap_width as usize)
-                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit), // Match textarea wrap
+
+        let style = bg
+            .map(|bg| {
+                let (r, g, b) = user_message_bg(bg);
+                Style::default().bg(Color::Rgb(r, g, b))
+            })
+            .unwrap_or_default();
+
+        // Use our ratatui wrapping helpers for correct styling and lifetimes.
+        let wrapped = word_wrap_lines(
+            &self
+                .message
+                .lines()
+                .map(|l| Line::from(l).style(style))
+                .collect::<Vec<_>>(),
+            RtOptions::new(wrap_width as usize),
         );
 
-        for line in wrapped {
-            lines.push(vec!["▌ ".cyan().dim(), line.to_string().dim()].into());
-        }
+        lines.push(Line::from("").style(style));
+        lines.extend(prefix_lines(wrapped, "› ".cyan().dim(), "  ".into()));
+        lines.push(Line::from("").style(style));
         lines
     }
 

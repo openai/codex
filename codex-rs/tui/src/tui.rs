@@ -1,5 +1,7 @@
+use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
+use std::io::Write;
 use std::io::stdout;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -123,6 +125,9 @@ pub fn restore() -> Result<()> {
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
 pub fn init() -> Result<Terminal> {
+    if !stdout().is_terminal() {
+        return Err(std::io::Error::other("stdout is not a terminal"));
+    }
     set_modes()?;
 
     set_panic_hook();
@@ -162,6 +167,7 @@ pub struct Tui {
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
+    bg: Option<(u8, u8, u8)>,
 }
 
 #[cfg(unix)]
@@ -271,6 +277,7 @@ impl Tui {
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        let bg = query_background_color().unwrap_or(None);
 
         Self {
             frame_schedule_tx,
@@ -285,6 +292,7 @@ impl Tui {
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
+            bg,
         }
     }
 
@@ -296,6 +304,10 @@ impl Tui {
 
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
+    }
+
+    pub fn bg(&self) -> Option<(u8, u8, u8)> {
+        self.bg
     }
 
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
@@ -560,6 +572,112 @@ impl Tui {
             })
         })?
     }
+}
+
+#[cfg(unix)]
+fn parse_osc_11_background_color(buffer: &[u8]) -> Option<(u8, u8, u8)> {
+    let text = std::str::from_utf8(buffer).ok()?;
+    let start = text.rfind("\u{1b}]11;")?;
+    let after_prefix = &text[start + 5..];
+    let end_bel = after_prefix.find('\u{7}');
+    let end_st = after_prefix.find("\u{1b}\\");
+    let end_idx = match (end_bel, end_st) {
+        (Some(bel), Some(st)) => bel.min(st),
+        (Some(bel), None) => bel,
+        (None, Some(st)) => st,
+        (None, None) => return None,
+    };
+    let payload = after_prefix[..end_idx].trim();
+    parse_osc_11_payload(payload)
+}
+
+#[cfg(unix)]
+fn parse_osc_11_payload(payload: &str) -> Option<(u8, u8, u8)> {
+    if payload.is_empty() || payload == "?" {
+        return None;
+    }
+    let (model, values) = payload.split_once(':')?;
+    if model != "rgb" && model != "rgba" {
+        return None;
+    }
+    let mut parts = values.split('/');
+    let r = parse_osc_11_component(parts.next()?)?;
+    let g = parse_osc_11_component(parts.next()?)?;
+    let b = parse_osc_11_component(parts.next()?)?;
+    Some((r, g, b))
+}
+
+#[cfg(unix)]
+fn parse_osc_11_component(component: &str) -> Option<u8> {
+    let trimmed = component.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let bits = trimmed.len().checked_mul(4)?;
+    if bits == 0 || bits > 64 {
+        return None;
+    }
+    let max = if bits == 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    };
+    let value = u64::from_str_radix(trimmed, 16).ok()?;
+    Some(((value * 255 + max / 2) / max) as u8)
+}
+
+fn query_background_color() -> Result<Option<(u8, u8, u8)>> {
+    use std::fs::OpenOptions;
+    use std::io::ErrorKind;
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+
+    let mut stdout_handle = stdout();
+    if !stdout_handle.is_terminal() {
+        return Ok(None);
+    }
+    stdout_handle.write_all(b"\x1b]11;?\x07")?;
+    stdout_handle.flush()?;
+
+    let mut tty = match OpenOptions::new().read(true).open("/dev/tty") {
+        Ok(file) => file,
+        Err(_) => return Ok(None),
+    };
+
+    let fd = tty.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(200);
+    let mut buffer = Vec::new();
+
+    while Instant::now() < deadline {
+        let mut chunk = [0u8; 128];
+        match tty.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buffer.extend_from_slice(&chunk[..n]);
+                if let Some(color) = parse_osc_11_background_color(&buffer) {
+                    return Ok(Some(color));
+                }
+            }
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+
+    if let Some(color) = parse_osc_11_background_color(&buffer) {
+        return Ok(Some(color));
+    }
+
+    Ok(None)
 }
 
 /// Command that emits an OSC 9 desktop notification with a message.

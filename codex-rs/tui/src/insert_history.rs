@@ -14,6 +14,8 @@ use crossterm::style::SetAttribute;
 use crossterm::style::SetBackgroundColor;
 use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
+use crossterm::terminal::Clear;
+use crossterm::terminal::ClearType;
 use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -97,6 +99,21 @@ pub fn insert_history_lines_to_writer<B, W>(
 
     for line in wrapped {
         queue!(writer, Print("\r\n")).ok();
+        queue!(
+            writer,
+            SetColors(Colors::new(
+                line.style
+                    .fg
+                    .map(std::convert::Into::into)
+                    .unwrap_or(CColor::Reset),
+                line.style
+                    .bg
+                    .map(std::convert::Into::into)
+                    .unwrap_or(CColor::Reset)
+            ))
+        )
+        .ok();
+        queue!(writer, Clear(ClearType::UntilNewLine)).ok();
         // Merge line-level style into each span so that ANSI colors reflect
         // line styles (e.g., blockquotes with green fg).
         let merged_spans: Vec<Span> = line

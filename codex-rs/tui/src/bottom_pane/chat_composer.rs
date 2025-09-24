@@ -1336,21 +1336,13 @@ impl WidgetRef for ChatComposer {
                     .render_ref(hint_rect, buf);
             }
         }
-        let border_style = if self.has_focus {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().add_modifier(Modifier::DIM)
-        };
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_type(BorderType::QuadrantOutside)
-            .border_style(border_style)
-            .render_ref(
-                Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
-                buf,
-            );
+        buf.set_span(
+            textarea_rect.x,
+            textarea_rect.y,
+            &"›".cyan(),
+            textarea_rect.width,
+        );
         let mut textarea_rect = textarea_rect;
-        // Leave 1 for border and 1 for padding
         textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
         textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
 
