@@ -122,11 +122,7 @@ where
                 })?;
 
                 let normalized = normalize_newlines(&contents);
-                let edited_text = if normalized.trim().is_empty() {
-                    None
-                } else {
-                    Some(normalized)
-                };
+                let edited_text = Some(normalized);
 
                 let kept_path = if request.keep_file {
                     let persisted_path = temp_file.path().to_path_buf();
@@ -414,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn run_external_editor_returns_none_for_empty_file() {
+    fn run_external_editor_returns_empty_string_for_empty_file() {
         let _lock = test_lock_guard();
         let dir = tempdir().unwrap();
         let _env_guard = EnvVarGuard::set("VISUAL", "mock-editor");
@@ -427,6 +423,6 @@ mod tests {
         };
 
         let result = run_external_editor_with_hook(request, |_, _| {}).expect("run external editor");
-        assert!(result.edited_text.is_none());
+        assert_eq!(result.edited_text.as_deref(), Some(""));
     }
 }
