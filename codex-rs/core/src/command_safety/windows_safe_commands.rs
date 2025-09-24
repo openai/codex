@@ -1,3 +1,4 @@
+// This is a WIP. This will eventually contain a real list of common safe Windows commands.
 pub fn is_safe_command_windows(_command: &[String]) -> bool {
     false
 }
