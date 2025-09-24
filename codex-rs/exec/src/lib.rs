@@ -195,11 +195,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
     }
 
-
-    // Print the effective configuration and prompt so users can see what Codex
-    // is using.
-    event_processor.print_config_summary(&config, &prompt);
-    
     let default_cwd = config.cwd.to_path_buf();
     let default_approval_policy = config.approval_policy;
     let default_sandbox_policy = config.sandbox_policy.clone();
