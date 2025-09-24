@@ -363,7 +363,7 @@ fn create_worker_count(num_workers: NonZero<usize>) -> WorkerCount {
 fn create_pattern(pattern: &str) -> Pattern {
     Pattern::new(
         pattern,
-        CaseMatching::Smart,
+        CaseMatching::Ignore,
         Normalization::Smart,
         AtomKind::Fuzzy,
     )
@@ -402,5 +402,35 @@ mod tests {
         ];
 
         assert_eq!(matches, expected);
+    }
+
+    #[test]
+    fn lowercase_query_matches_uppercase_filename() {
+        let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+        let mut utf32buf = Vec::<char>::new();
+        let haystack: Utf32Str<'_> = Utf32Str::new("TODOS.md", &mut utf32buf);
+        let pattern = create_pattern("tod");
+
+        let score = pattern.score(haystack, &mut matcher);
+
+        assert!(
+            score.is_some(),
+            "expected lowercase query to match uppercase filename"
+        );
+    }
+
+    #[test]
+    fn lowercase_query_matches_uppercase_segment_in_path() {
+        let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+        let mut utf32buf = Vec::<char>::new();
+        let haystack: Utf32Str<'_> = Utf32Str::new("docs/TODOS.md", &mut utf32buf);
+        let pattern = create_pattern("tod");
+
+        let score = pattern.score(haystack, &mut matcher);
+
+        assert!(
+            score.is_some(),
+            "expected lowercase query to match uppercase segment within a path"
+        );
     }
 }

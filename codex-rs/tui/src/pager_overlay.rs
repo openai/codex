@@ -470,8 +470,11 @@ impl TranscriptOverlay {
                 other => self.view.handle_key_event(tui, other),
             },
             TuiEvent::Draw => {
+                let banner = tui.update_banner_lines().cloned();
                 tui.draw(u16::MAX, |frame| {
-                    self.render(frame.area(), frame.buffer);
+                    let mut area = frame.area();
+                    crate::tui::render_persistent_banner(frame, &mut area, banner.as_deref());
+                    self.render(area, frame.buffer);
                 })?;
                 Ok(())
             }
@@ -534,8 +537,11 @@ impl StaticOverlay {
                 other => self.view.handle_key_event(tui, other),
             },
             TuiEvent::Draw => {
+                let banner = tui.update_banner_lines().cloned();
                 tui.draw(u16::MAX, |frame| {
-                    self.render(frame.area(), frame.buffer);
+                    let mut area = frame.area();
+                    crate::tui::render_persistent_banner(frame, &mut area, banner.as_deref());
+                    self.render(area, frame.buffer);
                 })?;
                 Ok(())
             }

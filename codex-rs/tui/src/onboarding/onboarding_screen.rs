@@ -22,6 +22,7 @@ use crate::onboarding::welcome::WelcomeWidget;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use crate::tui::render_persistent_banner;
 use color_eyre::eyre::Result;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -332,8 +333,11 @@ pub(crate) async fn run_onboarding_app(
     // One-time guard to fully clear the screen after ChatGPT login success message is shown
     let mut did_full_clear_after_success = false;
 
+    let banner = tui.update_banner_lines().cloned();
     tui.draw(u16::MAX, |frame| {
-        frame.render_widget_ref(&onboarding_screen, frame.area());
+        let mut area = frame.area();
+        render_persistent_banner(frame, &mut area, banner.as_deref());
+        frame.render_widget_ref(&onboarding_screen, area);
     })?;
 
     let tui_events = tui.event_stream();
@@ -379,8 +383,11 @@ pub(crate) async fn run_onboarding_app(
                         let _ = tui.terminal.clear();
                         did_full_clear_after_success = true;
                     }
+                    let banner = tui.update_banner_lines().cloned();
                     let _ = tui.draw(u16::MAX, |frame| {
-                        frame.render_widget_ref(&onboarding_screen, frame.area());
+                        let mut area = frame.area();
+                        render_persistent_banner(frame, &mut area, banner.as_deref());
+                        frame.render_widget_ref(&onboarding_screen, area);
                     });
                 }
             }

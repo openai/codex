@@ -152,6 +152,7 @@ pub struct Tui {
     draw_tx: tokio::sync::broadcast::Sender<()>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
+    update_banner: Option<Vec<Line<'static>>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     resume_pending: Arc<AtomicU8>, // Stores a ResumeAction
@@ -223,6 +224,16 @@ impl Tui {
             false
         }
     }
+
+    #[cfg_attr(debug_assertions, allow(dead_code))]
+    pub fn set_update_banner(&mut self, lines: Vec<Line<'static>>) {
+        self.update_banner = Some(lines);
+    }
+
+    pub fn update_banner_lines(&self) -> Option<&Vec<Line<'static>>> {
+        self.update_banner.as_ref()
+    }
+
     pub fn new(terminal: Terminal) -> Self {
         let (frame_schedule_tx, frame_schedule_rx) = tokio::sync::mpsc::unbounded_channel();
         let (draw_tx, _) = tokio::sync::broadcast::channel(1);
@@ -277,6 +288,7 @@ impl Tui {
             draw_tx,
             terminal,
             pending_history_lines: vec![],
+            update_banner: None,
             alt_saved_viewport: None,
             #[cfg(unix)]
             resume_pending: Arc::new(AtomicU8::new(0)),
@@ -559,6 +571,29 @@ impl Tui {
                 draw_fn(frame);
             })
         })?
+    }
+}
+
+pub(crate) fn render_persistent_banner(
+    frame: &mut crate::custom_terminal::Frame,
+    area: &mut ratatui::layout::Rect,
+    banner: Option<&[Line<'static>]>,
+) {
+    if let Some(lines) = banner {
+        let available = area.height as usize;
+        let to_render = lines.len().min(available);
+        for (idx, line) in lines.iter().take(to_render).enumerate() {
+            let line_area = ratatui::layout::Rect::new(
+                area.x,
+                area.y.saturating_add(idx as u16),
+                area.width,
+                1,
+            );
+            frame.render_widget_ref(line.clone(), line_area);
+        }
+        let consumed = to_render as u16;
+        area.y = area.y.saturating_add(consumed);
+        area.height = area.height.saturating_sub(consumed);
     }
 }
 
