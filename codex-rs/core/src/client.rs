@@ -183,13 +183,13 @@ impl ModelClient {
 
         let input_with_instructions = prompt.get_formatted_input();
 
-        // Only include `text.verbosity` for GPT-5 family models
-        let text = if self.config.model_family.family == "gpt-5" {
+        // Only include text controls for model families that support them
+        let text = if self.config.model_family.supports_text_controls() {
             create_text_param_for_request(self.config.model_verbosity, &prompt.output_schema)
         } else {
             if self.config.model_verbosity.is_some() {
                 warn!(
-                    "model_verbosity is set but ignored for non-gpt-5 model family: {}",
+                    "model_verbosity is set but ignored for model family without text controls: {}",
                     self.config.model_family.family
                 );
             }

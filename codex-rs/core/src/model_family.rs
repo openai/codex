@@ -43,6 +43,13 @@ pub struct ModelFamily {
     pub base_instructions: String,
 }
 
+impl ModelFamily {
+    /// Returns true when the model family supports Responses API text controls.
+    pub fn supports_text_controls(&self) -> bool {
+        self.family.starts_with("gpt-5") || self.family.starts_with("codex-")
+    }
+}
+
 macro_rules! model_family {
     (
         $slug:expr, $family:expr $(, $key:ident : $value:expr )* $(,)?

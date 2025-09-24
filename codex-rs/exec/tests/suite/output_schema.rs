@@ -8,8 +8,7 @@ use std::process::Command;
 use tempfile::TempDir;
 use wiremock::matchers::any;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
+async fn run_output_schema_in_request_test(model: &str) -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let workspace = TempDir::new()?;
 
@@ -47,7 +46,7 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
         .arg("--output-schema")
         .arg(&schema_path)
         .arg("-m")
-        .arg("gpt-5")
+        .arg(model)
         .arg("tell me a joke")
         .assert()
         .success();
@@ -73,4 +72,14 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
+    run_output_schema_in_request_test("gpt-5").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_includes_output_schema_for_codex_family() -> anyhow::Result<()> {
+    run_output_schema_in_request_test("gpt-5-codex").await
 }

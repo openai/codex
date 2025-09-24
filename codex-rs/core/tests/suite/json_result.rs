@@ -29,10 +29,7 @@ const SCHEMA: &str = r#"
 }
 "#;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_returns_json_result() -> anyhow::Result<()> {
-    non_sandbox_test!(result);
-
+async fn run_json_result_test(model: &str) -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let sse1 = sse(vec![
@@ -62,7 +59,6 @@ async fn codex_returns_json_result() -> anyhow::Result<()> {
 
     let TestCodex { codex, cwd, .. } = test_codex().build(&server).await?;
 
-    // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserTurn {
             items: vec![InputItem::Text {
@@ -72,7 +68,7 @@ async fn codex_returns_json_result() -> anyhow::Result<()> {
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: "gpt-5".to_string(),
+            model: model.to_string(),
             effort: None,
             summary: ReasoningSummary::Auto,
         })
@@ -94,4 +90,16 @@ async fn codex_returns_json_result() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_returns_json_result() -> anyhow::Result<()> {
+    non_sandbox_test!(result);
+    run_json_result_test("gpt-5").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_returns_json_result_for_codex_family() -> anyhow::Result<()> {
+    non_sandbox_test!(result);
+    run_json_result_test("gpt-5-codex").await
 }
