@@ -31,6 +31,7 @@ use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
+use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
@@ -99,7 +100,7 @@ use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
-use crate::protocol::RateLimitSnapshotEvent;
+use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
 use crate::protocol::SandboxPolicy;
@@ -260,7 +261,7 @@ struct State {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
-    latest_rate_limits: Option<RateLimitSnapshotEvent>,
+    latest_rate_limits: Option<RateLimitSnapshot>,
 }
 
 /// Context for an initialized model agent
@@ -302,6 +303,7 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
+    pub(crate) final_output_json_schema: Option<Value>,
 }
 
 impl TurnContext {
@@ -469,6 +471,7 @@ impl Session {
             shell_environment_policy: config.shell_environment_policy.clone(),
             cwd,
             is_review_mode: false,
+            final_output_json_schema: None,
         };
         let sess = Arc::new(Session {
             conversation_id,
@@ -736,31 +739,42 @@ impl Session {
 
     async fn update_token_usage_info(
         &self,
+        sub_id: &str,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
-        let mut state = self.state.lock().await;
-        if let Some(token_usage) = token_usage {
-            let info = TokenUsageInfo::new_or_append(
-                &state.token_info,
-                &Some(token_usage.clone()),
-                turn_context.client.get_model_context_window(),
-            );
-            state.token_info = info;
+        {
+            let mut state = self.state.lock().await;
+            if let Some(token_usage) = token_usage {
+                let info = TokenUsageInfo::new_or_append(
+                    &state.token_info,
+                    &Some(token_usage.clone()),
+                    turn_context.client.get_model_context_window(),
+                );
+                state.token_info = info;
+            }
         }
+        self.send_token_count_event(sub_id).await;
     }
 
-    async fn update_rate_limits(&self, new_rate_limits: RateLimitSnapshotEvent) {
-        let mut state = self.state.lock().await;
-        state.latest_rate_limits = Some(new_rate_limits);
+    async fn update_rate_limits(&self, sub_id: &str, new_rate_limits: RateLimitSnapshot) {
+        {
+            let mut state = self.state.lock().await;
+            state.latest_rate_limits = Some(new_rate_limits);
+        }
+        self.send_token_count_event(sub_id).await;
     }
 
-    async fn get_token_count_event(&self) -> TokenCountEvent {
-        let state = self.state.lock().await;
-        TokenCountEvent {
-            info: state.token_info.clone(),
-            rate_limits: state.latest_rate_limits.clone(),
-        }
+    async fn send_token_count_event(&self, sub_id: &str) {
+        let (info, rate_limits) = {
+            let state = self.state.lock().await;
+            (state.token_info.clone(), state.latest_rate_limits.clone())
+        };
+        let event = Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::TokenCount(TokenCountEvent { info, rate_limits }),
+        };
+        self.send_event(event).await;
     }
 
     /// Record a user input item to conversation history and also persist a
@@ -1117,16 +1131,13 @@ impl AgentTask {
         turn_context: Arc<TurnContext>,
         sub_id: String,
         input: Vec<InputItem>,
-        compact_instructions: String,
     ) -> Self {
         let handle = {
             let sess = sess.clone();
             let sub_id = sub_id.clone();
             let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move {
-                compact::run_compact_task(sess, tc, sub_id, input, compact_instructions).await
-            })
-            .abort_handle()
+            tokio::spawn(async move { compact::run_compact_task(sess, tc, sub_id, input).await })
+                .abort_handle()
         };
         Self {
             sess,
@@ -1240,6 +1251,7 @@ async fn submission_loop(
                     shell_environment_policy: prev.shell_environment_policy.clone(),
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
+                    final_output_json_schema: None,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1274,6 +1286,7 @@ async fn submission_loop(
                 model,
                 effort,
                 summary,
+                final_output_json_schema,
             } => {
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
@@ -1324,6 +1337,7 @@ async fn submission_loop(
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
                         is_review_mode: false,
+                        final_output_json_schema,
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1434,7 +1448,7 @@ async fn submission_loop(
                 // Attempt to inject input into current task
                 if let Err(items) = sess
                     .inject_input(vec![InputItem::Text {
-                        text: compact::COMPACT_TRIGGER_TEXT.to_string(),
+                        text: compact::SUMMARIZATION_PROMPT.to_string(),
                     }])
                     .await
                 {
@@ -1578,6 +1592,7 @@ async fn spawn_review_thread(
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
+        final_output_json_schema: None,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1944,6 +1959,7 @@ async fn run_turn(
         input,
         tools,
         base_instructions_override: turn_context.base_instructions.clone(),
+        output_schema: turn_context.final_output_json_schema.clone(),
     };
 
     let mut retries = 0;
@@ -1952,9 +1968,14 @@ async fn run_turn(
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
-            Err(e @ (CodexErr::UsageLimitReached(_) | CodexErr::UsageNotIncluded)) => {
-                return Err(e);
+            Err(CodexErr::UsageLimitReached(e)) => {
+                let rate_limits = e.rate_limits.clone();
+                if let Some(rate_limits) = rate_limits {
+                    sess.update_rate_limits(&sub_id, rate_limits).await;
+                }
+                return Err(CodexErr::UsageLimitReached(e));
             }
+            Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -2127,20 +2148,13 @@ async fn try_run_turn(
             ResponseEvent::RateLimits(snapshot) => {
                 // Update internal state with latest rate limits, but defer sending until
                 // token usage is available to avoid duplicate TokenCount events.
-                sess.update_rate_limits(snapshot).await;
+                sess.update_rate_limits(sub_id, snapshot).await;
             }
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
             } => {
-                sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await;
-                let token_event = sess.get_token_count_event().await;
-                let _ = sess
-                    .send_event(Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(token_event),
-                    })
+                sess.update_token_usage_info(sub_id, turn_context, token_usage.as_ref())
                     .await;
 
                 let unified_diff = turn_diff_tracker.get_unified_diff();
@@ -3607,6 +3621,7 @@ mod tests {
             shell_environment_policy: config.shell_environment_policy.clone(),
             tools_config,
             is_review_mode: false,
+            final_output_json_schema: None,
         };
         let session = Session {
             conversation_id,

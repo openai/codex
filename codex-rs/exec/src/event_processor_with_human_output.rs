@@ -539,8 +539,37 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::PlanUpdate(plan_update_event) => {
                 let UpdatePlanArgs { explanation, plan } = plan_update_event;
-                ts_println!(self, "explanation: {explanation:?}");
-                ts_println!(self, "plan: {plan:?}");
+
+                // Header
+                ts_println!(self, "{}", "Plan update".style(self.magenta));
+
+                // Optional explanation
+                if let Some(explanation) = explanation
+                    && !explanation.trim().is_empty()
+                {
+                    ts_println!(self, "{}", explanation.style(self.italic));
+                }
+
+                // Pretty-print the plan items with simple status markers.
+                for item in plan {
+                    use codex_core::plan_tool::StepStatus;
+                    match item.status {
+                        StepStatus::Completed => {
+                            ts_println!(self, "  {} {}", "✓".style(self.green), item.step);
+                        }
+                        StepStatus::InProgress => {
+                            ts_println!(self, "  {} {}", "→".style(self.cyan), item.step);
+                        }
+                        StepStatus::Pending => {
+                            ts_println!(
+                                self,
+                                "  {} {}",
+                                "•".style(self.dimmed),
+                                item.step.style(self.dimmed)
+                            );
+                        }
+                    }
+                }
             }
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
