@@ -179,6 +179,7 @@ pub(crate) fn create_text_param_for_request(
     verbosity: Option<VerbosityConfig>,
     output_schema: &Option<Value>,
 ) -> Option<TextControls> {
+    
     if verbosity.is_none() && output_schema.is_none() {
         return None;
     }
