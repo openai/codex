@@ -30,7 +30,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 
-pub(crate) struct EventProcessorWithJsonOutput {
+pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_event_id: u64,
     running_command: Option<Vec<String>>,
@@ -47,7 +47,7 @@ impl EventProcessorWithJsonOutput {
         }
     }
 
-    fn collect_conversation_events(&mut self, event: &Event) -> Vec<ConversationEvent> {
+    pub fn collect_conversation_events(&mut self, event: &Event) -> Vec<ConversationEvent> {
         match &event.msg {
             EventMsg::SessionConfigured(ev) => self.handle_session_configured(ev),
             EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),

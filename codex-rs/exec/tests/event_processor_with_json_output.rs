@@ -1,9 +1,28 @@
-use super::*;
-use crate::exec_events::ConversationEvent;
-use crate::exec_events::ConversationItem;
-use crate::exec_events::ConversationItemDetails;
-use crate::exec_events::ItemCompletedEvent;
+use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningEvent;
+use codex_core::protocol::Event;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::FileChange;
+use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::SessionConfiguredEvent;
+use codex_exec::event_processor_with_json_output::EventProcessorWithJsonOutput;
+use codex_exec::exec_events::AssistantMessageItem;
+use codex_exec::exec_events::CommandExecutionItem;
+use codex_exec::exec_events::CommandExecutionStatus;
+use codex_exec::exec_events::ConversationErrorEvent;
+use codex_exec::exec_events::ConversationEvent;
+use codex_exec::exec_events::ConversationItem;
+use codex_exec::exec_events::ConversationItemDetails;
+use codex_exec::exec_events::ItemCompletedEvent;
+use codex_exec::exec_events::PatchApplyStatus;
+use codex_exec::exec_events::PatchChangeKind;
+use codex_exec::exec_events::ReasoningItem;
+use codex_exec::exec_events::SessionCreatedEvent;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 use std::time::Duration;
 
 fn event(id: &str, msg: EventMsg) -> Event {

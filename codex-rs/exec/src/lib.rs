@@ -1,7 +1,7 @@
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
-mod event_processor_with_json_output;
+pub mod event_processor_with_json_output;
 pub mod exec_events;
 
 use std::io::IsTerminal;
