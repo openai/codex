@@ -1,6 +1,3 @@
-use crate::bash::try_parse_bash;
-use crate::bash::try_parse_word_only_commands_sequence;
-
 #[cfg(target_os = "windows")]
 use super::windows_safe_commands::is_safe_command_windows;
 
@@ -12,6 +9,9 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
 
     #[cfg(not(target_os = "windows"))]
     {
+        use crate::bash::try_parse_bash;
+        use crate::bash::try_parse_word_only_commands_sequence;
+
         if is_safe_to_call_with_exec(command) {
             return true;
         }
