@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq)]
-pub enum FunctionCallError{
+pub enum FunctionCallError {
     #[error("{0}")]
-    RespondToModel(String)
+    RespondToModel(String),
 }

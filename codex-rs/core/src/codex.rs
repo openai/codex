@@ -10,9 +10,9 @@ use std::time::Duration;
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
+use crate::function_tool::FunctionCallError;
 use crate::review_format::format_review_findings_block;
 use crate::user_notification::UserNotifier;
-use crate::function_tool::FunctionCallError;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
@@ -32,7 +32,7 @@ use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
-use thiserror::Error;
+
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
@@ -2217,18 +2217,30 @@ async fn handle_response_item(
             ..
         } => {
             info!("FunctionCall: {name}({arguments})");
-            Some(
-                handle_function_call(
+            {
+                let result = handle_function_call(
                     sess,
                     turn_context,
                     turn_diff_tracker,
                     sub_id.to_string(),
                     name,
                     arguments,
-                    call_id,
+                    call_id.clone(),
                 )
-                .await,
-            )
+                .await;
+
+                let output = match result {
+                    Ok(content) => FunctionCallOutputPayload {
+                        content,
+                        success: Some(true),
+                    },
+                    Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
+                        content: msg,
+                        success: Some(false),
+                    },
+                };
+                Some(ResponseInputItem::FunctionCallOutput { call_id, output })
+            }
         }
         ResponseItem::LocalShellCall {
             id,
@@ -2261,17 +2273,32 @@ async fn handle_response_item(
             };
 
             let exec_params = to_exec_params(params, turn_context);
-            Some(
-                handle_container_exec_with_params(
+            {
+                let result = handle_container_exec_with_params(
                     exec_params,
                     sess,
                     turn_context,
                     turn_diff_tracker,
                     sub_id.to_string(),
-                    effective_call_id,
+                    effective_call_id.clone(),
                 )
-                .await,
-            )
+                .await;
+
+                let output = match result {
+                    Ok(content) => FunctionCallOutputPayload {
+                        content,
+                        success: Some(true),
+                    },
+                    Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
+                        content: msg,
+                        success: Some(false),
+                    },
+                };
+                Some(ResponseInputItem::FunctionCallOutput {
+                    call_id: effective_call_id,
+                    output,
+                })
+            }
         }
         ResponseItem::CustomToolCall {
             id: _,
@@ -2279,18 +2306,24 @@ async fn handle_response_item(
             name,
             input,
             status: _,
-        } => Some(
-            handle_custom_tool_call(
+        } => {
+            let result = handle_custom_tool_call(
                 sess,
                 turn_context,
                 turn_diff_tracker,
                 sub_id.to_string(),
                 name,
                 input,
-                call_id,
+                call_id.clone(),
             )
-            .await,
-        ),
+            .await;
+
+            let output = match result {
+                Ok(content) => content,
+                Err(FunctionCallError::RespondToModel(msg)) => msg,
+            };
+            Some(ResponseInputItem::CustomToolCallOutput { call_id, output })
+        }
         ResponseItem::FunctionCallOutput { .. } => {
             debug!("unexpected FunctionCallOutput from stream");
             None
@@ -2334,9 +2367,10 @@ async fn handle_unified_exec_tool_call(
     let parsed_session_id = if let Some(session_id) = session_id {
         match session_id.parse::<i32>() {
             Ok(parsed) => Some(parsed),
-            Err(output) =>
-            {
-                return Err(FunctionCallError::RespondToModel(format!("invalid session_id: {session_id} due to error {output}")));
+            Err(output) => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "invalid session_id: {session_id} due to error {output}"
+                )));
             }
         }
     } else {
@@ -2349,26 +2383,25 @@ async fn handle_unified_exec_tool_call(
         timeout_ms,
     };
 
-    let result = sess.unified_exec_manager.handle_request(request).await;
+    let value = sess
+        .unified_exec_manager
+        .handle_request(request)
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format!("unified exec failed: {err}")))?;
 
-    match result {
-        Ok(value) => {
-            #[derive(Serialize)]
-            struct SerializedUnifiedExecResult<'a> {
-                session_id: Option<String>,
-                output: &'a str,
-            }
-
-            match serde_json::to_string(&SerializedUnifiedExecResult {
-                session_id: value.session_id.map(|id| id.to_string()),
-                output: &value.output,
-            }) {
-                Ok(serialized) => Ok(serialized),
-                Err(err) => Err(FunctionCallError::RespondToModel(format!("failed to serialize unified exec output: {err}")));
-            }
-        }
-        Err(err) => return Err(FunctionCallError::RespondToModel(format!("unified exec failed: {err}")))
+    #[derive(Serialize)]
+    struct SerializedUnifiedExecResult<'a> {
+        session_id: Option<String>,
+        output: &'a str,
     }
+
+    serde_json::to_string(&SerializedUnifiedExecResult {
+        session_id: value.session_id.map(|id| id.to_string()),
+        output: &value.output,
+    })
+    .map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to serialize unified exec output: {err}"))
+    })
 }
 
 async fn handle_function_call(
@@ -2403,47 +2436,41 @@ async fn handle_function_call(
                 timeout_ms: Option<u64>,
             }
 
-            let args = match serde_json::from_str::<UnifiedExecArgs>(&arguments) {
-                Ok(args) => args,
-                Err(err) => {
-                    return Err(FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}")));
-                }
-            };
+            let args: UnifiedExecArgs = serde_json::from_str(&arguments).map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {err}"
+                ))
+            })?;
 
-            handle_unified_exec_tool_call(
-                sess,
-                args.session_id,
-                args.input,
-                args.timeout_ms,
-            )
-            .await
+            handle_unified_exec_tool_call(sess, args.session_id, args.input, args.timeout_ms).await
         }
         "view_image" => {
             #[derive(serde::Deserialize)]
             struct SeeImageArgs {
                 path: String,
             }
-            let args = match serde_json::from_str::<SeeImageArgs>(&arguments) {
-                Ok(a) => a,
-                Err(e) => {
-                    return Err(FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}")));
-                }
-            };
+            let args: SeeImageArgs = serde_json::from_str(&arguments).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {e}"
+                ))
+            })?;
             let abs = turn_context.resolve_path(Some(args.path));
-            sess
-                .inject_input(vec![InputItem::LocalImage { path: abs }])
+            sess.inject_input(vec![InputItem::LocalImage { path: abs }])
                 .await
-                .map_err(|_| -> FunctionCallError::RespondToModel("unable to attach image (no active task)".to_string()))?
+                .map_err(|_| {
+                    FunctionCallError::RespondToModel(
+                        "unable to attach image (no active task)".to_string(),
+                    )
+                })?;
 
             Ok("attached local image path".to_string())
         }
         "apply_patch" => {
-            let args = match serde_json::from_str::<ApplyPatchToolArgs>(&arguments) {
-                Ok(a) => a,
-                Err(e) => {
-                    return Err(FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}")));
-                }
-            };
+            let args: ApplyPatchToolArgs = serde_json::from_str(&arguments).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {e}"
+                ))
+            })?;
             let exec_params = ExecParams {
                 command: vec!["apply_patch".to_string(), args.input.clone()],
                 cwd: turn_context.cwd.clone(),
@@ -2465,31 +2492,27 @@ async fn handle_function_call(
         "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
         EXEC_COMMAND_TOOL_NAME => {
             // TODO(mbolin): Sandbox check.
-            let exec_params = match serde_json::from_str::<ExecCommandParams>(&arguments) {
-                Ok(params) => params,
-                Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: Some(false),
-                        },
-                    };
-                }
-            };
+            let exec_params: ExecCommandParams = serde_json::from_str(&arguments).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {e}"
+                ))
+            })?;
             let result = sess
                 .session_manager
                 .handle_exec_command_request(exec_params)
                 .await;
-            let function_call_output = crate::exec_command::result_into_payload(result);
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: function_call_output,
+            match result {
+                Ok(output) => Ok(output.to_text_output()),
+                Err(err) => Err(FunctionCallError::RespondToModel(err)),
             }
         }
         WRITE_STDIN_TOOL_NAME => {
-            let write_stdin_params = serde_json::from_str::<WriteStdinParams>(&arguments)
-                .map_err(|e| -> FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}")))?;
+            let write_stdin_params =
+                serde_json::from_str::<WriteStdinParams>(&arguments).map_err(|e| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse function arguments: {e}"
+                    ))
+                })?;
 
             let result = sess
                 .session_manager
@@ -2506,7 +2529,9 @@ async fn handle_function_call(
                 }
                 None => {
                     // Unknown function: reply with structured failure so the model can adapt.
-                    Err(FunctionCallError::RespondToModel(format!("unsupported call: {tool_name}")))
+                    Err(FunctionCallError::RespondToModel(format!(
+                        "unsupported call: {name}"
+                    )))
                 }
             }
         }
@@ -2533,7 +2558,8 @@ async fn handle_custom_tool_call(
                 with_escalated_permissions: None,
                 justification: None,
             };
-            let resp = handle_container_exec_with_params(
+
+            handle_container_exec_with_params(
                 exec_params,
                 sess,
                 turn_context,
@@ -2541,26 +2567,13 @@ async fn handle_custom_tool_call(
                 sub_id,
                 call_id,
             )
-            .await;
-
-            // Convert function-call style output into a custom tool call output
-            match resp {
-                ResponseInputItem::FunctionCallOutput { call_id, output } => {
-                    ResponseInputItem::CustomToolCallOutput {
-                        call_id,
-                        output: output.content,
-                    }
-                }
-                // Pass through if already a custom tool output or other variant
-                other => other,
-            }
+            .await
         }
         _ => {
             debug!("unexpected CustomToolCall from stream");
-            ResponseInputItem::CustomToolCallOutput {
-                call_id,
-                output: format!("unsupported custom tool call: {name}"),
-            }
+            Err(FunctionCallError::RespondToModel(format!(
+                "unsupported custom tool call: {name}"
+            )))
         }
     }
 }
@@ -2579,16 +2592,13 @@ fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> Ex
 fn parse_container_exec_arguments(
     arguments: String,
     turn_context: &TurnContext,
-    call_id: &str,
+    _call_id: &str,
 ) -> Result<ExecParams, FunctionCallError> {
-    // parse command
-    match serde_json::from_str::<ShellToolCallParams>(&arguments) {
-        Ok(shell_tool_call_params) => Ok(to_exec_params(shell_tool_call_params, turn_context)),
-        Err(e) => {
-            // allow model to re-sample
-            Err(FunctionCallError::RespondToModel("failed to parse function arguments: {e}"))
-        }
-    }
+    serde_json::from_str::<ShellToolCallParams>(&arguments)
+        .map(|p| to_exec_params(p, turn_context))
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
+        })
 }
 
 pub struct ExecInvokeArgs<'a> {
@@ -2625,20 +2635,14 @@ async fn handle_container_exec_with_params(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     call_id: String,
-) -> ResponseInputItem::FunctionCallOutput {
+) -> Result<String, FunctionCallError> {
     if params.with_escalated_permissions.unwrap_or(false)
         && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
     {
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: format!(
-                    "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-                    policy = turn_context.approval_policy
-                ),
-                success: None,
-            },
-        };
+        return Err(FunctionCallError::RespondToModel(format!(
+            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+            policy = turn_context.approval_policy
+        )));
     }
 
     // check if this was a patch, and apply it if so
@@ -2655,13 +2659,9 @@ async fn handle_container_exec_with_params(
             // It looks like an invocation of `apply_patch`, but we
             // could not resolve it into a patch that would apply
             // cleanly. Return to model for resample.
-            return ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("error: {parse_error:#}"),
-                    success: None,
-                },
-            };
+            return Err(FunctionCallError::RespondToModel(format!(
+                "error: {parse_error:#}"
+            )));
         }
         MaybeApplyPatchVerified::ShellParseError(error) => {
             trace!("Failed to parse shell command, {error:?}");
@@ -2679,13 +2679,9 @@ async fn handle_container_exec_with_params(
                 .ok()
                 .map(|p| p.to_string_lossy().to_string());
             let Some(path_to_codex) = path_to_codex else {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: "failed to determine path to codex executable".to_string(),
-                        success: None,
-                    },
-                };
+                return Err(FunctionCallError::RespondToModel(
+                    "failed to determine path to codex executable".to_string(),
+                ));
             };
 
             let params = ExecParams {
@@ -2751,13 +2747,9 @@ async fn handle_container_exec_with_params(
                     sess.add_approved_command(params.command.clone()).await;
                 }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: "exec command rejected by user".to_string(),
-                            success: None,
-                        },
-                    };
+                    return Err(FunctionCallError::RespondToModel(
+                        "exec command rejected by user".to_string(),
+                    ));
                 }
             }
             // No sandboxing is applied because the user has given
@@ -2767,13 +2759,9 @@ async fn handle_container_exec_with_params(
             SandboxType::None
         }
         SafetyCheck::Reject { reason } => {
-            return ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("exec command rejected: {reason}"),
-                    success: None,
-                },
-            };
+            return Err(FunctionCallError::RespondToModel(format!(
+                "exec command rejected: {reason}"
+            )));
         }
     };
 
@@ -2820,15 +2808,11 @@ async fn handle_container_exec_with_params(
     match output_result {
         Ok(output) => {
             let ExecToolCallOutput { exit_code, .. } = &output;
-
-            let is_success = *exit_code == 0;
             let content = format_exec_output(&output);
-            ResponseInputItem::FunctionCallOutput {
-                call_id: call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    content,
-                    success: Some(is_success),
-                },
+            if *exit_code == 0 {
+                Ok(content)
+            } else {
+                Err(FunctionCallError::RespondToModel(content))
             }
         }
         Err(CodexErr::Sandbox(error)) => {
@@ -2843,13 +2827,9 @@ async fn handle_container_exec_with_params(
             )
             .await
         }
-        Err(e) => ResponseInputItem::FunctionCallOutput {
-            call_id: call_id.clone(),
-            output: FunctionCallOutputPayload {
-                content: format!("execution error: {e}"),
-                success: None,
-            },
-        },
+        Err(e) => Err(FunctionCallError::RespondToModel(format!(
+            "execution error: {e}"
+        ))),
     }
 }
 
@@ -2861,35 +2841,23 @@ async fn handle_sandbox_error(
     sandbox_type: SandboxType,
     sess: &Session,
     turn_context: &TurnContext,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     let call_id = exec_command_context.call_id.clone();
     let sub_id = exec_command_context.sub_id.clone();
     let cwd = exec_command_context.cwd.clone();
 
     if let SandboxErr::Timeout { output } = &error {
         let content = format_exec_output(output);
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content,
-                success: Some(false),
-            },
-        };
+        return Err(FunctionCallError::RespondToModel(content));
     }
 
     // Early out if either the user never wants to be asked for approval, or
     // we're letting the model manage escalation requests. Otherwise, continue
     match turn_context.approval_policy {
         AskForApproval::Never | AskForApproval::OnRequest => {
-            return ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!(
-                        "failed in sandbox {sandbox_type:?} with execution error: {error}"
-                    ),
-                    success: Some(false),
-                },
-            };
+            return Err(FunctionCallError::RespondToModel(format!(
+                "failed in sandbox {sandbox_type:?} with execution error: {error}"
+            )));
         }
         AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
     }
@@ -2955,36 +2923,23 @@ async fn handle_sandbox_error(
             match retry_output_result {
                 Ok(retry_output) => {
                     let ExecToolCallOutput { exit_code, .. } = &retry_output;
-
-                    let is_success = *exit_code == 0;
                     let content = format_exec_output(&retry_output);
-
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id: call_id.clone(),
-                        output: FunctionCallOutputPayload {
-                            content,
-                            success: Some(is_success),
-                        },
+                    if *exit_code == 0 {
+                        Ok(content)
+                    } else {
+                        Err(FunctionCallError::RespondToModel(content))
                     }
                 }
-                Err(e) => ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        content: format!("retry failed: {e}"),
-                        success: None,
-                    },
-                },
+                Err(e) => Err(FunctionCallError::RespondToModel(format!(
+                    "retry failed: {e}"
+                ))),
             }
         }
         ReviewDecision::Denied | ReviewDecision::Abort => {
             // Fall through to original failure handling.
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: "exec command rejected by user".to_string(),
-                    success: None,
-                },
-            }
+            Err(FunctionCallError::RespondToModel(
+                "exec command rejected by user".to_string(),
+            ))
         }
     }
 }
@@ -3705,8 +3660,8 @@ mod tests {
         )
         .await;
 
-        let ResponseInputItem::FunctionCallOutput { output, .. } = resp else {
-            panic!("expected FunctionCallOutput");
+        let Err(FunctionCallError::RespondToModel(output)) = resp else {
+            panic!("expected error result");
         };
 
         let expected = format!(
@@ -3714,7 +3669,7 @@ mod tests {
             policy = turn_context.approval_policy
         );
 
-        pretty_assertions::assert_eq!(output.content, expected);
+        pretty_assertions::assert_eq!(output, expected);
 
         // Now retry the same command WITHOUT escalated permissions; should succeed.
         // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
@@ -3730,9 +3685,7 @@ mod tests {
         )
         .await;
 
-        let ResponseInputItem::FunctionCallOutput { output, .. } = resp2 else {
-            panic!("expected FunctionCallOutput on retry");
-        };
+        let output = resp2.expect("expected Ok result");
 
         #[derive(Deserialize, PartialEq, Eq, Debug)]
         struct ResponseExecMetadata {
@@ -3746,10 +3699,10 @@ mod tests {
         }
 
         let exec_output: ResponseExecOutput =
-            serde_json::from_str(&output.content).expect("valid exec output json");
+            serde_json::from_str(&output).expect("valid exec output json");
 
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
-        pretty_assertions::assert_eq!(output.success, Some(true));
+        // success is conveyed via Ok(...) in the new API
     }
 }

@@ -3,13 +3,13 @@ use std::time::Instant;
 use tracing::error;
 
 use crate::codex::Session;
+use crate::function_tool::FunctionCallError;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
+use mcp_types::CallToolResult;
 
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
@@ -20,25 +20,18 @@ pub(crate) async fn handle_mcp_tool_call(
     server: String,
     tool_name: String,
     arguments: String,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
     // is not.
     let arguments_value = if arguments.trim().is_empty() {
         None
     } else {
-        match serde_json::from_str::<serde_json::Value>(&arguments) {
-            Ok(value) => Some(value),
-            Err(e) => {
+        Some(
+            serde_json::from_str::<serde_json::Value>(&arguments).map_err(|e| {
                 error!("failed to parse tool call arguments: {e}");
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        content: format!("err: {e}"),
-                        success: Some(false),
-                    },
-                };
-            }
-        }
+                FunctionCallError::RespondToModel(format!("err: {e}"))
+            })?,
+        )
     };
 
     let invocation = McpInvocation {
@@ -68,7 +61,20 @@ pub(crate) async fn handle_mcp_tool_call(
 
     notify_mcp_tool_call_event(sess, sub_id, tool_call_end_event.clone()).await;
 
-    ResponseInputItem::McpToolCallOutput { call_id, result }
+    match result {
+        Ok(call_result) => {
+            // Convert structured or unstructured content to a JSON string
+            let is_error = call_result.is_error.unwrap_or(false);
+            let content = stringify_call_tool_result(&call_result)
+                .map_err(FunctionCallError::RespondToModel)?;
+            if is_error {
+                Err(FunctionCallError::RespondToModel(content))
+            } else {
+                Ok(content)
+            }
+        }
+        Err(err) => Err(FunctionCallError::RespondToModel(err)),
+    }
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, sub_id: &str, event: EventMsg) {
@@ -77,4 +83,13 @@ async fn notify_mcp_tool_call_event(sess: &Session, sub_id: &str, event: EventMs
         msg: event,
     })
     .await;
+}
+
+fn stringify_call_tool_result(result: &CallToolResult) -> Result<String, String> {
+    if let Some(structured) = &result.structured_content
+        && structured != &serde_json::Value::Null
+    {
+        return serde_json::to_string(structured).map_err(|e| e.to_string());
+    }
+    serde_json::to_string(&result.content).map_err(|e| e.to_string())
 }
