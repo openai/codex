@@ -105,6 +105,10 @@ impl dyn HistoryCell {
     pub(crate) fn as_any(&self) -> &dyn Any {
         self
     }
+
+    pub(crate) fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -542,9 +546,7 @@ impl WidgetRef for &ExecCell {
 }
 
 impl ExecCell {
-    /// Convert an active exec cell into a failed, completed exec cell.
-    /// Any call without output is marked as failed with a red ✗.
-    pub(crate) fn into_failed(mut self) -> ExecCell {
+    pub(crate) fn mark_failed(&mut self) {
         for call in self.calls.iter_mut() {
             if call.output.is_none() {
                 let elapsed = call
@@ -561,7 +563,6 @@ impl ExecCell {
                 });
             }
         }
-        self
     }
 
     pub(crate) fn new(call: ExecCall) -> Self {
@@ -942,6 +943,179 @@ impl HistoryCell for CompositeHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct McpToolCallCell {
+    call_id: String,
+    invocation: McpInvocation,
+    start_time: Instant,
+    duration: Option<Duration>,
+    result: Option<Result<mcp_types::CallToolResult, String>>,
+}
+
+impl McpToolCallCell {
+    pub(crate) fn new(call_id: String, invocation: McpInvocation) -> Self {
+        Self {
+            call_id,
+            invocation,
+            start_time: Instant::now(),
+            duration: None,
+            result: None,
+        }
+    }
+
+    pub(crate) fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    pub(crate) fn complete(
+        &mut self,
+        duration: Duration,
+        result: Result<mcp_types::CallToolResult, String>,
+    ) -> Option<Box<dyn HistoryCell>> {
+        let image_cell = try_new_completed_mcp_tool_call_with_image_output(&result)
+            .map(|cell| Box::new(cell) as Box<dyn HistoryCell>);
+        self.duration = Some(duration);
+        self.result = Some(result);
+        image_cell
+    }
+
+    fn success(&self) -> Option<bool> {
+        match self.result.as_ref() {
+            Some(Ok(result)) => Some(!result.is_error.unwrap_or(false)),
+            Some(Err(_)) => Some(false),
+            None => None,
+        }
+    }
+
+    pub(crate) fn mark_failed(&mut self) {
+        let elapsed = self.start_time.elapsed();
+        self.duration = Some(elapsed);
+        self.result = Some(Err("interrupted".to_string()));
+    }
+
+    fn render_content_block(block: &mcp_types::ContentBlock, width: usize) -> String {
+        match block {
+            mcp_types::ContentBlock::TextContent(text) => {
+                format_and_truncate_tool_result(&text.text, TOOL_CALL_MAX_LINES, width)
+            }
+            mcp_types::ContentBlock::ImageContent(_) => "<image content>".to_string(),
+            mcp_types::ContentBlock::AudioContent(_) => "<audio content>".to_string(),
+            mcp_types::ContentBlock::EmbeddedResource(resource) => {
+                let uri = match &resource.resource {
+                    EmbeddedResourceResource::TextResourceContents(text) => text.uri.clone(),
+                    EmbeddedResourceResource::BlobResourceContents(blob) => blob.uri.clone(),
+                };
+                format!("embedded resource: {uri}")
+            }
+            mcp_types::ContentBlock::ResourceLink(ResourceLink { uri, .. }) => {
+                format!("link: {uri}")
+            }
+        }
+    }
+}
+
+impl HistoryCell for McpToolCallCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let status = self.success();
+        let bullet = match status {
+            Some(true) => "•".green().bold(),
+            Some(false) => "•".red().bold(),
+            None => spinner(Some(self.start_time)),
+        };
+        let header_text = if status.is_some() {
+            "Called"
+        } else {
+            "Calling"
+        };
+
+        let invocation_line = line_to_static(&format_mcp_invocation(self.invocation.clone()));
+        let mut compact_spans = vec![bullet.clone(), " ".into(), header_text.bold(), " ".into()];
+        let mut compact_header = Line::from(compact_spans.clone());
+        let reserved = compact_header.width();
+
+        let inline_invocation =
+            invocation_line.width() <= (width as usize).saturating_sub(reserved);
+
+        if inline_invocation {
+            compact_header.extend(invocation_line.spans.clone());
+            lines.push(compact_header);
+        } else {
+            compact_spans.pop(); // drop trailing space for standalone header
+            lines.push(Line::from(compact_spans));
+
+            let opts = RtOptions::new((width as usize).saturating_sub(4))
+                .initial_indent("".into())
+                .subsequent_indent("    ".into());
+            let wrapped = word_wrap_line(&invocation_line, opts);
+            let body_lines: Vec<Line<'static>> = wrapped.iter().map(line_to_static).collect();
+            lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
+        }
+
+        let mut detail_lines: Vec<Line<'static>> = Vec::new();
+
+        if let Some(result) = &self.result {
+            match result {
+                Ok(mcp_types::CallToolResult { content, .. }) => {
+                    if !content.is_empty() {
+                        for block in content {
+                            let text = Self::render_content_block(block, width as usize);
+                            for segment in text.split('\n') {
+                                let line = Line::from(segment.to_string().dim());
+                                let wrapped = word_wrap_line(
+                                    &line,
+                                    RtOptions::new((width as usize).saturating_sub(4))
+                                        .initial_indent("".into())
+                                        .subsequent_indent("    ".into()),
+                                );
+                                detail_lines.extend(wrapped.iter().map(line_to_static));
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    let err_line = Line::from(format!("Error: {err}").dim());
+                    let wrapped = word_wrap_line(
+                        &err_line,
+                        RtOptions::new((width as usize).saturating_sub(4))
+                            .initial_indent("".into())
+                            .subsequent_indent("    ".into()),
+                    );
+                    detail_lines.extend(wrapped.iter().map(line_to_static));
+                }
+            }
+        }
+
+        if !detail_lines.is_empty() {
+            let initial_prefix: Span<'static> = if inline_invocation {
+                "  └ ".dim()
+            } else {
+                "    ".into()
+            };
+            lines.extend(prefix_lines(detail_lines, initial_prefix, "    ".into()));
+        }
+
+        lines
+    }
+}
+
+impl WidgetRef for &McpToolCallCell {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        if area.height == 0 {
+            return;
+        }
+        let lines = self.display_lines(area.width);
+        let max_rows = area.height as usize;
+        let rendered = if lines.len() > max_rows {
+            lines[lines.len() - max_rows..].to_vec()
+        } else {
+            lines
+        };
+
+        Text::from(rendered).render(area, buf);
+    }
+}
+
 fn spinner(start_time: Option<Instant>) -> Span<'static> {
     const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     let idx = start_time
@@ -951,11 +1125,11 @@ fn spinner(start_time: Option<Instant>) -> Span<'static> {
     ch.to_string().into()
 }
 
-pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> PlainHistoryCell {
-    let title_line = Line::from(vec!["tool".magenta(), " running...".dim()]);
-    let lines: Vec<Line> = vec![title_line, format_mcp_invocation(invocation)];
-
-    PlainHistoryCell { lines }
+pub(crate) fn new_active_mcp_tool_call(
+    call_id: String,
+    invocation: McpInvocation,
+) -> McpToolCallCell {
+    McpToolCallCell::new(call_id, invocation)
 }
 
 pub(crate) fn new_web_search_call(query: String) -> PlainHistoryCell {
@@ -1001,79 +1175,6 @@ fn try_new_completed_mcp_tool_call_with_image_output(
         }
         _ => None,
     }
-}
-
-pub(crate) fn new_completed_mcp_tool_call(
-    num_cols: usize,
-    invocation: McpInvocation,
-    duration: Duration,
-    success: bool,
-    result: Result<mcp_types::CallToolResult, String>,
-) -> Box<dyn HistoryCell> {
-    if let Some(cell) = try_new_completed_mcp_tool_call_with_image_output(&result) {
-        return Box::new(cell);
-    }
-
-    let duration = format_duration(duration);
-    let status_str = if success { "success" } else { "failed" };
-    let title_line = Line::from(vec![
-        "tool".magenta(),
-        " ".into(),
-        if success {
-            status_str.green()
-        } else {
-            status_str.red()
-        },
-        format!(", duration: {duration}").dim(),
-    ]);
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(title_line);
-    lines.push(format_mcp_invocation(invocation));
-
-    match result {
-        Ok(mcp_types::CallToolResult { content, .. }) => {
-            if !content.is_empty() {
-                lines.push(Line::from(""));
-
-                for tool_call_result in content {
-                    let line_text = match tool_call_result {
-                        mcp_types::ContentBlock::TextContent(text) => {
-                            format_and_truncate_tool_result(
-                                &text.text,
-                                TOOL_CALL_MAX_LINES,
-                                num_cols,
-                            )
-                        }
-                        mcp_types::ContentBlock::ImageContent(_) => {
-                            // TODO show images even if they're not the first result, will require a refactor of `CompletedMcpToolCall`
-                            "<image content>".to_string()
-                        }
-                        mcp_types::ContentBlock::AudioContent(_) => "<audio content>".to_string(),
-                        mcp_types::ContentBlock::EmbeddedResource(resource) => {
-                            let uri = match resource.resource {
-                                EmbeddedResourceResource::TextResourceContents(text) => text.uri,
-                                EmbeddedResourceResource::BlobResourceContents(blob) => blob.uri,
-                            };
-                            format!("embedded resource: {uri}")
-                        }
-                        mcp_types::ContentBlock::ResourceLink(ResourceLink { uri, .. }) => {
-                            format!("link: {uri}")
-                        }
-                    };
-                    lines.push(Line::styled(
-                        line_text,
-                        Style::default().add_modifier(Modifier::DIM),
-                    ));
-                }
-            }
-        }
-        Err(e) => {
-            lines.push(vec!["Error: ".red().bold(), e.into()].into());
-        }
-    };
-
-    Box::new(PlainHistoryCell { lines })
 }
 
 #[allow(clippy::disallowed_methods)]
@@ -1743,6 +1844,11 @@ mod tests {
     use codex_core::config::ConfigToml;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    use mcp_types::CallToolResult;
+    use mcp_types::ContentBlock;
+    use mcp_types::TextContent;
 
     fn test_config() -> Config {
         Config::load_from_base_config_with_overrides(
@@ -1767,6 +1873,192 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines())
+    }
+
+    #[test]
+    fn active_mcp_tool_call_snapshot() {
+        let invocation = McpInvocation {
+            server: "search".into(),
+            tool: "find_docs".into(),
+            arguments: Some(json!({
+                "query": "ratatui styling",
+                "limit": 3,
+            })),
+        };
+
+        let cell = new_active_mcp_tool_call("call-1".into(), invocation);
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_success_snapshot() {
+        let invocation = McpInvocation {
+            server: "search".into(),
+            tool: "find_docs".into(),
+            arguments: Some(json!({
+                "query": "ratatui styling",
+                "limit": 3,
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                annotations: None,
+                text: "Found styling guidance in styles.md".into(),
+                r#type: "text".into(),
+            })],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-2".into(), invocation);
+        assert!(
+            cell.complete(Duration::from_millis(1420), Ok(result))
+                .is_none()
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_error_snapshot() {
+        let invocation = McpInvocation {
+            server: "search".into(),
+            tool: "find_docs".into(),
+            arguments: Some(json!({
+                "query": "ratatui styling",
+                "limit": 3,
+            })),
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-3".into(), invocation);
+        assert!(
+            cell.complete(Duration::from_secs(2), Err("network timeout".into()))
+                .is_none()
+        );
+
+        let rendered = render_lines(&cell.display_lines(80)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_multiple_outputs_snapshot() {
+        let invocation = McpInvocation {
+            server: "search".into(),
+            tool: "find_docs".into(),
+            arguments: Some(json!({
+                "query": "ratatui styling",
+                "limit": 3,
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![
+                ContentBlock::TextContent(TextContent {
+                    annotations: None,
+                    text: "Found styling guidance in styles.md and additional notes in CONTRIBUTING.md.".into(),
+                    r#type: "text".into(),
+                }),
+                ContentBlock::ResourceLink(ResourceLink {
+                    annotations: None,
+                    description: Some("Link to styles documentation".into()),
+                    mime_type: None,
+                    name: "styles.md".into(),
+                    size: None,
+                    title: Some("Styles".into()),
+                    r#type: "resource_link".into(),
+                    uri: "file:///docs/styles.md".into(),
+                }),
+            ],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-4".into(), invocation);
+        assert!(
+            cell.complete(Duration::from_millis(640), Ok(result))
+                .is_none()
+        );
+
+        let rendered = render_lines(&cell.display_lines(48)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_wrapped_outputs_snapshot() {
+        let invocation = McpInvocation {
+            server: "metrics".into(),
+            tool: "get_nearby_metric".into(),
+            arguments: Some(json!({
+                "query": "very_long_query_that_needs_wrapping_to_display_properly_in_the_history",
+                "limit": 1,
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                annotations: None,
+                text: "Line one of the response, which is quite long and needs wrapping.\nLine two continues the response with more detail.".into(),
+                r#type: "text".into(),
+            })],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-5".into(), invocation);
+        assert!(
+            cell.complete(Duration::from_millis(1280), Ok(result))
+                .is_none()
+        );
+
+        let rendered = render_lines(&cell.display_lines(40)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
+        let invocation = McpInvocation {
+            server: "metrics".into(),
+            tool: "summary".into(),
+            arguments: Some(json!({
+                "metric": "trace.latency",
+                "window": "15m",
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![
+                ContentBlock::TextContent(TextContent {
+                    annotations: None,
+                    text: "Latency summary: p50=120ms, p95=480ms.".into(),
+                    r#type: "text".into(),
+                }),
+                ContentBlock::TextContent(TextContent {
+                    annotations: None,
+                    text: "No anomalies detected.".into(),
+                    r#type: "text".into(),
+                }),
+            ],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-6".into(), invocation);
+        assert!(
+            cell.complete(Duration::from_millis(320), Ok(result))
+                .is_none()
+        );
+
+        let rendered = render_lines(&cell.display_lines(120)).join("\n");
+
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]
