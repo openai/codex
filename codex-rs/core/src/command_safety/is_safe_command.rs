@@ -33,7 +33,6 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
         return true;
     }
     false
-
 }
 
 fn is_safe_to_call_with_exec(command: &[String]) -> bool {
