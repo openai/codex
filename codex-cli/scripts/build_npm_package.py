@@ -15,6 +15,11 @@ CODEX_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = CODEX_CLI_ROOT.parent
 GITHUB_REPO = "openai/codex"
 
+# The docs are not clear on what the expected value/format of
+# workflow/workflowName is:
+# https://cli.github.com/manual/gh_run_list
+WORKFLOW_NAME = ".github/workflows/rust-release.yml"
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
@@ -163,10 +168,8 @@ def install_native_binaries(staging_dir: Path, workflow_url: str | None) -> None
 
 def resolve_latest_alpha_workflow_url() -> str:
     version = determine_latest_alpha_version()
-    workflow_url = fetch_workflow_url_for_version(version)
-    if not workflow_url:
-        raise RuntimeError(f"Unable to locate workflow for version {version}.")
-    return workflow_url
+    workflow = resolve_release_workflow(version)
+    return workflow["url"]
 
 
 def determine_latest_alpha_version() -> str:
@@ -205,36 +208,6 @@ def list_releases() -> list[dict]:
     return releases
 
 
-def fetch_workflow_url_for_version(version: str) -> str | None:
-    ref = f"rust-v{version}"
-    stdout = subprocess.check_output(
-        [
-            "gh",
-            "run",
-            "list",
-            "--branch",
-            ref,
-            "--limit",
-            "20",
-            "--json",
-            "workflowName,url",
-        ],
-        text=True,
-    )
-
-    try:
-        runs = json.loads(stdout or "[]")
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Unable to parse workflow run listing.") from exc
-
-    for run in runs:
-        if run.get("workflowName") == "rust-release":
-            url = run.get("url")
-            if url:
-                return url
-    return None
-
-
 def resolve_release_workflow(version: str) -> dict:
     stdout = subprocess.check_output(
         [
@@ -245,12 +218,14 @@ def resolve_release_workflow(version: str) -> dict:
             f"rust-v{version}",
             "--json",
             "workflowName,url,headSha",
+            "--workflow",
+            WORKFLOW_NAME,
             "--jq",
-            'first(.[] | select(.workflowName == "rust-release"))',
+            "first(.[])",
         ],
         text=True,
     )
-    workflow = json.loads(stdout)
+    workflow = json.loads(stdout or "[]")
     if not workflow:
         raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
     return workflow
