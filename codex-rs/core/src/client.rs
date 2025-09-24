@@ -489,33 +489,40 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
 }
 
 fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
-    let primary_used_percent = parse_header_f64(headers, "x-codex-primary-used-percent");
-    let primary_window_minutes = parse_header_u64(headers, "x-codex-primary-window-minutes");
-    let primary_resets_in_seconds =
-        parse_header_u64(headers, "x-codex-primary-reset-after-seconds");
+    let primary = parse_rate_limit_window(
+        headers,
+        "x-codex-primary-used-percent",
+        "x-codex-primary-window-minutes",
+        "x-codex-primary-reset-after-seconds",
+    );
 
-    let primary = primary_used_percent.map(|used_percent| RateLimitWindow {
-        used_percent,
-        window_minutes: primary_window_minutes,
-        resets_in_seconds: primary_resets_in_seconds,
-    });
-
-    let secondary_used_percent = parse_header_f64(headers, "x-codex-secondary-used-percent");
-    let secondary_window_minutes = parse_header_u64(headers, "x-codex-secondary-window-minutes");
-    let secondary_resets_in_seconds =
-        parse_header_u64(headers, "x-codex-secondary-reset-after-seconds");
-
-    let secondary = secondary_used_percent.map(|used_percent| RateLimitWindow {
-        used_percent,
-        window_minutes: secondary_window_minutes,
-        resets_in_seconds: secondary_resets_in_seconds,
-    });
+    let secondary = parse_rate_limit_window(
+        headers,
+        "x-codex-secondary-used-percent",
+        "x-codex-secondary-window-minutes",
+        "x-codex-secondary-reset-after-seconds",
+    );
 
     if primary.is_none() && secondary.is_none() {
         return None;
     }
 
     Some(RateLimitSnapshot { primary, secondary })
+}
+
+fn parse_rate_limit_window(
+    headers: &HeaderMap,
+    used_percent_header: &str,
+    window_minutes_header: &str,
+    resets_header: &str,
+) -> Option<RateLimitWindow> {
+    let used_percent = parse_header_f64(headers, used_percent_header)?;
+
+    Some(RateLimitWindow {
+        used_percent,
+        window_minutes: parse_header_u64(headers, window_minutes_header),
+        resets_in_seconds: parse_header_u64(headers, resets_header),
+    })
 }
 
 fn parse_header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
