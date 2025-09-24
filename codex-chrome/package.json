@@ -1,0 +1,44 @@
+{
+  "name": "codex-chrome",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "vite:build": "vite build",
+    "build": "node scripts/build.js",
+    "build:watch": "vite build --watch",
+    "test": "vitest",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src --ext .ts,.svelte",
+    "format": "prettier --write 'src/**/*.{ts,svelte,html,css}'"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.1.2",
+    "@tailwindcss/postcss": "^4.1.13",
+    "@testing-library/svelte": "^5.2.8",
+    "@types/chrome": "^0.1.12",
+    "@typescript-eslint/eslint-plugin": "^8.44.1",
+    "@typescript-eslint/parser": "^8.44.1",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.36.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-svelte": "^3.12.4",
+    "jsdom": "^27.0.0",
+    "postcss": "^8.5.6",
+    "prettier": "^3.6.2",
+    "svelte": "^4.2.20",
+    "svelte-preprocess": "^6.0.3",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.2",
+    "vite": "^5.4.20",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "uuid": "^13.0.0",
+    "zod": "^4.1.11"
+  }
+}

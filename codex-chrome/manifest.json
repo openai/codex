@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Codex Chrome Agent",
+  "version": "0.1.0",
+  "description": "AI-powered browser automation agent preserving codex-rs SQ/EQ architecture",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "storage",
+    "scripting",
+    "webNavigation",
+    "sidePanel",
+    "contextMenus"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Codex Agent",
+    "default_icon": {
+      "16": "icons/icon16.svg",
+      "48": "icons/icon48.svg",
+      "128": "icons/icon128.svg"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }],
+  "icons": {
+    "16": "icons/icon16.svg",
+    "48": "icons/icon48.svg",
+    "128": "icons/icon128.svg"
+  },
+  "commands": {
+    "toggle-sidepanel": {
+      "suggested_key": {
+        "default": "Alt+Shift+C"
+      },
+      "description": "Toggle Codex side panel"
+    },
+    "quick-action": {
+      "suggested_key": {
+        "default": "Alt+Shift+Q"
+      },
+      "description": "Quick action on current page"
+    }
+  }
+}
