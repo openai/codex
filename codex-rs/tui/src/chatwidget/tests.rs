@@ -314,7 +314,7 @@ fn make_chatwidget_manual() -> (
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
-        active_exec_cell: None,
+        active_cell: None,
         config: cfg.clone(),
         auth_manager,
         session_header: SessionHeader::new(cfg.model),
@@ -551,9 +551,9 @@ fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, ex
 
 fn active_blob(chat: &ChatWidget) -> String {
     let lines = chat
-        .active_exec_cell
+        .active_cell
         .as_ref()
-        .expect("active exec cell present")
+        .expect("active cell present")
         .display_lines(80);
     lines_to_single_string(&lines)
 }
