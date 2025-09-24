@@ -28,6 +28,7 @@ use unicode_width::UnicodeWidthStr;
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
 const STATUS_LIMIT_BAR_EMPTY: &str = "░";
+const RESET_BULLET: &str = "·";
 
 fn label_display(label: &str) -> String {
     format!(" {label}: ")
@@ -308,9 +309,10 @@ impl StatusHistoryCell {
                     ];
 
                     if let Some(resets_at) = row.resets_at.as_ref() {
-                        let resets_span = Span::from(format!("Resets at: {resets_at}")).dim();
+                        let resets_span =
+                            Span::from(format!("{RESET_BULLET} resets {resets_at}")).dim();
                         let mut inline_spans = base_spans.clone();
-                        inline_spans.push(Span::from(" "));
+                        inline_spans.push(Span::from(" ").dim());
                         inline_spans.push(resets_span.clone());
 
                         if line_display_width(&Line::from(inline_spans.clone()))
@@ -396,7 +398,7 @@ impl RateLimitWindowDisplay {
             .resets_in_seconds
             .and_then(|seconds| i64::try_from(seconds).ok())
             .and_then(|secs| captured_at.checked_add_signed(ChronoDuration::seconds(secs)))
-            .map(|dt| dt.format("%b %-d, %Y %-I:%M %p").to_string());
+            .map(|dt| format_reset_timestamp(dt, captured_at));
 
         Self {
             used_percent: window.used_percent,
@@ -592,6 +594,15 @@ fn render_status_limit_progress_bar(percent_used: f64) -> String {
 
 fn format_status_limit_summary(percent_used: f64) -> String {
     format!("{percent_used:.0}% used")
+}
+
+fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> String {
+    let time = dt.format("%H:%M").to_string();
+    if dt.date_naive() == captured_at.date_naive() {
+        time
+    } else {
+        format!("{} ({time})", dt.format("%-d %b"))
+    }
 }
 
 fn title_case(s: &str) -> String {
