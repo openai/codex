@@ -19,12 +19,6 @@ pub struct SessionCreatedEvent {
     pub session_id: String,
 }
 
-/// Payload describing a newly created conversation item.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ItemAddedEvent {
-    pub item: ConversationItem,
-}
-
 /// Payload describing the completion of an existing conversation item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemCompletedEvent {
@@ -45,17 +39,6 @@ pub struct ConversationItem {
     pub details: ConversationItemDetails,
 }
 
-/// Lifecycle stages shared by all conversation items.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ConversationItemStatus {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-    Failed,
-}
-
 /// Typed payloads for each supported conversation item type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "item_type", rename_all = "snake_case")]
@@ -63,7 +46,7 @@ pub enum ConversationItemDetails {
     AssistantMessage(AssistantMessageItem),
     Reasoning(ReasoningItem),
     CommandExecution(CommandExecutionItem),
-    PatchApply(PatchApplyItem),
+    PatchApply(FileUpdateItem),
     McpToolCall(McpToolCallItem),
     WebSearch(WebSearchItem),
     Error(ErrorItem),
@@ -84,7 +67,16 @@ pub struct AssistantMessageItem {
 /// Model reasoning summary payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReasoningItem {
-    pub summary_text: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandExecutionStatus {
+    #[default]
+    InProgress,
+    Completed,
+    Failed,
 }
 
 /// Local shell command execution payload.
@@ -93,19 +85,20 @@ pub struct CommandExecutionItem {
     pub command: String,
     pub aggregated_output: String,
     pub exit_code: i32,
+    pub status: CommandExecutionStatus,
 }
 
 /// Single file change summary for a patch.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PatchChange {
+pub struct FileUpdateChange {
     pub path: String,
     pub kind: PatchChangeKind,
 }
 
 /// Patch application payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PatchApplyItem {
-    pub changes: Vec<PatchChange>,
+pub struct FileUpdateItem {
+    pub changes: Vec<FileUpdateChange>,
 }
 
 /// Known change kinds for a patch.
@@ -117,29 +110,28 @@ pub enum PatchChangeKind {
     Update,
 }
 
-/// MCP tool invocation payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum McpToolCallStatus {
+    #[default]
+    InProgress,
+    Completed,
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct McpToolCallItem {
     pub server: String,
     pub tool: String,
+    pub status: McpToolCallStatus,
 }
 
-/// Web search payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WebSearchItem {
     pub query: String,
 }
 
-/// Error payload attached to a conversation item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorItem {
     pub message: String,
-}
-
-/// Severity classification for errors.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ConversationErrorSeverity {
-    Fatal,
-    Warning,
 }

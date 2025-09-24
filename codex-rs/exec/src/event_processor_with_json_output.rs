@@ -13,6 +13,7 @@ use crate::exec_events::ReasoningItem;
 use crate::exec_events::SessionCreatedEvent;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::SessionConfiguredEvent;
@@ -35,7 +36,7 @@ impl EventProcessorWithJsonOutput {
         match &event.msg {
             EventMsg::SessionConfigured(ev) => self.handle_session_configured(ev),
             EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),
-            EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev.text.clone()),
+            EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
             EventMsg::Error(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
                 message: ev.message.clone(),
             })],
@@ -75,11 +76,13 @@ impl EventProcessorWithJsonOutput {
         })]
     }
 
-    fn handle_reasoning_event(&mut self, summary_text: String) -> Vec<ConversationEvent> {
+    fn handle_reasoning_event(&mut self, ev: &AgentReasoningEvent) -> Vec<ConversationEvent> {
         let item = ConversationItem {
             id: self.get_next_item_id(),
 
-            details: ConversationItemDetails::Reasoning(ReasoningItem { summary_text }),
+            details: ConversationItemDetails::Reasoning(ReasoningItem {
+                text: ev.text.clone(),
+            }),
         };
 
         vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
