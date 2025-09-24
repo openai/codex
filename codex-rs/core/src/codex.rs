@@ -738,7 +738,7 @@ impl Session {
             Some(turn_context.cwd.clone()),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
-            Some(self.services.user_shell.clone()),
+            Some(self.user_shell().clone()),
         )));
         items
     }
@@ -807,10 +807,8 @@ impl Session {
             .await;
 
         // Derive user message events and persist only UserMessage to rollout
-        let msgs = map_response_item_to_event_messages(
-            &response_item,
-            self.services.show_raw_agent_reasoning,
-        );
+        let msgs =
+            map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning());
         let user_msgs: Vec<RolloutItem> = msgs
             .into_iter()
             .filter_map(|m| match m {
@@ -1080,6 +1078,14 @@ impl Session {
 
     pub(crate) fn notifier(&self) -> &UserNotifier {
         &self.services.notifier
+    }
+
+    fn user_shell(&self) -> &shell::Shell {
+        &self.services.user_shell
+    }
+
+    fn show_raw_agent_reasoning(&self) -> bool {
+        self.services.show_raw_agent_reasoning
     }
 }
 
@@ -2236,7 +2242,7 @@ async fn try_run_turn(
                 sess.send_event(event).await;
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
-                if sess.services.show_raw_agent_reasoning {
+                if sess.show_raw_agent_reasoning() {
                     let event = Event {
                         id: sub_id.to_string(),
                         msg: EventMsg::AgentReasoningRawContentDelta(
@@ -2358,10 +2364,7 @@ async fn handle_response_item(
                     trace!("suppressing assistant Message in review mode");
                     Vec::new()
                 }
-                _ => map_response_item_to_event_messages(
-                    &item,
-                    sess.services.show_raw_agent_reasoning,
-                ),
+                _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning()),
             };
             for msg in msgs {
                 let event = Event {
@@ -2740,13 +2743,12 @@ fn maybe_translate_shell_command(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ExecParams {
-    let should_translate = matches!(sess.services.user_shell, crate::shell::Shell::PowerShell(_))
+    let should_translate = matches!(sess.user_shell(), crate::shell::Shell::PowerShell(_))
         || turn_context.shell_environment_policy.use_profile;
 
     if should_translate
         && let Some(command) = sess
-            .services
-            .user_shell
+            .user_shell()
             .format_default_shell_invocation(params.command.clone())
     {
         return ExecParams { command, ..params };
