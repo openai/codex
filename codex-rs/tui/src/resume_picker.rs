@@ -452,10 +452,10 @@ impl PickerState {
         let Some(active) = self.search_state.active_token() else {
             return;
         };
-        if let Some(token) = completed_token {
-            if token != active {
-                return;
-            }
+        if let Some(token) = completed_token
+            && token != active
+        {
+            return;
         }
         self.continue_search_if_needed();
     }
