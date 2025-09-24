@@ -78,5 +78,3 @@ async fn notify_mcp_tool_call_event(sess: &Session, sub_id: &str, event: EventMs
     })
     .await;
 }
-
-// no longer converts MCP result to string here; conversion happens at a higher layer.

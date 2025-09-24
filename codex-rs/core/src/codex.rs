@@ -2417,14 +2417,14 @@ async fn handle_unified_exec_tool_call(
         .map_err(|err| FunctionCallError::RespondToModel(format!("unified exec failed: {err}")))?;
 
     #[derive(Serialize)]
-    struct SerializedUnifiedExecResult<'a> {
+    struct SerializedUnifiedExecResult {
         session_id: Option<String>,
-        output: &'a str,
+        output: String,
     }
 
     serde_json::to_string(&SerializedUnifiedExecResult {
         session_id: value.session_id.map(|id| id.to_string()),
-        output: &value.output,
+        output: value.output,
     })
     .map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to serialize unified exec output: {err}"))
@@ -3721,6 +3721,5 @@ mod tests {
 
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
-        // success is conveyed via Ok(...) in the new API
     }
 }
