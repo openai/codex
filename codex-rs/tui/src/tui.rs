@@ -476,6 +476,36 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    /// Clear inline history rendered outside the viewport and reset pending inserts.
+    pub fn clear_history(&mut self) -> Result<()> {
+        use crossterm::QueueableCommand;
+        use crossterm::cursor::MoveTo;
+        use crossterm::terminal::Clear;
+        use crossterm::terminal::ClearType;
+        use std::io::Write;
+
+        {
+            let mut stdout = std::io::stdout();
+            stdout.queue(Clear(ClearType::Purge))?;
+            stdout.queue(MoveTo(0, 0))?;
+            stdout.flush()?;
+        }
+
+        self.pending_history_lines.clear();
+
+        if let Ok(size) = self.terminal.size() {
+            self.terminal.resize(size)?;
+            let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+            self.terminal.set_viewport_area(area);
+            if area.height > 0 {
+                self.terminal
+                    .set_cursor_position((0, area.bottom().saturating_sub(1)))?;
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn draw(
         &mut self,
         height: u16,
