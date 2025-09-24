@@ -27,8 +27,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use futures::prelude::*;
 
-pub(super) const COMPACT_TRIGGER_TEXT: &str = "Start Summarization";
-const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
+pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 #[derive(Template)]
@@ -44,13 +43,7 @@ pub(super) async fn spawn_compact_task(
     sub_id: String,
     input: Vec<InputItem>,
 ) {
-    let task = AgentTask::compact(
-        sess.clone(),
-        turn_context,
-        sub_id,
-        input,
-        SUMMARIZATION_PROMPT.to_string(),
-    );
+    let task = AgentTask::compact(sess.clone(), turn_context, sub_id, input);
     sess.set_task(task).await;
 }
 
@@ -60,17 +53,9 @@ pub(super) async fn run_inline_auto_compact_task(
 ) {
     let sub_id = sess.next_internal_sub_id();
     let input = vec![InputItem::Text {
-        text: COMPACT_TRIGGER_TEXT.to_string(),
+        text: SUMMARIZATION_PROMPT.to_string(),
     }];
-    run_compact_task_inner(
-        sess,
-        turn_context,
-        sub_id,
-        input,
-        SUMMARIZATION_PROMPT.to_string(),
-        false,
-    )
-    .await;
+    run_compact_task_inner(sess, turn_context, sub_id, input, false).await;
 }
 
 pub(super) async fn run_compact_task(
@@ -78,7 +63,6 @@ pub(super) async fn run_compact_task(
     turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
-    compact_instructions: String,
 ) {
     let start_event = Event {
         id: sub_id.clone(),
@@ -87,15 +71,7 @@ pub(super) async fn run_compact_task(
         }),
     };
     sess.send_event(start_event).await;
-    run_compact_task_inner(
-        sess.clone(),
-        turn_context,
-        sub_id.clone(),
-        input,
-        compact_instructions,
-        true,
-    )
-    .await;
+    run_compact_task_inner(sess.clone(), turn_context, sub_id.clone(), input, true).await;
     let event = Event {
         id: sub_id,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
@@ -110,19 +86,16 @@ async fn run_compact_task_inner(
     turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
-    compact_instructions: String,
     remove_task_on_completion: bool,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let instructions_override = compact_instructions;
     let turn_input = sess
         .turn_input_with_history(vec![initial_input_for_turn.clone().into()])
         .await;
 
     let prompt = Prompt {
         input: turn_input,
-        tools: Vec::new(),
-        base_instructions_override: Some(instructions_override),
+        ..Default::default()
     };
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();

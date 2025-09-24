@@ -5,6 +5,7 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::Result;
 use base64::Engine;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
@@ -76,13 +77,13 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
 }
 
 #[tokio::test]
-async fn end_to_end_login_flow_persists_auth_json() {
-    non_sandbox_test!();
+async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
+    non_sandbox_test!(result);
 
     let (issuer_addr, issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir()?;
     let codex_home = tmp.path().to_path_buf();
 
     // Seed auth.json with stale API key + tokens that should be overwritten.
@@ -97,9 +98,8 @@ async fn end_to_end_login_flow_persists_auth_json() {
     });
     std::fs::write(
         codex_home.join("auth.json"),
-        serde_json::to_string_pretty(&stale_auth).unwrap(),
-    )
-    .unwrap();
+        serde_json::to_string_pretty(&stale_auth)?,
+    )?;
 
     let state = "test_state_123".to_string();
 
@@ -114,25 +114,24 @@ async fn end_to_end_login_flow_persists_auth_json() {
         open_browser: false,
         force_state: Some(state),
     };
-    let server = run_login_server(opts).unwrap();
+    let server = run_login_server(opts)?;
     let login_port = server.actual_port;
 
     // Simulate browser callback, and follow redirect to /success
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .unwrap();
+        .build()?;
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123");
-    let resp = client.get(&url).send().await.unwrap();
+    let resp = client.get(&url).send().await?;
     assert!(resp.status().is_success());
 
     // Wait for server shutdown
-    server.block_until_done().await.unwrap();
+    server.block_until_done().await?;
 
     // Validate auth.json
     let auth_path = codex_home.join("auth.json");
-    let data = std::fs::read_to_string(&auth_path).unwrap();
-    let json: serde_json::Value = serde_json::from_str(&data).unwrap();
+    let data = std::fs::read_to_string(&auth_path)?;
+    let json: serde_json::Value = serde_json::from_str(&data)?;
     // The following assert is here because of the old oauth flow that exchanges tokens for an
     // API key. See obtain_api_key in server.rs for details. Once we remove this old mechanism
     // from the code, this test should be updated to expect that the API key is no longer present.
@@ -143,16 +142,17 @@ async fn end_to_end_login_flow_persists_auth_json() {
 
     // Stop mock issuer
     drop(issuer_handle);
+    Ok(())
 }
 
 #[tokio::test]
-async fn creates_missing_codex_home_dir() {
-    non_sandbox_test!();
+async fn creates_missing_codex_home_dir() -> Result<()> {
+    non_sandbox_test!(result);
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
-    let tmp = tempdir().unwrap();
+    let tmp = tempdir()?;
     let codex_home = tmp.path().join("missing-subdir"); // does not exist
 
     let state = "state2".to_string();
@@ -167,31 +167,32 @@ async fn creates_missing_codex_home_dir() {
         open_browser: false,
         force_state: Some(state),
     };
-    let server = run_login_server(opts).unwrap();
+    let server = run_login_server(opts)?;
     let login_port = server.actual_port;
 
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=state2");
-    let resp = client.get(&url).send().await.unwrap();
+    let resp = client.get(&url).send().await?;
     assert!(resp.status().is_success());
 
-    server.block_until_done().await.unwrap();
+    server.block_until_done().await?;
 
     let auth_path = codex_home.join("auth.json");
     assert!(
         auth_path.exists(),
         "auth.json should be created even if parent dir was missing"
     );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancels_previous_login_server_when_port_is_in_use() {
-    non_sandbox_test!();
+async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
+    non_sandbox_test!(result);
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
-    let first_tmp = tempdir().unwrap();
+    let first_tmp = tempdir()?;
     let first_codex_home = first_tmp.path().to_path_buf();
 
     let first_opts = ServerOptions {
@@ -203,13 +204,13 @@ async fn cancels_previous_login_server_when_port_is_in_use() {
         force_state: Some("cancel_state".to_string()),
     };
 
-    let first_server = run_login_server(first_opts).unwrap();
+    let first_server = run_login_server(first_opts)?;
     let login_port = first_server.actual_port;
     let first_server_task = tokio::spawn(async move { first_server.block_until_done().await });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let second_tmp = tempdir().unwrap();
+    let second_tmp = tempdir()?;
     let second_codex_home = second_tmp.path().to_path_buf();
 
     let second_opts = ServerOptions {
@@ -221,7 +222,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() {
         force_state: Some("cancel_state_2".to_string()),
     };
 
-    let second_server = run_login_server(second_opts).unwrap();
+    let second_server = run_login_server(second_opts)?;
     assert_eq!(second_server.actual_port, login_port);
 
     let cancel_result = first_server_task
@@ -232,11 +233,12 @@ async fn cancels_previous_login_server_when_port_is_in_use() {
 
     let client = reqwest::Client::new();
     let cancel_url = format!("http://127.0.0.1:{login_port}/cancel");
-    let resp = client.get(cancel_url).send().await.unwrap();
+    let resp = client.get(cancel_url).send().await?;
     assert!(resp.status().is_success());
 
     second_server
         .block_until_done()
         .await
         .expect_err("second login server should report cancellation");
+    Ok(())
 }

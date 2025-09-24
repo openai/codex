@@ -1,17 +1,15 @@
 use std::time::Duration;
 
-use codex_core::CodexAuth;
-use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::non_sandbox_test;
+use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_with_timeout;
-use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -78,18 +76,14 @@ async fn continue_after_stream_error() {
         requires_openai_auth: false,
     };
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home);
-    config.base_instructions = Some("You are a helpful assistant".to_string());
-    config.model_provider = provider;
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |config| {
+            config.base_instructions = Some("You are a helpful assistant".to_string());
+            config.model_provider = provider;
+        })
+        .build(&server)
         .await
-        .unwrap()
-        .conversation;
+        .unwrap();
 
     codex
         .submit(Op::UserInput {

@@ -3,17 +3,16 @@
 
 use std::time::Duration;
 
-use codex_core::CodexAuth;
-use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
+use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::non_sandbox_test;
-use tempfile::TempDir;
+use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::test_codex;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -74,7 +73,7 @@ async fn retries_on_early_close() {
         // provider is not set.
         env_key: Some("PATH".into()),
         env_key_instructions: None,
-        wire_api: codex_core::WireApi::Responses,
+        wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -85,16 +84,13 @@ async fn retries_on_early_close() {
         requires_openai_auth: false,
     };
 
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.model_provider = model_provider;
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+        })
+        .build(&server)
         .await
-        .unwrap()
-        .conversation;
+        .unwrap();
 
     codex
         .submit(Op::UserInput {
