@@ -1,4 +1,4 @@
-pub fn is_safe_command_windows(command: &[String]) -> bool {
+pub fn is_safe_command_windows(_command: &[String]) -> bool {
     false
 }
 
