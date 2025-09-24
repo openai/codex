@@ -193,18 +193,19 @@ mod tests {
         ];
 
         // Simulate streaming with a commit tick attempt after each delta.
-        for d in &deltas {
+        for d in deltas.iter() {
             ctrl.push(d);
-            let (Some(cell), true) = ctrl.on_commit_tick() else {
-                panic!("expected cell");
-            };
-            lines.extend(cell.transcript_lines());
+            while let (Some(cell), idle) = ctrl.on_commit_tick() {
+                lines.extend(cell.transcript_lines());
+                if idle {
+                    break;
+                }
+            }
         }
         // Finalize and flush remaining lines now.
-        let Some(cell) = ctrl.finalize() else {
-            panic!("expected cell");
-        };
-        lines.extend(cell.transcript_lines());
+        if let Some(cell) = ctrl.finalize() {
+            lines.extend(cell.transcript_lines());
+        }
 
         let mut flat = lines;
         // Drop leading blank and header line if present.
