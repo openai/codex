@@ -317,6 +317,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -653,10 +664,13 @@ dependencies = [
 name = "codex-common"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "clap",
  "codex-core",
  "codex-protocol",
  "serde",
+ "thiserror 2.0.16",
+ "tokio",
  "toml",
 ]
 
@@ -779,6 +793,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-git-tooling"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "tempfile",
+ "thiserror 2.0.16",
+ "walkdir",
+]
+
+[[package]]
 name = "codex-linux-sandbox"
 version = "0.0.0"
 dependencies = [
@@ -795,6 +819,7 @@ dependencies = [
 name = "codex-login"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "base64",
  "chrono",
  "codex-core",
@@ -875,6 +900,7 @@ dependencies = [
 name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "base64",
  "icu_decimal",
  "icu_locale_core",
@@ -919,6 +945,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-file-search",
+ "codex-git-tooling",
  "codex-login",
  "codex-ollama",
  "codex-protocol",
@@ -1076,6 +1103,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 name = "core_test_support"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "codex-core",
  "serde_json",
  "tempfile",

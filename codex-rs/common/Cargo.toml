@@ -7,11 +7,14 @@ version = { workspace = true }
 workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive", "wrap_help"], optional = true }
 codex-core = { workspace = true }
 codex-protocol = { workspace = true }
 serde = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
 
 [features]
 # Separate feature so that `clap` is not a mandatory dependency.
