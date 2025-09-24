@@ -11,6 +11,9 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
+use chrono::DateTime;
+use chrono::Duration as ChronoDuration;
+use chrono::Local;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
@@ -25,6 +28,7 @@ use codex_core::project_doc::discover_project_doc_paths;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
@@ -47,6 +51,7 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::any::Any;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
@@ -1078,11 +1083,54 @@ pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RateLimitWindowDisplay {
+    pub used_percent: f64,
+    pub resets_at: Option<String>,
+}
+
+impl RateLimitWindowDisplay {
+    fn from_window(window: &RateLimitWindow, captured_at: DateTime<Local>) -> Self {
+        let resets_at = window
+            .resets_in_seconds
+            .and_then(|seconds| i64::try_from(seconds).ok())
+            .and_then(|secs| captured_at.checked_add_signed(ChronoDuration::seconds(secs)))
+            .map(|dt| dt.format("%b %-d, %Y %-I:%M %p").to_string());
+
+        Self {
+            used_percent: window.used_percent,
+            resets_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RateLimitSnapshotDisplay {
+    pub primary: Option<RateLimitWindowDisplay>,
+    pub secondary: Option<RateLimitWindowDisplay>,
+}
+
+pub(crate) fn rate_limit_snapshot_display(
+    snapshot: &RateLimitSnapshot,
+    captured_at: DateTime<Local>,
+) -> RateLimitSnapshotDisplay {
+    RateLimitSnapshotDisplay {
+        primary: snapshot
+            .primary
+            .as_ref()
+            .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
+        secondary: snapshot
+            .secondary
+            .as_ref()
+            .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
+    }
+}
+
 pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
     session_id: &Option<ConversationId>,
-    rate_limits: Option<&RateLimitSnapshot>,
+    rate_limits: Option<&RateLimitSnapshotDisplay>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("/status".magenta().into());
@@ -1611,23 +1659,39 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     invocation_spans.into()
 }
 
-fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshot>) -> Vec<Line<'static>> {
+fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotDisplay>) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> =
         vec![vec![padded_emoji("⏱️").into(), "Usage Limits".bold()].into()];
 
     match snapshot {
         Some(snapshot) => {
-            let rows = [
-                ("5h limit".to_string(), snapshot.primary_used_percent),
-                ("Weekly limit".to_string(), snapshot.secondary_used_percent),
-            ];
-            let label_width = rows
-                .iter()
-                .map(|(label, _)| UnicodeWidthStr::width(label.as_str()))
-                .max()
-                .unwrap_or(0);
-            for (label, percent) in rows {
-                lines.push(build_status_limit_line(&label, percent, label_width));
+            let mut windows: Vec<(&str, &RateLimitWindowDisplay)> = Vec::new();
+            if let Some(primary) = snapshot.primary.as_ref() {
+                windows.push(("5h limit", primary));
+            }
+            if let Some(secondary) = snapshot.secondary.as_ref() {
+                windows.push(("Weekly limit", secondary));
+            }
+
+            if windows.is_empty() {
+                lines.push("  • No rate limit data available.".into());
+            } else {
+                let label_width = windows
+                    .iter()
+                    .map(|(label, _)| UnicodeWidthStr::width(*label))
+                    .max()
+                    .unwrap_or(0);
+
+                for (label, window) in windows {
+                    lines.push(build_status_limit_line(
+                        label,
+                        window.used_percent,
+                        label_width,
+                    ));
+                    if let Some(resets_at) = window.resets_at.as_deref() {
+                        lines.push(build_status_reset_line(resets_at));
+                    }
+                }
             }
         }
         None => lines.push("  • Send a message to load usage data.".into()),
@@ -1649,6 +1713,10 @@ fn build_status_limit_line(label: &str, percent_used: f64, label_width: usize) -
     spans.push(summary.into());
 
     Line::from(spans)
+}
+
+fn build_status_reset_line(resets_at: &str) -> Line<'static> {
+    vec!["    ".into(), format!("Resets at: {resets_at}").dim()].into()
 }
 
 fn render_status_limit_progress_bar(percent_used: f64) -> String {

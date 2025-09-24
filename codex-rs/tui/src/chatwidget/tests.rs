@@ -384,12 +384,12 @@ fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
 
-    warnings.extend(state.take_warnings(10.0, 55.0));
-    warnings.extend(state.take_warnings(55.0, 10.0));
-    warnings.extend(state.take_warnings(10.0, 80.0));
-    warnings.extend(state.take_warnings(80.0, 10.0));
-    warnings.extend(state.take_warnings(10.0, 95.0));
-    warnings.extend(state.take_warnings(95.0, 10.0));
+    warnings.extend(state.take_warnings(Some(10.0), Some(55.0)));
+    warnings.extend(state.take_warnings(Some(55.0), Some(10.0)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(80.0)));
+    warnings.extend(state.take_warnings(Some(80.0), Some(10.0)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(95.0)));
+    warnings.extend(state.take_warnings(Some(95.0), Some(10.0)));
 
     assert_eq!(
         warnings,
