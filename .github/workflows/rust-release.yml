@@ -193,21 +193,18 @@ jobs:
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
+      # build_npm_package.py requires DotSlash when staging releases.
+      - uses: facebook/install-dotslash@v2
       - name: Stage npm package
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TMP_DIR="${RUNNER_TEMP}/npm-stage"
-          python3 codex-cli/scripts/stage_rust_release.py \
+          ./codex-cli/scripts/build_npm_package.py \
             --release-version "${{ steps.release_name.outputs.name }}" \
-            --tmp "${TMP_DIR}"
-          mkdir -p dist/npm
-          # Produce an npm-ready tarball using `npm pack` and store it in dist/npm.
-          # We then rename it to a stable name used by our publishing script.
-          (cd "$TMP_DIR" && npm pack --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
-          mv "${GITHUB_WORKSPACE}"/dist/npm/*.tgz \
-             "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
+            --staging-dir "${TMP_DIR}" \
+            --pack-output "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
