@@ -30,6 +30,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
+use crate::session_id::SessionId;
 use crate::text_formatting::truncate_text;
 
 /// Request coming from the agent that needs user approval.
@@ -102,6 +103,7 @@ pub(crate) struct UserApprovalWidget {
     app_event_tx: AppEventSender,
     confirmation_prompt: Paragraph<'static>,
     select_options: &'static Vec<SelectOption>,
+    session_id: SessionId,
 
     /// Currently selected index in *select* mode.
     selected_option: usize,
@@ -112,7 +114,11 @@ pub(crate) struct UserApprovalWidget {
 }
 
 impl UserApprovalWidget {
-    pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
+    pub(crate) fn new(
+        approval_request: ApprovalRequest,
+        app_event_tx: AppEventSender,
+        session_id: SessionId,
+    ) -> Self {
         let confirmation_prompt = match &approval_request {
             ApprovalRequest::Exec { reason, .. } => {
                 let mut contents: Vec<Line> = vec![];
@@ -154,6 +160,7 @@ impl UserApprovalWidget {
             confirmation_prompt,
             selected_option: 0,
             done: false,
+            session_id,
         }
     }
 
@@ -287,9 +294,11 @@ impl UserApprovalWidget {
                     }
                 }
 
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_user_approval_decision(lines),
-                )));
+                self.app_event_tx.send(AppEvent::InsertHistoryCell {
+                    session_id: self.session_id,
+                    conversation_id: None,
+                    cell: Box::new(history_cell::new_user_approval_decision(lines)),
+                });
             }
             ApprovalRequest::ApplyPatch { .. } => {
                 // No history line for patch approval decisions.
@@ -405,7 +414,7 @@ mod tests {
             command: vec!["echo".to_string()],
             reason: None,
         };
-        let mut widget = UserApprovalWidget::new(req, tx);
+        let mut widget = UserApprovalWidget::new(req, tx, SessionId::new(0));
         widget.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         assert!(widget.is_complete());
         let mut events: Vec<AppEvent> = Vec::new();
@@ -430,7 +439,7 @@ mod tests {
             command: vec!["echo".to_string()],
             reason: None,
         };
-        let mut widget = UserApprovalWidget::new(req, tx);
+        let mut widget = UserApprovalWidget::new(req, tx, SessionId::new(0));
         widget.handle_key_event(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE));
         assert!(widget.is_complete());
         let mut events: Vec<AppEvent> = Vec::new();

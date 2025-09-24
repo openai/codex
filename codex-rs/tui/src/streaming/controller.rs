@@ -1,7 +1,10 @@
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use codex_core::config::Config;
+use codex_protocol::mcp_protocol::ConversationId;
 use ratatui::text::Line;
+
+use crate::session_id::SessionId;
 
 use super::StreamState;
 
@@ -13,19 +16,41 @@ pub(crate) trait HistorySink {
 }
 
 /// Concrete sink backed by `AppEventSender`.
-pub(crate) struct AppEventHistorySink(pub(crate) crate::app_event_sender::AppEventSender);
+pub(crate) struct AppEventHistorySink {
+    pub(crate) tx: crate::app_event_sender::AppEventSender,
+    pub(crate) session_id: SessionId,
+    pub(crate) conversation_id: Option<ConversationId>,
+}
+
+impl AppEventHistorySink {
+    pub(crate) fn new(
+        tx: crate::app_event_sender::AppEventSender,
+        session_id: SessionId,
+        conversation_id: Option<ConversationId>,
+    ) -> Self {
+        Self {
+            tx,
+            session_id,
+            conversation_id,
+        }
+    }
+}
 
 impl HistorySink for AppEventHistorySink {
     fn insert_history_cell(&self, cell: Box<dyn crate::history_cell::HistoryCell>) {
-        self.0
-            .send(crate::app_event::AppEvent::InsertHistoryCell(cell))
+        self.tx.send(crate::app_event::AppEvent::InsertHistoryCell {
+            session_id: self.session_id,
+            conversation_id: self.conversation_id,
+            cell,
+        })
     }
     fn start_commit_animation(&self) {
-        self.0
+        self.tx
             .send(crate::app_event::AppEvent::StartCommitAnimation)
     }
     fn stop_commit_animation(&self) {
-        self.0.send(crate::app_event::AppEvent::StopCommitAnimation)
+        self.tx
+            .send(crate::app_event::AppEvent::StopCommitAnimation)
     }
 }
 

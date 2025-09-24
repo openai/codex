@@ -6,6 +6,7 @@ use crate::app::App;
 use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
+use crate::session_manager::SessionManager;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationPathResponseEvent;
@@ -110,7 +111,8 @@ impl App {
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.enter_alt_screen();
-        self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+        let transcript = self.chat_widget.active_transcript().clone();
+        self.overlay = Some(Overlay::new_transcript(transcript));
         tui.frame_requester().schedule_frame();
     }
 
@@ -133,8 +135,8 @@ impl App {
     /// Re-render the full transcript into the terminal scrollback in one call.
     /// Useful when switching sessions to ensure prior history remains visible.
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
-        if !self.transcript_cells.is_empty() {
-            for cell in &self.transcript_cells {
+        if !self.chat_widget.active_transcript().is_empty() {
+            for cell in self.chat_widget.active_transcript() {
                 tui.insert_history_lines(cell.transcript_lines());
             }
         }
@@ -162,7 +164,7 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.base_id = self.chat_widget.conversation_id();
         self.backtrack.overlay_preview_active = true;
-        let count = user_count(&self.transcript_cells);
+        let count = user_count(self.chat_widget.active_transcript());
         if let Some(last) = count.checked_sub(1) {
             self.apply_backtrack_selection(last);
         }
@@ -171,7 +173,7 @@ impl App {
 
     /// Step selection to the next older user message and update overlay.
     fn step_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let count = user_count(&self.transcript_cells);
+        let count = user_count(self.chat_widget.active_transcript());
         if count == 0 {
             return;
         }
@@ -194,7 +196,9 @@ impl App {
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
     fn apply_backtrack_selection(&mut self, nth_user_message: usize) {
-        if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
+        if let Some(cell_idx) =
+            nth_user_position(self.chat_widget.active_transcript(), nth_user_message)
+        {
             self.backtrack.nth_user_message = nth_user_message;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.set_highlight_cell(Some(cell_idx));
@@ -223,8 +227,8 @@ impl App {
     fn overlay_confirm_backtrack(&mut self, tui: &mut tui::Tui) {
         let nth_user_message = self.backtrack.nth_user_message;
         if let Some(base_id) = self.backtrack.base_id {
-            let prefill = nth_user_position(&self.transcript_cells, nth_user_message)
-                .and_then(|idx| self.transcript_cells.get(idx))
+            let prefill = nth_user_position(self.chat_widget.active_transcript(), nth_user_message)
+                .and_then(|idx| self.chat_widget.active_transcript().get(idx))
                 .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
                 .map(|c| c.message.clone())
                 .unwrap_or_default();
@@ -248,12 +252,14 @@ impl App {
     /// Computes the prefill from the selected user message and requests history.
     pub(crate) fn confirm_backtrack_from_main(&mut self) {
         if let Some(base_id) = self.backtrack.base_id {
-            let prefill =
-                nth_user_position(&self.transcript_cells, self.backtrack.nth_user_message)
-                    .and_then(|idx| self.transcript_cells.get(idx))
-                    .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
-                    .map(|c| c.message.clone())
-                    .unwrap_or_default();
+            let prefill = nth_user_position(
+                self.chat_widget.active_transcript(),
+                self.backtrack.nth_user_message,
+            )
+            .and_then(|idx| self.chat_widget.active_transcript().get(idx))
+            .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
+            .map(|c| c.message.clone())
+            .unwrap_or_default();
             self.request_backtrack(prefill, base_id, self.backtrack.nth_user_message);
         }
         self.reset_backtrack_state();
@@ -329,6 +335,7 @@ impl App {
     ) {
         let conv = new_conv.conversation;
         let session_configured = new_conv.session_configured;
+        let session_id = self.alloc_session_id();
         let init = crate::chatwidget::ChatWidgetInit {
             config: cfg,
             frame_requester: tui.frame_requester(),
@@ -337,9 +344,17 @@ impl App {
             initial_images: Vec::new(),
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
+            session_id,
         };
-        self.chat_widget =
-            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
+        let previous_cells = std::mem::take(self.chat_widget.active_transcript_mut());
+        let session_configured_clone = session_configured.clone();
+        self.chat_widget = SessionManager::single(
+            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured),
+            session_id,
+        );
+        *self.chat_widget.active_transcript_mut() = previous_cells;
+        self.chat_widget
+            .set_active_conversation_id(session_configured_clone.session_id);
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(nth_user_message);
         self.render_transcript_once(tui);
@@ -351,7 +366,10 @@ impl App {
 
     /// Trim transcript_cells to preserve only content up to the selected user message.
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
-        trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message);
+        trim_transcript_cells_to_nth_user(
+            self.chat_widget.active_transcript_mut(),
+            nth_user_message,
+        );
     }
 }
 

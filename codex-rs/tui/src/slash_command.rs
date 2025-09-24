@@ -17,6 +17,10 @@ pub enum SlashCommand {
     Review,
     New,
     Init,
+    Thread,
+    Clear,
+    Close,
+    Threads,
     Compact,
     Diff,
     Mention,
@@ -32,9 +36,13 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
-            SlashCommand::New => "start a new chat during a conversation",
+            SlashCommand::New => "start a new thread with empty context",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Thread => "start a new thread with the current context",
+            SlashCommand::Clear => "clear the current thread's context",
+            SlashCommand::Close => "close the current thread and optionally summarize",
+            SlashCommand::Threads => "switch between existing threads",
             SlashCommand::Review => "review my changes and find issues",
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -60,12 +68,16 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Init
+            | SlashCommand::Thread
+            | SlashCommand::Clear
+            | SlashCommand::Close
             | SlashCommand::Compact
             | SlashCommand::Model
             | SlashCommand::Approvals
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
+            | SlashCommand::Threads
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp

@@ -6,6 +6,7 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::text_formatting::format_and_truncate_tool_result;
+use crate::text_formatting::truncate_text;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -664,6 +665,7 @@ pub(crate) fn new_session_info(
     config: &Config,
     event: SessionConfiguredEvent,
     is_first_event: bool,
+    thread_path: &[String],
 ) -> CompositeHistoryCell {
     let SessionConfiguredEvent {
         model,
@@ -681,6 +683,7 @@ pub(crate) fn new_session_info(
             reasoning_effort,
             config.cwd.clone(),
             crate::version::CODEX_CLI_VERSION,
+            thread_path,
         );
 
         // Help lines below the header (new copy and list)
@@ -760,6 +763,7 @@ struct SessionHeaderHistoryCell {
     model: String,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
+    thread_path: Vec<String>,
 }
 
 impl SessionHeaderHistoryCell {
@@ -768,12 +772,18 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
+        thread_path: &[String],
     ) -> Self {
         Self {
             version,
             model,
             reasoning_effort,
             directory,
+            thread_path: if thread_path.is_empty() {
+                vec!["main".to_string()]
+            } else {
+                thread_path.to_vec()
+            },
         }
     }
 
@@ -811,6 +821,27 @@ impl SessionHeaderHistoryCell {
             ReasoningEffortConfig::Medium => "medium",
             ReasoningEffortConfig::High => "high",
         })
+    }
+
+    fn format_thread_path(&self, max_width: usize) -> String {
+        if max_width == 0 {
+            return String::new();
+        }
+        let mut path = self
+            .thread_path
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" → ");
+        if path.is_empty() {
+            path = "main".to_string();
+        }
+        let display = format!("⎇ {path}");
+        if UnicodeWidthStr::width(display.as_str()) > max_width {
+            truncate_text(&display, max_width)
+        } else {
+            display
+        }
     }
 }
 
@@ -859,6 +890,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
         const DIR_LABEL: &str = "directory:";
+        const THREAD_LABEL: &str = "thread:";
         let label_width = DIR_LABEL.len();
         let model_label = format!(
             "{model_label:<label_width$}",
@@ -893,7 +925,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         spans.push(Span::from("│").dim());
         out.push(Line::from(spans));
 
-        // Directory line: " Directory: <cwd>"
+        // Directory line: " directory: <cwd>"
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!(" {dir_label} ");
         let dir_max_width = inner_width.saturating_sub(UnicodeWidthStr::width(dir_prefix.as_str()));
@@ -913,6 +945,28 @@ impl HistoryCell for SessionHeaderHistoryCell {
         }
         spans.push(Span::from("│").dim());
         out.push(Line::from(spans));
+
+        // Thread path line: " thread: ⎇ main → branch"
+        let thread_label = format!("{THREAD_LABEL:<label_width$}");
+        let thread_prefix = format!(" {thread_label} ");
+        let thread_max_width =
+            inner_width.saturating_sub(UnicodeWidthStr::width(thread_prefix.as_str()));
+        let thread_display = self.format_thread_path(thread_max_width);
+        let thread_text = format!(" {thread_label} {thread_display}");
+        let thread_w = UnicodeWidthStr::width(thread_text.as_str());
+        let pad_w = inner_width.saturating_sub(thread_w);
+        let mut thread_spans: Vec<Span<'static>> = vec![
+            Span::from("│").dim(),
+            Span::from(" ").dim(),
+            Span::from(thread_label).dim(),
+            Span::from(" ").dim(),
+            Span::from(thread_display),
+        ];
+        if pad_w > 0 {
+            thread_spans.push(Span::from(" ".repeat(pad_w)).dim());
+        }
+        thread_spans.push(Span::from("│").dim());
+        out.push(Line::from(thread_spans));
 
         // Bottom border
         let bottom = format!("╰{}╯", "─".repeat(inner_width));
@@ -1708,16 +1762,23 @@ mod tests {
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",
+            &["main".to_string(), "thread".to_string()],
         );
 
         let lines = render_lines(&cell.display_lines(80));
         let model_line = lines
-            .into_iter()
+            .iter()
             .find(|line| line.contains("model:"))
             .expect("model line");
 
         assert!(model_line.contains("gpt-4o high"));
         assert!(model_line.contains("/model to change"));
+
+        let thread_line = lines
+            .iter()
+            .find(|line| line.contains("thread:"))
+            .expect("thread line");
+        assert!(thread_line.contains("⎇ main → thread"));
     }
 
     #[test]

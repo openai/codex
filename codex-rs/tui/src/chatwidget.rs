@@ -52,6 +52,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
@@ -79,6 +85,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
+use crate::text_formatting::concise_request_summary;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
@@ -90,6 +97,7 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
+use crate::session_id::SessionId;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 //
@@ -109,6 +117,16 @@ use std::path::Path;
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ThreadPickerEntry {
+    pub index: usize,
+    pub title: String,
+    pub conversation_id: Option<ConversationId>,
+    pub is_active: bool,
+    pub unread_count: usize,
+    pub path: Vec<String>,
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [50.0, 75.0, 90.0];
@@ -160,6 +178,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) session_id: SessionId,
 }
 
 pub(crate) struct ChatWidget {
@@ -197,6 +216,7 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    session_id: SessionId,
 }
 
 struct UserMessage {
@@ -224,7 +244,11 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 impl ChatWidget {
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            let sink = AppEventHistorySink::new(
+                self.app_event_tx.clone(),
+                self.session_id,
+                self.conversation_id,
+            );
             controller.finalize(&sink);
         }
     }
@@ -240,6 +264,7 @@ impl ChatWidget {
             &self.config,
             event,
             self.show_welcome_banner,
+            self.session_header.thread_path(),
         ));
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
@@ -320,7 +345,11 @@ impl ChatWidget {
         // If a stream is currently active, finalize only that stream to flush any tail
         // without emitting stray headers for other streams.
         if let Some(mut controller) = self.stream_controller.take() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            let sink = AppEventHistorySink::new(
+                self.app_event_tx.clone(),
+                self.session_id,
+                self.conversation_id,
+            );
             controller.finalize(&sink);
         }
         // Mark task stopped and request redraw now that all content is in history.
@@ -519,7 +548,11 @@ impl ChatWidget {
     /// animating the output.
     pub(crate) fn on_commit_tick(&mut self) {
         if let Some(controller) = self.stream_controller.as_mut() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            let sink = AppEventHistorySink::new(
+                self.app_event_tx.clone(),
+                self.session_id,
+                self.conversation_id,
+            );
             let finished = controller.on_commit_tick(&sink);
             if finished {
                 self.handle_stream_finished();
@@ -567,7 +600,11 @@ impl ChatWidget {
             self.stream_controller = Some(StreamController::new(self.config.clone()));
         }
         if let Some(controller) = self.stream_controller.as_mut() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            let sink = AppEventHistorySink::new(
+                self.app_event_tx.clone(),
+                self.session_id,
+                self.conversation_id,
+            );
             controller.push_and_maybe_commit(&delta, &sink);
         }
         self.request_redraw();
@@ -716,16 +753,18 @@ impl ChatWidget {
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let bottom_min = self.bottom_pane.desired_height(area.width).min(area.height);
-        let remaining = area.height.saturating_sub(bottom_min);
+        let header_height = if area.height > 0 { 1 } else { 0 };
+
+        let remaining = area
+            .height
+            .saturating_sub(header_height)
+            .saturating_sub(bottom_min);
 
         let active_desired = self
             .active_exec_cell
             .as_ref()
             .map_or(0, |c| c.desired_height(area.width) + 1);
         let active_height = active_desired.min(remaining);
-        // Note: no header area; remaining is not used beyond computing active height.
-
-        let header_height = 0u16;
 
         Layout::vertical([
             Constraint::Length(header_height),
@@ -733,6 +772,54 @@ impl ChatWidget {
             Constraint::Min(bottom_min),
         ])
         .areas(area)
+    }
+
+    fn render_thread_header(&self, area: Rect, buf: &mut Buffer) {
+        if area.height == 0 {
+            return;
+        }
+
+        let mut parts = if self.session_header.thread_path().is_empty() {
+            vec!["main".to_string()]
+        } else {
+            self.session_header.thread_path().to_vec()
+        };
+
+        if parts.is_empty() {
+            parts.push("main".to_string());
+        }
+
+        const BRANCH_ICON: &str = "⎇";
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.push(Span::styled(
+            format!("{BRANCH_ICON} "),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled("[", Style::default().fg(Color::DarkGray)));
+
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(" → ", Style::default().fg(Color::DarkGray)));
+            }
+            let style = if i == parts.len() - 1 {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            spans.push(Span::styled(part.clone(), style));
+        }
+
+        spans.push(Span::styled("]", Style::default().fg(Color::DarkGray)));
+
+        let line = Line::from(spans);
+        let width = area.width as usize;
+        let blank = " ".repeat(width);
+        buf.set_string(area.x, area.y, blank, Style::default());
+        Paragraph::new(line).render(area, buf);
     }
 
     pub(crate) fn new(
@@ -747,12 +834,18 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            session_id,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
+        let codex_op_tx = spawn_agent(
+            config.clone(),
+            app_event_tx.clone(),
+            conversation_manager,
+            session_id,
+        );
 
-        Self {
+        let mut this = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -763,6 +856,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                session_id,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -787,7 +881,11 @@ impl ChatWidget {
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
-        }
+            session_id,
+        };
+
+        this.set_thread_path(vec!["main".to_string()]);
+        this
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
@@ -804,14 +902,19 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            session_id,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
-        let codex_op_tx =
-            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+        let codex_op_tx = spawn_agent_from_existing(
+            conversation,
+            session_configured,
+            app_event_tx.clone(),
+            session_id,
+        );
 
-        Self {
+        let mut this = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -822,6 +925,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                session_id,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -846,7 +950,11 @@ impl ChatWidget {
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
-        }
+            session_id,
+        };
+
+        this.set_thread_path(vec!["main".to_string()]);
+        this
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
@@ -950,11 +1058,23 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::New => {
-                self.app_event_tx.send(AppEvent::NewSession);
+                self.app_event_tx.send(AppEvent::NewBlankThread);
             }
             SlashCommand::Init => {
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_text_message(INIT_PROMPT.to_string());
+            }
+            SlashCommand::Thread => {
+                self.app_event_tx.send(AppEvent::StartThread);
+            }
+            SlashCommand::Clear => {
+                self.app_event_tx.send(AppEvent::ClearActiveThread);
+            }
+            SlashCommand::Close => {
+                self.app_event_tx.send(AppEvent::PromptCloseActiveThread);
+            }
+            SlashCommand::Threads => {
+                self.app_event_tx.send(AppEvent::ToggleThreadPicker);
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -970,7 +1090,7 @@ impl ChatWidget {
                 self.open_approvals_popup();
             }
             SlashCommand::Quit => {
-                self.app_event_tx.send(AppEvent::ExitRequest);
+                self.app_event_tx.send(AppEvent::QuitRequested);
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_core::auth::logout(&self.config.codex_home) {
@@ -1012,35 +1132,40 @@ impl ChatWidget {
                 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
                 use codex_core::protocol::FileChange;
 
-                self.app_event_tx.send(AppEvent::CodexEvent(Event {
-                    id: "1".to_string(),
-                    // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                    //     call_id: "1".to_string(),
-                    //     command: vec!["git".into(), "apply".into()],
-                    //     cwd: self.config.cwd.clone(),
-                    //     reason: Some("test".to_string()),
-                    // }),
-                    msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-                        call_id: "1".to_string(),
-                        changes: HashMap::from([
-                            (
-                                PathBuf::from("/tmp/test.txt"),
-                                FileChange::Add {
-                                    content: "test".to_string(),
-                                },
-                            ),
-                            (
-                                PathBuf::from("/tmp/test2.txt"),
-                                FileChange::Update {
-                                    unified_diff: "+test\n-test2".to_string(),
-                                    move_path: None,
-                                },
-                            ),
-                        ]),
-                        reason: None,
-                        grant_root: Some(PathBuf::from("/tmp")),
-                    }),
-                }));
+                let conversation_id = self.conversation_id.unwrap_or_default();
+                self.app_event_tx.send(AppEvent::CodexEvent {
+                    session_id: self.session_id,
+                    conversation_id,
+                    event: Event {
+                        id: "1".to_string(),
+                        // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                        //     call_id: "1".to_string(),
+                        //     command: vec!["git".into(), "apply".into()],
+                        //     cwd: self.config.cwd.clone(),
+                        //     reason: Some("test".to_string()),
+                        // }),
+                        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                            call_id: "1".to_string(),
+                            changes: HashMap::from([
+                                (
+                                    PathBuf::from("/tmp/test.txt"),
+                                    FileChange::Add {
+                                        content: "test".to_string(),
+                                    },
+                                ),
+                                (
+                                    PathBuf::from("/tmp/test2.txt"),
+                                    FileChange::Update {
+                                        unified_diff: "+test\n-test2".to_string(),
+                                        move_path: None,
+                                    },
+                                ),
+                            ]),
+                            reason: None,
+                            grant_root: Some(PathBuf::from("/tmp")),
+                        }),
+                    },
+                });
             }
         }
     }
@@ -1069,8 +1194,11 @@ impl ChatWidget {
 
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
-            self.app_event_tx
-                .send(AppEvent::InsertHistoryCell(Box::new(active)));
+            self.app_event_tx.send(AppEvent::InsertHistoryCell {
+                session_id: self.session_id,
+                conversation_id: self.conversation_id,
+                cell: Box::new(active),
+            });
         }
     }
 
@@ -1083,7 +1211,11 @@ impl ChatWidget {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_exec_cell();
         }
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        self.app_event_tx.send(AppEvent::InsertHistoryCell {
+            session_id: self.session_id,
+            conversation_id: self.conversation_id,
+            cell,
+        });
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
@@ -1115,12 +1247,32 @@ impl ChatWidget {
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
+            let summary = Self::summarize_request(&text);
+            self.bottom_pane.set_request_summary(Some(summary));
+            self.app_event_tx.send(AppEvent::SuggestThreadName {
+                session_id: self.session_id,
+                text: text.clone(),
+            });
         }
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
+    }
+
+    fn summarize_request(text: &str) -> String {
+        concise_request_summary(text, 10, 60).unwrap_or_else(|| {
+            let mut normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if normalized.is_empty() {
+                return normalized;
+            }
+            if normalized.len() > 60 {
+                normalized.truncate(59);
+                normalized.push('…');
+            }
+            normalized
+        })
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when
@@ -1263,8 +1415,11 @@ impl ChatWidget {
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
                     append_markdown(&explanation, &mut rendered, &self.config);
                     let body_cell = AgentMessageCell::new(rendered, false);
-                    self.app_event_tx
-                        .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell {
+                        session_id: self.session_id,
+                        conversation_id: self.conversation_id,
+                        cell: Box::new(body_cell),
+                    });
                 }
             } else {
                 let message_text =
@@ -1272,8 +1427,11 @@ impl ChatWidget {
                 let mut message_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
                 append_markdown(&message_text, &mut message_lines, &self.config);
                 let body_cell = AgentMessageCell::new(message_lines, true);
-                self.app_event_tx
-                    .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+                self.app_event_tx.send(AppEvent::InsertHistoryCell {
+                    session_id: self.session_id,
+                    conversation_id: self.conversation_id,
+                    cell: Box::new(body_cell),
+                });
             }
         }
 
@@ -1500,6 +1658,29 @@ impl ChatWidget {
         self.config.model = model.to_string();
     }
 
+    pub(crate) fn set_thread_path(&mut self, parts: Vec<String>) {
+        let display_parts: Vec<String> = parts
+            .into_iter()
+            .map(|part| Self::format_thread_segment(&part))
+            .collect();
+        self.session_header.set_thread_path(display_parts.clone());
+        if display_parts.len() > 1 {
+            let display = display_parts.join(" → ");
+            self.bottom_pane
+                .set_thread_indicator(Some(format!("Thread: ⎇ {display}")));
+        } else {
+            self.bottom_pane.set_thread_indicator(None);
+        }
+    }
+
+    fn format_thread_segment(segment: &str) -> String {
+        if segment == "main" {
+            "#main".to_string()
+        } else {
+            segment.to_string()
+        }
+    }
+
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
@@ -1516,6 +1697,110 @@ impl ChatWidget {
         } else {
             self.submit_op(Op::ListMcpTools);
         }
+    }
+
+    pub(crate) fn clear_request_summary(&mut self) {
+        self.bottom_pane.set_request_summary(None);
+    }
+
+    pub(crate) fn open_thread_picker(&mut self, entries: Vec<ThreadPickerEntry>) {
+        let items: Vec<SelectionItem> = entries
+            .into_iter()
+            .map(|entry| {
+                let idx = entry.index;
+                let description = entry.conversation_id.map(|id| format!("Conversation {id}"));
+                let title = Self::format_thread_segment(&entry.title);
+                let mut name = if entry.path.is_empty() {
+                    title
+                } else {
+                    entry
+                        .path
+                        .iter()
+                        .map(|segment| Self::format_thread_segment(segment))
+                        .collect::<Vec<_>>()
+                        .join(" → ")
+                };
+                if entry.unread_count > 0 {
+                    name = format!("{name} ({} new)", entry.unread_count);
+                }
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::SwitchThread(idx));
+                })];
+                SelectionItem {
+                    name,
+                    description,
+                    is_current: entry.is_active,
+                    actions,
+                    dismiss_on_select: true,
+                    search_value: None,
+                }
+            })
+            .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select thread".to_string(),
+            subtitle: None,
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_quit_thread_prompt(
+        &mut self,
+        index: usize,
+        title: String,
+        parent_label: Option<String>,
+    ) {
+        let parent_desc = parent_label.map(|label| format!("Parent: {label}"));
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let summarize_idx = index;
+        items.push(SelectionItem {
+            name: format!("Summarize and close '{title}'"),
+            description: parent_desc,
+            is_current: false,
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::CloseThread {
+                    index: summarize_idx,
+                    summarize: true,
+                });
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        let close_idx = index;
+        items.push(SelectionItem {
+            name: format!("Close '{title}' without summary"),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::CloseThread {
+                    index: close_idx,
+                    summarize: false,
+                });
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        items.push(SelectionItem {
+            name: "Keep thread open".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: format!("Close thread '{title}'"),
+            subtitle: Some("Choose how to proceed before closing.".to_string()),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            ..Default::default()
+        });
     }
 
     /// Forward file-search results to the bottom pane.
@@ -1776,6 +2061,11 @@ impl ChatWidget {
         self.conversation_id
     }
 
+    #[cfg(test)]
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
     /// Return a reference to the widget's current config (includes any
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
@@ -1795,7 +2085,9 @@ impl ChatWidget {
 
 impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
+        let [header_area, active_cell_area, bottom_pane_area] = self.layout_areas(area);
+
+        self.render_thread_header(header_area, buf);
         (&self.bottom_pane).render(bottom_pane_area, buf);
         if !active_cell_area.is_empty()
             && let Some(cell) = &self.active_exec_cell
