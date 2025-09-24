@@ -1,16 +1,11 @@
-//! Group long‑lived helpers/managers for a session.
-
-use std::path::PathBuf;
-
-use tokio::sync::Mutex;
-
+use crate::RolloutRecorder;
 use crate::exec_command::ExecSessionManager;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::rollout::RolloutRecorder;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_notification::UserNotifier;
+use std::path::PathBuf;
+use tokio::sync::Mutex;
 
-/// Container for side‑effectful services and helpers used by `Session`.
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: McpConnectionManager,
     pub(crate) session_manager: ExecSessionManager,
