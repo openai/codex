@@ -7,13 +7,14 @@ use crate::model_family::ModelFamily;
 /// Though this would help present more accurate pricing information in the UI.
 #[derive(Debug)]
 pub(crate) struct ModelInfo {
-    /// Size of the context window in tokens.
+    /// Size of the context window in tokens. This is the maximum size of the input context.
     pub(crate) context_window: u64,
 
     /// Maximum number of output tokens that can be generated for the model.
     pub(crate) max_output_tokens: u64,
 
-    /// Token threshold where we should automatically compact conversation history.
+    /// Token threshold where we should automatically compact conversation history. This considers
+    /// input tokens + output tokens of this turn.
     pub(crate) auto_compact_token_limit: Option<i64>,
 }
 
@@ -64,7 +65,7 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
         _ if slug.starts_with("gpt-5-codex") => Some(ModelInfo {
             context_window: 272_000,
             max_output_tokens: 128_000,
-            auto_compact_token_limit: Some(220_000),
+            auto_compact_token_limit: Some(350_000),
         }),
 
         _ if slug.starts_with("gpt-5") => Some(ModelInfo::new(272_000, 128_000)),

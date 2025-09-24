@@ -53,7 +53,6 @@ image = { workspace = true, features = [
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 mcp-types = { workspace = true }
-once_cell = { workspace = true }
 path-clean = { workspace = true }
 rand = { workspace = true }
 ratatui = { workspace = true, features = [

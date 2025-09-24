@@ -30,7 +30,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
-use codex_core::protocol::RateLimitSnapshotEvent;
+use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
@@ -77,6 +77,7 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use crate::history_cell::RateLimitSnapshotDisplay;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::truncate_text;
@@ -90,10 +91,10 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
-use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use std::path::Path;
 
+use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
@@ -129,35 +130,46 @@ struct RateLimitWarningState {
 impl RateLimitWarningState {
     fn take_warnings(
         &mut self,
-        secondary_used_percent: f64,
-        primary_used_percent: f64,
+        secondary_used_percent: Option<f64>,
+        primary_used_percent: Option<f64>,
     ) -> Vec<String> {
+        let reached_secondary_cap =
+            matches!(secondary_used_percent, Some(percent) if percent == 100.0);
+        let reached_primary_cap = matches!(primary_used_percent, Some(percent) if percent == 100.0);
+        if reached_secondary_cap || reached_primary_cap {
+            return Vec::new();
+        }
+
         let mut warnings = Vec::new();
 
-        let mut highest_secondary: Option<f64> = None;
-        while self.secondary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-            && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
-        {
-            highest_secondary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]);
-            self.secondary_index += 1;
-        }
-        if let Some(threshold) = highest_secondary {
-            warnings.push(format!(
-                "Heads up, you've used over {threshold:.0}% of your weekly limit. Run /status for a breakdown."
-            ));
+        if let Some(secondary_used_percent) = secondary_used_percent {
+            let mut highest_secondary: Option<f64> = None;
+            while self.secondary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+                && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
+            {
+                highest_secondary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]);
+                self.secondary_index += 1;
+            }
+            if let Some(threshold) = highest_secondary {
+                warnings.push(format!(
+                    "Heads up, you've used over {threshold:.0}% of your weekly limit. Run /status for a breakdown."
+                ));
+            }
         }
 
-        let mut highest_primary: Option<f64> = None;
-        while self.primary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
-            && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
-        {
-            highest_primary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]);
-            self.primary_index += 1;
-        }
-        if let Some(threshold) = highest_primary {
-            warnings.push(format!(
-                "Heads up, you've used over {threshold:.0}% of your 5h limit. Run /status for a breakdown."
-            ));
+        if let Some(primary_used_percent) = primary_used_percent {
+            let mut highest_primary: Option<f64> = None;
+            while self.primary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+                && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
+            {
+                highest_primary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]);
+                self.primary_index += 1;
+            }
+            if let Some(threshold) = highest_primary {
+                warnings.push(format!(
+                    "Heads up, you've used over {threshold:.0}% of your 5h limit. Run /status for a breakdown."
+                ));
+            }
         }
 
         warnings
@@ -185,7 +197,7 @@ pub(crate) struct ChatWidget {
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
-    rate_limit_snapshot: Option<RateLimitSnapshotEvent>,
+    rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
@@ -239,11 +251,13 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 
 impl ChatWidget {
     fn flush_answer_stream_with_separator(&mut self) {
-        if let Some(mut controller) = self.stream_controller.take() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            controller.finalize(&sink);
+        if let Some(mut controller) = self.stream_controller.take()
+            && let Some(cell) = controller.finalize()
+        {
+            self.add_boxed_history(cell);
         }
     }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
@@ -333,12 +347,8 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
-        // If a stream is currently active, finalize only that stream to flush any tail
-        // without emitting stray headers for other streams.
-        if let Some(mut controller) = self.stream_controller.take() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            controller.finalize(&sink);
-        }
+        // If a stream is currently active, finalize it.
+        self.flush_answer_stream_with_separator();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -353,23 +363,33 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        self.bottom_pane.set_token_usage(info.clone());
-        self.token_info = info;
+        if info.is_some() {
+            self.bottom_pane.set_token_usage(info.clone());
+            self.token_info = info;
+        }
     }
 
-    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshotEvent>) {
+    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
         if let Some(snapshot) = snapshot {
             let warnings = self.rate_limit_warnings.take_warnings(
-                snapshot.secondary_used_percent,
-                snapshot.primary_used_percent,
+                snapshot
+                    .secondary
+                    .as_ref()
+                    .map(|window| window.used_percent),
+                snapshot.primary.as_ref().map(|window| window.used_percent),
             );
-            self.rate_limit_snapshot = Some(snapshot);
+
+            let display = history_cell::rate_limit_snapshot_display(&snapshot, Local::now());
+            self.rate_limit_snapshot = Some(display);
+
             if !warnings.is_empty() {
                 for warning in warnings {
                     self.add_to_history(history_cell::new_warning_event(warning));
                 }
                 self.request_redraw();
             }
+        } else {
+            self.rate_limit_snapshot = None;
         }
     }
     /// Finalize any active exec as failed and stop/clear running UI state.
@@ -531,14 +551,18 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_stream_error_event(message));
         self.request_redraw();
     }
+
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
     pub(crate) fn on_commit_tick(&mut self) {
         if let Some(controller) = self.stream_controller.as_mut() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            let finished = controller.on_commit_tick(&sink);
-            if finished {
-                self.handle_stream_finished();
+            let (cell, is_idle) = controller.on_commit_tick();
+            if let Some(cell) = cell {
+                self.bottom_pane.set_task_running(false);
+                self.add_boxed_history(cell);
+            }
+            if is_idle {
+                self.app_event_tx.send(AppEvent::StopCommitAnimation);
             }
         }
     }
@@ -582,9 +606,10 @@ impl ChatWidget {
         if self.stream_controller.is_none() {
             self.stream_controller = Some(StreamController::new(self.config.clone()));
         }
-        if let Some(controller) = self.stream_controller.as_mut() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            controller.push_and_maybe_commit(&delta, &sink);
+        if let Some(controller) = self.stream_controller.as_mut()
+            && controller.push(&delta)
+        {
+            self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         self.request_redraw();
     }
