@@ -2233,7 +2233,18 @@ async fn handle_response_item(
             ..
         } => {
             info!("FunctionCall: {name}({arguments})");
-            {
+            if let Some((server, tool_name)) = sess.mcp_connection_manager.parse_tool_name(&name) {
+                let resp = handle_mcp_tool_call(
+                    sess,
+                    sub_id,
+                    call_id.clone(),
+                    server,
+                    tool_name,
+                    arguments,
+                )
+                .await;
+                Some(resp)
+            } else {
                 let result = handle_function_call(
                     sess,
                     turn_context,
@@ -2538,19 +2549,9 @@ async fn handle_function_call(
 
             Ok(result.to_text_output())
         }
-        _ => {
-            match sess.mcp_connection_manager.parse_tool_name(&name) {
-                Some((server, tool_name)) => {
-                    handle_mcp_tool_call(sess, &sub_id, call_id, server, tool_name, arguments).await
-                }
-                None => {
-                    // Unknown function: reply with structured failure so the model can adapt.
-                    Err(FunctionCallError::RespondToModel(format!(
-                        "unsupported call: {name}"
-                    )))
-                }
-            }
-        }
+        _ => Err(FunctionCallError::RespondToModel(format!(
+            "unsupported call: {name}"
+        ))),
     }
 }
 
