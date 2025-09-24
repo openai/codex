@@ -1191,15 +1191,19 @@ impl AgentTask {
         // TOCTOU?
         if !self.handle.is_finished() {
             self.handle.abort();
+            let sub_id = self.sub_id.clone();
+            let is_review = self.kind == AgentTaskKind::Review;
+            let sess = self.sess;
             let event = Event {
-                id: self.sub_id.clone(),
+                id: sub_id.clone(),
                 msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
-            let sess = self.sess;
             tokio::spawn(async move {
-                if self.kind == AgentTaskKind::Review {
-                    exit_review_mode(sess.clone(), self.sub_id, None).await;
+                if is_review {
+                    exit_review_mode(sess.clone(), sub_id.clone(), None).await;
                 }
+                // Ensure active turn state is cleared when a task is aborted.
+                sess.remove_task(&sub_id).await;
                 sess.send_event(event).await;
             });
         }
