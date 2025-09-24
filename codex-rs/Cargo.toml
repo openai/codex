@@ -19,6 +19,7 @@ members = [
     "protocol",
     "protocol-ts",
     "tui",
+    "utils/readiness",
 ]
 resolver = "2"
 
@@ -49,6 +50,7 @@ codex-ollama = { path = "ollama" }
 codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
 codex-tui = { path = "tui" }
+codex-utils-readiness = { path = "utils/readiness" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -121,7 +123,7 @@ strum = "0.27.2"
 strum_macros = "0.27.2"
 supports-color = "3.0.2"
 sys-locale = "0.3.2"
-tempfile = "3.13.0"
+tempfile = "3.23.0"
 textwrap = "0.16.2"
 thiserror = "2.0.16"
 time = "0.3"
@@ -191,7 +193,7 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["openssl-sys"]
+ignored = ["openssl-sys", "codex-utils-readiness"]
 
 [profile.release]
 lto = "fat"
