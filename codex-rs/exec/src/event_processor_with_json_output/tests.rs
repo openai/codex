@@ -290,10 +290,10 @@ fn patch_apply_success_produces_item_completed_patchapply() {
 
                     assert_eq!(actual, expected);
                 }
-                other => panic!("unexpected details: {:?}", other),
+                other => panic!("unexpected details: {other:?}"),
             }
         }
-        other => panic!("unexpected event: {:?}", other),
+        other => panic!("unexpected event: {other:?}"),
     }
 }
 
@@ -344,9 +344,9 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
                     assert_eq!(file_update.changes[0].path, "file.txt".to_string());
                     assert_eq!(file_update.changes[0].kind, PatchChangeKind::Update);
                 }
-                other => panic!("unexpected details: {:?}", other),
+                other => panic!("unexpected details: {other:?}"),
             }
         }
-        other => panic!("unexpected event: {:?}", other),
+        other => panic!("unexpected event: {other:?}"),
     }
 }
