@@ -405,7 +405,7 @@ async fn create_unified_exec_session(
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use crate::skip_if_sandbox;
+    use core_test_support::skip_if_sandbox;
 
     #[test]
     fn push_chunk_trims_only_excess_bytes() {
