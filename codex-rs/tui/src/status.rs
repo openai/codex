@@ -279,7 +279,7 @@ impl StatusHistoryCell {
         spans
     }
 
-    fn rate_limit_lines(&self) -> Vec<Line<'static>> {
+    fn rate_limit_lines(&self, available_inner_width: usize) -> Vec<Line<'static>> {
         match &self.rate_limits {
             StatusRateLimitData::Available(rows_data) => {
                 if rows_data.is_empty() {
@@ -289,27 +289,42 @@ impl StatusHistoryCell {
                     ])];
                 }
 
+                let mut lines = Vec::new();
+
                 let label_width = rows_data
                     .iter()
                     .map(|row| UnicodeWidthStr::width(row.label))
                     .max()
                     .unwrap_or(0);
-
-                let mut lines = Vec::new();
+                let resets_indent = format!("  {:<label_width$}  ", "");
 
                 for row in rows_data {
                     let padded = format!("{label:<label_width$}", label = row.label);
-                    lines.push(Line::from(vec![
-                        Span::from(format!("  {padded}: ")).dim(),
+                    let base_spans = vec![
+                        Span::from(format!(" {padded}: ")).dim(),
                         Span::from(render_status_limit_progress_bar(row.percent_used)),
                         Span::from(" "),
                         Span::from(format_status_limit_summary(row.percent_used)),
-                    ]));
+                    ];
 
                     if let Some(resets_at) = row.resets_at.as_ref() {
-                        lines.push(
-                            vec!["    ".into(), format!("Resets at: {resets_at}").dim()].into(),
-                        );
+                        let resets_span = Span::from(format!("Resets at: {resets_at}")).dim();
+                        let mut inline_spans = base_spans.clone();
+                        inline_spans.push(Span::from(" "));
+                        inline_spans.push(resets_span.clone());
+
+                        if line_display_width(&Line::from(inline_spans.clone()))
+                            <= available_inner_width
+                        {
+                            lines.push(Line::from(inline_spans));
+                        } else {
+                            lines.push(Line::from(base_spans));
+                            lines.push(
+                                vec![Span::from(resets_indent.clone()).dim(), resets_span].into(),
+                            );
+                        }
+                    } else {
+                        lines.push(Line::from(base_spans));
                     }
                 }
 
@@ -347,12 +362,13 @@ impl HistoryCell for StatusHistoryCell {
 
         rows.push_blank();
         rows.push_field(self.token_usage_field());
-        rows.extend_lines(self.rate_limit_lines());
 
         let available_inner_width = usize::from(width.saturating_sub(4));
         if available_inner_width == 0 {
             return Vec::new();
         }
+
+        rows.extend_lines(self.rate_limit_lines(available_inner_width));
 
         let lines = rows.into_lines();
         let content_width = lines.iter().map(line_display_width).max().unwrap_or(0);
