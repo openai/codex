@@ -715,6 +715,11 @@ impl Session {
         state.record_items(items.iter());
     }
 
+    async fn replace_history(&self, items: Vec<ResponseItem>) {
+        let mut state = self.state.lock().await;
+        state.replace_history(items);
+    }
+
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
         let rollout_items: Vec<RolloutItem> = items
             .iter()

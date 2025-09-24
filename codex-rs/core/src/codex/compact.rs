@@ -156,10 +156,7 @@ async fn run_compact_task_inner(
     let user_messages = collect_user_messages(&history_snapshot);
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
-    {
-        let mut state = sess.state.lock().await;
-        state.replace_history(new_history);
-    }
+    sess.replace_history(new_history).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
