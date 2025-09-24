@@ -55,22 +55,35 @@ function initialize(): void {
  */
 function setupMessageHandlers(): void {
   if (!router) return;
-  
+
   // Handle ping (for checking if content script is loaded)
   router.on(MessageType.PING, () => {
     return { type: MessageType.PONG, timestamp: Date.now() };
   });
-  
+
   // Handle tab commands
   router.on(MessageType.TAB_COMMAND, async (message) => {
     const { command, args } = message.payload;
     return executeCommand(command, args);
   });
-  
+
+  // Handle tool execution for DOM tools
+  router.on(MessageType.TOOL_EXECUTE, async (message) => {
+    const { toolName, args } = message.payload;
+    return executeDOMTool(toolName, args);
+  });
+
   // Handle DOM queries
   router.on(MessageType.TAB_COMMAND, async (message) => {
     if (message.payload.command === 'query') {
       return queryDOM(message.payload.args);
+    }
+  });
+
+  // Handle page isolation events
+  router.on(MessageType.TAB_COMMAND, async (message) => {
+    if (message.payload.command === 'isolate') {
+      return setupPageIsolation(message.payload.args);
     }
   });
 }
@@ -232,7 +245,8 @@ function extractData(
  */
 function getElementAttributes(element: Element): Record<string, string> {
   const attrs: Record<string, string> = {};
-  for (const attr of element.attributes) {
+  for (let i = 0; i < element.attributes.length; i++) {
+    const attr = element.attributes[i];
     attrs[attr.name] = attr.value;
   }
   return attrs;
@@ -553,16 +567,127 @@ function getElementSelector(element: Element): string {
 }
 
 /**
+ * Execute DOM tool
+ */
+async function executeDOMTool(toolName: string, args: any): Promise<any> {
+  try {
+    switch (toolName) {
+      case 'dom_query':
+        return selectElements(args.selector || args.query);
+
+      case 'dom_click':
+        return clickElement(args.selector);
+
+      case 'dom_type':
+        return typeInElement(args.selector, args.text);
+
+      case 'dom_extract':
+        return extractData(args.selector, args.attributes);
+
+      case 'dom_highlight':
+        return highlightElements(args.selector, args.style);
+
+      case 'dom_scroll':
+        return scrollToElement(args.selector);
+
+      case 'dom_form_fill':
+        return fillForm(args.selector, args.data);
+
+      case 'dom_form_data':
+        return getFormData(args.selector);
+
+      case 'dom_screenshot':
+        return screenshotElement(args.selector);
+
+      case 'dom_observe':
+        return observeElement(args.selector, args.options);
+
+      case 'dom_context':
+        return getPageContext();
+
+      default:
+        throw new Error(`Unknown DOM tool: ${toolName}`);
+    }
+  } catch (error) {
+    // Send error back to background
+    if (router) {
+      await router.sendToolError(error instanceof Error ? error.message : 'Unknown error');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Setup page isolation
+ */
+function setupPageIsolation(args: any): boolean {
+  try {
+    // Create isolated execution context
+    const isolatedScript = document.createElement('script');
+    isolatedScript.textContent = `
+      (function() {
+        // Isolated context for Codex operations
+        window.__codexIsolated = {
+          execute: ${args.code || 'function() { return null; }'},
+          context: ${JSON.stringify(args.context || {})}
+        };
+      })();
+    `;
+
+    document.head.appendChild(isolatedScript);
+    document.head.removeChild(isolatedScript);
+
+    return true;
+  } catch (error) {
+    console.error('Failed to setup page isolation:', error);
+    return false;
+  }
+}
+
+/**
  * Announce presence to background script
  */
 function announcePresence(): void {
   if (!router) return;
-  
+
   // Send initial context
   router.send(MessageType.TAB_RESULT, {
     type: 'content-script-ready',
     context: getPageContext(),
+  }).catch(() => {
+    // Ignore connection errors on initial announcement
   });
+
+  // Also send tool registration info
+  const availableTools = [
+    'dom_query',
+    'dom_click',
+    'dom_type',
+    'dom_extract',
+    'dom_highlight',
+    'dom_scroll',
+    'dom_form_fill',
+    'dom_form_data',
+    'dom_screenshot',
+    'dom_observe',
+    'dom_context'
+  ];
+
+  router.send(MessageType.TOOL_RESULT, {
+    type: 'tools-available',
+    tools: availableTools,
+    tabId: getTabId()
+  }).catch(() => {
+    // Ignore connection errors
+  });
+}
+
+/**
+ * Get current tab ID if available
+ */
+function getTabId(): number | undefined {
+  // This would typically be injected by the background script
+  return (window as any).__codexTabId;
 }
 
 /**
@@ -585,5 +710,66 @@ window.addEventListener('unload', () => {
 // Initialize content script
 initialize();
 
+// Inject necessary scripts for enhanced functionality
+function injectEnhancementScripts(): void {
+  // Inject script for page interaction enhancement
+  const enhancementScript = document.createElement('script');
+  enhancementScript.textContent = `
+    // Enhanced page interaction utilities
+    window.__codexUtils = {
+      // Utility functions for better DOM interaction
+      getElementPath: function(element) {
+        const path = [];
+        let current = element;
+        while (current && current !== document.body) {
+          let selector = current.tagName.toLowerCase();
+          if (current.id) {
+            selector += '#' + current.id;
+          } else if (current.className) {
+            selector += '.' + Array.from(current.classList).join('.');
+          }
+          path.unshift(selector);
+          current = current.parentElement;
+        }
+        return path.join(' > ');
+      },
+
+      // Enhanced element selection
+      smartSelect: function(query) {
+        // Try multiple selection strategies
+        let elements = [];
+
+        // CSS selector
+        try {
+          elements = Array.from(document.querySelectorAll(query));
+          if (elements.length > 0) return elements;
+        } catch (e) {}
+
+        // XPath
+        try {
+          const result = document.evaluate(query, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          for (let i = 0; i < result.snapshotLength; i++) {
+            elements.push(result.snapshotItem(i));
+          }
+          if (elements.length > 0) return elements;
+        } catch (e) {}
+
+        // Text content search
+        const allElements = document.querySelectorAll('*');
+        elements = Array.from(allElements).filter(el =>
+          el.textContent && el.textContent.includes(query)
+        );
+
+        return elements;
+      }
+    };
+  `;
+
+  document.head.appendChild(enhancementScript);
+}
+
+// Inject enhancement scripts
+injectEnhancementScripts();
+
 // Export for testing
-export { getPageContext, selectElements, executeCommand };
+export { getPageContext, selectElements, executeCommand, executeDOMTool };

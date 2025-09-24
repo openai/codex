@@ -3,8 +3,8 @@
  * Handles message passing between background, content scripts, and side panel
  */
 
-import { Submission, Event } from '../protocol/types';
-import { EventMsg } from '../protocol/events';
+import type { Submission, Event } from '../protocol/types';
+import type { EventMsg } from '../protocol/events';
 
 /**
  * Message types for Chrome extension communication
@@ -13,25 +13,51 @@ export enum MessageType {
   // Core protocol messages
   SUBMISSION = 'SUBMISSION',
   EVENT = 'EVENT',
-  
+
   // Connection management
   CONNECT = 'CONNECT',
   DISCONNECT = 'DISCONNECT',
   PING = 'PING',
   PONG = 'PONG',
-  
+
   // State queries
   GET_STATE = 'GET_STATE',
   STATE_UPDATE = 'STATE_UPDATE',
-  
+
   // Tab operations
   TAB_COMMAND = 'TAB_COMMAND',
   TAB_RESULT = 'TAB_RESULT',
-  
+
   // Storage operations
   STORAGE_GET = 'STORAGE_GET',
   STORAGE_SET = 'STORAGE_SET',
   STORAGE_RESULT = 'STORAGE_RESULT',
+
+  // Model client messages
+  MODEL_REQUEST = 'MODEL_REQUEST',
+  MODEL_RESPONSE = 'MODEL_RESPONSE',
+  MODEL_ERROR = 'MODEL_ERROR',
+
+  // Tool execution messages
+  TOOL_EXECUTE = 'TOOL_EXECUTE',
+  TOOL_RESULT = 'TOOL_RESULT',
+  TOOL_ERROR = 'TOOL_ERROR',
+
+  // Approval messages
+  APPROVAL_REQUEST = 'APPROVAL_REQUEST',
+  APPROVAL_RESPONSE = 'APPROVAL_RESPONSE',
+  APPROVAL_TIMEOUT = 'APPROVAL_TIMEOUT',
+
+  // Diff tracking messages
+  DIFF_GENERATED = 'DIFF_GENERATED',
+  DIFF_APPLIED = 'DIFF_APPLIED',
+  DIFF_REJECTED = 'DIFF_REJECTED',
+  DIFF_UPDATED = 'DIFF_UPDATED',
+
+  // Turn management messages
+  TURN_STARTED = 'TURN_STARTED',
+  TURN_COMPLETED = 'TURN_COMPLETED',
+  TURN_ABORTED = 'TURN_ABORTED',
 }
 
 /**
@@ -349,6 +375,85 @@ export class MessageRouter {
 
   async storageSet(key: string, value: any): Promise<void> {
     await this.send(MessageType.STORAGE_SET, { key, value });
+  }
+
+  /**
+   * Model client operations
+   */
+  async sendModelRequest(config: any, prompt: string): Promise<any> {
+    return this.send(MessageType.MODEL_REQUEST, { config, prompt });
+  }
+
+  async sendModelResponse(response: any): Promise<void> {
+    await this.send(MessageType.MODEL_RESPONSE, response);
+  }
+
+  async sendModelError(error: string): Promise<void> {
+    await this.send(MessageType.MODEL_ERROR, { error });
+  }
+
+  /**
+   * Tool execution operations
+   */
+  async executeToolMessage(toolName: string, args: any): Promise<any> {
+    return this.send(MessageType.TOOL_EXECUTE, { toolName, args });
+  }
+
+  async sendToolResult(result: any): Promise<void> {
+    await this.send(MessageType.TOOL_RESULT, result);
+  }
+
+  async sendToolError(error: string): Promise<void> {
+    await this.send(MessageType.TOOL_ERROR, { error });
+  }
+
+  /**
+   * Approval operations
+   */
+  async requestApproval(approvalId: string, type: string, details: any): Promise<any> {
+    return this.send(MessageType.APPROVAL_REQUEST, { approvalId, type, details });
+  }
+
+  async sendApprovalResponse(approvalId: string, approved: boolean): Promise<void> {
+    await this.send(MessageType.APPROVAL_RESPONSE, { approvalId, approved });
+  }
+
+  async sendApprovalTimeout(approvalId: string): Promise<void> {
+    await this.send(MessageType.APPROVAL_TIMEOUT, { approvalId });
+  }
+
+  /**
+   * Diff tracking operations
+   */
+  async sendDiffGenerated(diffId: string, path: string, content: any): Promise<void> {
+    await this.send(MessageType.DIFF_GENERATED, { diffId, path, content });
+  }
+
+  async sendDiffApplied(diffId: string): Promise<void> {
+    await this.send(MessageType.DIFF_APPLIED, { diffId });
+  }
+
+  async sendDiffRejected(diffId: string): Promise<void> {
+    await this.send(MessageType.DIFF_REJECTED, { diffId });
+  }
+
+  async sendDiffUpdated(diffId: string, content: any): Promise<void> {
+    await this.send(MessageType.DIFF_UPDATED, { diffId, content });
+  }
+
+  /**
+   * Turn management operations
+   */
+  async sendTurnStarted(turnId: string): Promise<void> {
+    await this.send(MessageType.TURN_STARTED, { turnId });
+  }
+
+  async sendTurnCompleted(turnId: string, result: any): Promise<void> {
+    await this.send(MessageType.TURN_COMPLETED, { turnId, result });
+  }
+
+  async sendTurnAborted(turnId: string, reason: string): Promise<void> {
+    await this.send(MessageType.TURN_ABORTED, { turnId, reason });
   }
 
   /**

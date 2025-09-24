@@ -3,8 +3,8 @@
  * Implements async queue patterns from codex.rs
  */
 
-import { Submission, Event, Op } from '../protocol/types';
-import { EventMsg } from '../protocol/events';
+import type { Submission, Event, Op } from '../protocol/types';
+import type { EventMsg } from '../protocol/events';
 
 /**
  * Priority levels for queue items
@@ -264,7 +264,7 @@ export class EventQueue extends PriorityQueue<Event> {
 export class QueueProcessor {
   private submissionQueue: SubmissionQueue;
   private eventQueue: EventQueue;
-  private processingInterval?: NodeJS.Timeout;
+  private processingInterval?: number;
   private batchSize: number;
 
   constructor(

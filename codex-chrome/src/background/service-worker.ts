@@ -5,34 +5,47 @@
 
 import { CodexAgent } from '../core/CodexAgent';
 import { MessageRouter, MessageType } from '../core/MessageRouter';
-import { Submission, Event } from '../protocol/types';
+import type { Submission, Event } from '../protocol/types';
 import { validateSubmission } from '../protocol/schemas';
+import { ModelClientFactory } from '../models/ModelClientFactory';
+import { ToolRegistry } from '../tools/ToolRegistry';
 
-// Global agent instance
+// Global instances
 let agent: CodexAgent | null = null;
 let router: MessageRouter | null = null;
+let modelClientFactory: ModelClientFactory | null = null;
+let toolRegistry: ToolRegistry | null = null;
 
 /**
  * Initialize the service worker
  */
 async function initialize(): Promise<void> {
   console.log('Initializing Codex background service worker');
-  
-  // Create agent instance
+
+  // Initialize ModelClientFactory
+  modelClientFactory = ModelClientFactory.getInstance();
+
+  // Initialize ToolRegistry
+  toolRegistry = new ToolRegistry();
+
+  // Create agent instance (this will create its own instances of components)
   agent = new CodexAgent();
-  
+
   // Create message router
   router = new MessageRouter('background');
-  
+
   // Setup message handlers
   setupMessageHandlers();
-  
+
   // Setup Chrome event listeners
   setupChromeListeners();
-  
+
   // Setup periodic tasks
   setupPeriodicTasks();
-  
+
+  // Initialize browser-specific tools
+  await initializeBrowserTools();
+
   console.log('Service worker initialized');
 }
 
@@ -84,11 +97,63 @@ function setupMessageHandlers(): void {
     const result = await chrome.storage.local.get(key);
     return result[key];
   });
-  
+
   router.on(MessageType.STORAGE_SET, async (message) => {
     const { key, value } = message.payload;
     await chrome.storage.local.set({ [key]: value });
     return { success: true };
+  });
+
+  // Handle model client messages
+  router.on(MessageType.MODEL_REQUEST, async (message) => {
+    if (!modelClientFactory) throw new Error('Model client factory not initialized');
+
+    const { config, prompt } = message.payload;
+    const client = await modelClientFactory.createClient(config);
+    return await client.complete(prompt);
+  });
+
+  // Handle tool execution messages
+  router.on(MessageType.TOOL_EXECUTE, async (message) => {
+    if (!agent) throw new Error('Agent not initialized');
+
+    const { toolName, args } = message.payload;
+    const toolRegistry = agent.getToolRegistry();
+    const tool = toolRegistry.getTool(toolName);
+
+    if (!tool) {
+      throw new Error(`Tool not found: ${toolName}`);
+    }
+
+    // For now, just return a placeholder result
+    return { success: true, message: `Tool ${toolName} executed` };
+  });
+
+  // Handle approval requests
+  router.on(MessageType.APPROVAL_REQUEST, async (message) => {
+    if (!agent) throw new Error('Agent not initialized');
+
+    const { approvalId, type, details } = message.payload;
+    const approvalManager = agent.getApprovalManager();
+
+    // For now, just return a placeholder approval response
+    return { approved: false, message: 'Approval system not fully integrated yet' };
+  });
+
+  // Handle diff events
+  router.on(MessageType.DIFF_GENERATED, async (message) => {
+    if (!agent) throw new Error('Agent not initialized');
+
+    const { diffId, path, content } = message.payload;
+    const diffTracker = agent.getDiffTracker();
+
+    // For now, just log the diff - proper integration pending
+    console.log(`Diff generated: ${diffId} for ${path}`);
+
+    // Broadcast diff to UI
+    if (router) {
+      await router.broadcast(MessageType.DIFF_GENERATED, message.payload);
+    }
   });
   
   // Handle tab commands
@@ -342,14 +407,44 @@ async function executeTabCommand(
 }
 
 /**
+ * Initialize browser-specific tools
+ */
+async function initializeBrowserTools(): Promise<void> {
+  if (!toolRegistry || !agent) return;
+
+  const agentToolRegistry = agent.getToolRegistry();
+
+  // Register browser tools in the agent's tool registry
+  const browserTools = [
+    'browser_action',
+    'tab_navigate',
+    'tab_screenshot',
+    'dom_query',
+    'dom_click',
+    'dom_type',
+    'dom_extract',
+    'storage_get',
+    'storage_set'
+  ];
+
+  for (const toolName of browserTools) {
+    const tool = toolRegistry.getTool(toolName);
+    if (tool) {
+      // For now, just log tool registration - proper integration pending
+      console.log(`Registering browser tool: ${toolName}`);
+    }
+  }
+}
+
+/**
  * Execute quick action on tab
  */
 async function executeQuickAction(tabId: number): Promise<void> {
   // Get current page context
-  const [tab] = await chrome.tabs.get(tabId);
-  
+  const tab = await chrome.tabs.get(tabId);
+
   if (!agent) return;
-  
+
   // Submit quick analysis request
   await agent.submitOperation({
     type: 'UserInput',
@@ -364,7 +459,7 @@ async function executeQuickAction(tabId: number): Promise<void> {
       },
     ],
   });
-  
+
   // Open side panel
   chrome.sidePanel.open({ tabId });
 }
@@ -414,8 +509,35 @@ chrome.runtime.onStartup.addListener(() => {
   initialize();
 });
 
+/**
+ * Handle service worker installation
+ */
+chrome.runtime.onInstalled.addListener(() => {
+  initialize();
+});
+
+/**
+ * Handle service worker shutdown
+ */
+chrome.runtime.onSuspend.addListener(async () => {
+  console.log('Service worker shutting down');
+
+  // Cleanup resources
+  if (agent) {
+    await agent.cleanup();
+  }
+
+  if (router) {
+    router.cleanup();
+  }
+
+  if (toolRegistry) {
+    toolRegistry.clear();
+  }
+});
+
 // Initialize on script load
 initialize();
 
 // Export for testing
-export { agent, router, initialize };
+export { agent, router, modelClientFactory, toolRegistry, initialize };

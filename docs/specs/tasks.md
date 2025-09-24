@@ -1,312 +1,401 @@
-# Codex Chrome Extension - Implementation Tasks
+# Implementation Tasks: Codex Chrome Extension (Missing Components)
 
 ## Overview
-Convert codex-rs terminal agent to Chrome extension, preserving the SQ/EQ architecture and exact protocol types.
+Implement missing components for the existing Codex Chrome extension skeleton: ModelClient implementations, TaskRunner, TurnManager, ToolsRegistry, BrowserTools, ApprovalManager, and DiffTracker while preserving SQ/EQ architecture from codex-rs.
 
-## Phase 1: Project Setup & Protocol Port
+## Task Execution Order
 
-### T001: Initialize Chrome Extension Project
-**Priority**: Critical
-**Files**: package.json, tsconfig.json, manifest.json
-```bash
-mkdir codex-chrome && cd codex-chrome
-npm init -y
-npm install typescript vite svelte zod
-npm install -D @types/chrome @sveltejs/vite-plugin-svelte
-```
+### Phase 1: Testing Infrastructure & Contracts
+Establish contract tests before implementation (TDD approach).
 
-### T002: Port Protocol Types
-**Priority**: Critical
-**Source**: codex-rs/protocol/src/protocol.rs
-**Target**: src/protocol/types.ts
-- Port `Submission` and `Op` enum exactly
-- Port `Event` and `EventMsg` enum exactly
-- Preserve all type names without changes
-
-### T003: Port Event Types
-**Priority**: Critical
-**Source**: codex-rs/protocol/src/protocol.rs (lines 200-1400)
-**Target**: src/protocol/events.ts
-- Port all event data structures (TaskStartedEvent, AgentMessageEvent, etc.)
-- Maintain exact field names and types
-
-### T004: Port Model Types
-**Priority**: High
-**Source**: codex-rs/protocol/src/models.rs
-**Target**: src/protocol/models.ts
-- Port ContentItem, ResponseItem types
-- Port conversation and message types
-
-## Phase 2: Core Agent Implementation
-
-### T005: Implement CodexAgent Class
-**Priority**: Critical
-**Source**: codex-rs/core/src/codex.rs (Codex struct)
-**Target**: src/core/CodexAgent.ts
+#### T001: Setup Test Utilities [P] ✅
+**Files**: `codex-chrome/src/tests/utils/chrome-mocks.ts`, `codex-chrome/src/tests/utils/test-helpers.ts`
+**Deps**: None
 ```typescript
-class CodexAgent {
-  private nextId: AtomicU64 equivalent
-  private submissionQueue: Submission[]
-  private eventQueue: Event[]
-
-  async submitOperation(op: Op): Promise<string>
-  async getNextEvent(): Promise<Event | null>
-}
+// Chrome API mocks for testing
+// Helper functions for async testing
+// Mock message passing between components
 ```
 
-### T006: Implement Session Management
-**Priority**: Critical
-**Source**: codex-rs/core/src/codex.rs (Session struct)
-**Target**: src/core/Session.ts
-- Port Session struct with Chrome adaptations
-- Replace MCP with Chrome tool registry
-- Adapt state management for browser
+#### T002: Create Contract Tests - ModelClient [P] ✅
+**Files**: `codex-chrome/src/tests/contracts/model-client.test.ts`
+**Deps**: T001
+- Test OpenAIClient contract (CompletionRequest/Response)
+- Test AnthropicClient contract (AnthropicRequest/Response)
+- Validate message format and tool calls
+- Test streaming responses
 
-### T007: Implement Queue Processing
-**Priority**: Critical
-**Target**: src/core/Queue.ts
-- Implement SQ processing logic
-- Implement EQ emission logic
-- Handle async message passing
-
-### T008: Port Turn Context Management
-**Priority**: High
-**Source**: codex-rs/protocol/src/protocol.rs (TurnContext)
-**Target**: src/core/TurnContext.ts
-- Port TurnContext structure
-- Adapt sandbox policies for browser
-- Implement override logic
-
-## Phase 3: Chrome Extension Infrastructure
-
-### T009: Setup Background Service Worker
-**Priority**: Critical
-**Target**: src/background/index.ts
-- Initialize CodexAgent instance
-- Setup Chrome message listeners
-- Handle extension lifecycle events
-
-### T010: Implement Message Router
-**Priority**: Critical
-**Target**: src/background/MessageRouter.ts
-- Route messages between components
-- Handle Submission forwarding
-- Handle Event distribution
-
-### T011: Create Storage Manager
-**Priority**: High
-**Target**: src/background/StorageManager.ts
-- Implement Chrome storage wrapper
-- Handle conversation persistence
-- Manage session state
-
-### T012: Setup Content Script Base
-**Priority**: High
-**Target**: src/content/index.ts
-- Create message listener
-- Setup DOM injection framework
-- Handle page context isolation
-
-## Phase 4: Tool System (Interfaces Only)
-
-### T013: Create Tool Base Interface
-**Priority**: High
-**Target**: src/tools/Tool.ts
-```typescript
-interface Tool {
-  name: string;
-  description: string;
-  execute(params: any): Promise<ToolResult>;
-}
-```
-
-### T014: Create Tab Management Tool Interface
-**Priority**: Medium
-**Target**: src/tools/TabManager.ts
-- Define openTab, closeTab, switchTab methods
-- Define getAllTabs, getCurrentTab methods
-- Create stub implementations
-
-### T015: Create Page Interaction Tool Interface
-**Priority**: Medium
-**Target**: src/tools/PageInteractor.ts
-- Define click, type, submit methods
-- Define scroll, screenshot methods
-- Create stub implementations
-
-### T016: Create Data Extraction Tool Interface
-**Priority**: Medium
-**Target**: src/tools/DataExtractor.ts
-- Define getText, getHTML methods
-- Define getAttribute, getAllElements methods
-- Create stub implementations
-
-### T017: Create Navigation Tool Interface
-**Priority**: Medium
-**Target**: src/tools/Navigator.ts
-- Define goto, back, forward, refresh methods
-- Define waitForNavigation method
-- Create stub implementations
-
-### T018: Implement Tool Registry
-**Priority**: High
-**Source**: Pattern from codex-rs/core/src/openai_tools.rs
-**Target**: src/core/ToolRegistry.ts
-- Port tool registration logic
-- Implement tool discovery
-- Handle tool execution dispatch
-
-## Phase 5: UI Implementation
-
-### T019: Create Side Panel HTML
-**Priority**: High
-**Target**: src/sidepanel/index.html
-- Basic HTML structure
-- Load Svelte app
-- Include Tailwind CSS
-
-### T020: Implement Main Svelte App
-**Priority**: High
-**Target**: src/sidepanel/App.svelte
-- Create input interface
-- Display event stream
-- Handle user submissions
-
-### T021: Create Event Display Component
-**Priority**: Medium
-**Target**: src/sidepanel/components/EventDisplay.svelte
-- Render different event types
-- Handle AgentMessage events
-- Show execution status
-
-### T022: Create Input Component
-**Priority**: Medium
-**Target**: src/sidepanel/components/QueryInput.svelte
-- Text input with validation
-- Submit handling
-- Keyboard shortcuts
-
-### T023: Implement Event Polling
-**Priority**: High
-**Target**: src/sidepanel/lib/EventPoller.ts
-- Poll background for events
-- Handle event queue
-- Update UI state
-
-## Phase 6: Message Flow Integration
-
-### T024: Connect Side Panel to Background
-**Priority**: Critical
-**Dependencies**: T009, T020
-- Implement submission sending
-- Implement event receiving
-- Handle connection lifecycle
-
-### T025: Connect Background to Content Scripts
-**Priority**: High
-**Dependencies**: T009, T012
-- Implement tab messaging
-- Handle script injection
-- Manage response routing
-
-### T026: Implement Op Handlers
-**Priority**: Critical
-**Dependencies**: T005, T002
-- Handle UserInput op
-- Handle UserTurn op
-- Handle Interrupt op
-- Handle other ops
-
-### T027: Implement Event Emitters
-**Priority**: Critical
-**Dependencies**: T005, T003
-- Emit TaskStarted/Complete events
-- Emit AgentMessage events
-- Emit Error events
-- Emit tool execution events
-
-## Phase 7: Testing
-
-### T028: Test Protocol Types
-**Priority**: High
-**Target**: tests/protocol.test.ts
-- Test type serialization/deserialization
-- Test type guards
-- Test Zod validation
-
-### T029: Test Queue Architecture
-**Priority**: High
-**Target**: tests/queue.test.ts
-- Test submission queuing
-- Test event dequeuing
-- Test async processing
-
-### T030: Test Message Flow
-**Priority**: High
-**Target**: tests/integration/messageFlow.test.ts
-- Test end-to-end message flow
+#### T003: Create Contract Tests - TaskRunner [P] ✅
+**Files**: `codex-chrome/src/tests/contracts/task-runner.test.ts`
+**Deps**: T001
+- Test TaskExecutionRequest/Response
+- Test task cancellation
+- Validate progress events
 - Test error handling
-- Test interruption
 
-### T031: Test Chrome APIs
-**Priority**: Medium
-**Target**: tests/chrome.test.ts
-- Mock Chrome APIs
-- Test storage operations
-- Test tab operations
+#### T004: Create Contract Tests - TurnManager [P] ✅
+**Files**: `codex-chrome/src/tests/contracts/turn-manager.test.ts`
+**Deps**: T001
+- Test TurnRequest/Response
+- Test conversation state management
+- Validate turn context updates
+- Test retry logic
 
-## Phase 8: Build and Package
+#### T005: Create Contract Tests - ToolRegistry [P] ✅
+**Files**: `codex-chrome/src/tests/contracts/tool-registry.test.ts`
+**Deps**: T001
+- Test tool registration
+- Test tool discovery
+- Test parameter validation
+- Test execution dispatch
 
-### T032: Configure Vite Build
-**Priority**: High
-**Target**: vite.config.ts
-- Setup multiple entry points
-- Configure Chrome extension build
-- Handle asset copying
+#### T006: Create Contract Tests - Browser Tools [P] ✅
+**Files**: `codex-chrome/src/tests/contracts/browser-tools.test.ts`
+**Deps**: T001
+- Test TabToolRequest/Response
+- Test DOMToolRequest/Response
+- Test StorageToolRequest/Response
+- Test NavigationToolRequest/Response
 
-### T033: Create Build Scripts
-**Priority**: Medium
-**Target**: package.json scripts
-```json
-"scripts": {
-  "dev": "vite",
-  "build": "vite build",
-  "preview": "vite preview",
-  "test": "vitest"
+#### T007: Create Contract Tests - ApprovalManager [P] ✅
+**Files**: `codex-chrome/src/tests/contracts/approval-manager.test.ts`
+**Deps**: T001
+- Test ApprovalRequest/Response
+- Test ReviewDecision handling
+- Validate approval policies
+- Test timeout scenarios
+
+#### T008: Create Contract Tests - DiffTracker [P] ✅
+**Files**: `codex-chrome/src/tests/contracts/diff-tracker.test.ts`
+**Deps**: T001
+- Test AddChangeRequest/GetChangesRequest
+- Test DiffResult format
+- Validate change tracking
+- Test rollback operations
+
+### Phase 2: Core Implementation - Model Clients
+
+#### T009: Create ModelClient Base Interface ✅
+**Files**: `codex-chrome/src/models/ModelClient.ts`
+**Deps**: Protocol types exist
+```typescript
+interface ModelClient {
+  complete(request: CompletionRequest): Promise<CompletionResponse>;
+  stream(request: CompletionRequest): AsyncGenerator<StreamChunk>;
+  countTokens(text: string, model: string): number;
 }
 ```
 
-### T034: Setup Development Workflow
-**Priority**: Low
-**Target**: .github/workflows/ci.yml
-- Automated testing
-- Build verification
-- Type checking
+#### T010: Implement OpenAI ModelClient ✅
+**Files**: `codex-chrome/src/models/OpenAIClient.ts`
+**Deps**: T002, T009
+- Implement complete() method with API key support
+- Implement stream() generator for streaming responses
+- Add token counting logic
+- Handle tool calls and function calling
+- Add retry logic with exponential backoff
 
-## Critical Path
+#### T011: Implement Anthropic ModelClient ✅
+**Files**: `codex-chrome/src/models/AnthropicClient.ts`
+**Deps**: T002, T009
+- Implement complete() method with Claude API
+- Implement stream() generator
+- Handle content blocks and tool use
+- Add proper error handling
+- Support system prompts
 
-Must complete in order:
-1. T001 → T002 → T003 → T005 → T006 → T009 → T020 → T024
+#### T012: Create ModelClient Factory ✅
+**Files**: `codex-chrome/src/models/ModelClientFactory.ts`
+**Deps**: T010, T011
+- Create factory to instantiate correct client
+- Load API keys from Chrome storage
+- Handle provider selection
+- Cache client instances
 
-Can parallelize:
-- Protocol types (T002-T004)
-- Tool interfaces (T014-T017)
-- UI components (T021-T023)
-- Tests (T028-T031)
+### Phase 3: Core Implementation - Task & Turn Management
+
+#### T013: Implement TaskRunner ✅
+**Files**: `codex-chrome/src/core/TaskRunner.ts`
+**Deps**: T003, T009
+- Port run_task equivalent from Rust
+- Handle task execution lifecycle
+- Emit progress events through EQ
+- Support task cancellation
+- Integrate with TurnManager
+
+#### T014: Implement TurnManager ✅
+**Files**: `codex-chrome/src/core/TurnManager.ts`
+**Deps**: T004, T009
+- Port run_turn equivalent from Rust
+- Manage conversation flow
+- Handle turn context
+- Process user inputs
+- Coordinate with model clients
+
+#### T015: Implement Turn Context Manager ✅
+**Files**: `codex-chrome/src/core/TurnContext.ts`
+**Deps**: T014
+- Manage turn state
+- Handle context switching
+- Store conversation history
+- Apply approval and sandbox policies
+
+### Phase 4: Core Implementation - Tools System
+
+#### T016: Implement ToolRegistry ✅
+**Files**: `codex-chrome/src/tools/ToolRegistry.ts`
+**Deps**: T005
+- Create tool registration system
+- Handle tool discovery
+- Implement execution dispatch
+- Add validation logic
+- Support dynamic tool loading
+
+#### T017: Create Base Tool Class ✅
+**Files**: `codex-chrome/src/tools/BaseTool.ts`
+**Deps**: T016
+```typescript
+abstract class BaseTool implements Tool {
+  abstract name: string;
+  abstract execute(params: any): Promise<ToolResult>;
+}
+```
+
+#### T018: Implement TabTool [P] ✅
+**Files**: `codex-chrome/src/tools/TabTool.ts`
+**Deps**: T006, T017
+- Implement openTab, closeTab, switchTab
+- Implement getAllTabs, getCurrentTab
+- Add screenshot capability
+- Handle tab events
+
+#### T019: Implement DOMTool [P] ✅
+**Files**: `codex-chrome/src/tools/DOMTool.ts`
+**Deps**: T006, T017
+- Implement click, type, submit methods
+- Implement querySelector, extractText
+- Handle cross-frame communication
+- Add element waiting logic
+
+#### T020: Implement StorageTool [P] ✅
+**Files**: `codex-chrome/src/tools/StorageTool.ts`
+**Deps**: T006, T017
+- Implement get/set/remove for chrome.storage
+- Support local, session, and sync storage
+- Add data migration support
+- Handle storage quotas
+
+#### T021: Implement NavigationTool [P] ✅
+**Files**: `codex-chrome/src/tools/NavigationTool.ts`
+**Deps**: T006, T017
+- Implement goto, back, forward, refresh
+- Add waitForNavigation support
+- Handle navigation errors
+- Track navigation history
+
+### Phase 5: Core Implementation - Approval & Tracking
+
+#### T022: Implement ApprovalManager ✅
+**Files**: `codex-chrome/src/core/ApprovalManager.ts`
+**Deps**: T007
+- Implement requestApproval method
+- Handle approval policies
+- Create approval queue
+- Store approval history
+- Add timeout handling
+
+#### T023: Create Approval UI Component ✅
+**Files**: `codex-chrome/src/sidepanel/components/ApprovalDialog.svelte`
+**Deps**: T022
+- Create Svelte component for approvals
+- Display tool details and risks
+- Handle user decisions
+- Show approval history
+
+#### T024: Implement DiffTracker ✅
+**Files**: `codex-chrome/src/core/DiffTracker.ts`
+**Deps**: T008
+- Track DOM changes
+- Track storage changes
+- Generate diff reports
+- Implement undo functionality
+- Store change history
+
+### Phase 6: Integration - Wire Components Together
+
+#### T025: Update CodexAgent Integration ✅
+**Files**: `codex-chrome/src/core/CodexAgent.ts`
+**Deps**: T013, T014, T016, T022, T024
+- Integrate TaskRunner
+- Wire up TurnManager
+- Connect ToolRegistry
+- Add ApprovalManager
+- Enable DiffTracker
+
+#### T026: Update Background Service Worker ✅
+**Files**: `codex-chrome/src/background/index.ts`
+**Deps**: T025, T012
+- Initialize ModelClientFactory
+- Setup message routing for new components
+- Handle Chrome runtime events
+- Manage component lifecycle
+
+#### T027: Update Message Router ✅
+**Files**: `codex-chrome/src/core/MessageRouter.ts`
+**Deps**: T026
+- Add routes for model client messages
+- Handle tool execution messages
+- Route approval requests
+- Distribute diff events
+
+#### T028: Update Content Script Integration ✅
+**Files**: `codex-chrome/src/content/index.ts`
+**Deps**: T019, T027
+- Connect DOM tool execution
+- Setup message listeners
+- Handle page isolation
+- Inject necessary scripts
+
+#### T029: Update Session Management ✅
+**Files**: `codex-chrome/src/core/Session.ts`
+**Deps**: T015, T016
+- Integrate turn context
+- Register all browser tools
+- Setup tool permissions
+- Initialize tracking
+
+### Phase 7: UI Components
+
+#### T030: Create Tool Execution Display [P]
+**Files**: `codex-chrome/src/sidepanel/components/ToolExecution.svelte`
+**Deps**: Sidepanel exists
+- Display tool execution status
+- Show tool parameters
+- Display results
+- Handle errors
+
+#### T031: Create Diff Display Component [P]
+**Files**: `codex-chrome/src/sidepanel/components/DiffDisplay.svelte`
+**Deps**: T024
+- Show changes made
+- Display before/after states
+- Enable undo operations
+- Group changes by type
+
+#### T032: Update Main App Component
+**Files**: `codex-chrome/src/sidepanel/App.svelte`
+**Deps**: T023, T030, T031
+- Integrate approval dialog
+- Add tool execution display
+- Show diff tracking
+- Update event handling
+
+### Phase 8: Polish & Documentation
+
+#### T033: Add Error Boundaries [P]
+**Files**: Multiple component files
+**Deps**: All UI components
+- Add try-catch to all async operations
+- Implement error recovery
+- Create error reporting
+- Add user-friendly error messages
+
+#### T034: Add Logging System [P]
+**Files**: `codex-chrome/src/utils/logger.ts`
+**Deps**: Core components complete
+- Implement debug logging
+- Add performance monitoring
+- Create log persistence
+- Add log levels
+
+#### T035: Create Integration Tests [P]
+**Files**: `codex-chrome/src/tests/integration/*.test.ts`
+**Deps**: All implementation complete
+- Test end-to-end flows
+- Test error scenarios
+- Validate Chrome API usage
+- Test message passing
+
+#### T036: Add TypeScript Strict Checks [P]
+**Files**: `codex-chrome/tsconfig.json`, multiple .ts files
+**Deps**: All TypeScript files
+- Enable strict mode
+- Fix type errors
+- Add missing type annotations
+- Remove any types
+
+#### T037: Create User Documentation [P]
+**Files**: `codex-chrome/README.md`, `codex-chrome/docs/*.md`
+**Deps**: All features complete
+- Installation guide
+- API documentation
+- Tool usage examples
+- Troubleshooting guide
+
+## Parallel Execution Examples
+
+Group 1 - Contract Tests (after T001):
+```bash
+# All contract tests can run in parallel
+Task T002 && Task T003 && Task T004 && Task T005 && Task T006 && Task T007 && Task T008
+```
+
+Group 2 - Model Clients (after contracts):
+```bash
+# Independent implementations
+Task T010 && Task T011
+```
+
+Group 3 - Browser Tools (after T017):
+```bash
+# All tools are independent
+Task T018 && Task T019 && Task T020 && Task T021
+```
+
+Group 4 - UI Components (independent):
+```bash
+# Different components
+Task T030 && Task T031
+```
+
+Group 5 - Polish Tasks (at the end):
+```bash
+# Documentation and quality
+Task T033 && Task T034 && Task T035 && Task T036 && Task T037
+```
+
+## Task Dependencies Graph
+```
+T001 → T002-T008 (contracts)
+     ↓
+T009 → T010, T011 → T012 (model clients)
+     ↓
+T013, T014 → T015 (task/turn management)
+     ↓
+T016 → T017 → T018-T021 (tools)
+     ↓
+T022 → T023 (approval)
+T024 (diff tracking)
+     ↓
+T025-T029 (integration)
+     ↓
+T030-T032 (UI updates)
+     ↓
+T033-T037 (polish)
+```
 
 ## Success Criteria
-
-- [ ] SQ/EQ architecture working
-- [ ] Protocol types match Rust exactly
-- [ ] Basic user input → agent response flow
-- [ ] Chrome extension loads without errors
-- [ ] Side panel accepts input
-- [ ] Events display in UI
-- [ ] Tool interfaces defined (not implemented)
+- All contract tests pass before implementation
+- SQ/EQ architecture preserved from codex-rs
+- All protocol type names match exactly
+- Chrome extension loads without errors
+- All tools execute successfully
+- Approval flow works correctly
+- Changes are tracked and reversible
 
 ## Notes
-
-1. **DO NOT** rename any protocol types - keep exact Rust names
-2. **DO NOT** implement full tool logic yet - interfaces only
-3. **FOCUS** on message flow and protocol preservation
-4. **PRESERVE** the queue-based architecture
+- The codex-chrome skeleton already exists with basic structure
+- Focus only on missing components, not recreating the entire extension
+- Preserve exact type names from codex-rs protocol
+- Tasks marked [P] can be executed in parallel
+- Each task is self-contained and immediately executable

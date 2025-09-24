@@ -1,32 +1,17 @@
 # Implementation Plan Template
 
 ## Metadata
-- Input: /home/irichard/dev/study/codex-study/docs/specs/20250924-complete-codex-chrome-implementation.md
-- Output: Implementation artifacts in /home/irichard/dev/study/codex-study/docs/specs
-- Status: COMPLETE
+- Input: [FEATURE_SPEC_PATH]
+- Output: Implementation artifacts in SPECS_DIR
+- Status: INITIALIZING
 
 ## Technical Context
-The codex-chrome skeleton already exists with basic structure in place. Focus on implementing the missing core components without creating the chrome extension app from zero:
-
-**Existing Infrastructure:**
-- Chrome extension project setup with Vite, TypeScript, Svelte
-- Basic directory structure (src/core, src/protocol, src/background, src/sidepanel, src/content)
-- Some core files already exist: CodexAgent.ts, Session.ts, MessageRouter.ts, QueueProcessor.ts
-- Protocol types and events partially implemented
-
-**Missing Components to Implement:**
-1. ModelClient implementations (OpenAI, Anthropic)
-2. TaskRunner (run_task equivalent) for task execution
-3. TurnManager (run_turn equivalent) for conversation flow
-4. ToolsRegistry and BrowserTools (TabTool, DOMTool, StorageTool, NavigationTool)
-5. ApprovalManager for user consent
-6. DiffTracker for change monitoring
-7. Integration wiring between all components
+[USER_PROVIDED_CONTEXT]
 
 ## Progress Tracking
-- [x] Phase 0: Research and Analysis
-- [x] Phase 1: Design and Architecture
-- [x] Phase 2: Implementation Planning
+- [ ] Phase 0: Research and Analysis
+- [ ] Phase 1: Design and Architecture
+- [ ] Phase 2: Implementation Planning
 
 ## Execution Flow
 
