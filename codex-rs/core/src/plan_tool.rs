@@ -68,7 +68,7 @@ pub(crate) async fn handle_update_plan(
     arguments: String,
     sub_id: String,
     call_id: String,
-) -> ResponseInputItem {
+) -> Result<String, > {
     match parse_update_plan_arguments(arguments, &call_id) {
         Ok(args) => {
             let output = ResponseInputItem::FunctionCallOutput {

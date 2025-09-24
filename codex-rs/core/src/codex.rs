@@ -12,6 +12,7 @@ use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::review_format::format_review_findings_block;
 use crate::user_notification::UserNotifier;
+use crate::function_tool::FunctionCallError;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
@@ -31,6 +32,7 @@ use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
+use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
@@ -2325,22 +2327,16 @@ async fn handle_response_item(
 
 async fn handle_unified_exec_tool_call(
     sess: &Session,
-    call_id: String,
     session_id: Option<String>,
     arguments: Vec<String>,
     timeout_ms: Option<u64>,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     let parsed_session_id = if let Some(session_id) = session_id {
         match session_id.parse::<i32>() {
             Ok(parsed) => Some(parsed),
-            Err(output) => {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.to_string(),
-                    output: FunctionCallOutputPayload {
-                        content: format!("invalid session_id: {session_id} due to error {output}"),
-                        success: Some(false),
-                    },
-                };
+            Err(output) =>
+            {
+                return Err(FunctionCallError::RespondToModel(format!("invalid session_id: {session_id} due to error {output}")));
             }
         }
     } else {
@@ -2355,7 +2351,7 @@ async fn handle_unified_exec_tool_call(
 
     let result = sess.unified_exec_manager.handle_request(request).await;
 
-    let output_payload = match result {
+    match result {
         Ok(value) => {
             #[derive(Serialize)]
             struct SerializedUnifiedExecResult<'a> {
@@ -2367,25 +2363,11 @@ async fn handle_unified_exec_tool_call(
                 session_id: value.session_id.map(|id| id.to_string()),
                 output: &value.output,
             }) {
-                Ok(serialized) => FunctionCallOutputPayload {
-                    content: serialized,
-                    success: Some(true),
-                },
-                Err(err) => FunctionCallOutputPayload {
-                    content: format!("failed to serialize unified exec output: {err}"),
-                    success: Some(false),
-                },
+                Ok(serialized) => Ok(serialized),
+                Err(err) => Err(FunctionCallError::RespondToModel(format!("failed to serialize unified exec output: {err}")));
             }
         }
-        Err(err) => FunctionCallOutputPayload {
-            content: format!("unified exec failed: {err}"),
-            success: Some(false),
-        },
-    };
-
-    ResponseInputItem::FunctionCallOutput {
-        call_id,
-        output: output_payload,
+        Err(err) => return Err(FunctionCallError::RespondToModel(format!("unified exec failed: {err}")))
     }
 }
 
@@ -2397,15 +2379,10 @@ async fn handle_function_call(
     name: String,
     arguments: String,
     call_id: String,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     match name.as_str() {
         "container.exec" | "shell" => {
-            let params = match parse_container_exec_arguments(arguments, turn_context, &call_id) {
-                Ok(params) => params,
-                Err(output) => {
-                    return *output;
-                }
-            };
+            let params = parse_container_exec_arguments(arguments, turn_context, &call_id)?;
             handle_container_exec_with_params(
                 params,
                 sess,
@@ -2429,19 +2406,12 @@ async fn handle_function_call(
             let args = match serde_json::from_str::<UnifiedExecArgs>(&arguments) {
                 Ok(args) => args,
                 Err(err) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {err}"),
-                            success: Some(false),
-                        },
-                    };
+                    return Err(FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}")));
                 }
             };
 
             handle_unified_exec_tool_call(
                 sess,
-                call_id,
                 args.session_id,
                 args.input,
                 args.timeout_ms,
@@ -2456,42 +2426,22 @@ async fn handle_function_call(
             let args = match serde_json::from_str::<SeeImageArgs>(&arguments) {
                 Ok(a) => a,
                 Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: Some(false),
-                        },
-                    };
+                    return Err(FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}")));
                 }
             };
             let abs = turn_context.resolve_path(Some(args.path));
-            let output = match sess
+            sess
                 .inject_input(vec![InputItem::LocalImage { path: abs }])
                 .await
-            {
-                Ok(()) => FunctionCallOutputPayload {
-                    content: "attached local image path".to_string(),
-                    success: Some(true),
-                },
-                Err(_) => FunctionCallOutputPayload {
-                    content: "unable to attach image (no active task)".to_string(),
-                    success: Some(false),
-                },
-            };
-            ResponseInputItem::FunctionCallOutput { call_id, output }
+                .map_err(|_| -> FunctionCallError::RespondToModel("unable to attach image (no active task)".to_string()))?
+
+            Ok("attached local image path".to_string())
         }
         "apply_patch" => {
             let args = match serde_json::from_str::<ApplyPatchToolArgs>(&arguments) {
                 Ok(a) => a,
                 Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: None,
-                        },
-                    };
+                    return Err(FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}")));
                 }
             };
             let exec_params = ExecParams {
@@ -2538,28 +2488,16 @@ async fn handle_function_call(
             }
         }
         WRITE_STDIN_TOOL_NAME => {
-            let write_stdin_params = match serde_json::from_str::<WriteStdinParams>(&arguments) {
-                Ok(params) => params,
-                Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: Some(false),
-                        },
-                    };
-                }
-            };
+            let write_stdin_params = serde_json::from_str::<WriteStdinParams>(&arguments)
+                .map_err(|e| -> FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}")))?;
+
             let result = sess
                 .session_manager
                 .handle_write_stdin_request(write_stdin_params)
-                .await;
-            let function_call_output: FunctionCallOutputPayload =
-                crate::exec_command::result_into_payload(result);
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: function_call_output,
-            }
+                .await
+                .map_err(FunctionCallError::RespondToModel)?;
+
+            Ok(result.to_text_output())
         }
         _ => {
             match sess.mcp_connection_manager.parse_tool_name(&name) {
@@ -2568,13 +2506,7 @@ async fn handle_function_call(
                 }
                 None => {
                     // Unknown function: reply with structured failure so the model can adapt.
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("unsupported call: {name}"),
-                            success: None,
-                        },
-                    }
+                    Err(FunctionCallError::RespondToModel(format!("unsupported call: {tool_name}")))
                 }
             }
         }
@@ -2589,7 +2521,7 @@ async fn handle_custom_tool_call(
     name: String,
     input: String,
     call_id: String,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     info!("CustomToolCall: {name} {input}");
     match name.as_str() {
         "apply_patch" => {
@@ -2648,20 +2580,13 @@ fn parse_container_exec_arguments(
     arguments: String,
     turn_context: &TurnContext,
     call_id: &str,
-) -> Result<ExecParams, Box<ResponseInputItem>> {
+) -> Result<ExecParams, FunctionCallError> {
     // parse command
     match serde_json::from_str::<ShellToolCallParams>(&arguments) {
         Ok(shell_tool_call_params) => Ok(to_exec_params(shell_tool_call_params, turn_context)),
         Err(e) => {
             // allow model to re-sample
-            let output = ResponseInputItem::FunctionCallOutput {
-                call_id: call_id.to_string(),
-                output: FunctionCallOutputPayload {
-                    content: format!("failed to parse function arguments: {e}"),
-                    success: None,
-                },
-            };
-            Err(Box::new(output))
+            Err(FunctionCallError::RespondToModel("failed to parse function arguments: {e}"))
         }
     }
 }
@@ -2700,7 +2625,7 @@ async fn handle_container_exec_with_params(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     call_id: String,
-) -> ResponseInputItem {
+) -> ResponseInputItem::FunctionCallOutput {
     if params.with_escalated_permissions.unwrap_or(false)
         && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
     {
