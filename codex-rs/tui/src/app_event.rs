@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
+use codex_git_tooling::GhostCommit;
 
 use crate::history_cell::HistoryCell;
 
@@ -68,6 +69,9 @@ pub(crate) enum AppEvent {
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
 
+    /// Result of a ghost snapshot capture attempt.
+    GhostSnapshotResult(GhostSnapshotEvent),
+
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
 
@@ -76,4 +80,13 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+}
+
+#[derive(Debug)]
+pub(crate) enum GhostSnapshotEvent {
+    Success(GhostCommit),
+    Disabled {
+        message: String,
+        hint: Option<String>,
+    },
 }

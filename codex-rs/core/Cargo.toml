@@ -22,6 +22,7 @@ codex-apply-patch = { workspace = true }
 codex-file-search = { workspace = true }
 codex-mcp-client = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-readiness = { workspace = true }
 dirs = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }

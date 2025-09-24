@@ -44,7 +44,7 @@ pub(super) async fn spawn_compact_task(
     input: Vec<InputItem>,
 ) {
     let task = AgentTask::compact(sess.clone(), turn_context, sub_id, input);
-    sess.set_task(task).await;
+    sess.set_task(task, None).await;
 }
 
 pub(super) async fn run_inline_auto_compact_task(

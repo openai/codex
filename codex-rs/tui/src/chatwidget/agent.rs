@@ -3,6 +3,7 @@ use std::sync::Arc;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::TurnReadinessTx;
 use codex_core::config::Config;
 use codex_core::protocol::Op;
 use tokio::sync::mpsc::UnboundedSender;
@@ -11,14 +12,23 @@ use tokio::sync::mpsc::unbounded_channel;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
+pub(crate) struct AgentChannels {
+    pub(crate) op_tx: UnboundedSender<OutgoingOp>,
+}
+
+pub(crate) struct OutgoingOp {
+    pub(crate) op: Op,
+    pub(crate) readiness: Option<TurnReadinessTx>,
+}
+
 /// Spawn the agent bootstrapper and op forwarding loop, returning the
-/// `UnboundedSender<Op>` used by the UI to submit operations.
+/// channels used by the UI to submit operations and register turn readiness.
 pub(crate) fn spawn_agent(
     config: Config,
     app_event_tx: AppEventSender,
     server: Arc<ConversationManager>,
-) -> UnboundedSender<Op> {
-    let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+) -> AgentChannels {
+    let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<OutgoingOp>();
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
@@ -45,8 +55,10 @@ pub(crate) fn spawn_agent(
 
         let conversation_clone = conversation.clone();
         tokio::spawn(async move {
-            while let Some(op) = codex_op_rx.recv().await {
-                let id = conversation_clone.submit(op).await;
+            while let Some(outgoing) = codex_op_rx.recv().await {
+                let id = conversation_clone
+                    .submit_with_readiness(outgoing.op, outgoing.readiness)
+                    .await;
                 if let Err(e) = id {
                     tracing::error!("failed to submit op: {e}");
                 }
@@ -58,7 +70,7 @@ pub(crate) fn spawn_agent(
         }
     });
 
-    codex_op_tx
+    AgentChannels { op_tx: codex_op_tx }
 }
 
 /// Spawn agent loops for an existing conversation (e.g., a forked conversation).
@@ -68,8 +80,8 @@ pub(crate) fn spawn_agent_from_existing(
     conversation: std::sync::Arc<CodexConversation>,
     session_configured: codex_core::protocol::SessionConfiguredEvent,
     app_event_tx: AppEventSender,
-) -> UnboundedSender<Op> {
-    let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+) -> AgentChannels {
+    let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<OutgoingOp>();
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
@@ -82,8 +94,10 @@ pub(crate) fn spawn_agent_from_existing(
 
         let conversation_clone = conversation.clone();
         tokio::spawn(async move {
-            while let Some(op) = codex_op_rx.recv().await {
-                let id = conversation_clone.submit(op).await;
+            while let Some(outgoing) = codex_op_rx.recv().await {
+                let id = conversation_clone
+                    .submit_with_readiness(outgoing.op, outgoing.readiness)
+                    .await;
                 if let Err(e) = id {
                     tracing::error!("failed to submit op: {e}");
                 }
@@ -95,5 +109,5 @@ pub(crate) fn spawn_agent_from_existing(
         }
     });
 
-    codex_op_tx
+    AgentChannels { op_tx: codex_op_tx }
 }

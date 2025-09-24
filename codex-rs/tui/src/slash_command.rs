@@ -97,5 +97,6 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
 }
 
 fn beta_features_enabled() -> bool {
-    std::env::var_os("BETA_FEATURE").is_some()
+    true
+    // std::env::var_os("BETA_FEATURE").is_some()
 }

@@ -58,6 +58,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+use crate::app_event::GhostSnapshotEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
@@ -111,6 +112,10 @@ use codex_git_tooling::GhostCommit;
 use codex_git_tooling::GitToolingError;
 use codex_git_tooling::create_ghost_commit;
 use codex_git_tooling::restore_ghost_commit;
+use codex_utils_readiness::Readiness;
+use codex_utils_readiness::ReadinessFlag;
+use tokio::sync::oneshot;
+use tracing::warn;
 
 const MAX_TRACKED_GHOST_COMMITS: usize = 20;
 
@@ -190,7 +195,7 @@ pub(crate) struct ChatWidgetInit {
 
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
-    codex_op_tx: UnboundedSender<Op>,
+    codex_op_tx: UnboundedSender<agent::OutgoingOp>,
     bottom_pane: BottomPane,
     active_exec_cell: Option<ExecCell>,
     config: Config,
@@ -789,12 +794,13 @@ impl ChatWidget {
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
+        let agent_channels =
+            spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
         Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
-            codex_op_tx,
+            codex_op_tx: agent_channels.op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -827,7 +833,7 @@ impl ChatWidget {
             pending_notification: None,
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
-            ghost_snapshots_disabled: true,
+            ghost_snapshots_disabled: false,
         }
     }
 
@@ -849,13 +855,13 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
-        let codex_op_tx =
+        let agent_channels =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
         Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
-            codex_op_tx,
+            codex_op_tx: agent_channels.op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -888,7 +894,7 @@ impl ChatWidget {
             pending_notification: None,
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
-            ghost_snapshots_disabled: true,
+            ghost_snapshots_disabled: false,
         }
     }
 
@@ -1138,7 +1144,48 @@ impl ChatWidget {
             return;
         }
 
-        self.capture_ghost_snapshot();
+        let (readiness_tx, readiness_rx) = oneshot::channel::<Arc<ReadinessFlag>>();
+        let capture_snapshot = !self.ghost_snapshots_disabled;
+        let repo_path = self.config.cwd.clone();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let Ok(flag) = readiness_rx.await else {
+                return;
+            };
+            let readiness_token = flag.subscribe().await.ok();
+            if capture_snapshot {
+                let event = match create_ghost_commit(&CreateGhostCommitOptions::new(
+                    repo_path.as_path(),
+                )) {
+                    Ok(commit) => {
+                        AppEvent::GhostSnapshotResult(GhostSnapshotEvent::Success(commit))
+                    }
+                    Err(err) => {
+                        warn!("failed to create ghost snapshot: {err}");
+                        let (message, hint) = match &err {
+                            GitToolingError::NotAGitRepository { .. } => (
+                                "Snapshots disabled: current directory is not a Git repository.".to_string(),
+                                None,
+                            ),
+                            _ => (
+                                format!("Snapshots disabled after error: {err}"),
+                                Some(
+                                    "Restart Codex after resolving the issue to re-enable snapshots.".to_string(),
+                                ),
+                            ),
+                        };
+                        AppEvent::GhostSnapshotResult(GhostSnapshotEvent::Disabled {
+                            message,
+                            hint,
+                        })
+                    }
+                };
+                app_event_tx.send(event);
+            }
+            if let Some(token) = readiness_token {
+                let _ = flag.mark_ready(token).await;
+            }
+        });
 
         let mut items: Vec<InputItem> = Vec::new();
 
@@ -1151,7 +1198,10 @@ impl ChatWidget {
         }
 
         self.codex_op_tx
-            .send(Op::UserInput { items })
+            .send(agent::OutgoingOp {
+                op: Op::UserInput { items },
+                readiness: Some(readiness_tx),
+            })
             .unwrap_or_else(|e| {
                 tracing::error!("failed to send message: {e}");
             });
@@ -1159,7 +1209,10 @@ impl ChatWidget {
         // Persist the text to cross-session message history.
         if !text.is_empty() {
             self.codex_op_tx
-                .send(Op::AddToHistory { text: text.clone() })
+                .send(agent::OutgoingOp {
+                    op: Op::AddToHistory { text: text.clone() },
+                    readiness: None,
+                })
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
@@ -1171,37 +1224,17 @@ impl ChatWidget {
         }
     }
 
-    fn capture_ghost_snapshot(&mut self) {
-        if self.ghost_snapshots_disabled {
-            return;
-        }
-
-        let options = CreateGhostCommitOptions::new(&self.config.cwd);
-        match create_ghost_commit(&options) {
-            Ok(commit) => {
+    pub(crate) fn handle_ghost_snapshot_event(&mut self, event: GhostSnapshotEvent) {
+        match event {
+            GhostSnapshotEvent::Success(commit) => {
                 self.ghost_snapshots.push(commit);
                 if self.ghost_snapshots.len() > MAX_TRACKED_GHOST_COMMITS {
                     self.ghost_snapshots.remove(0);
                 }
             }
-            Err(err) => {
+            GhostSnapshotEvent::Disabled { message, hint } => {
                 self.ghost_snapshots_disabled = true;
-                let (message, hint) = match &err {
-                    GitToolingError::NotAGitRepository { .. } => (
-                        "Snapshots disabled: current directory is not a Git repository."
-                            .to_string(),
-                        None,
-                    ),
-                    _ => (
-                        format!("Snapshots disabled after error: {err}"),
-                        Some(
-                            "Restart Codex after resolving the issue to re-enable snapshots."
-                                .to_string(),
-                        ),
-                    ),
-                };
                 self.add_info_message(message, hint);
-                tracing::warn!("failed to create ghost snapshot: {err}");
             }
         }
     }
@@ -1668,7 +1701,10 @@ impl ChatWidget {
     pub(crate) fn submit_op(&self, op: Op) {
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
-        if let Err(e) = self.codex_op_tx.send(op) {
+        if let Err(e) = self.codex_op_tx.send(agent::OutgoingOp {
+            op,
+            readiness: None,
+        }) {
             tracing::error!("failed to submit op: {e}");
         }
     }

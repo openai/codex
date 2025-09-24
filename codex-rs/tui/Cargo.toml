@@ -39,6 +39,7 @@ codex-git-tooling = { workspace = true }
 codex-login = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-readiness = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = [
     "bracketed-paste",

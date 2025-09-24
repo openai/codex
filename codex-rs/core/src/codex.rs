@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,7 +30,6 @@ use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
-use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
@@ -51,7 +49,6 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
-use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
@@ -119,7 +116,8 @@ use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
-use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::state::SessionState;
+use crate::state::TurnState;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
@@ -134,6 +132,10 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::InitialHistory;
+use codex_utils_readiness::Readiness;
+use codex_utils_readiness::ReadinessFlag;
+
+pub(crate) use crate::state::turn::TurnContext;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -143,7 +145,7 @@ use self::compact::collect_user_messages;
 /// It operates as a queue pair where you send submissions and receive events.
 pub struct Codex {
     next_id: AtomicU64,
-    tx_sub: Sender<Submission>,
+    tx_sub: Sender<PendingSubmission>,
     rx_event: Receiver<Event>,
 }
 
@@ -164,6 +166,13 @@ pub(crate) const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
 pub(crate) const MODEL_FORMAT_HEAD_LINES: usize = MODEL_FORMAT_MAX_LINES / 2;
 pub(crate) const MODEL_FORMAT_TAIL_LINES: usize = MODEL_FORMAT_MAX_LINES - MODEL_FORMAT_HEAD_LINES; // 128
 pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
+
+type TurnReadinessTx = oneshot::Sender<Arc<ReadinessFlag>>;
+
+struct PendingSubmission {
+    submission: Submission,
+    readiness: Option<TurnReadinessTx>,
+}
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -228,18 +237,47 @@ impl Codex {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
             .to_string();
         let sub = Submission { id: id.clone(), op };
-        self.submit_with_id(sub).await?;
+        self.enqueue_submission(sub, None)
+            .await
+            .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(id)
     }
 
     /// Use sparingly: prefer `submit()` so Codex is responsible for generating
     /// unique IDs for each submission.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
-        self.tx_sub
-            .send(sub)
+        self.enqueue_submission(sub, None)
+            .await
+            .map_err(|_| CodexErr::InternalAgentDied)
+    }
+
+    pub(crate) async fn submit_with_readiness(
+        &self,
+        op: Op,
+        readiness: Option<TurnReadinessTx>,
+    ) -> CodexResult<String> {
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .to_string();
+        let sub = Submission { id: id.clone(), op };
+        self.enqueue_submission(sub, readiness)
             .await
             .map_err(|_| CodexErr::InternalAgentDied)?;
-        Ok(())
+        Ok(id)
+    }
+
+    async fn enqueue_submission(
+        &self,
+        submission: Submission,
+        readiness: Option<TurnReadinessTx>,
+    ) -> Result<(), async_channel::SendError<PendingSubmission>> {
+        self.tx_sub
+            .send(PendingSubmission {
+                submission,
+                readiness,
+            })
+            .await
     }
 
     pub async fn next_event(&self) -> CodexResult<Event> {
@@ -250,18 +288,6 @@ impl Codex {
             .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(event)
     }
-}
-
-/// Mutable state of the agent
-#[derive(Default)]
-struct State {
-    approved_commands: HashSet<Vec<String>>,
-    current_task: Option<AgentTask>,
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
-    pending_input: Vec<ResponseInputItem>,
-    history: ConversationHistory,
-    token_info: Option<TokenUsageInfo>,
-    latest_rate_limits: Option<RateLimitSnapshot>,
 }
 
 /// Context for an initialized model agent
@@ -281,37 +307,13 @@ pub(crate) struct Session {
     /// Optional rollout recorder for persisting the conversation transcript so
     /// sessions can be replayed or inspected later.
     rollout: Mutex<Option<RolloutRecorder>>,
-    state: Mutex<State>,
+    state: Mutex<SessionState>,
+    current_task: Mutex<Option<AgentTask>>,
+    current_turn: Mutex<Option<Arc<TurnState>>>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
     show_raw_agent_reasoning: bool,
     next_internal_sub_id: AtomicU64,
-}
-
-/// The context needed for a single turn of the conversation.
-#[derive(Debug)]
-pub(crate) struct TurnContext {
-    pub(crate) client: ModelClient,
-    /// The session's current working directory. All relative paths provided by
-    /// the model as well as sandbox policies are resolved against this path
-    /// instead of `std::env::current_dir()`.
-    pub(crate) cwd: PathBuf,
-    pub(crate) base_instructions: Option<String>,
-    pub(crate) user_instructions: Option<String>,
-    pub(crate) approval_policy: AskForApproval,
-    pub(crate) sandbox_policy: SandboxPolicy,
-    pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
-    pub(crate) tools_config: ToolsConfig,
-    pub(crate) is_review_mode: bool,
-    pub(crate) final_output_json_schema: Option<Value>,
-}
-
-impl TurnContext {
-    fn resolve_path(&self, path: Option<String>) -> PathBuf {
-        path.as_ref()
-            .map(PathBuf::from)
-            .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
-    }
 }
 
 /// Configure the model session.
@@ -411,11 +413,6 @@ impl Session {
             anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
-        // Create the mutable state for the Session.
-        let state = State {
-            history: ConversationHistory::new(),
-            ..Default::default()
-        };
 
         // Handle MCP manager result and record any startup failures.
         let (mcp_connection_manager, failed_clients) = match mcp_res {
@@ -473,6 +470,7 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
         };
+        let state = SessionState::default();
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -481,6 +479,8 @@ impl Session {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: notify,
             state: Mutex::new(state),
+            current_task: Mutex::new(None),
+            current_turn: Mutex::new(None),
             rollout: Mutex::new(Some(rollout_recorder)),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
@@ -514,20 +514,28 @@ impl Session {
         Ok((sess, turn_context))
     }
 
-    pub async fn set_task(&self, task: AgentTask) {
-        let mut state = self.state.lock().await;
-        if let Some(current_task) = state.current_task.take() {
-            current_task.abort(TurnAbortReason::Replaced);
+    pub async fn set_task(&self, task: AgentTask, turn_state: Option<Arc<TurnState>>) {
+        let mut current_task = self.current_task.lock().await;
+        if let Some(existing) = current_task.take() {
+            existing.abort(TurnAbortReason::Replaced);
         }
-        state.current_task = Some(task);
+        *current_task = Some(task);
+        drop(current_task);
+
+        let mut current_turn = self.current_turn.lock().await;
+        *current_turn = turn_state;
     }
 
     pub async fn remove_task(&self, sub_id: &str) {
-        let mut state = self.state.lock().await;
-        if let Some(task) = &state.current_task
-            && task.sub_id == sub_id
-        {
-            state.current_task.take();
+        let mut current_task = self.current_task.lock().await;
+        let should_clear = matches!(current_task.as_ref(), Some(task) if task.sub_id == sub_id);
+        if should_clear {
+            current_task.take();
+        }
+        drop(current_task);
+        if should_clear {
+            let mut current_turn = self.current_turn.lock().await;
+            current_turn.take();
         }
     }
 
@@ -802,7 +810,7 @@ impl Session {
 
     async fn on_exec_command_begin(
         &self,
-        turn_diff_tracker: &mut TurnDiffTracker,
+        turn_state: &TurnState,
         exec_command_context: ExecCommandContext,
     ) {
         let ExecCommandContext {
@@ -817,7 +825,7 @@ impl Session {
                 user_explicitly_approved_this_action,
                 changes,
             }) => {
-                turn_diff_tracker.on_patch_begin(&changes);
+                turn_state.on_patch_begin(&changes).await;
 
                 EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                     call_id,
@@ -844,7 +852,7 @@ impl Session {
 
     async fn on_exec_command_end(
         &self,
-        turn_diff_tracker: &mut TurnDiffTracker,
+        turn_state: &TurnState,
         sub_id: &str,
         call_id: &str,
         output: &ExecToolCallOutput,
@@ -892,7 +900,7 @@ impl Session {
         // If this is an apply_patch, after we emit the end patch, emit a second event
         // with the full turn diff if there is one.
         if is_apply_patch {
-            let unified_diff = turn_diff_tracker.get_unified_diff();
+            let unified_diff = turn_state.take_unified_diff().await;
             if let Ok(Some(unified_diff)) = unified_diff {
                 let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                 let event = Event {
@@ -909,7 +917,7 @@ impl Session {
     /// Returns the output of the exec tool call.
     async fn run_exec_with_events<'a>(
         &self,
-        turn_diff_tracker: &mut TurnDiffTracker,
+        turn_state: &TurnState,
         begin_ctx: ExecCommandContext,
         exec_args: ExecInvokeArgs<'a>,
     ) -> crate::error::Result<ExecToolCallOutput> {
@@ -917,7 +925,7 @@ impl Session {
         let sub_id = begin_ctx.sub_id.clone();
         let call_id = begin_ctx.call_id.clone();
 
-        self.on_exec_command_begin(turn_diff_tracker, begin_ctx.clone())
+        self.on_exec_command_begin(turn_state, begin_ctx.clone())
             .await;
 
         let result = process_exec_tool_call(
@@ -946,14 +954,8 @@ impl Session {
                 &output_stderr
             }
         };
-        self.on_exec_command_end(
-            turn_diff_tracker,
-            &sub_id,
-            &call_id,
-            borrowed,
-            is_apply_patch,
-        )
-        .await;
+        self.on_exec_command_end(turn_state, &sub_id, &call_id, borrowed, is_apply_patch)
+            .await;
 
         result
     }
@@ -992,24 +994,20 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into
-    pub async fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
-        let mut state = self.state.lock().await;
-        if state.current_task.is_some() {
-            state.pending_input.push(input.into());
+    pub async fn inject_input(
+        &self,
+        input: Vec<InputItem>,
+        readiness: Option<Arc<ReadinessFlag>>,
+    ) -> Result<(), (Vec<InputItem>, Option<Arc<ReadinessFlag>>)> {
+        let current_turn = {
+            let guard = self.current_turn.lock().await;
+            guard.clone()
+        };
+        if let Some(turn_state) = current_turn {
+            turn_state.enqueue_user_input(input, readiness).await;
             Ok(())
         } else {
-            Err(input)
-        }
-    }
-
-    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut state = self.state.lock().await;
-        if state.pending_input.is_empty() {
-            Vec::with_capacity(0)
-        } else {
-            let mut ret = Vec::new();
-            std::mem::swap(&mut ret, &mut state.pending_input);
-            ret
+            Err((input, readiness))
         }
     }
 
@@ -1026,10 +1024,19 @@ impl Session {
 
     pub async fn interrupt_task(&self) {
         info!("interrupt received: abort current task, if any");
+
         let mut state = self.state.lock().await;
         state.pending_approvals.clear();
-        state.pending_input.clear();
-        if let Some(task) = state.current_task.take() {
+
+        let task = {
+            let mut current_task = self.current_task.lock().await;
+            current_task.take()
+        };
+
+        let mut current_turn = self.current_turn.lock().await;
+        current_turn.take();
+
+        if let Some(task) = task {
             task.abort(TurnAbortReason::Interrupted);
         }
     }
@@ -1037,10 +1044,14 @@ impl Session {
     fn interrupt_task_sync(&self) {
         if let Ok(mut state) = self.state.try_lock() {
             state.pending_approvals.clear();
-            state.pending_input.clear();
-            if let Some(task) = state.current_task.take() {
-                task.abort(TurnAbortReason::Interrupted);
-            }
+        }
+        if let Ok(mut current_turn) = self.current_turn.try_lock() {
+            current_turn.take();
+        }
+        if let Ok(mut current_task) = self.current_task.try_lock()
+            && let Some(task) = current_task.take()
+        {
+            task.abort(TurnAbortReason::Interrupted);
         }
     }
 
@@ -1086,17 +1097,12 @@ pub(crate) struct AgentTask {
 }
 
 impl AgentTask {
-    fn spawn(
-        sess: Arc<Session>,
-        turn_context: Arc<TurnContext>,
-        sub_id: String,
-        input: Vec<InputItem>,
-    ) -> Self {
+    fn spawn(sess: Arc<Session>, turn_state: Arc<TurnState>) -> Self {
+        let sub_id = turn_state.sub_id().to_string();
         let handle = {
             let sess = sess.clone();
-            let sub_id = sub_id.clone();
-            let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move { run_task(sess, tc, sub_id, input).await }).abort_handle()
+            let turn_state = Arc::clone(&turn_state);
+            tokio::spawn(async move { run_task(sess, turn_state).await }).abort_handle()
         };
         Self {
             sess,
@@ -1106,17 +1112,12 @@ impl AgentTask {
         }
     }
 
-    fn review(
-        sess: Arc<Session>,
-        turn_context: Arc<TurnContext>,
-        sub_id: String,
-        input: Vec<InputItem>,
-    ) -> Self {
+    fn review(sess: Arc<Session>, turn_state: Arc<TurnState>) -> Self {
+        let sub_id = turn_state.sub_id().to_string();
         let handle = {
             let sess = sess.clone();
-            let sub_id = sub_id.clone();
-            let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move { run_task(sess, tc, sub_id, input).await }).abort_handle()
+            let turn_state = Arc::clone(&turn_state);
+            tokio::spawn(async move { run_task(sess, turn_state).await }).abort_handle()
         };
         Self {
             sess,
@@ -1170,13 +1171,15 @@ async fn submission_loop(
     sess: Arc<Session>,
     turn_context: TurnContext,
     config: Arc<Config>,
-    rx_sub: Receiver<Submission>,
+    rx_sub: Receiver<PendingSubmission>,
 ) {
     // Wrap once to avoid cloning TurnContext for each task.
     let mut turn_context = Arc::new(turn_context);
     // To break out of this loop, send Op::Shutdown.
-    while let Ok(sub) = rx_sub.recv().await {
-        debug!(?sub, "Submission");
+    while let Ok(pending) = rx_sub.recv().await {
+        debug!(?pending.submission, "Submission");
+        let mut readiness = pending.readiness;
+        let sub = pending.submission;
         match sub.op {
             Op::Interrupt => {
                 sess.interrupt_task().await;
@@ -1270,12 +1273,16 @@ async fn submission_loop(
                 }
             }
             Op::UserInput { items } => {
-                // attempt to inject input into current task
-                if let Err(items) = sess.inject_input(items).await {
-                    // no current task, spawn a new one
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
-                    sess.set_task(task).await;
+                let readiness_flag = prepare_turn_readiness(&mut readiness).await;
+                if let Err((items, readiness)) = sess.inject_input(items, readiness_flag).await {
+                    let turn_state = Arc::new(TurnState::new(
+                        sub.id.clone(),
+                        Arc::clone(&turn_context),
+                        items,
+                        readiness,
+                    ));
+                    let task = AgentTask::spawn(sess.clone(), Arc::clone(&turn_state));
+                    sess.set_task(task, Some(turn_state)).await;
                 }
             }
             Op::UserTurn {
@@ -1288,8 +1295,8 @@ async fn submission_loop(
                 summary,
                 final_output_json_schema,
             } => {
-                // attempt to inject input into current task
-                if let Err(items) = sess.inject_input(items).await {
+                let readiness_flag = prepare_turn_readiness(&mut readiness).await;
+                if let Err((items, readiness)) = sess.inject_input(items, readiness_flag).await {
                     // Derive a fresh TurnContext for this turn using the provided overrides.
                     let provider = turn_context.client.get_provider();
                     let auth_manager = turn_context.client.get_auth_manager();
@@ -1352,9 +1359,14 @@ async fn submission_loop(
                     turn_context = Arc::new(fresh_turn_context);
 
                     // no current task, spawn a new one with the per‑turn context
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
-                    sess.set_task(task).await;
+                    let turn_state = Arc::new(TurnState::new(
+                        sub.id.clone(),
+                        Arc::clone(&turn_context),
+                        items,
+                        readiness,
+                    ));
+                    let task = AgentTask::spawn(sess.clone(), Arc::clone(&turn_state));
+                    sess.set_task(task, Some(turn_state)).await;
                 }
             }
             Op::ExecApproval { id, decision } => match decision {
@@ -1446,10 +1458,13 @@ async fn submission_loop(
             }
             Op::Compact => {
                 // Attempt to inject input into current task
-                if let Err(items) = sess
-                    .inject_input(vec![InputItem::Text {
-                        text: compact::SUMMARIZATION_PROMPT.to_string(),
-                    }])
+                if let Err((items, _)) = sess
+                    .inject_input(
+                        vec![InputItem::Text {
+                            text: compact::SUMMARIZATION_PROMPT.to_string(),
+                        }],
+                        None,
+                    )
                     .await
                 {
                     compact::spawn_compact_task(
@@ -1531,8 +1546,38 @@ async fn submission_loop(
                 // Ignore unknown ops; enum is non_exhaustive to allow extensions.
             }
         }
+        send_ready_flag(readiness).await;
     }
     debug!("Agent loop exited");
+}
+
+async fn prepare_turn_readiness(
+    readiness: &mut Option<TurnReadinessTx>,
+) -> Option<Arc<ReadinessFlag>> {
+    let sender = readiness.take()?;
+    let flag = Arc::new(ReadinessFlag::new());
+    if sender.send(Arc::clone(&flag)).is_err() {
+        mark_flag_ready(&flag).await;
+    }
+    Some(flag)
+}
+
+async fn send_ready_flag(readiness: Option<TurnReadinessTx>) {
+    let Some(sender) = readiness else {
+        return;
+    };
+    let flag = Arc::new(ReadinessFlag::new());
+    mark_flag_ready(&flag).await;
+    let _ = sender.send(flag);
+}
+
+async fn mark_flag_ready(flag: &Arc<ReadinessFlag>) {
+    if flag.is_ready() {
+        return;
+    }
+    if let Ok(token) = flag.subscribe().await {
+        let _ = flag.mark_ready(token).await;
+    }
 }
 
 /// Spawn a review thread using the given prompt.
@@ -1600,11 +1645,12 @@ async fn spawn_review_thread(
         text: format!("{base_instructions}\n\n---\n\nNow, here's your task: {review_prompt}"),
     }];
     let tc = Arc::new(review_turn_context);
+    let turn_state = Arc::new(TurnState::new(sub_id.clone(), Arc::clone(&tc), input, None));
 
     // Clone sub_id for the upcoming announcement before moving it into the task.
     let sub_id_for_event = sub_id.clone();
-    let task = AgentTask::review(sess.clone(), tc.clone(), sub_id, input);
-    sess.set_task(task).await;
+    let task = AgentTask::review(sess.clone(), Arc::clone(&turn_state));
+    sess.set_task(task, Some(turn_state)).await;
 
     // Announce entering review mode so UIs can switch modes.
     sess.send_event(Event {
@@ -1631,15 +1677,12 @@ async fn spawn_review_thread(
 /// Review mode: when `turn_context.is_review_mode` is true, the turn runs in an
 /// isolated in-memory thread without the parent session's prior history or
 /// user_instructions. Emits ExitedReviewMode upon final review message.
-async fn run_task(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    sub_id: String,
-    input: Vec<InputItem>,
-) {
-    if input.is_empty() {
+async fn run_task(sess: Arc<Session>, turn_state: Arc<TurnState>) {
+    let turn_context = turn_state.turn_context();
+    let sub_id = turn_state.sub_id().to_string();
+    let Some(initial_input_for_turn) = turn_state.take_initial_input().await else {
         return;
-    }
+    };
     let event = Event {
         id: sub_id.clone(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
@@ -1648,53 +1691,27 @@ async fn run_task(
     };
     sess.send_event(event).await;
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     // For review threads, keep an isolated in-memory history so the
     // model sees a fresh conversation without the parent session's history.
     // For normal turns, continue recording to the session history as before.
     let is_review_mode = turn_context.is_review_mode;
-    let mut review_thread_history: Vec<ResponseItem> = Vec::new();
     if is_review_mode {
-        // Seed review threads with environment context so the model knows the working directory.
-        review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
-        review_thread_history.push(initial_input_for_turn.into());
+        let mut history = sess.build_initial_context(turn_context.as_ref());
+        history.push(initial_input_for_turn.clone().into());
+        turn_state.set_review_history(history).await;
     } else {
         sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
             .await;
     }
 
-    let mut last_agent_message: Option<String> = None;
-    // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
-    // many turns, from the perspective of the user, it is a single turn.
-    let mut turn_diff_tracker = TurnDiffTracker::new();
-    let mut auto_compact_recently_attempted = false;
-
     loop {
-        // Note that pending_input would be something like a message the user
-        // submitted through the UI while the model was running. Though the UI
-        // may support this, the model might not.
-        let pending_input = sess
-            .get_pending_input()
-            .await
-            .into_iter()
-            .map(ResponseItem::from)
-            .collect::<Vec<ResponseItem>>();
+        let (pending_input, _turn_readiness) = turn_state.drain_mailbox().await.into_parts();
 
-        // Construct the input that we will send to the model.
-        //
-        // - For review threads, use the isolated in-memory history so the
-        //   model sees a fresh conversation (no parent history/user_instructions).
-        //
-        // - For normal turns, use the session's full history. When using the
-        //   chat completions API (or ZDR clients), the model needs the full
-        //   conversation history on each turn. The rollout file, however, should
-        //   only record the new items that originated in this turn so that it
-        //   represents an append-only log without duplicates.
         let turn_input: Vec<ResponseItem> = if is_review_mode {
             if !pending_input.is_empty() {
-                review_thread_history.extend(pending_input);
+                turn_state.extend_review_history(&pending_input).await;
             }
-            review_thread_history.clone()
+            turn_state.review_history().await
         } else {
             sess.record_conversation_items(&pending_input).await;
             sess.turn_input_with_history(pending_input).await
@@ -1713,15 +1730,8 @@ async fn run_task(
                 })
             })
             .collect();
-        match run_turn(
-            &sess,
-            turn_context.as_ref(),
-            &mut turn_diff_tracker,
-            sub_id.clone(),
-            turn_input,
-        )
-        .await
-        {
+
+        match run_turn(&sess, turn_state.as_ref(), sub_id.clone(), turn_input).await {
             Ok(turn_output) => {
                 let TurnRunResult {
                     processed_items,
@@ -1833,8 +1843,9 @@ async fn run_task(
                 // Only attempt to take the lock if there is something to record.
                 if !items_to_record_in_conversation_history.is_empty() {
                     if is_review_mode {
-                        review_thread_history
-                            .extend(items_to_record_in_conversation_history.clone());
+                        turn_state
+                            .extend_review_history(&items_to_record_in_conversation_history)
+                            .await;
                     } else {
                         sess.record_conversation_items(&items_to_record_in_conversation_history)
                             .await;
@@ -1842,7 +1853,7 @@ async fn run_task(
                 }
 
                 if token_limit_reached {
-                    if auto_compact_recently_attempted {
+                    if turn_state.mark_auto_compact_attempted().await {
                         let limit_str = limit.to_string();
                         let current_tokens = total_usage_tokens
                             .map(|tokens| tokens.to_string())
@@ -1858,17 +1869,19 @@ async fn run_task(
                         sess.send_event(event).await;
                         break;
                     }
-                    auto_compact_recently_attempted = true;
                     compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
                     continue;
                 }
 
-                auto_compact_recently_attempted = false;
+                turn_state.reset_auto_compact_attempted().await;
 
                 if responses.is_empty() {
-                    last_agent_message = get_last_assistant_message_from_turn(
+                    let last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
+                    turn_state
+                        .set_last_agent_message(last_agent_message.clone())
+                        .await;
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
                             turn_id: sub_id.clone(),
@@ -1893,6 +1906,8 @@ async fn run_task(
             }
         }
     }
+
+    let last_agent_message = turn_state.last_agent_message().await;
 
     // If this was a review thread and we have a final assistant message,
     // try to parse it as a ReviewOutput.
@@ -1945,11 +1960,11 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
 
 async fn run_turn(
     sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
+    turn_state: &TurnState,
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<TurnRunResult> {
+    let turn_context = turn_state.turn_context();
     let tools = get_openai_tools(
         &turn_context.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),
@@ -1964,7 +1979,7 @@ async fn run_turn(
 
     let mut retries = 0;
     loop {
-        match try_run_turn(sess, turn_context, turn_diff_tracker, &sub_id, &prompt).await {
+        match try_run_turn(sess, turn_state, turn_context.as_ref(), &sub_id, &prompt).await {
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
@@ -2027,8 +2042,8 @@ struct TurnRunResult {
 
 async fn try_run_turn(
     sess: &Session,
+    turn_state: &TurnState,
     turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<TurnRunResult> {
@@ -2126,14 +2141,9 @@ async fn try_run_turn(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let response = handle_response_item(
-                    sess,
-                    turn_context,
-                    turn_diff_tracker,
-                    sub_id,
-                    item.clone(),
-                )
-                .await?;
+                let response =
+                    handle_response_item(sess, turn_state, turn_context, sub_id, item.clone())
+                        .await?;
                 output.push(ProcessedResponseItem { item, response });
             }
             ResponseEvent::WebSearchCallBegin { call_id } => {
@@ -2157,7 +2167,7 @@ async fn try_run_turn(
                 sess.update_token_usage_info(sub_id, turn_context, token_usage.as_ref())
                     .await;
 
-                let unified_diff = turn_diff_tracker.get_unified_diff();
+                let unified_diff = turn_state.take_unified_diff().await;
                 if let Ok(Some(unified_diff)) = unified_diff {
                     let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                     let event = Event {
@@ -2218,8 +2228,8 @@ async fn try_run_turn(
 
 async fn handle_response_item(
     sess: &Session,
+    turn_state: &TurnState,
     turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: &str,
     item: ResponseItem,
 ) -> CodexResult<Option<ResponseInputItem>> {
@@ -2231,12 +2241,14 @@ async fn handle_response_item(
             call_id,
             ..
         } => {
+            // Gate tool invocation on readiness signal for this turn, if set.
+            turn_state.wait_on_readiness().await;
             info!("FunctionCall: {name}({arguments})");
             Some(
                 handle_function_call(
                     sess,
+                    turn_state,
                     turn_context,
-                    turn_diff_tracker,
                     sub_id.to_string(),
                     name,
                     arguments,
@@ -2252,6 +2264,7 @@ async fn handle_response_item(
             action,
         } => {
             let LocalShellAction::Exec(action) = action;
+            turn_state.wait_on_readiness().await;
             tracing::info!("LocalShellCall: {action:?}");
             let params = ShellToolCallParams {
                 command: action.command,
@@ -2280,8 +2293,8 @@ async fn handle_response_item(
                 handle_container_exec_with_params(
                     exec_params,
                     sess,
+                    turn_state,
                     turn_context,
-                    turn_diff_tracker,
                     sub_id.to_string(),
                     effective_call_id,
                 )
@@ -2294,18 +2307,21 @@ async fn handle_response_item(
             name,
             input,
             status: _,
-        } => Some(
-            handle_custom_tool_call(
-                sess,
-                turn_context,
-                turn_diff_tracker,
-                sub_id.to_string(),
-                name,
-                input,
-                call_id,
+        } => {
+            turn_state.wait_on_readiness().await;
+            Some(
+                handle_custom_tool_call(
+                    sess,
+                    turn_state,
+                    turn_context,
+                    sub_id.to_string(),
+                    name,
+                    input,
+                    call_id,
+                )
+                .await,
             )
-            .await,
-        ),
+        }
         ResponseItem::FunctionCallOutput { .. } => {
             debug!("unexpected FunctionCallOutput from stream");
             None
@@ -2408,8 +2424,8 @@ async fn handle_unified_exec_tool_call(
 
 async fn handle_function_call(
     sess: &Session,
+    turn_state: &TurnState,
     turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     name: String,
     arguments: String,
@@ -2426,8 +2442,8 @@ async fn handle_function_call(
             handle_container_exec_with_params(
                 params,
                 sess,
+                turn_state,
                 turn_context,
-                turn_diff_tracker,
                 sub_id,
                 call_id,
             )
@@ -2484,7 +2500,7 @@ async fn handle_function_call(
             };
             let abs = turn_context.resolve_path(Some(args.path));
             let output = match sess
-                .inject_input(vec![InputItem::LocalImage { path: abs }])
+                .inject_input(vec![InputItem::LocalImage { path: abs }], None)
                 .await
             {
                 Ok(()) => FunctionCallOutputPayload {
@@ -2522,8 +2538,8 @@ async fn handle_function_call(
             handle_container_exec_with_params(
                 exec_params,
                 sess,
+                turn_state,
                 turn_context,
-                turn_diff_tracker,
                 sub_id,
                 call_id,
             )
@@ -2600,8 +2616,8 @@ async fn handle_function_call(
 
 async fn handle_custom_tool_call(
     sess: &Session,
+    turn_state: &TurnState,
     turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     name: String,
     input: String,
@@ -2621,8 +2637,8 @@ async fn handle_custom_tool_call(
             let resp = handle_container_exec_with_params(
                 exec_params,
                 sess,
+                turn_state,
                 turn_context,
-                turn_diff_tracker,
                 sub_id,
                 call_id,
             )
@@ -2713,8 +2729,8 @@ fn maybe_translate_shell_command(
 async fn handle_container_exec_with_params(
     params: ExecParams,
     sess: &Session,
+    turn_state: &TurnState,
     turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     call_id: String,
 ) -> ResponseInputItem {
@@ -2888,7 +2904,7 @@ async fn handle_container_exec_with_params(
     let params = maybe_translate_shell_command(params, sess, turn_context);
     let output_result = sess
         .run_exec_with_events(
-            turn_diff_tracker,
+            turn_state,
             exec_command_context.clone(),
             ExecInvokeArgs {
                 params: params.clone(),
@@ -2925,7 +2941,7 @@ async fn handle_container_exec_with_params(
         }
         Err(CodexErr::Sandbox(error)) => {
             handle_sandbox_error(
-                turn_diff_tracker,
+                turn_state,
                 params,
                 exec_command_context,
                 error,
@@ -2946,7 +2962,7 @@ async fn handle_container_exec_with_params(
 }
 
 async fn handle_sandbox_error(
-    turn_diff_tracker: &mut TurnDiffTracker,
+    turn_state: &TurnState,
     params: ExecParams,
     exec_command_context: ExecCommandContext,
     error: SandboxErr,
@@ -3023,7 +3039,7 @@ async fn handle_sandbox_error(
             // examined and the sandbox has been set to `None`.
             let retry_output_result = sess
                 .run_exec_with_events(
-                    turn_diff_tracker,
+                    turn_state,
                     exec_command_context.clone(),
                     ExecInvokeArgs {
                         params,
@@ -3631,10 +3647,9 @@ mod tests {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
             rollout: Mutex::new(None),
-            state: Mutex::new(State {
-                history: ConversationHistory::new(),
-                ..Default::default()
-            }),
+            state: Mutex::new(SessionState::default()),
+            current_task: Mutex::new(None),
+            current_turn: Mutex::new(None),
             codex_linux_sandbox_exe: None,
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -3749,13 +3764,16 @@ mod tests {
     async fn rejects_escalated_permissions_when_policy_not_on_request() {
         use crate::exec::ExecParams;
         use crate::protocol::AskForApproval;
+        use crate::protocol::InputItem;
         use crate::protocol::SandboxPolicy;
-        use crate::turn_diff_tracker::TurnDiffTracker;
+        use crate::state::TurnState;
         use std::collections::HashMap;
+        use std::sync::Arc;
 
-        let (session, mut turn_context) = make_session_and_context();
+        let (session, turn_context) = make_session_and_context();
+        let mut turn_context = Arc::new(turn_context);
         // Ensure policy is NOT OnRequest so the early rejection path triggers
-        turn_context.approval_policy = AskForApproval::OnFailure;
+        Arc::get_mut(&mut turn_context).unwrap().approval_policy = AskForApproval::OnFailure;
 
         let params = ExecParams {
             command: if cfg!(windows) {
@@ -3783,20 +3801,27 @@ mod tests {
             ..params.clone()
         };
 
-        let mut turn_diff_tracker = TurnDiffTracker::new();
-
         let sub_id = "test-sub".to_string();
         let call_id = "test-call".to_string();
 
-        let resp = handle_container_exec_with_params(
-            params,
-            &session,
-            &turn_context,
-            &mut turn_diff_tracker,
-            sub_id,
-            call_id,
-        )
-        .await;
+        let resp = {
+            let turn_state = TurnState::new(
+                sub_id.clone(),
+                Arc::clone(&turn_context),
+                Vec::<InputItem>::new(),
+                None,
+            );
+
+            handle_container_exec_with_params(
+                params,
+                &session,
+                &turn_state,
+                turn_context.as_ref(),
+                sub_id,
+                call_id,
+            )
+            .await
+        };
 
         let ResponseInputItem::FunctionCallOutput { output, .. } = resp else {
             panic!("expected FunctionCallOutput");
@@ -3811,13 +3836,20 @@ mod tests {
 
         // Now retry the same command WITHOUT escalated permissions; should succeed.
         // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
-        turn_context.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        Arc::get_mut(&mut turn_context).unwrap().sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+        let turn_state = TurnState::new(
+            "test-sub".to_string(),
+            Arc::clone(&turn_context),
+            Vec::<InputItem>::new(),
+            None,
+        );
 
         let resp2 = handle_container_exec_with_params(
             params2,
             &session,
-            &turn_context,
-            &mut turn_diff_tracker,
+            &turn_state,
+            turn_context.as_ref(),
             "test-sub".to_string(),
             "test-call-2".to_string(),
         )

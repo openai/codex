@@ -278,6 +278,9 @@ impl App {
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
             }
+            AppEvent::GhostSnapshotResult(event) => {
+                self.chat_widget.handle_ghost_snapshot_event(event);
+            }
             AppEvent::ExitRequest => {
                 return Ok(false);
             }

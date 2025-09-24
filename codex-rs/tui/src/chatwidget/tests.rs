@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::chatwidget::agent;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -43,6 +44,7 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -295,11 +297,11 @@ async fn helpers_are_available_and_do_not_panic() {
 fn make_chatwidget_manual() -> (
     ChatWidget,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    tokio::sync::mpsc::UnboundedReceiver<Op>,
+    tokio::sync::mpsc::UnboundedReceiver<agent::OutgoingOp>,
 ) {
     let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
-    let (op_tx, op_rx) = unbounded_channel::<Op>();
+    let (op_tx, op_rx) = unbounded_channel::<agent::OutgoingOp>();
     let cfg = test_config();
     let bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
@@ -345,7 +347,7 @@ pub(crate) fn make_chatwidget_manual_with_sender() -> (
     ChatWidget,
     AppEventSender,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    tokio::sync::mpsc::UnboundedReceiver<Op>,
+    tokio::sync::mpsc::UnboundedReceiver<agent::OutgoingOp>,
 ) {
     let (widget, rx, op_rx) = make_chatwidget_manual();
     let app_event_tx = widget.app_event_tx.clone();
@@ -1672,7 +1674,8 @@ fn apply_patch_full_flow_integration_like() {
     let forwarded = op_rx
         .try_recv()
         .expect("expected op forwarded to codex channel");
-    match forwarded {
+    assert!(forwarded.readiness.is_none());
+    match forwarded.op {
         Op::PatchApproval { id, decision } => {
             assert_eq!(id, "sub-xyz");
             assert!(matches!(
