@@ -2396,7 +2396,7 @@ async fn handle_unified_exec_tool_call(
             Ok(parsed) => Some(parsed),
             Err(output) => {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "invalid session_id: {session_id} due to error {output}"
+                    "invalid session_id: {session_id} due to error {output:?}"
                 )));
             }
         }
@@ -2414,7 +2414,9 @@ async fn handle_unified_exec_tool_call(
         .unified_exec_manager
         .handle_request(request)
         .await
-        .map_err(|err| FunctionCallError::RespondToModel(format!("unified exec failed: {err}")))?;
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("unified exec failed: {err:?}"))
+        })?;
 
     #[derive(Serialize)]
     struct SerializedUnifiedExecResult {
@@ -2427,7 +2429,9 @@ async fn handle_unified_exec_tool_call(
         output: value.output,
     })
     .map_err(|err| {
-        FunctionCallError::RespondToModel(format!("failed to serialize unified exec output: {err}"))
+        FunctionCallError::RespondToModel(format!(
+            "failed to serialize unified exec output: {err:?}"
+        ))
     })
 }
 
@@ -2465,7 +2469,7 @@ async fn handle_function_call(
 
             let args: UnifiedExecArgs = serde_json::from_str(&arguments).map_err(|err| {
                 FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {err}"
+                    "failed to parse function arguments: {err:?}"
                 ))
             })?;
 
@@ -2478,7 +2482,7 @@ async fn handle_function_call(
             }
             let args: SeeImageArgs = serde_json::from_str(&arguments).map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {e}"
+                    "failed to parse function arguments: {e:?}"
                 ))
             })?;
             let abs = turn_context.resolve_path(Some(args.path));
@@ -2495,7 +2499,7 @@ async fn handle_function_call(
         "apply_patch" => {
             let args: ApplyPatchToolArgs = serde_json::from_str(&arguments).map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {e}"
+                    "failed to parse function arguments: {e:?}"
                 ))
             })?;
             let exec_params = ExecParams {
@@ -2521,7 +2525,7 @@ async fn handle_function_call(
             // TODO(mbolin): Sandbox check.
             let exec_params: ExecCommandParams = serde_json::from_str(&arguments).map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {e}"
+                    "failed to parse function arguments: {e:?}"
                 ))
             })?;
             let result = sess
@@ -2537,7 +2541,7 @@ async fn handle_function_call(
             let write_stdin_params =
                 serde_json::from_str::<WriteStdinParams>(&arguments).map_err(|e| {
                     FunctionCallError::RespondToModel(format!(
-                        "failed to parse function arguments: {e}"
+                        "failed to parse function arguments: {e:?}"
                     ))
                 })?;
 
@@ -2614,7 +2618,7 @@ fn parse_container_exec_arguments(
     serde_json::from_str::<ShellToolCallParams>(&arguments)
         .map(|p| to_exec_params(p, turn_context))
         .map_err(|e| {
-            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
+            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
         })
 }
 
@@ -2677,7 +2681,7 @@ async fn handle_container_exec_with_params(
             // could not resolve it into a patch that would apply
             // cleanly. Return to model for resample.
             return Err(FunctionCallError::RespondToModel(format!(
-                "error: {parse_error:#}"
+                "error: {parse_error:#?}"
             )));
         }
         MaybeApplyPatchVerified::ShellParseError(error) => {
@@ -2777,7 +2781,7 @@ async fn handle_container_exec_with_params(
         }
         SafetyCheck::Reject { reason } => {
             return Err(FunctionCallError::RespondToModel(format!(
-                "exec command rejected: {reason}"
+                "exec command rejected: {reason:?}"
             )));
         }
     };
@@ -2845,7 +2849,7 @@ async fn handle_container_exec_with_params(
             .await
         }
         Err(e) => Err(FunctionCallError::RespondToModel(format!(
-            "execution error: {e}"
+            "execution error: {e:?}"
         ))),
     }
 }
@@ -2873,7 +2877,7 @@ async fn handle_sandbox_error(
     match turn_context.approval_policy {
         AskForApproval::Never | AskForApproval::OnRequest => {
             return Err(FunctionCallError::RespondToModel(format!(
-                "failed in sandbox {sandbox_type:?} with execution error: {error}"
+                "failed in sandbox {sandbox_type:?} with execution error: {error:?}"
             )));
         }
         AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
