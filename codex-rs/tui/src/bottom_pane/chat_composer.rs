@@ -416,23 +416,32 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
-                    // Clear textarea so no residual text remains.
-                    self.textarea.set_text("");
-                    // Capture any needed data from popup before clearing it.
                     let prompt_content = match sel {
                         CommandItem::UserPrompt(idx) => {
                             popup.prompt_content(idx).map(str::to_string)
                         }
                         _ => None,
                     };
+                    let existing_text = self.textarea.text().to_string();
                     // Hide popup since an action has been dispatched.
                     self.active_popup = ActivePopup::None;
 
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            if let Some(remainder) =
+                                Self::text_after_invoked_command(&existing_text, cmd.command())
+                            {
+                                self.textarea.set_text(&remainder);
+                                self.textarea.set_cursor(remainder.len());
+                            } else {
+                                self.textarea.set_text("");
+                                self.textarea.set_cursor(0);
+                            }
                             return (InputResult::Command(cmd), true);
                         }
                         CommandItem::UserPrompt(_) => {
+                            self.textarea.set_text("");
+                            self.textarea.set_cursor(0);
                             if let Some(contents) = prompt_content {
                                 return (InputResult::Submitted(contents), true);
                             }
@@ -458,6 +467,51 @@ impl ChatComposer {
                 .unwrap_or(0);
         }
         p
+    }
+
+    fn text_after_invoked_command(text: &str, command: &str) -> Option<String> {
+        let first_non_ws_idx = text
+            .char_indices()
+            .find(|(_, ch)| !ch.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(text.len());
+        if first_non_ws_idx >= text.len() {
+            return None;
+        }
+
+        let rest = &text[first_non_ws_idx..];
+        if !rest.starts_with('/') {
+            return None;
+        }
+
+        let after_slash = &rest[1..];
+        let mut command_end = after_slash.len();
+        for (idx, ch) in after_slash.char_indices() {
+            if ch.is_whitespace() {
+                command_end = idx;
+                break;
+            }
+        }
+
+        if &after_slash[..command_end] != command {
+            return None;
+        }
+
+        let mut remainder_offset = command_end;
+        while remainder_offset < after_slash.len() {
+            if let Some(ch) = after_slash[remainder_offset..].chars().next() {
+                if ch.is_whitespace() {
+                    remainder_offset += ch.len_utf8();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let remainder_start = first_non_ws_idx + 1 + remainder_offset;
+        Some(text[remainder_start..].to_string())
     }
 
     #[inline]
@@ -1926,6 +1980,30 @@ mod tests {
         assert!(composer.textarea.is_empty(), "composer should be cleared");
         composer.insert_str("@");
         assert_eq!(composer.textarea.text(), "@");
+    }
+
+    #[test]
+    fn text_after_invoked_command_returns_remainder() {
+        assert_eq!(
+            ChatComposer::text_after_invoked_command("/model analyze this request", "model"),
+            Some("analyze this request".to_string())
+        );
+    }
+
+    #[test]
+    fn text_after_invoked_command_trims_whitespace_and_newlines() {
+        assert_eq!(
+            ChatComposer::text_after_invoked_command("/model\nContinue with the plan", "model"),
+            Some("Continue with the plan".to_string())
+        );
+    }
+
+    #[test]
+    fn text_after_invoked_command_none_when_command_differs() {
+        assert_eq!(
+            ChatComposer::text_after_invoked_command("/status", "model"),
+            None
+        );
     }
 
     #[test]
