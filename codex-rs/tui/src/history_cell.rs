@@ -1613,7 +1613,7 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
 
 fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshot>) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> =
-        vec![vec![padded_emoji("⏱️").into(), "Usage Limits".bold()].into()];
+        vec![vec![padded_emoji("⏱️").into(), " Usage Limits".bold()].into()];
 
     match snapshot {
         Some(snapshot) => {
