@@ -10,11 +10,6 @@ use crate::openai_tools::ResponsesApiTool;
 
 const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("tool_apply_patch.lark");
 
-#[derive(Serialize, Deserialize)]
-pub(crate) struct ApplyPatchToolArgs {
-    pub(crate) input: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
