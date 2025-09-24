@@ -1,42 +1,41 @@
-#[cfg(target_os = "windows")]
-use super::windows_safe_commands::is_safe_command_windows;
+use crate::bash::try_parse_bash;
+use crate::bash::try_parse_word_only_commands_sequence;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
     #[cfg(target_os = "windows")]
     {
-        is_safe_command_windows(command)
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        use crate::bash::try_parse_bash;
-        use crate::bash::try_parse_word_only_commands_sequence;
-
-        if is_safe_to_call_with_exec(command) {
-            return true;
-        }
-
-        // Support `bash -lc "..."` where the script consists solely of one or
-        // more "plain" commands (only bare words / quoted strings) combined with
-        // a conservative allow‑list of shell operators that themselves do not
-        // introduce side effects ( "&&", "||", ";", and "|" ). If every
-        // individual command in the script is itself a known‑safe command, then
-        // the composite expression is considered safe.
-        if let [bash, flag, script] = command
-            && bash == "bash"
-            && flag == "-lc"
-            && let Some(tree) = try_parse_bash(script)
-            && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
-            && !all_commands.is_empty()
-            && all_commands
-                .iter()
-                .all(|cmd| is_safe_to_call_with_exec(cmd))
+        use super::windows_safe_commands::is_safe_command_windows;
+        if is_safe_command_windows(command)
         {
             return true;
         }
-
-        false
     }
+
+    if is_safe_to_call_with_exec(command) {
+        return true;
+    }
+
+    // Support `bash -lc "..."` where the script consists solely of one or
+    // more "plain" commands (only bare words / quoted strings) combined with
+    // a conservative allow‑list of shell operators that themselves do not
+    // introduce side effects ( "&&", "||", ";", and "|" ). If every
+    // individual command in the script is itself a known‑safe command, then
+    // the composite expression is considered safe.
+    if let [bash, flag, script] = command
+        && bash == "bash"
+        && flag == "-lc"
+        && let Some(tree) = try_parse_bash(script)
+        && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
+        && !all_commands.is_empty()
+        && all_commands
+            .iter()
+            .all(|cmd| is_safe_to_call_with_exec(cmd))
+    {
+        return true;
+    }
+
+    false
+
 }
 
 fn is_safe_to_call_with_exec(command: &[String]) -> bool {
