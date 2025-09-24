@@ -677,6 +677,7 @@ mod tests {
     use codex_protocol::config_types::ReasoningEffort;
     use codex_protocol::config_types::ReasoningSummary;
     use insta::assert_snapshot;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn test_config(temp_home: &TempDir) -> Config {
@@ -739,8 +740,7 @@ mod tests {
             exclude_slash_tmp: false,
         };
 
-        let workspace = temp_home.path().join("workspace");
-        config.cwd = workspace;
+        config.cwd = PathBuf::from("/workspace/tests");
 
         let usage = TokenUsage {
             input_tokens: 1_200,
@@ -784,7 +784,7 @@ mod tests {
         let temp_home = TempDir::new().expect("temp home");
         let mut config = test_config(&temp_home);
         config.model = "gpt-5-codex".to_string();
-        config.cwd = temp_home.path().join("workspace");
+        config.cwd = PathBuf::from("/workspace/tests");
 
         let usage = TokenUsage {
             input_tokens: 1_200,
@@ -811,7 +811,7 @@ mod tests {
         config.model_provider_id = "openai".to_string();
         config.model_reasoning_effort = Some(ReasoningEffort::High);
         config.model_reasoning_summary = ReasoningSummary::Detailed;
-        config.cwd = temp_home.path().join("workspace");
+        config.cwd = PathBuf::from("/workspace/tests");
 
         let usage = TokenUsage {
             input_tokens: 1_200,
