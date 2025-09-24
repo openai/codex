@@ -28,6 +28,7 @@ use super::file_search_popup::FileSearchPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
+use crate::history_cell::user_message_bg;
 use crate::slash_command::SlashCommand;
 use codex_protocol::custom_prompts::CustomPrompt;
 
@@ -140,6 +141,7 @@ impl ChatComposer {
         // Leave 1 column for the left border and 1 column for left padding
         self.textarea
             .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
+            + 1
             + match &self.active_popup {
                 ActivePopup::None => FOOTER_HEIGHT_WITH_HINT,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
@@ -155,8 +157,9 @@ impl ChatComposer {
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::None => Constraint::Max(FOOTER_HEIGHT_WITH_HINT),
         };
-        let [textarea_rect, _] =
-            Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
+        let [_, textarea_rect, _] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(1), popup_constraint])
+                .areas(area);
         let mut textarea_rect = textarea_rect;
         // Leave 1 for border and 1 for padding
         textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
@@ -1231,8 +1234,8 @@ impl ChatComposer {
     }
 }
 
-impl WidgetRef for ChatComposer {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+impl ChatComposer {
+    pub fn render(&self, area: Rect, buf: &mut Buffer, bg: Option<(u8, u8, u8)>) {
         let (popup_constraint, hint_spacing) = match &self.active_popup {
             ActivePopup::Command(popup) => (
                 Constraint::Max(popup.calculate_required_height(area.width)),
@@ -1244,8 +1247,9 @@ impl WidgetRef for ChatComposer {
                 FOOTER_SPACING_HEIGHT,
             ),
         };
-        let [textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
+        let [_, textarea_rect, popup_rect] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(1), popup_constraint])
+                .areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -1336,6 +1340,17 @@ impl WidgetRef for ChatComposer {
                     .render_ref(hint_rect, buf);
             }
         }
+        let bg = match bg {
+            Some(bg) => {
+                let (r, g, b) = user_message_bg(bg);
+                Style::default().bg(Color::Rgb(r, g, b))
+            }
+            None => Style::default(),
+        };
+        let mut block_rect = textarea_rect;
+        block_rect.y = textarea_rect.y.saturating_sub(1);
+        block_rect.height = textarea_rect.height.saturating_add(2);
+        Block::default().style(bg).render_ref(block_rect, buf);
         buf.set_span(
             textarea_rect.x,
             textarea_rect.y,

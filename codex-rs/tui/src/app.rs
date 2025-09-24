@@ -194,10 +194,11 @@ impl App {
                     {
                         return Ok(true);
                     }
+                    let bg = tui.bg();
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
-                            frame.render_widget_ref(&self.chat_widget, frame.area());
+                            self.chat_widget.render(frame.area(), frame.buffer, bg);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }

@@ -1925,10 +1925,10 @@ impl ChatWidget {
     }
 }
 
-impl WidgetRef for &ChatWidget {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+impl ChatWidget {
+    pub fn render(&self, area: Rect, buf: &mut Buffer, bg: Option<(u8, u8, u8)>) {
         let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
-        (&self.bottom_pane).render(bottom_pane_area, buf);
+        self.bottom_pane.render(bottom_pane_area, buf, bg);
         if !active_cell_area.is_empty()
             && let Some(cell) = &self.active_cell
         {

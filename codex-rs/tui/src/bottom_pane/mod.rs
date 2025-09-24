@@ -480,8 +480,8 @@ impl BottomPane {
     }
 }
 
-impl WidgetRef for &BottomPane {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+impl BottomPane {
+    pub fn render(&self, area: Rect, buf: &mut Buffer, bg: Option<(u8, u8, u8)>) {
         let [status_area, content] = self.layout(area);
 
         // When a modal view is active, it owns the whole content area.
@@ -495,7 +495,7 @@ impl WidgetRef for &BottomPane {
             }
 
             // Render the composer in the remaining area.
-            self.composer.render_ref(content, buf);
+            self.composer.render(content, buf, bg);
         }
     }
 }

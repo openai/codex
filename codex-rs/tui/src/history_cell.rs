@@ -137,7 +137,7 @@ fn blend(fg: (u8, u8, u8), bg: (u8, u8, u8), alpha: f32) -> (u8, u8, u8) {
     (r, g, b)
 }
 
-fn user_message_bg(terminal_bg: (u8, u8, u8)) -> (u8, u8, u8) {
+pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> (u8, u8, u8) {
     let top = if is_light(Some(terminal_bg)) {
         (0, 0, 0)
     } else {
