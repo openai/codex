@@ -32,7 +32,6 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
     {
         return true;
     }
-
     false
 
 }
