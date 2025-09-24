@@ -1009,6 +1009,7 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary,
+                final_output_json_schema: None,
             })
             .await;
 
@@ -1410,13 +1411,13 @@ fn extract_conversation_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     #[test]
-    fn extract_conversation_summary_prefers_plain_user_messages() {
-        let conversation_id =
-            ConversationId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0").unwrap();
+    fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
+        let conversation_id = ConversationId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0")?;
         let timestamp = Some("2025-09-05T16:53:11.850Z".to_string());
         let path = PathBuf::from("rollout.jsonl");
 
@@ -1456,5 +1457,6 @@ mod tests {
         );
         assert_eq!(summary.path, path);
         assert_eq!(summary.preview, "Count to 5");
+        Ok(())
     }
 }

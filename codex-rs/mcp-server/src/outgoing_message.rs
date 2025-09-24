@@ -256,6 +256,7 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::config_types::ReasoningEffort;
@@ -269,12 +270,12 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_send_event_as_notification() {
+    async fn test_send_event_as_notification() -> Result<()> {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
         let conversation_id = ConversationId::new();
-        let rollout_file = NamedTempFile::new().unwrap();
+        let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -302,15 +303,16 @@ mod tests {
             panic!("Event must serialize");
         };
         assert_eq!(params, Some(expected_params));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_send_event_as_notification_with_meta() {
+    async fn test_send_event_as_notification_with_meta() -> Result<()> {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
         let conversation_id = ConversationId::new();
-        let rollout_file = NamedTempFile::new().unwrap();
+        let rollout_file = NamedTempFile::new()?;
         let session_configured_event = SessionConfiguredEvent {
             session_id: conversation_id,
             model: "gpt-4o".to_string(),
@@ -353,6 +355,7 @@ mod tests {
             }
         });
         assert_eq!(params.unwrap(), expected_params);
+        Ok(())
     }
 
     #[test]
