@@ -65,7 +65,7 @@ impl TurnDiffTracker {
                 let baseline_file_info = if path.exists() {
                     let mode = file_mode_for_path(path);
                     let mode_val = mode.unwrap_or(FileMode::Regular);
-                    let content = blob_bytes(path, &mode_val).unwrap_or_default();
+                    let content = blob_bytes(path, mode_val).unwrap_or_default();
                     let oid = if mode == Some(FileMode::Symlink) {
                         format!("{:x}", git_blob_sha1_hex_bytes(&content))
                     } else {
@@ -266,7 +266,7 @@ impl TurnDiffTracker {
         };
 
         let current_mode = file_mode_for_path(&current_external_path).unwrap_or(FileMode::Regular);
-        let right_bytes = blob_bytes(&current_external_path, &current_mode);
+        let right_bytes = blob_bytes(&current_external_path, current_mode);
 
         // Compute displays with &mut self before borrowing any baseline content.
         let left_display = self.relative_to_git_root_str(&baseline_external_path);
@@ -388,7 +388,7 @@ enum FileMode {
 }
 
 impl FileMode {
-    fn as_str(&self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             FileMode::Regular => "100644",
             #[cfg(unix)]
@@ -427,9 +427,9 @@ fn file_mode_for_path(_path: &Path) -> Option<FileMode> {
     Some(FileMode::Regular)
 }
 
-fn blob_bytes(path: &Path, mode: &FileMode) -> Option<Vec<u8>> {
+fn blob_bytes(path: &Path, mode: FileMode) -> Option<Vec<u8>> {
     if path.exists() {
-        let contents = if *mode == FileMode::Symlink {
+        let contents = if mode == FileMode::Symlink {
             symlink_blob_bytes(path)
                 .ok_or_else(|| anyhow!("failed to read symlink target for {}", path.display()))
         } else {

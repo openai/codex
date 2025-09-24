@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_core::config_types::Notifications;
+use codex_core::git_info::current_branch_name;
+use codex_core::git_info::local_git_branches;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -28,6 +30,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
@@ -62,6 +65,9 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::custom_prompt_view::CustomPromptView;
+use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
 use crate::get_git_diff::get_git_diff;
@@ -86,6 +92,8 @@ mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use std::path::Path;
+
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
@@ -96,11 +104,68 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use codex_git_tooling::CreateGhostCommitOptions;
+use codex_git_tooling::GhostCommit;
+use codex_git_tooling::GitToolingError;
+use codex_git_tooling::create_ghost_commit;
+use codex_git_tooling::restore_ghost_commit;
+
+const MAX_TRACKED_GHOST_COMMITS: usize = 20;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
+}
+
+const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
+
+#[derive(Default)]
+struct RateLimitWarningState {
+    secondary_index: usize,
+    primary_index: usize,
+}
+
+impl RateLimitWarningState {
+    fn take_warnings(
+        &mut self,
+        secondary_used_percent: f64,
+        primary_used_percent: f64,
+    ) -> Vec<String> {
+        if secondary_used_percent == 100.0 || primary_used_percent == 100.0 {
+            return Vec::new();
+        }
+
+        let mut warnings = Vec::new();
+
+        let mut highest_secondary: Option<f64> = None;
+        while self.secondary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+            && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
+        {
+            highest_secondary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]);
+            self.secondary_index += 1;
+        }
+        if let Some(threshold) = highest_secondary {
+            warnings.push(format!(
+                "Heads up, you've used over {threshold:.0}% of your weekly limit. Run /status for a breakdown."
+            ));
+        }
+
+        let mut highest_primary: Option<f64> = None;
+        while self.primary_index < RATE_LIMIT_WARNING_THRESHOLDS.len()
+            && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
+        {
+            highest_primary = Some(RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]);
+            self.primary_index += 1;
+        }
+        if let Some(threshold) = highest_primary {
+            warnings.push(format!(
+                "Heads up, you've used over {threshold:.0}% of your 5h limit. Run /status for a breakdown."
+            ));
+        }
+
+        warnings
+    }
 }
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
@@ -124,8 +189,10 @@ pub(crate) struct ChatWidget {
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
+    rate_limit_snapshot: Option<RateLimitSnapshot>,
+    rate_limit_warnings: RateLimitWarningState,
     // Stream lifecycle controller
-    stream: StreamController,
+    stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
@@ -147,6 +214,9 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    // List of ghost commits corresponding to each turn.
+    ghost_snapshots: Vec<GhostCommit>,
+    ghost_snapshots_disabled: bool,
 }
 
 struct UserMessage {
@@ -173,8 +243,10 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 
 impl ChatWidget {
     fn flush_answer_stream_with_separator(&mut self) {
-        let sink = AppEventHistorySink(self.app_event_tx.clone());
-        let _ = self.stream.finalize(true, &sink);
+        if let Some(mut controller) = self.stream_controller.take() {
+            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            controller.finalize(&sink);
+        }
     }
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
@@ -203,9 +275,13 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        let sink = AppEventHistorySink(self.app_event_tx.clone());
-        let finished = self.stream.apply_final_answer(&message, &sink);
-        self.handle_if_stream_finished(finished);
+        // If we have a stream_controller, then the final agent message is redundant and will be a
+        // duplicate of what has already been streamed.
+        if self.stream_controller.is_none() {
+            self.handle_streaming_delta(message);
+        }
+        self.flush_answer_stream_with_separator();
+        self.handle_stream_finished();
         self.request_redraw();
     }
 
@@ -255,7 +331,6 @@ impl ChatWidget {
     fn on_task_started(&mut self) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
-        self.stream.reset_headers_for_new_turn();
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
@@ -264,9 +339,9 @@ impl ChatWidget {
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize only that stream to flush any tail
         // without emitting stray headers for other streams.
-        if self.stream.is_write_cycle_active() {
+        if let Some(mut controller) = self.stream_controller.take() {
             let sink = AppEventHistorySink(self.app_event_tx.clone());
-            let _ = self.stream.finalize(true, &sink);
+            controller.finalize(&sink);
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
@@ -282,8 +357,26 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        self.bottom_pane.set_token_usage(info.clone());
-        self.token_info = info;
+        if info.is_some() {
+            self.bottom_pane.set_token_usage(info.clone());
+            self.token_info = info;
+        }
+    }
+
+    fn on_rate_limit_snapshot(&mut self, snapshot: Option<RateLimitSnapshot>) {
+        if let Some(snapshot) = snapshot {
+            let warnings = self.rate_limit_warnings.take_warnings(
+                snapshot.secondary_used_percent,
+                snapshot.primary_used_percent,
+            );
+            self.rate_limit_snapshot = Some(snapshot);
+            if !warnings.is_empty() {
+                for warning in warnings {
+                    self.add_to_history(history_cell::new_warning_event(warning));
+                }
+                self.request_redraw();
+            }
+        }
     }
     /// Finalize any active exec as failed and stop/clear running UI state.
     fn finalize_turn(&mut self) {
@@ -292,7 +385,7 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
-        self.stream.clear_all();
+        self.stream_controller = None;
     }
 
     fn on_error(&mut self, message: String) {
@@ -447,12 +540,13 @@ impl ChatWidget {
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
     pub(crate) fn on_commit_tick(&mut self) {
-        let sink = AppEventHistorySink(self.app_event_tx.clone());
-        let finished = self.stream.on_commit_tick(&sink);
-        self.handle_if_stream_finished(finished);
-    }
-    fn is_write_cycle_active(&self) -> bool {
-        self.stream.is_write_cycle_active()
+        if let Some(controller) = self.stream_controller.as_mut() {
+            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            let finished = controller.on_commit_tick(&sink);
+            if finished {
+                self.handle_stream_finished();
+            }
+        }
     }
 
     fn flush_interrupt_queue(&mut self) {
@@ -470,32 +564,34 @@ impl ChatWidget {
         // Preserve deterministic FIFO across queued interrupts: once anything
         // is queued due to an active write cycle, continue queueing until the
         // queue is flushed to avoid reordering (e.g., ExecEnd before ExecBegin).
-        if self.is_write_cycle_active() || !self.interrupts.is_empty() {
+        if self.stream_controller.is_some() || !self.interrupts.is_empty() {
             push(&mut self.interrupts);
         } else {
             handle(self);
         }
     }
 
-    #[inline]
-    fn handle_if_stream_finished(&mut self, finished: bool) {
-        if finished {
-            if self.task_complete_pending {
-                self.bottom_pane.set_task_running(false);
-                self.task_complete_pending = false;
-            }
-            // A completed stream indicates non-exec content was just inserted.
-            self.flush_interrupt_queue();
+    fn handle_stream_finished(&mut self) {
+        if self.task_complete_pending {
+            self.bottom_pane.set_task_running(false);
+            self.task_complete_pending = false;
         }
+        // A completed stream indicates non-exec content was just inserted.
+        self.flush_interrupt_queue();
     }
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
         self.flush_active_exec_cell();
-        let sink = AppEventHistorySink(self.app_event_tx.clone());
-        self.stream.begin(&sink);
-        self.stream.push_and_maybe_commit(&delta, &sink);
+
+        if self.stream_controller.is_none() {
+            self.stream_controller = Some(StreamController::new(self.config.clone()));
+        }
+        if let Some(controller) = self.stream_controller.as_mut() {
+            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            controller.push_and_maybe_commit(&delta, &sink);
+        }
         self.request_redraw();
     }
 
@@ -547,7 +643,7 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         // Emit the proposed command into history (like proposed patches)
         self.add_to_history(history_cell::new_proposed_command(&ev.command));
-        let command = shlex::try_join(ev.command.iter().map(|s| s.as_str()))
+        let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
         self.notify(Notification::ExecApprovalRequested { command });
 
@@ -693,13 +789,15 @@ impl ChatWidget {
             active_exec_cell: None,
             config: config.clone(),
             auth_manager,
-            session_header: SessionHeader::new(config.model.clone()),
+            session_header: SessionHeader::new(config.model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
             token_info: None,
-            stream: StreamController::new(config),
+            rate_limit_snapshot: None,
+            rate_limit_warnings: RateLimitWarningState::default(),
+            stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
@@ -711,6 +809,8 @@ impl ChatWidget {
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
+            ghost_snapshots: Vec::new(),
+            ghost_snapshots_disabled: true,
         }
     }
 
@@ -750,13 +850,15 @@ impl ChatWidget {
             active_exec_cell: None,
             config: config.clone(),
             auth_manager,
-            session_header: SessionHeader::new(config.model.clone()),
+            session_header: SessionHeader::new(config.model),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
             token_info: None,
-            stream: StreamController::new(config),
+            rate_limit_snapshot: None,
+            rate_limit_warnings: RateLimitWarningState::default(),
+            stream_controller: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
@@ -768,6 +870,8 @@ impl ChatWidget {
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
+            ghost_snapshots: Vec::new(),
+            ghost_snapshots_disabled: true,
         }
     }
 
@@ -883,13 +987,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
             }
             SlashCommand::Review => {
-                // Simplified flow: directly send a review op for current changes.
-                self.submit_op(Op::Review {
-                    review_request: ReviewRequest {
-                        prompt: "review current changes".to_string(),
-                        user_facing_hint: "current changes".to_string(),
-                    },
-                });
+                self.open_review_popup();
             }
             SlashCommand::Model => {
                 self.open_model_popup();
@@ -905,6 +1003,9 @@ impl ChatWidget {
                     tracing::error!("failed to logout: {e}");
                 }
                 self.app_event_tx.send(AppEvent::ExitRequest);
+            }
+            SlashCommand::Undo => {
+                self.undo_last_snapshot();
             }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
@@ -1016,6 +1117,12 @@ impl ChatWidget {
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
+        if text.is_empty() && image_paths.is_empty() {
+            return;
+        }
+
+        self.capture_ghost_snapshot();
+
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
@@ -1024,10 +1131,6 @@ impl ChatWidget {
 
         for path in image_paths {
             items.push(InputItem::LocalImage { path });
-        }
-
-        if items.is_empty() {
-            return;
         }
 
         self.codex_op_tx
@@ -1049,6 +1152,57 @@ impl ChatWidget {
         if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
+    }
+
+    fn capture_ghost_snapshot(&mut self) {
+        if self.ghost_snapshots_disabled {
+            return;
+        }
+
+        let options = CreateGhostCommitOptions::new(&self.config.cwd);
+        match create_ghost_commit(&options) {
+            Ok(commit) => {
+                self.ghost_snapshots.push(commit);
+                if self.ghost_snapshots.len() > MAX_TRACKED_GHOST_COMMITS {
+                    self.ghost_snapshots.remove(0);
+                }
+            }
+            Err(err) => {
+                self.ghost_snapshots_disabled = true;
+                let (message, hint) = match &err {
+                    GitToolingError::NotAGitRepository { .. } => (
+                        "Snapshots disabled: current directory is not a Git repository."
+                            .to_string(),
+                        None,
+                    ),
+                    _ => (
+                        format!("Snapshots disabled after error: {err}"),
+                        Some(
+                            "Restart Codex after resolving the issue to re-enable snapshots."
+                                .to_string(),
+                        ),
+                    ),
+                };
+                self.add_info_message(message, hint);
+                tracing::warn!("failed to create ghost snapshot: {err}");
+            }
+        }
+    }
+
+    fn undo_last_snapshot(&mut self) {
+        let Some(commit) = self.ghost_snapshots.pop() else {
+            self.add_info_message("No snapshot available to undo.".to_string(), None);
+            return;
+        };
+
+        if let Err(err) = restore_ghost_commit(&self.config.cwd, &commit) {
+            self.add_error_message(format!("Failed to restore snapshot: {err}"));
+            self.ghost_snapshots.push(commit);
+            return;
+        }
+
+        let short_id: String = commit.id().chars().take(8).collect();
+        self.add_info_message(format!("Restored workspace to snapshot {short_id}"), None);
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when
@@ -1106,7 +1260,10 @@ impl ChatWidget {
             EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                 self.on_task_complete(last_agent_message)
             }
-            EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
+            EventMsg::TokenCount(ev) => {
+                self.set_token_info(ev.info);
+                self.on_rate_limit_snapshot(ev.rate_limits);
+            }
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
@@ -1294,6 +1451,7 @@ impl ChatWidget {
             &self.config,
             usage_ref,
             &self.conversation_id,
+            self.rate_limit_snapshot.as_ref(),
         ));
     }
 
@@ -1344,15 +1502,20 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                dismiss_on_select: true,
+                search_value: None,
             });
         }
 
-        self.bottom_pane.show_selection_view(
-            "Select model and reasoning level".to_string(),
-            Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
-            Some("Press Enter to confirm or Esc to go back".to_string()),
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select model and reasoning level".to_string(),
+            subtitle: Some(
+                "Switch between OpenAI models for this and future Codex CLI session".to_string(),
+            ),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
-        );
+            ..Default::default()
+        });
     }
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
@@ -1385,15 +1548,17 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                dismiss_on_select: true,
+                search_value: None,
             });
         }
 
-        self.bottom_pane.show_selection_view(
-            "Select Approval Mode".to_string(),
-            None,
-            Some("Press Enter to confirm or Esc to go back".to_string()),
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select Approval Mode".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
-        );
+            ..Default::default()
+        });
     }
 
     /// Set the approval policy in the widget's config copy.
@@ -1500,6 +1665,176 @@ impl ChatWidget {
         debug!("received {len} custom prompts");
         // Forward to bottom pane so the slash popup can show them now.
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
+    }
+
+    pub(crate) fn open_review_popup(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        items.push(SelectionItem {
+            name: "Review uncommitted changes".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(
+                move |tx: &AppEventSender| {
+                    tx.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt: "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.".to_string(),
+                            user_facing_hint: "current changes".to_string(),
+                        },
+                    }));
+                },
+            )],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        // New: Review a specific commit (opens commit picker)
+        items.push(SelectionItem {
+            name: "Review a commit".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        items.push(SelectionItem {
+            name: "Review against a base branch".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        items.push(SelectionItem {
+            name: "Custom review instructions".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenReviewCustomPrompt);
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a review preset".into(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn show_review_branch_picker(&mut self, cwd: &Path) {
+        let branches = local_git_branches(cwd).await;
+        let current_branch = current_branch_name(cwd)
+            .await
+            .unwrap_or_else(|| "(detached HEAD)".to_string());
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(branches.len());
+
+        for option in branches {
+            let branch = option.clone();
+            items.push(SelectionItem {
+                name: format!("{current_branch} -> {branch}"),
+                description: None,
+                is_current: false,
+                actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    tx3.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt: format!(
+                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
+                            ),
+                            user_facing_hint: format!("changes against '{branch}'"),
+                        },
+                    }));
+                })],
+                dismiss_on_select: true,
+                search_value: Some(option),
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a base branch".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search branches".to_string()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
+        let commits = codex_core::git_info::recent_commits(cwd, 100).await;
+
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
+        for entry in commits {
+            let subject = entry.subject.clone();
+            let sha = entry.sha.clone();
+            let short = sha.chars().take(7).collect::<String>();
+            let search_val = format!("{subject} {sha}");
+
+            items.push(SelectionItem {
+                name: subject.clone(),
+                description: None,
+                is_current: false,
+                actions: vec![Box::new(move |tx3: &AppEventSender| {
+                    let hint = format!("commit {short}");
+                    let prompt = format!(
+                        "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
+                    );
+                    tx3.send(AppEvent::CodexOp(Op::Review {
+                        review_request: ReviewRequest {
+                            prompt,
+                            user_facing_hint: hint,
+                        },
+                    }));
+                })],
+                dismiss_on_select: true,
+                search_value: Some(search_val),
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Select a commit to review".to_string(),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Type to search commits".to_string()),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn show_review_custom_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Custom review instructions".to_string(),
+            "Type instructions and press Enter".to_string(),
+            None,
+            Box::new(move |prompt: String| {
+                let trimmed = prompt.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        prompt: trimmed.clone(),
+                        user_facing_hint: trimmed,
+                    },
+                }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     /// Programmatically submit a user text message as if typed in the
@@ -1656,6 +1991,49 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+#[cfg(test)]
+pub(crate) fn show_review_commit_picker_with_entries(
+    chat: &mut ChatWidget,
+    entries: Vec<codex_core::git_info::CommitLogEntry>,
+) {
+    let mut items: Vec<SelectionItem> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let subject = entry.subject.clone();
+        let sha = entry.sha.clone();
+        let short = sha.chars().take(7).collect::<String>();
+        let search_val = format!("{subject} {sha}");
+
+        items.push(SelectionItem {
+            name: subject.clone(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(move |tx3: &AppEventSender| {
+                let hint = format!("commit {short}");
+                let prompt = format!(
+                    "Review the code changes introduced by commit {sha} (\"{subject}\"). Provide prioritized, actionable findings."
+                );
+                tx3.send(AppEvent::CodexOp(Op::Review {
+                    review_request: ReviewRequest {
+                        prompt,
+                        user_facing_hint: hint,
+                    },
+                }));
+            })],
+            dismiss_on_select: true,
+            search_value: Some(search_val),
+        });
+    }
+
+    chat.bottom_pane.show_selection_view(SelectionViewParams {
+        title: "Select a commit to review".to_string(),
+        footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+        items,
+        is_searchable: true,
+        search_placeholder: Some("Type to search commits".to_string()),
+        ..Default::default()
+    });
 }
 
 #[cfg(test)]

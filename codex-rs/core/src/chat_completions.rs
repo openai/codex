@@ -35,6 +35,12 @@ pub(crate) async fn stream_chat_completions(
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
 ) -> Result<ResponseStream> {
+    if prompt.output_schema.is_some() {
+        return Err(CodexErr::UnsupportedOperation(
+            "output_schema is not supported for Chat Completions API".to_string(),
+        ));
+    }
+
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
 
@@ -462,7 +468,7 @@ async fn process_chat_sse<S>(
             if let Some(reasoning_val) = choice.get("delta").and_then(|d| d.get("reasoning")) {
                 let mut maybe_text = reasoning_val
                     .as_str()
-                    .map(|s| s.to_string())
+                    .map(str::to_string)
                     .filter(|s| !s.is_empty());
 
                 if maybe_text.is_none() && reasoning_val.is_object() {
@@ -715,6 +721,9 @@ where
 
                     // Not an assistant message – forward immediately.
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot))));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::Completed {
                     response_id,

@@ -50,11 +50,7 @@ pub(crate) fn render_markdown_text_with_citations(
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(
-        parser,
-        scheme.map(|s| s.to_string()),
-        Some(cwd.to_path_buf()),
-    );
+    let mut w = Writer::new(parser, scheme.map(str::to_string), Some(cwd.to_path_buf()));
     w.run();
     w.text
 }
@@ -329,7 +325,7 @@ where
         let is_ordered = self
             .list_indices
             .last()
-            .map(|index| index.is_some())
+            .map(Option::is_some)
             .unwrap_or(false);
         let width = depth * 4 - 3;
         let marker = if let Some(last_index) = self.list_indices.last_mut() {

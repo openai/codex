@@ -74,6 +74,39 @@ pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
     })
 }
 
+/// Convenience: SSE event for an `apply_patch` custom tool call with raw patch
+/// text. This mirrors the payload produced by the Responses API when the model
+/// invokes `apply_patch` directly (before we convert it to a function call).
+pub fn ev_apply_patch_custom_tool_call(call_id: &str, patch: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "custom_tool_call",
+            "name": "apply_patch",
+            "input": patch,
+            "call_id": call_id
+        }
+    })
+}
+
+/// Convenience: SSE event for an `apply_patch` function call. The Responses API
+/// wraps the patch content in a JSON string under the `input` key; we recreate
+/// the same structure so downstream code exercises the full parsing path.
+pub fn ev_apply_patch_function_call(call_id: &str, patch: &str) -> Value {
+    let arguments = serde_json::json!({ "input": patch });
+    let arguments = serde_json::to_string(&arguments).expect("serialize apply_patch arguments");
+
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "name": "apply_patch",
+            "arguments": arguments,
+            "call_id": call_id
+        }
+    })
+}
+
 pub fn sse_response(body: String) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")

@@ -24,6 +24,7 @@ use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::project_doc::discover_project_doc_paths;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
@@ -53,6 +54,10 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
+
+const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
+const STATUS_LIMIT_BAR_FILLED: &str = "█";
+const STATUS_LIMIT_BAR_EMPTY: &str = " ";
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
@@ -372,19 +377,18 @@ impl ExecCell {
                 .iter()
                 .all(|c| matches!(c, ParsedCommand::Read { .. }))
             {
-                let names: Vec<String> = call
+                let names = call
                     .parsed
                     .iter()
                     .map(|c| match c {
                         ParsedCommand::Read { name, .. } => name.clone(),
                         _ => unreachable!(),
                     })
-                    .unique()
-                    .collect();
+                    .unique();
                 vec![(
                     "Read",
                     itertools::Itertools::intersperse(
-                        names.into_iter().map(|n| n.into()),
+                        names.into_iter().map(Into::into),
                         ", ".dim(),
                     )
                     .collect(),
@@ -629,6 +633,50 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
 const TOOL_CALL_MAX_LINES: usize = 5;
 const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
+fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
+    if width < 4 {
+        return None;
+    }
+    let inner_width = std::cmp::min(width.saturating_sub(4) as usize, max_inner_width);
+    Some(inner_width)
+}
+
+fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let content_width = lines
+        .iter()
+        .map(|line| {
+            line.iter()
+                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+
+    let mut out = Vec::with_capacity(lines.len() + 2);
+    let border_inner_width = content_width + 2;
+    out.push(vec![format!("╭{}╮", "─".repeat(border_inner_width)).dim()].into());
+
+    for line in lines.into_iter() {
+        let used_width: usize = line
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum();
+        let span_count = line.spans.len();
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 4);
+        spans.push(Span::from("│ ").dim());
+        spans.extend(line.into_iter());
+        if used_width < content_width {
+            spans.push(Span::from(" ".repeat(content_width - used_width)).dim());
+        }
+        spans.push(Span::from(" │").dim());
+        out.push(Line::from(spans));
+    }
+
+    out.push(vec![format!("╰{}╯", "─".repeat(border_inner_width)).dim()].into());
+
+    out
+}
+
 fn title_case(s: &str) -> String {
     if s.is_empty() {
         return String::new();
@@ -812,46 +860,20 @@ impl SessionHeaderHistoryCell {
 
 impl HistoryCell for SessionHeaderHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut out: Vec<Line<'static>> = Vec::new();
-        if width < 4 {
-            return out;
-        }
+        let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
+            return Vec::new();
+        };
 
-        let inner_width = std::cmp::min(
-            width.saturating_sub(2) as usize,
-            SESSION_HEADER_MAX_INNER_WIDTH,
-        );
-        // Top border without a title on the border
-        let mut top = String::with_capacity(inner_width + 2);
-        top.push('╭');
-        top.push_str(&"─".repeat(inner_width));
-        top.push('╮');
-        out.push(Line::from(top.dim()));
+        let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: " >_ OpenAI Codex (vX)"
-        let title_text = format!(" >_ OpenAI Codex (v{})", self.version);
-        let title_w = UnicodeWidthStr::width(title_text.as_str());
-        let pad_w = inner_width.saturating_sub(title_w);
-        let mut title_spans: Vec<Span<'static>> = vec![
-            Span::from("│").dim(),
-            Span::from(" ").dim(),
+        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
+        let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
             Span::from("OpenAI Codex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
         ];
-        if pad_w > 0 {
-            title_spans.push(Span::from(" ".repeat(pad_w)).dim());
-        }
-        title_spans.push(Span::from("│").dim());
-        out.push(Line::from(title_spans));
 
-        // Spacer row between title and details
-        out.push(Line::from(vec![
-            Span::from(format!("│{}│", " ".repeat(inner_width))).dim(),
-        ]));
-
-        // Model line: " model: <model> <reasoning_label> (change with /model)"
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
         const DIR_LABEL: &str = "directory:";
@@ -862,59 +884,33 @@ impl HistoryCell for SessionHeaderHistoryCell {
             label_width = label_width
         );
         let reasoning_label = self.reasoning_label();
-        let mut model_value_for_width = self.model.clone();
-        if let Some(reasoning) = reasoning_label {
-            model_value_for_width.push(' ');
-            model_value_for_width.push_str(reasoning);
-        }
-        let model_text_for_width_calc = format!(
-            " {model_label} {model_value_for_width}   {CHANGE_MODEL_HINT_COMMAND}{CHANGE_MODEL_HINT_EXPLANATION}",
-        );
-        let model_w = UnicodeWidthStr::width(model_text_for_width_calc.as_str());
-        let pad_w = inner_width.saturating_sub(model_w);
-        let mut spans: Vec<Span<'static>> = vec![
-            Span::from(format!("│ {model_label} ")).dim(),
+        let mut model_spans: Vec<Span<'static>> = vec![
+            Span::from(format!("{model_label} ")).dim(),
             Span::from(self.model.clone()),
         ];
         if let Some(reasoning) = reasoning_label {
-            spans.push(Span::from(" "));
-            spans.push(Span::from(reasoning));
+            model_spans.push(Span::from(" "));
+            model_spans.push(Span::from(reasoning));
         }
-        spans.push(Span::from("   ").dim());
-        spans.push(Span::from(CHANGE_MODEL_HINT_COMMAND).cyan());
-        spans.push(Span::from(CHANGE_MODEL_HINT_EXPLANATION).dim());
-        if pad_w > 0 {
-            spans.push(Span::from(" ".repeat(pad_w)).dim());
-        }
-        spans.push(Span::from("│").dim());
-        out.push(Line::from(spans));
+        model_spans.push("   ".dim());
+        model_spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+        model_spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
 
-        // Directory line: " Directory: <cwd>"
         let dir_label = format!("{DIR_LABEL:<label_width$}");
-        let dir_prefix = format!(" {dir_label} ");
-        let dir_max_width = inner_width.saturating_sub(UnicodeWidthStr::width(dir_prefix.as_str()));
+        let dir_prefix = format!("{dir_label} ");
+        let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
+        let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
         let dir = self.format_directory(Some(dir_max_width));
-        let dir_text = format!(" {dir_label} {dir}");
-        let dir_w = UnicodeWidthStr::width(dir_text.as_str());
-        let pad_w = inner_width.saturating_sub(dir_w);
-        let mut spans: Vec<Span<'static>> = vec![
-            Span::from("│").dim(),
-            Span::from(" ").dim(),
-            Span::from(dir_label).dim(),
-            Span::from(" ").dim(),
-            Span::from(dir),
+        let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
+
+        let lines = vec![
+            make_row(title_spans),
+            make_row(Vec::new()),
+            make_row(model_spans),
+            make_row(dir_spans),
         ];
-        if pad_w > 0 {
-            spans.push(Span::from(" ".repeat(pad_w)).dim());
-        }
-        spans.push(Span::from("│").dim());
-        out.push(Line::from(spans));
 
-        // Bottom border
-        let bottom = format!("╰{}╯", "─".repeat(inner_width));
-        out.push(Line::from(bottom.dim()));
-
-        out
+        with_border(lines)
     }
 }
 
@@ -1075,10 +1071,18 @@ pub(crate) fn new_completed_mcp_tool_call(
     Box::new(PlainHistoryCell { lines })
 }
 
+#[allow(clippy::disallowed_methods)]
+pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![vec![format!("⚠ {message}").yellow()].into()],
+    }
+}
+
 pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
     session_id: &Option<ConversationId>,
+    rate_limits: Option<&RateLimitSnapshot>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("/status".magenta().into());
@@ -1163,7 +1167,13 @@ pub(crate) fn new_status_output(
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
     let auth_file = get_auth_file(&config.codex_home);
-    if let Ok(auth) = try_read_auth_json(&auth_file)
+    let auth = try_read_auth_json(&auth_file).ok();
+    let is_chatgpt_auth = auth
+        .as_ref()
+        .and_then(|auth| auth.tokens.as_ref())
+        .is_some();
+    if is_chatgpt_auth
+        && let Some(auth) = auth.as_ref()
         && let Some(tokens) = auth.tokens.clone()
     {
         lines.push(vec![padded_emoji("👤").into(), "Account".bold()].into());
@@ -1238,6 +1248,11 @@ pub(crate) fn new_status_output(
         "  • Total: ".into(),
         format_with_separators(usage.blended_total()).into(),
     ]));
+
+    if is_chatgpt_auth {
+        lines.push("".into());
+        lines.extend(build_status_limit_lines(rate_limits));
+    }
 
     PlainHistoryCell { lines }
 }
@@ -1594,6 +1609,62 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         ")".into(),
     ];
     invocation_spans.into()
+}
+
+fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshot>) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> =
+        vec![vec![padded_emoji("⏱️").into(), "Usage Limits".bold()].into()];
+
+    match snapshot {
+        Some(snapshot) => {
+            let rows = [
+                ("5h limit".to_string(), snapshot.primary_used_percent),
+                ("Weekly limit".to_string(), snapshot.secondary_used_percent),
+            ];
+            let label_width = rows
+                .iter()
+                .map(|(label, _)| UnicodeWidthStr::width(label.as_str()))
+                .max()
+                .unwrap_or(0);
+            for (label, percent) in rows {
+                lines.push(build_status_limit_line(&label, percent, label_width));
+            }
+        }
+        None => lines.push("  • Send a message to load usage data.".into()),
+    }
+
+    lines
+}
+
+fn build_status_limit_line(label: &str, percent_used: f64, label_width: usize) -> Line<'static> {
+    let clamped_percent = percent_used.clamp(0.0, 100.0);
+    let progress = render_status_limit_progress_bar(clamped_percent);
+    let summary = format_status_limit_summary(clamped_percent);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(5);
+    let padded_label = format!("{label:<label_width$}");
+    spans.push(format!("  • {padded_label}: ").into());
+    spans.push(progress.into());
+    spans.push(" ".into());
+    spans.push(summary.into());
+
+    Line::from(spans)
+}
+
+fn render_status_limit_progress_bar(percent_used: f64) -> String {
+    let ratio = (percent_used / 100.0).clamp(0.0, 1.0);
+    let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
+    let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
+    let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
+    format!(
+        "[{}{}]",
+        STATUS_LIMIT_BAR_FILLED.repeat(filled),
+        STATUS_LIMIT_BAR_EMPTY.repeat(empty)
+    )
+}
+
+fn format_status_limit_summary(percent_used: f64) -> String {
+    format!("{percent_used:.0}% used")
 }
 
 #[cfg(test)]

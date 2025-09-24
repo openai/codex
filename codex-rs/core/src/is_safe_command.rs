@@ -160,9 +160,10 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::string::ToString;
 
     fn vec_str(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| s.to_string()).collect()
+        args.iter().map(ToString::to_string).collect()
     }
 
     #[test]
