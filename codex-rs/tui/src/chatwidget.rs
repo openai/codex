@@ -91,7 +91,6 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
-use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use std::path::Path;
 
@@ -252,11 +251,13 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 
 impl ChatWidget {
     fn flush_answer_stream_with_separator(&mut self) {
-        if let Some(mut controller) = self.stream_controller.take() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            controller.finalize(&sink);
+        if let Some(mut controller) = self.stream_controller.take()
+            && let Some(cell) = controller.finalize()
+        {
+            self.add_boxed_history(cell);
         }
     }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
@@ -346,12 +347,8 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>) {
-        // If a stream is currently active, finalize only that stream to flush any tail
-        // without emitting stray headers for other streams.
-        if let Some(mut controller) = self.stream_controller.take() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            controller.finalize(&sink);
-        }
+        // If a stream is currently active, finalize it.
+        self.flush_answer_stream_with_separator();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -554,14 +551,18 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_stream_error_event(message));
         self.request_redraw();
     }
+
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
     pub(crate) fn on_commit_tick(&mut self) {
         if let Some(controller) = self.stream_controller.as_mut() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            let finished = controller.on_commit_tick(&sink);
-            if finished {
-                self.handle_stream_finished();
+            let (cell, is_idle) = controller.on_commit_tick();
+            if let Some(cell) = cell {
+                self.bottom_pane.set_task_running(false);
+                self.add_boxed_history(cell);
+            }
+            if is_idle {
+                self.app_event_tx.send(AppEvent::StopCommitAnimation);
             }
         }
     }
@@ -605,9 +606,10 @@ impl ChatWidget {
         if self.stream_controller.is_none() {
             self.stream_controller = Some(StreamController::new(self.config.clone()));
         }
-        if let Some(controller) = self.stream_controller.as_mut() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            controller.push_and_maybe_commit(&delta, &sink);
+        if let Some(controller) = self.stream_controller.as_mut()
+            && controller.push(&delta)
+        {
+            self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         self.request_redraw();
     }
