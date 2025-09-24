@@ -4,7 +4,7 @@ use super::windows_safe_commands::is_safe_command_windows;
 pub fn is_known_safe_command(command: &[String]) -> bool {
     #[cfg(target_os = "windows")]
     {
-        is_safe_command_windows(command);
+        is_safe_command_windows(command)
     }
 
     #[cfg(not(target_os = "windows"))]
