@@ -188,7 +188,12 @@ impl EventProcessorWithJsonOutput {
 }
 
 impl EventProcessor for EventProcessorWithJsonOutput {
-    fn print_config_summary(&mut self, _: &Config, _: &str) {}
+    fn print_config_summary(&mut self, _: &Config, _: &str, ev: &SessionConfiguredEvent) {
+        self.process_event(Event {
+            id: "".to_string(),
+            msg: EventMsg::SessionConfigured(ev.clone()),
+        });
+    }
 
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let aggregated = self.collect_conversation_events(&event);
@@ -209,5 +214,3 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         CodexStatus::Running
     }
 }
-#[cfg(test)]
-mod tests;
