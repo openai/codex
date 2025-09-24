@@ -75,6 +75,10 @@ pub struct Cli {
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
 
+    /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model.
+    #[arg(long = "search", default_value_t = false)]
+    pub web_search: bool,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT")]

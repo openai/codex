@@ -55,6 +55,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         output_schema: output_schema_path,
         include_plan_tool,
         config_overrides,
+        web_search,
     } = cli;
 
     // Determine the prompt source (parent or subcommand) and read from stdin if needed.
@@ -166,7 +167,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_apply_patch_tool: None,
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
-        tools_web_search_request: None,
+        tools_web_search_request: web_search.then_some(true),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
