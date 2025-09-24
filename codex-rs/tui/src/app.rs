@@ -14,6 +14,8 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -349,10 +351,10 @@ impl App {
                 }
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
-                self.chat_widget.set_approval_policy(policy);
+                self.apply_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
-                self.chat_widget.set_sandbox_policy(policy);
+                self.apply_sandbox_policy(policy);
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
@@ -374,6 +376,16 @@ impl App {
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
+    }
+
+    fn apply_approval_policy(&mut self, policy: AskForApproval) {
+        self.chat_widget.set_approval_policy(policy);
+        self.config.approval_policy = policy;
+    }
+
+    fn apply_sandbox_policy(&mut self, policy: SandboxPolicy) {
+        self.chat_widget.set_sandbox_policy(policy.clone());
+        self.config.sandbox_policy = policy;
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
@@ -503,6 +515,32 @@ mod tests {
             app.chat_widget.config_ref().model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
+    }
+
+    #[test]
+    fn apply_approval_policy_updates_config() {
+        let mut app = make_test_app();
+        app.config.approval_policy = AskForApproval::OnRequest;
+
+        app.apply_approval_policy(AskForApproval::Never);
+
+        assert_eq!(app.config.approval_policy, AskForApproval::Never);
+        assert_eq!(
+            app.chat_widget.config_ref().approval_policy,
+            AskForApproval::Never
+        );
+    }
+
+    #[test]
+    fn apply_sandbox_policy_updates_config() {
+        let mut app = make_test_app();
+        app.config.sandbox_policy = SandboxPolicy::ReadOnly;
+
+        let new_policy = SandboxPolicy::new_workspace_write_policy();
+        app.apply_sandbox_policy(new_policy.clone());
+
+        assert_eq!(app.config.sandbox_policy, new_policy);
+        assert_eq!(app.chat_widget.config_ref().sandbox_policy, new_policy);
     }
 
     #[test]
