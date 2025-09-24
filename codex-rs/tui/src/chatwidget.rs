@@ -76,6 +76,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PatchEventType;
 use crate::history_cell::RateLimitSnapshotDisplay;
 use crate::markdown::append_markdown;
@@ -191,7 +192,7 @@ pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
-    active_exec_cell: Option<ExecCell>,
+    active_cell: Option<Box<dyn HistoryCell>>,
     config: Config,
     auth_manager: Arc<AuthManager>,
     session_header: SessionHeader,
@@ -395,7 +396,7 @@ impl ChatWidget {
     /// Finalize any active exec as failed and stop/clear running UI state.
     fn finalize_turn(&mut self) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
-        self.finalize_active_exec_cell_as_failed();
+        self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -601,7 +602,7 @@ impl ChatWidget {
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
-        self.flush_active_exec_cell();
+        self.flush_active_cell();
 
         if self.stream_controller.is_none() {
             self.stream_controller = Some(StreamController::new(self.config.clone()));
@@ -621,16 +622,25 @@ impl ChatWidget {
             None => (vec![ev.call_id.clone()], Vec::new()),
         };
 
-        if self.active_exec_cell.is_none() {
-            // This should have been created by handle_exec_begin_now, but in case it wasn't,
-            // create it now.
-            self.active_exec_cell = Some(history_cell::new_active_exec_command(
+        let needs_new = self
+            .active_cell
+            .as_ref()
+            .map(|cell| cell.as_any().downcast_ref::<ExecCell>().is_none())
+            .unwrap_or(true);
+        if needs_new {
+            self.flush_active_cell();
+            self.active_cell = Some(Box::new(history_cell::new_active_exec_command(
                 ev.call_id.clone(),
                 command,
                 parsed,
-            ));
+            )));
         }
-        if let Some(cell) = self.active_exec_cell.as_mut() {
+
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+        {
             cell.complete_call(
                 &ev.call_id,
                 CommandOutput {
@@ -642,7 +652,7 @@ impl ChatWidget {
                 ev.duration,
             );
             if cell.should_flush() {
-                self.flush_active_exec_cell();
+                self.flush_active_cell();
             }
         }
     }
@@ -709,50 +719,68 @@ impl ChatWidget {
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
-        if let Some(exec) = &self.active_exec_cell {
-            if let Some(new_exec) = exec.with_added_call(
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+            && let Some(new_exec) = cell.with_added_call(
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd.clone(),
-            ) {
-                self.active_exec_cell = Some(new_exec);
-            } else {
-                // Make a new cell.
-                self.flush_active_exec_cell();
-                self.active_exec_cell = Some(history_cell::new_active_exec_command(
-                    ev.call_id.clone(),
-                    ev.command.clone(),
-                    ev.parsed_cmd,
-                ));
-            }
+            )
+        {
+            *cell = new_exec;
         } else {
-            self.active_exec_cell = Some(history_cell::new_active_exec_command(
+            self.flush_active_cell();
+
+            self.active_cell = Some(Box::new(history_cell::new_active_exec_command(
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
-            ));
+            )));
         }
 
-        // Request a redraw so the working header and command list are visible immediately.
         self.request_redraw();
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_active_mcp_tool_call(ev.invocation));
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
+            ev.call_id,
+            ev.invocation,
+        )));
+        self.request_redraw();
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_boxed_history(history_cell::new_completed_mcp_tool_call(
-            80,
-            ev.invocation,
-            ev.duration,
-            ev.result
-                .as_ref()
-                .map(|r| !r.is_error.unwrap_or(false))
-                .unwrap_or(false),
-            ev.result,
-        ));
+
+        let McpToolCallEndEvent {
+            call_id,
+            invocation,
+            duration,
+            result,
+        } = ev;
+
+        let extra_cell = match self
+            .active_cell
+            .as_mut()
+            .and_then(|cell| cell.as_any_mut().downcast_mut::<McpToolCallCell>())
+        {
+            Some(cell) if cell.call_id() == call_id => cell.complete(duration, result),
+            _ => {
+                self.flush_active_cell();
+                let mut cell = history_cell::new_active_mcp_tool_call(call_id, invocation);
+                let extra_cell = cell.complete(duration, result);
+                self.active_cell = Some(Box::new(cell));
+                extra_cell
+            }
+        };
+
+        self.flush_active_cell();
+        if let Some(extra) = extra_cell {
+            self.add_boxed_history(extra);
+        }
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -760,7 +788,7 @@ impl ChatWidget {
         let remaining = area.height.saturating_sub(bottom_min);
 
         let active_desired = self
-            .active_exec_cell
+            .active_cell
             .as_ref()
             .map_or(0, |c| c.desired_height(area.width) + 1);
         let active_height = active_desired.min(remaining);
@@ -805,7 +833,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
             }),
-            active_exec_cell: None,
+            active_cell: None,
             config: config.clone(),
             auth_manager,
             session_header: SessionHeader::new(config.model),
@@ -866,7 +894,7 @@ impl ChatWidget {
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
             }),
-            active_exec_cell: None,
+            active_cell: None,
             config: config.clone(),
             auth_manager,
             session_header: SessionHeader::new(config.model),
@@ -897,7 +925,7 @@ impl ChatWidget {
     pub fn desired_height(&self, width: u16) -> u16 {
         self.bottom_pane.desired_height(width)
             + self
-                .active_exec_cell
+                .active_cell
                 .as_ref()
                 .map_or(0, |c| c.desired_height(width) + 1)
     }
@@ -1115,10 +1143,9 @@ impl ChatWidget {
         }
     }
 
-    fn flush_active_exec_cell(&mut self) {
-        if let Some(active) = self.active_exec_cell.take() {
-            self.app_event_tx
-                .send(AppEvent::InsertHistoryCell(Box::new(active)));
+    fn flush_active_cell(&mut self) {
+        if let Some(active) = self.active_cell.take() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
     }
 
@@ -1129,7 +1156,7 @@ impl ChatWidget {
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
         if !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
-            self.flush_active_exec_cell();
+            self.flush_active_cell();
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
@@ -1350,7 +1377,7 @@ impl ChatWidget {
         if let Some(output) = review.review_output {
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
-            self.flush_active_exec_cell();
+            self.flush_active_cell();
 
             if output.findings.is_empty() {
                 let explanation = output.overall_explanation.trim().to_string();
@@ -1419,12 +1446,16 @@ impl ChatWidget {
         }
     }
 
-    /// Mark the active exec cell as failed (✗) and flush it into history.
-    fn finalize_active_exec_cell_as_failed(&mut self) {
-        if let Some(cell) = self.active_exec_cell.take() {
-            let cell = cell.into_failed();
-            // Insert finalized exec into history and keep grouping consistent.
-            self.add_to_history(cell);
+    /// Mark the active cell as failed (✗) and flush it into history.
+    fn finalize_active_cell_as_failed(&mut self) {
+        if let Some(mut cell) = self.active_cell.take() {
+            // Insert finalized cell into history and keep grouping consistent.
+            if let Some(exec) = cell.as_any_mut().downcast_mut::<ExecCell>() {
+                exec.mark_failed();
+            } else if let Some(tool) = cell.as_any_mut().downcast_mut::<McpToolCallCell>() {
+                tool.mark_failed();
+            }
+            self.add_boxed_history(cell);
         }
     }
 
@@ -1899,12 +1930,16 @@ impl WidgetRef for &ChatWidget {
         let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
         if !active_cell_area.is_empty()
-            && let Some(cell) = &self.active_exec_cell
+            && let Some(cell) = &self.active_cell
         {
-            let mut active_cell_area = active_cell_area;
-            active_cell_area.y = active_cell_area.y.saturating_add(1);
-            active_cell_area.height -= 1;
-            cell.render_ref(active_cell_area, buf);
+            let mut area = active_cell_area;
+            area.y = area.y.saturating_add(1);
+            area.height = area.height.saturating_sub(1);
+            if let Some(exec) = cell.as_any().downcast_ref::<ExecCell>() {
+                exec.render_ref(area, buf);
+            } else if let Some(tool) = cell.as_any().downcast_ref::<McpToolCallCell>() {
+                tool.render_ref(area, buf);
+            }
         }
     }
 }
