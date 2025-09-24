@@ -10,30 +10,33 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
         return is_safe_command_windows(command);
     }
 
-    if is_safe_to_call_with_exec(command) {
-        return true;
-    }
-
-    // Support `bash -lc "..."` where the script consists solely of one or
-    // more "plain" commands (only bare words / quoted strings) combined with
-    // a conservative allow‑list of shell operators that themselves do not
-    // introduce side effects ( "&&", "||", ";", and "|" ). If every
-    // individual command in the script is itself a known‑safe command, then
-    // the composite expression is considered safe.
-    if let [bash, flag, script] = command
-        && bash == "bash"
-        && flag == "-lc"
-        && let Some(tree) = try_parse_bash(script)
-        && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
-        && !all_commands.is_empty()
-        && all_commands
-            .iter()
-            .all(|cmd| is_safe_to_call_with_exec(cmd))
+    #[cfg(not(target_os = "windows"))]
     {
-        return true;
-    }
+        if is_safe_to_call_with_exec(command) {
+            return true;
+        }
 
-    false
+        // Support `bash -lc "..."` where the script consists solely of one or
+        // more "plain" commands (only bare words / quoted strings) combined with
+        // a conservative allow‑list of shell operators that themselves do not
+        // introduce side effects ( "&&", "||", ";", and "|" ). If every
+        // individual command in the script is itself a known‑safe command, then
+        // the composite expression is considered safe.
+        if let [bash, flag, script] = command
+            && bash == "bash"
+            && flag == "-lc"
+            && let Some(tree) = try_parse_bash(script)
+            && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
+            && !all_commands.is_empty()
+            && all_commands
+                .iter()
+                .all(|cmd| is_safe_to_call_with_exec(cmd))
+        {
+            return true;
+        }
+
+        false
+    }
 }
 
 fn is_safe_to_call_with_exec(command: &[String]) -> bool {
