@@ -273,6 +273,7 @@ impl ModelClient {
             include,
             prompt_cache_key: Some(self.conversation_id.to_string()),
             text,
+            max_output_tokens: self.config.model_max_output_tokens,
         };
 
         let mut payload_json = serde_json::to_value(&payload)?;
