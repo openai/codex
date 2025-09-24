@@ -4,6 +4,8 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
 use crate::exec_events::AssistantMessageItem;
+use crate::exec_events::CommandExecutionItem;
+use crate::exec_events::CommandExecutionStatus;
 use crate::exec_events::ConversationErrorEvent;
 use crate::exec_events::ConversationEvent;
 use crate::exec_events::ConversationItem;
@@ -16,12 +18,15 @@ use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 
 pub(crate) struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_event_id: u64,
+    running_command: Option<Vec<String>>,
 }
 
 impl EventProcessorWithJsonOutput {
@@ -29,6 +34,7 @@ impl EventProcessorWithJsonOutput {
         Self {
             last_message_path,
             next_event_id: 0,
+            running_command: None,
         }
     }
 
@@ -37,6 +43,8 @@ impl EventProcessorWithJsonOutput {
             EventMsg::SessionConfigured(ev) => self.handle_session_configured(ev),
             EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),
             EventMsg::AgentReasoning(ev) => self.handle_reasoning_event(ev),
+            EventMsg::ExecCommandBegin(ev) => self.handle_exec_command_begin(ev),
+            EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
             EventMsg::Error(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
                 message: ev.message.clone(),
             })],
@@ -89,6 +97,38 @@ impl EventProcessorWithJsonOutput {
             item,
         })]
     }
+    fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ConversationEvent> {
+        self.running_command = Some(ev.command.clone());
+
+        Vec::new()
+    }
+
+    fn handle_exec_command_end(&mut self, ev: &ExecCommandEndEvent) -> Vec<ConversationEvent> {
+        let command = if let Some(command) = self.running_command.take() {
+            command.join(" ")
+        } else {
+            "".to_string()
+        };
+        let status = if ev.exit_code == 0 {
+            CommandExecutionStatus::Completed
+        } else {
+            CommandExecutionStatus::Failed
+        };
+        let item = ConversationItem {
+            id: self.get_next_item_id(),
+
+            details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+                command,
+                aggregated_output: ev.aggregated_output.clone(),
+                exit_code: ev.exit_code,
+                status,
+            }),
+        };
+
+        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
+            item,
+        })]
+    }
 }
 
 impl EventProcessor for EventProcessorWithJsonOutput {
@@ -113,3 +153,5 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         CodexStatus::Running
     }
 }
+#[cfg(test)]
+mod tests;
