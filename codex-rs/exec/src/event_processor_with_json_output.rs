@@ -31,6 +31,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use tracing::error;
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
@@ -204,8 +205,13 @@ impl EventProcessor for EventProcessorWithJsonOutput {
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let aggregated = self.collect_conversation_events(&event);
         for conv_event in aggregated {
-            if let Ok(line) = serde_json::to_string(&conv_event) {
-                println!("{line}");
+            match serde_json::to_string(&conv_event) {
+                Ok(line) => {
+                    println!("{line}");
+                }
+                Err(e) => {
+                    error!("Failed to serialize event: {e:?}");
+                }
             }
         }
 
@@ -215,8 +221,9 @@ impl EventProcessor for EventProcessorWithJsonOutput {
             if let Some(output_file) = self.last_message_path.as_deref() {
                 handle_last_message(last_agent_message.as_deref(), output_file);
             }
-            return CodexStatus::InitiateShutdown;
+            CodexStatus::InitiateShutdown
+        } else {
+            CodexStatus::Running
         }
-        CodexStatus::Running
     }
 }
