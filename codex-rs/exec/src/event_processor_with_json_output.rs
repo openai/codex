@@ -69,12 +69,11 @@ impl EventProcessorWithJsonOutput {
     }
 
     fn get_next_item_id(&self) -> String {
-        let id = format!(
+        format!(
             "item_{}",
             self.next_event_id
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-        );
-        id
+        )
     }
 
     fn handle_session_configured(
