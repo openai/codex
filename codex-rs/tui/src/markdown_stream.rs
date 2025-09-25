@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use codex_core::config::Config;
 use ratatui::text::Line;
 
@@ -20,23 +18,9 @@ impl MarkdownStreamCollector {
         }
     }
 
-    /// Returns the number of logical lines that have already been committed
-    /// (i.e., previously returned from `commit_complete_lines`).
-    pub fn committed_count(&self) -> usize {
-        self.committed_line_count
-    }
-
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_line_count = 0;
-    }
-
-    /// Replace the buffered content and mark that the first `committed_count`
-    /// logical lines are already committed.
-    pub fn replace_with_and_mark_committed(&mut self, s: &str, committed_count: usize) {
-        self.buffer.clear();
-        self.buffer.push_str(s);
-        self.committed_line_count = committed_count;
     }
 
     pub fn push_delta(&mut self, delta: &str) {
@@ -108,59 +92,6 @@ impl MarkdownStreamCollector {
         // Reset collector state for next stream.
         self.clear();
         out
-    }
-}
-
-pub(crate) struct StepResult {
-    pub history: Vec<Line<'static>>, // lines to insert into history this step
-}
-
-/// Streams already-rendered rows into history while computing the newest K
-/// rows to show in a live overlay.
-pub(crate) struct AnimatedLineStreamer {
-    queue: VecDeque<Line<'static>>,
-}
-
-impl AnimatedLineStreamer {
-    pub fn new() -> Self {
-        Self {
-            queue: VecDeque::new(),
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.queue.clear();
-    }
-
-    pub fn enqueue(&mut self, lines: Vec<Line<'static>>) {
-        for l in lines {
-            self.queue.push_back(l);
-        }
-    }
-
-    pub fn step(&mut self) -> StepResult {
-        let mut history = Vec::new();
-        // Move exactly one per tick to animate gradual insertion.
-        let burst = if self.queue.is_empty() { 0 } else { 1 };
-        for _ in 0..burst {
-            if let Some(l) = self.queue.pop_front() {
-                history.push(l);
-            }
-        }
-
-        StepResult { history }
-    }
-
-    pub fn drain_all(&mut self) -> StepResult {
-        let mut history = Vec::new();
-        while let Some(l) = self.queue.pop_front() {
-            history.push(l);
-        }
-        StepResult { history }
-    }
-
-    pub fn is_idle(&self) -> bool {
-        self.queue.is_empty()
     }
 }
 
@@ -310,10 +241,8 @@ mod tests {
         let long = "> This is a very long quoted line that should wrap across multiple columns to verify style preservation.";
         let out = super::simulate_stream_markdown_for_tests(&[long, "\n"], true, &cfg);
         // Wrap to a narrow width to force multiple output lines.
-        let wrapped = crate::wrapping::word_wrap_lines(
-            out.iter().collect::<Vec<_>>(),
-            crate::wrapping::RtOptions::new(24),
-        );
+        let wrapped =
+            crate::wrapping::word_wrap_lines(out.iter(), crate::wrapping::RtOptions::new(24));
         // Filter out purely blank lines
         let non_blank: Vec<_> = wrapped
             .into_iter()

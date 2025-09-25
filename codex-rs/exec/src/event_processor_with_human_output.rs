@@ -539,8 +539,37 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::PlanUpdate(plan_update_event) => {
                 let UpdatePlanArgs { explanation, plan } = plan_update_event;
-                ts_println!(self, "explanation: {explanation:?}");
-                ts_println!(self, "plan: {plan:?}");
+
+                // Header
+                ts_println!(self, "{}", "Plan update".style(self.magenta));
+
+                // Optional explanation
+                if let Some(explanation) = explanation
+                    && !explanation.trim().is_empty()
+                {
+                    ts_println!(self, "{}", explanation.style(self.italic));
+                }
+
+                // Pretty-print the plan items with simple status markers.
+                for item in plan {
+                    use codex_core::plan_tool::StepStatus;
+                    match item.status {
+                        StepStatus::Completed => {
+                            ts_println!(self, "  {} {}", "✓".style(self.green), item.step);
+                        }
+                        StepStatus::InProgress => {
+                            ts_println!(self, "  {} {}", "→".style(self.cyan), item.step);
+                        }
+                        StepStatus::Pending => {
+                            ts_println!(
+                                self,
+                                "  {} {}",
+                                "•".style(self.dimmed),
+                                item.step.style(self.dimmed)
+                            );
+                        }
+                    }
+                }
             }
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
@@ -573,7 +602,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 }
 
 fn escape_command(command: &[String]) -> String {
-    try_join(command.iter().map(|s| s.as_str())).unwrap_or_else(|_| command.join(" "))
+    try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
 
 fn format_file_change(change: &FileChange) -> &'static str {
