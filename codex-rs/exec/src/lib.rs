@@ -3,6 +3,7 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_json_output;
 pub mod exec_events;
+pub mod experimental_event_processor_with_json_output;
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -25,7 +26,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
-use event_processor_with_json_output::EventProcessorWithJsonOutput;
+use experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
 use serde_json::Value;
 use tracing::debug;
 use tracing::error;
@@ -35,6 +36,7 @@ use tracing_subscriber::EnvFilter;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use crate::event_processor_with_json_output::EventProcessorWithJsonOutput;
 use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
@@ -51,6 +53,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         color,
         last_message_file,
         json: json_mode,
+        experimental_json,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
@@ -179,14 +182,22 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    let mut event_processor: Box<dyn EventProcessor> = if json_mode {
-        Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
-    } else {
-        Box::new(EventProcessorWithHumanOutput::create_with_ansi(
+    let mut event_processor: Box<dyn EventProcessor> = match (json_mode, experimental_json) {
+        (_, true) => Box::new(ExperimentalEventProcessorWithJsonOutput::new(
+            last_message_file.clone(),
+        )),
+        (true, _) => {
+            eprintln!(
+                "The existing `--json` output format is being deprecated. Please try the new format using `--experimental-json`."
+            );
+
+            Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
+        }
+        _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stdout_with_ansi,
             &config,
             last_message_file.clone(),
-        ))
+        )),
     };
 
     if oss {

@@ -8,7 +8,7 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_exec::event_processor_with_json_output::EventProcessorWithJsonOutput;
+use codex_exec::experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
 use codex_exec::exec_events::AssistantMessageItem;
 use codex_exec::exec_events::CommandExecutionItem;
 use codex_exec::exec_events::CommandExecutionStatus;
@@ -34,7 +34,7 @@ fn event(id: &str, msg: EventMsg) -> Event {
 
 #[test]
 fn session_configured_produces_session_created_event() {
-    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
     let session_id = codex_protocol::mcp_protocol::ConversationId::from_string(
         "67e55044-10b1-426f-9247-bb680e5fe0c8",
     )
@@ -63,7 +63,7 @@ fn session_configured_produces_session_created_event() {
 
 #[test]
 fn agent_reasoning_produces_item_completed_reasoning() {
-    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
     let ev = event(
         "e1",
         EventMsg::AgentReasoning(AgentReasoningEvent {
@@ -86,7 +86,7 @@ fn agent_reasoning_produces_item_completed_reasoning() {
 
 #[test]
 fn agent_message_produces_item_completed_assistant_message() {
-    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
     let ev = event(
         "e1",
         EventMsg::AgentMessage(AgentMessageEvent {
@@ -109,7 +109,7 @@ fn agent_message_produces_item_completed_assistant_message() {
 
 #[test]
 fn error_event_produces_error() {
-    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
     let out = ep.collect_conversation_events(&event(
         "e1",
         EventMsg::Error(codex_core::protocol::ErrorEvent {
@@ -126,7 +126,7 @@ fn error_event_produces_error() {
 
 #[test]
 fn stream_error_event_produces_error() {
-    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
     let out = ep.collect_conversation_events(&event(
         "e1",
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
@@ -143,7 +143,7 @@ fn stream_error_event_produces_error() {
 
 #[test]
 fn exec_command_end_success_produces_completed_command_item() {
-    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
 
     // Begin -> no output
     let begin = event(
@@ -190,7 +190,7 @@ fn exec_command_end_success_produces_completed_command_item() {
 
 #[test]
 fn exec_command_end_failure_produces_failed_command_item() {
-    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
 
     // Begin -> no output
     let begin = event(
@@ -236,7 +236,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
 
 #[test]
 fn patch_apply_success_produces_item_completed_patchapply() {
-    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
 
     // Prepare a patch with multiple kinds of changes
     let mut changes = std::collections::HashMap::new();
@@ -318,7 +318,7 @@ fn patch_apply_success_produces_item_completed_patchapply() {
 
 #[test]
 fn patch_apply_failure_produces_item_completed_patchapply_failed() {
-    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
 
     let mut changes = std::collections::HashMap::new();
     changes.insert(
