@@ -1,5 +1,4 @@
 use codex_core::protocol::TokenUsageInfo;
-use codex_protocol::num_format::format_si_suffix;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -27,8 +26,9 @@ use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::CtrlCReminderState;
 use super::footer::FooterContent;
+use super::footer::FooterRenderParams;
 use super::footer::ShortcutsState;
-use super::footer::footer_spans;
+use super::footer::render_footer;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
@@ -1276,44 +1276,15 @@ impl WidgetRef for ChatComposer {
                         esc_backtrack_hint: self.esc_backtrack_hint,
                     })
                 };
-                let mut hint = footer_spans(content);
 
-                // Append token/context usage info to the footer hints when available.
-                if let Some(token_usage_info) = &self.token_usage_info {
-                    let token_usage = &token_usage_info.total_token_usage;
-                    hint.push("   ".into());
-                    hint.push(
-                        Span::from(format!(
-                            "{} tokens used",
-                            format_si_suffix(token_usage.blended_total())
-                        ))
-                        .style(Style::default().add_modifier(Modifier::DIM)),
-                    );
-                    let last_token_usage = &token_usage_info.last_token_usage;
-                    if let Some(context_window) = token_usage_info.model_context_window {
-                        let percent_remaining: u8 = if context_window > 0 {
-                            last_token_usage.percent_of_context_window_remaining(context_window)
-                        } else {
-                            100
-                        };
-                        let context_style = if percent_remaining < 20 {
-                            Style::default().fg(Color::Yellow)
-                        } else {
-                            Style::default().add_modifier(Modifier::DIM)
-                        };
-                        hint.push("   ".into());
-                        hint.push(Span::styled(
-                            format!("{percent_remaining}% context left"),
-                            context_style,
-                        ));
-                    }
-                }
-
-                let hint = hint
-                    .into_iter()
-                    .map(|span| span.patch_style(Style::default().dim()))
-                    .collect::<Vec<_>>();
-                Line::from(hint).render_ref(hint_rect, buf);
+                render_footer(
+                    hint_rect,
+                    buf,
+                    FooterRenderParams {
+                        content,
+                        token_usage_info: self.token_usage_info.as_ref(),
+                    },
+                );
             }
         }
         let border_style = if self.has_focus {

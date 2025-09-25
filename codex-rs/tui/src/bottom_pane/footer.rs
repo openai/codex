@@ -1,8 +1,24 @@
+use codex_core::protocol::TokenUsageInfo;
+use codex_protocol::num_format::format_si_suffix;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::WidgetRef;
 
 use crate::key_hint;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FooterRenderParams<'a> {
+    pub(crate) content: FooterContent,
+    pub(crate) token_usage_info: Option<&'a TokenUsageInfo>,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CtrlCReminderState {
@@ -21,10 +37,55 @@ pub(crate) enum FooterContent {
     CtrlCReminder(CtrlCReminderState),
 }
 
+pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, params: FooterRenderParams<'_>) {
+    let mut spans = footer_spans(params.content);
+    if let Some(token_usage_info) = params.token_usage_info {
+        append_token_usage_spans(&mut spans, token_usage_info);
+    }
+
+    let spans = spans
+        .into_iter()
+        .map(|span| span.patch_style(Style::default().dim()))
+        .collect::<Vec<_>>();
+    Line::from(spans).render_ref(area, buf);
+}
+
 pub(crate) fn footer_spans(content: FooterContent) -> Vec<Span<'static>> {
     match content {
         FooterContent::Shortcuts(state) => shortcuts_spans(state),
         FooterContent::CtrlCReminder(state) => ctrl_c_reminder_spans(state),
+    }
+}
+
+fn append_token_usage_spans(spans: &mut Vec<Span<'static>>, token_usage_info: &TokenUsageInfo) {
+    let token_usage = &token_usage_info.total_token_usage;
+    spans.push("   ".into());
+    spans.push(
+        Span::from(format!(
+            "{} tokens used",
+            format_si_suffix(token_usage.blended_total())
+        ))
+        .style(Style::default().add_modifier(Modifier::DIM)),
+    );
+
+    let last_token_usage = &token_usage_info.last_token_usage;
+    if let Some(context_window) = token_usage_info.model_context_window {
+        let percent_remaining: u8 = if context_window > 0 {
+            last_token_usage.percent_of_context_window_remaining(context_window)
+        } else {
+            100
+        };
+
+        let context_style = if percent_remaining < 20 {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
+        spans.push("   ".into());
+        spans.push(Span::styled(
+            format!("{percent_remaining}% context left"),
+            context_style,
+        ));
     }
 }
 
