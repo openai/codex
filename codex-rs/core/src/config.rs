@@ -100,6 +100,10 @@ pub struct Config {
 
     pub sandbox_policy: SandboxPolicy,
 
+    /// True if the user passed in an override or set a value in config.toml
+    /// for either of approval_policy or sandbox_mode.
+    pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
+
     pub shell_environment_policy: ShellEnvironmentPolicy,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
@@ -880,12 +884,18 @@ impl From<ToolsToml> for Tools {
 
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
-    pub fn derive_sandbox_policy(
+    fn derive_sandbox_policy(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
+        resolved_cwd: &Path,
     ) -> SandboxPolicy {
         let resolved_sandbox_mode = sandbox_mode_override
             .or(self.sandbox_mode)
+            .or_else(|| {
+                // if no sandbox_mode is set, but user has marked directory as trusted, use WorkspaceWrite
+                self.is_cwd_trusted(resolved_cwd)
+                    .then_some(SandboxMode::WorkspaceWrite)
+            })
             .unwrap_or_default();
         match resolved_sandbox_mode {
             SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
@@ -989,7 +999,7 @@ impl Config {
             model,
             review_model: override_review_model,
             cwd,
-            approval_policy,
+            approval_policy: approval_policy_override,
             sandbox_mode,
             model_provider,
             config_profile: config_profile_key,
@@ -1029,7 +1039,42 @@ impl Config {
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
 
-        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
+        let resolved_cwd = {
+            use std::env;
+
+            match cwd {
+                None => {
+                    tracing::info!("cwd not set, using current dir");
+                    env::current_dir()?
+                }
+                Some(p) if p.is_absolute() => p,
+                Some(p) => {
+                    // Resolve relative path against the current working directory.
+                    tracing::info!("cwd is relative, resolving against current dir");
+                    let mut current = env::current_dir()?;
+                    current.push(p);
+                    current
+                }
+            }
+        };
+
+        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
+        let approval_policy = approval_policy_override
+            .or(config_profile.approval_policy)
+            .or(cfg.approval_policy)
+            .or_else(|| {
+                // If no explicit approval policy is set, but we trust cwd, default to OnRequest
+                cfg.is_cwd_trusted(&resolved_cwd)
+                    .then_some(AskForApproval::OnRequest)
+            })
+            .unwrap_or_else(AskForApproval::default);
+        let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
+            .is_some()
+            || config_profile.approval_policy.is_some()
+            || cfg.approval_policy.is_some()
+            // TODO: policy.sandbox_mode is not implemented
+            || sandbox_mode.is_some()
+            || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -1052,25 +1097,6 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
-
-        let resolved_cwd = {
-            use std::env;
-
-            match cwd {
-                None => {
-                    tracing::info!("cwd not set, using current dir");
-                    env::current_dir()?
-                }
-                Some(p) if p.is_absolute() => p,
-                Some(p) => {
-                    // Resolve relative path against the current working directory.
-                    tracing::info!("cwd is relative, resolving against current dir");
-                    let mut current = env::current_dir()?;
-                    current.push(p);
-                    current
-                }
-            }
-        };
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1149,6 +1175,7 @@ impl Config {
             cwd: resolved_cwd,
             approval_policy,
             sandbox_policy,
+            did_user_set_custom_approval_policy_or_sandbox_mode,
             shell_environment_policy,
             notify: cfg.notify,
             user_instructions,
@@ -1398,7 +1425,8 @@ network_access = false  # This should be ignored.
         let sandbox_mode_override = None;
         assert_eq!(
             SandboxPolicy::DangerFullAccess,
-            sandbox_full_access_cfg.derive_sandbox_policy(sandbox_mode_override)
+            sandbox_full_access_cfg
+                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
         );
 
         let sandbox_read_only = r#"
@@ -1413,7 +1441,8 @@ network_access = true  # This should be ignored.
         let sandbox_mode_override = None;
         assert_eq!(
             SandboxPolicy::ReadOnly,
-            sandbox_read_only_cfg.derive_sandbox_policy(sandbox_mode_override)
+            sandbox_read_only_cfg
+                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
         );
 
         let sandbox_workspace_write = r#"
@@ -1437,7 +1466,36 @@ exclude_slash_tmp = true
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
-            sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
+            sandbox_workspace_write_cfg
+                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
+        );
+
+        let sandbox_workspace_write = r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = [
+    "/my/workspace",
+]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
+
+[projects."/tmp/test"]
+trust_level = "trusted"
+"#;
+
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+            .expect("TOML deserialization should succeed");
+        let sandbox_mode_override = None;
+        assert_eq!(
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![PathBuf::from("/my/workspace")],
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            sandbox_workspace_write_cfg
+                .derive_sandbox_policy(sandbox_mode_override, &PathBuf::from("/tmp/test"))
         );
     }
 
@@ -2224,6 +2282,7 @@ model_verbosity = "high"
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
@@ -2288,6 +2347,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -2367,6 +2427,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -2432,6 +2493,7 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,

@@ -18,7 +18,6 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -192,20 +191,10 @@ pub async fn run_main(
         }
     };
 
-    let mut config = {
-        // Load configuration and support CLI overrides.
+    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone());
 
-        #[allow(clippy::print_stderr)]
-        match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides).await {
-            Ok(config) => config,
-            Err(err) => {
-                eprintln!("Error loading configuration: {err}");
-                std::process::exit(1);
-            }
-        }
-    };
-
-    // we load config.toml here to determine project state.
+    // TODO(dylan): expose project in Config, migrate active_profile below to use Config,
+    // and remove use of config_toml in tui
     #[allow(clippy::print_stderr)]
     let config_toml = {
         let codex_home = match find_codex_home() {
@@ -216,7 +205,7 @@ pub async fn run_main(
             }
         };
 
-        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides).await {
+        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides.clone()) {
             Ok(config_toml) => config_toml,
             Err(err) => {
                 eprintln!("Error loading config.toml: {err}");
@@ -230,13 +219,7 @@ pub async fn run_main(
         .clone()
         .or_else(|| config_toml.profile.clone());
 
-    let should_show_trust_screen = determine_repo_trust_state(
-        &mut config,
-        &config_toml,
-        approval_policy,
-        sandbox_mode,
-        cli_profile_override,
-    )?;
+    let should_show_trust_screen = determine_repo_trust_state(&config, &config_toml);
 
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
@@ -303,18 +286,26 @@ pub async fn run_main(
         let _ = tracing_subscriber::registry().with(file_layer).try_init();
     };
 
-    run_ratatui_app(cli, config, active_profile, should_show_trust_screen)
-        .await
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(
+        cli,
+        config,
+        overrides,
+        cli_kv_overrides,
+        active_profile,
+        should_show_trust_screen,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
     cli: Cli,
-    config: Config,
+    mut config: Config,
+    overrides: ConfigOverrides,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
     active_profile: Option<String>,
     should_show_trust_screen: bool,
 ) -> color_eyre::Result<AppExitInfo> {
-    let mut config = config;
     color_eyre::install()?;
 
     // Forward panic reports through tracing so they appear in the UI status
@@ -443,9 +434,9 @@ async fn run_ratatui_app(
         if should_show_windows_wsl_screen {
             config.windows_wsl_setup_acknowledged = true;
         }
-        if let Some(TrustDirectorySelection::Trust) = onboarding_result.directory_trust_decision {
-            config.approval_policy = AskForApproval::OnRequest;
-            config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        if let Some(TrustDirectorySelection::Trust) = directory_trust_decision {
+            // if the user made an explicit decision to trust the directory, reload the config
+            config = load_config_or_exit(cli_kv_overrides, overrides);
         }
     }
 
@@ -588,44 +579,35 @@ fn get_login_status(config: &Config) -> LoginStatus {
     }
 }
 
-/// Determine if user has configured a sandbox / approval policy,
-/// or if the current cwd project is trusted, and updates the config
-/// accordingly.
-fn determine_repo_trust_state(
-    config: &mut Config,
-    config_toml: &ConfigToml,
-    approval_policy_overide: Option<AskForApproval>,
-    sandbox_mode_override: Option<SandboxMode>,
-    config_profile_override: Option<String>,
-) -> std::io::Result<bool> {
-    let config_profile = config_toml.get_config_profile(config_profile_override)?;
+fn load_config_or_exit(
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    overrides: ConfigOverrides,
+) -> Config {
+    #[allow(clippy::print_stderr)]
+    match Config::load_with_cli_overrides(cli_kv_overrides, overrides) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Error loading configuration: {err}");
+            std::process::exit(1);
+        }
+    }
+}
 
-    if approval_policy_overide.is_some() || sandbox_mode_override.is_some() {
+/// Determine if user has configured a sandbox / approval policy,
+/// or if the current cwd project is already trusted. If not, we need to
+/// show the trust screen.
+fn determine_repo_trust_state(config: &Config, config_toml: &ConfigToml) -> bool {
+    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
         // if the user has overridden either approval policy or sandbox mode,
         // skip the trust flow
-        Ok(false)
-    } else if config_profile.approval_policy.is_some() {
-        // if the user has specified settings in a config profile, skip the trust flow
-        // todo: profile sandbox mode?
-        Ok(false)
-    } else if config_toml.approval_policy.is_some() || config_toml.sandbox_mode.is_some() {
-        // if the user has specified either approval policy or sandbox mode in config.toml
-        // skip the trust flow
-        Ok(false)
+        false
     } else if config_toml.is_cwd_trusted(&config.cwd) {
-        // if the current cwd project is trusted and no config has been set
-        // skip the trust flow and set the approval policy and sandbox mode
-        config.approval_policy = AskForApproval::OnRequest;
-        // Respect workspace‑write settings from config.toml
-        config.sandbox_policy = if config_toml.sandbox_workspace_write.is_some() {
-            config_toml.derive_sandbox_policy(Some(SandboxMode::WorkspaceWrite))
-        } else {
-            SandboxPolicy::new_workspace_write_policy()
-        };
-        Ok(false)
+        // if the current cwd project is already trusted, Config derives the policy.
+        // skip the trust flow
+        false
     } else {
         // if none of the above conditions are met, show the trust screen
-        Ok(true)
+        true
     }
 }
 
