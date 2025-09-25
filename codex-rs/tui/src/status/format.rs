@@ -15,10 +15,13 @@ pub(crate) struct FieldFormatter {
 impl FieldFormatter {
     pub(crate) const INDENT: &'static str = " ";
 
-    pub(crate) fn from_labels<'a>(labels: impl IntoIterator<Item = &'a str>) -> Self {
+    pub(crate) fn from_labels<S>(labels: impl IntoIterator<Item = S>) -> Self
+    where
+        S: AsRef<str>,
+    {
         let label_width = labels
             .into_iter()
-            .map(UnicodeWidthStr::width)
+            .map(|label| UnicodeWidthStr::width(label.as_ref()))
             .max()
             .unwrap_or(0);
         let indent_width = UnicodeWidthStr::width(Self::INDENT);
