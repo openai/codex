@@ -62,11 +62,9 @@ use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
 
-mod color;
-
-use self::color::blend;
-use self::color::is_light;
-use self::color::perceptual_distance;
+use crate::color::blend;
+use crate::color::is_light;
+use crate::color::perceptual_distance;
 
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
