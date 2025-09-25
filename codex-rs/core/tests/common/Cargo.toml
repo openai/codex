@@ -8,6 +8,7 @@ path = "lib.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+assert_cmd = { workspace = true }
 codex-core = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
