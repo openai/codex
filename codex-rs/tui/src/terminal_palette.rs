@@ -8,18 +8,13 @@ use std::os::fd::RawFd;
 
 #[cfg(not(test))]
 pub fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
-    static CACHE: OnceLock<[(u8, u8, u8); 256]> = OnceLock::new();
-    if let Some(cached) = CACHE.get() {
-        return Some(*cached);
-    }
-
-    match query_terminal_palette() {
-        Ok(Some(palette)) => {
-            let _ = CACHE.set(palette);
-            CACHE.get().copied()
-        }
-        _ => None,
-    }
+    static CACHE: OnceLock<Option<[(u8, u8, u8); 256]>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| match query_terminal_palette() {
+            Ok(Some(palette)) => Some(palette),
+            _ => None,
+        })
+        .clone()
 }
 
 #[cfg(test)]
