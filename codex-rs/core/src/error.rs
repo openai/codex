@@ -156,7 +156,7 @@ impl std::fmt::Display for UsageLimitReachedError {
                 )
             }
             Some(PlanType::Known(KnownPlan::Free)) => {
-                "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
+                "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
                     .to_string()
             }
             Some(PlanType::Known(KnownPlan::Pro))
@@ -306,7 +306,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
+            "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
         );
     }
 
