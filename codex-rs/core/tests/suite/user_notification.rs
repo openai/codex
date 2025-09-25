@@ -5,8 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use core_test_support::non_sandbox_test;
 use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -22,7 +22,7 @@ use tokio::time::sleep;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() -> anyhow::Result<()> {
-    non_sandbox_test!(result);
+    skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
 

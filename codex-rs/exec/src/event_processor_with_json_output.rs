@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use serde_json::json;
 
@@ -23,7 +24,7 @@ impl EventProcessorWithJsonOutput {
 }
 
 impl EventProcessor for EventProcessorWithJsonOutput {
-    fn print_config_summary(&mut self, config: &Config, prompt: &str) {
+    fn print_config_summary(&mut self, config: &Config, prompt: &str, _: &SessionConfiguredEvent) {
         let entries = create_config_summary_entries(config)
             .into_iter()
             .map(|(key, value)| (key.to_string(), value))
