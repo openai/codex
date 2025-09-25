@@ -262,7 +262,6 @@ impl BottomPane {
     }
 
     /// Get the current composer text (for tests and programmatic checks).
-    #[cfg(test)]
     pub(crate) fn composer_text(&self) -> String {
         self.composer.current_text()
     }
