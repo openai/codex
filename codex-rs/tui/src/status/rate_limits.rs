@@ -1,3 +1,5 @@
+use crate::chatwidget::get_limits_duration;
+
 use super::helpers::format_reset_timestamp;
 use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
@@ -13,7 +15,7 @@ pub(crate) const RESET_BULLET: &str = "·";
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusRateLimitRow {
-    pub label: &'static str,
+    pub label: String,
     pub percent_used: f64,
     pub resets_at: Option<String>,
 }
@@ -28,6 +30,7 @@ pub(crate) enum StatusRateLimitData {
 pub(crate) struct RateLimitWindowDisplay {
     pub used_percent: f64,
     pub resets_at: Option<String>,
+    pub window_minutes: Option<u64>,
 }
 
 impl RateLimitWindowDisplay {
@@ -41,6 +44,7 @@ impl RateLimitWindowDisplay {
         Self {
             used_percent: window.used_percent,
             resets_at,
+            window_minutes: window.window_minutes,
         }
     }
 }
@@ -75,16 +79,26 @@ pub(crate) fn compose_rate_limit_data(
             let mut rows = Vec::with_capacity(2);
 
             if let Some(primary) = snapshot.primary.as_ref() {
+                let label: String = primary
+                    .window_minutes
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "5h".to_string());
+                let label = capitalize_first(&label);
                 rows.push(StatusRateLimitRow {
-                    label: "5h limit",
+                    label: format!("{label} limit"),
                     percent_used: primary.used_percent,
                     resets_at: primary.resets_at.clone(),
                 });
             }
 
             if let Some(secondary) = snapshot.secondary.as_ref() {
+                let label: String = secondary
+                    .window_minutes
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "weekly".to_string());
+                let label = capitalize_first(&label);
                 rows.push(StatusRateLimitRow {
-                    label: "Weekly limit",
+                    label: format!("{label} limit"),
                     percent_used: secondary.used_percent,
                     resets_at: secondary.resets_at.clone(),
                 });
@@ -114,4 +128,16 @@ pub(crate) fn render_status_limit_progress_bar(percent_used: f64) -> String {
 
 pub(crate) fn format_status_limit_summary(percent_used: f64) -> String {
     format!("{percent_used:.0}% used")
+}
+
+fn capitalize_first(label: &str) -> String {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => {
+            let mut capitalized = first.to_uppercase().collect::<String>();
+            capitalized.push_str(chars.as_str());
+            capitalized
+        }
+        None => String::new(),
+    }
 }
