@@ -1330,9 +1330,11 @@ impl WidgetRef for ChatComposer {
                     }
                 }
 
-                Line::from(hint)
-                    .style(Style::default().dim())
-                    .render_ref(hint_rect, buf);
+                let hint = hint
+                    .into_iter()
+                    .map(|span| span.patch_style(Style::default().dim()))
+                    .collect::<Vec<_>>();
+                Line::from(hint).render_ref(hint_rect, buf);
             }
         }
         let border_style = if self.has_focus {
@@ -1356,9 +1358,8 @@ impl WidgetRef for ChatComposer {
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            Line::from(self.placeholder_text.as_str())
-                .style(Style::default().dim())
-                .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+            let placeholder = Span::from(self.placeholder_text.as_str()).dim();
+            Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
         }
     }
 }
