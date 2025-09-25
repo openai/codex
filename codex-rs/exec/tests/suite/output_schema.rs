@@ -8,7 +8,7 @@ use wiremock::matchers::any;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
-    let test = test_codex_exec().build()?;
+    let test = test_codex_exec();
 
     let schema_contents = serde_json::json!({
         "type": "object",
@@ -18,7 +18,7 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
         "required": ["answer"],
         "additionalProperties": false
     });
-    let schema_path = test.cwd.path().join("schema.json");
+    let schema_path = test.cwd_path().join("schema.json");
     std::fs::write(&schema_path, serde_json::to_vec_pretty(&schema_contents)?)?;
     let expected_schema: Value = schema_contents;
 
@@ -37,7 +37,7 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
         .arg("--skip-git-repo-check")
         // keep using -C in the test to exercise the flag as well
         .arg("-C")
-        .arg(test.cwd.path())
+        .arg(test.cwd_path())
         .arg("--output-schema")
         .arg(&schema_path)
         .arg("-m")

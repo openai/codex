@@ -54,8 +54,8 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
 
     skip_if_no_network!(Ok(()));
 
-    let test = test_codex_exec().build()?;
-    let tmp_path = test.cwd.path().to_path_buf();
+    let test = test_codex_exec();
+    let tmp_path = test.cwd_path().to_path_buf();
     let add_patch = r#"*** Begin Patch
 *** Add File: test.md
 +Hello world
@@ -103,7 +103,7 @@ async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
 
     skip_if_no_network!(Ok(()));
 
-    let test = test_codex_exec().build()?;
+    let test = test_codex_exec();
     let freeform_add_patch = r#"*** Begin Patch
 *** Add File: app.py
 +class BaseClass:
@@ -140,7 +140,7 @@ async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
         .success();
 
     // Verify final file contents
-    let final_path = test.cwd.path().join("app.py");
+    let final_path = test.cwd_path().join("app.py");
     let contents = std::fs::read_to_string(&final_path)
         .unwrap_or_else(|e| panic!("failed reading {}: {e}", final_path.display()));
     assert_eq!(
