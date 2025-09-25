@@ -384,7 +384,6 @@ fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
 
-    // secondary window ~ weekly (10079), primary window ~ 5h (299)
     warnings.extend(state.take_warnings(Some(10.0), Some(10079), Some(55.0), Some(299)));
     warnings.extend(state.take_warnings(Some(55.0), Some(10079), Some(10.0), Some(299)));
     warnings.extend(state.take_warnings(Some(10.0), Some(10079), Some(80.0), Some(299)));

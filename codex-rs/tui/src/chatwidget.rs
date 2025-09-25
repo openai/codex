@@ -192,9 +192,6 @@ fn get_limits_duration(windows_minutes: u64) -> String {
     const MINUTES_PER_MONTH: u64 = 30 * MINUTES_PER_DAY;
     const ROUNDING_BIAS_MINUTES: u64 = 3;
 
-    // Symmetric ±3 minute bias around day/week/month thresholds.
-    // Use the bias only for choosing the bucket boundary; keep the +3 min bias
-    // when rounding to hours so that e.g. 4h57m-4h59m shows as 5h.
     if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
         let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
         let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
