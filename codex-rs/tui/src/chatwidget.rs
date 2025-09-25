@@ -52,6 +52,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
@@ -77,11 +78,9 @@ use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PatchEventType;
+use crate::history_cell::RateLimitSnapshotDisplay;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
-use crate::status::RateLimitSnapshotDisplay;
-use crate::status::new_status_output;
-use crate::status::rate_limit_snapshot_display;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
@@ -417,7 +416,7 @@ impl ChatWidget {
                     .and_then(|window| window.window_minutes),
             );
 
-            let display = rate_limit_snapshot_display(&snapshot, Local::now());
+            let display = history_cell::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
 
             if !warnings.is_empty() {
@@ -1542,7 +1541,7 @@ impl ChatWidget {
             default_usage = TokenUsage::default();
             &default_usage
         };
-        self.add_to_history(new_status_output(
+        self.add_to_history(history_cell::new_status_output(
             &self.config,
             usage_ref,
             &self.conversation_id,
@@ -1973,7 +1972,7 @@ impl ChatWidget {
 impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
-        (&self.bottom_pane).render_ref(bottom_pane_area, buf);
+        (&self.bottom_pane).render(bottom_pane_area, buf);
         if !active_cell_area.is_empty()
             && let Some(cell) = &self.active_cell
         {

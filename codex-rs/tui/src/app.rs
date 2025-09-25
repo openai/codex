@@ -24,7 +24,6 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::WidgetRef;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -198,7 +197,7 @@ impl App {
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
-                            (&self.chat_widget).render_ref(frame.area(), frame.buffer);
+                            frame.render_widget_ref(&self.chat_widget, frame.area());
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }
