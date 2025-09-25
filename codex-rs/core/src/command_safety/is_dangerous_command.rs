@@ -13,13 +13,13 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
         && bash == "bash"
         && flag == "-lc"
         && let Some(tree) = try_parse_bash(script)
-            && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
-            && all_commands
-                .iter()
-                .any(|cmd| starts_with_dangerous_prefix(cmd))
-        {
-            return true;
-        }
+        && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
+        && all_commands
+            .iter()
+            .any(|cmd| starts_with_dangerous_prefix(cmd))
+    {
+        return true;
+    }
 
     false
 }
@@ -36,7 +36,6 @@ fn starts_with_dangerous_prefix(command: &[String]) -> bool {
         .any(|dangerous| command_string.trim().starts_with(dangerous))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,17 +46,12 @@ mod tests {
 
     #[test]
     fn git_reset_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
-            "git", "reset"
-        ])));
+        assert!(command_might_be_dangerous(&vec_str(&["git", "reset"])));
     }
 
     #[test]
     fn git_reset_with_leading_space_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
-            "  git",
-            "reset"
-        ])));
+        assert!(command_might_be_dangerous(&vec_str(&["  git", "reset"])));
     }
 
     #[test]

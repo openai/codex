@@ -87,7 +87,6 @@ pub fn assess_command_safety(
     approved: &HashSet<Vec<String>>,
     with_escalated_permissions: bool,
 ) -> SafetyCheck {
-
     // Some commands look dangerous. Even if they are run inside a sandbox,
     // unless the user has explicitly approved them, we should ask,
     // regardless of the approval policy and sandbox policy.
@@ -353,7 +352,12 @@ mod tests {
             request_escalated_privileges,
         );
 
-        assert_eq!(safety_check, SafetyCheck::AutoApprove { sandbox_type: SandboxType::None });
+        assert_eq!(
+            safety_check,
+            SafetyCheck::AutoApprove {
+                sandbox_type: SandboxType::None
+            }
+        );
     }
 
     fn dangerous_command_not_allowed_if_not_explicitly_approved() {
