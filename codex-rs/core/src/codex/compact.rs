@@ -35,7 +35,7 @@ struct HistoryBridgeTemplate<'a> {
     summary_text: &'a str,
 }
 
-pub(super) async fn run_inline_auto_compact_task(
+pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
@@ -46,7 +46,7 @@ pub(super) async fn run_inline_auto_compact_task(
     run_compact_task_inner(sess, turn_context, sub_id, input).await;
 }
 
-pub(super) async fn run_compact_task(
+pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,

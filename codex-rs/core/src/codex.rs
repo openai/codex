@@ -117,6 +117,9 @@ use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
+use crate::tasks::CompactTask;
+use crate::tasks::RegularTask;
+use crate::tasks::ReviewTask;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
@@ -136,7 +139,6 @@ use codex_protocol::protocol::InitialHistory;
 pub mod compact;
 use self::compact::build_compacted_history;
 use self::compact::collect_user_messages;
-mod tasks;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -260,7 +262,7 @@ pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
     state: Mutex<SessionState>,
-    active_turn: Mutex<Option<ActiveTurn>>,
+    pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     services: SessionServices,
     next_internal_sub_id: AtomicU64,
 }
@@ -1180,7 +1182,7 @@ async fn submission_loop(
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
                     // no current task, spawn a new one
-                    sess.spawn_task_regular(Arc::clone(&turn_context), sub.id, items)
+                    sess.spawn_task(Arc::clone(&turn_context), sub.id, items, RegularTask)
                         .await;
                 }
             }
@@ -1258,7 +1260,7 @@ async fn submission_loop(
                     turn_context = Arc::new(fresh_turn_context);
 
                     // no current task, spawn a new one with the per-turn context
-                    sess.spawn_task_regular(Arc::clone(&turn_context), sub.id, items)
+                    sess.spawn_task(Arc::clone(&turn_context), sub.id, items, RegularTask)
                         .await;
                 }
             }
@@ -1357,7 +1359,7 @@ async fn submission_loop(
                     }])
                     .await
                 {
-                    sess.spawn_task_compact(Arc::clone(&turn_context), sub.id, items)
+                    sess.spawn_task(Arc::clone(&turn_context), sub.id, items, CompactTask)
                         .await;
                 }
             }
@@ -1503,7 +1505,7 @@ async fn spawn_review_thread(
 
     // Clone sub_id for the upcoming announcement before moving it into the task.
     let sub_id_for_event = sub_id.clone();
-    sess.spawn_task_review(tc.clone(), sub_id, input).await;
+    sess.spawn_task(tc.clone(), sub_id, input, ReviewTask).await;
 
     // Announce entering review mode so UIs can switch modes.
     sess.send_event(Event {
@@ -1530,7 +1532,7 @@ async fn spawn_review_thread(
 /// Review mode: when `turn_context.is_review_mode` is true, the turn runs in an
 /// isolated in-memory thread without the parent session's prior history or
 /// user_instructions. Emits ExitedReviewMode upon final review message.
-async fn run_task(
+pub(crate) async fn run_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,
@@ -3068,7 +3070,7 @@ fn convert_call_tool_result_to_function_call_output_payload(
 
 /// Emits an ExitedReviewMode Event with optional ReviewOutput,
 /// and records a developer message with the review output.
-async fn exit_review_mode(
+pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
     review_output: Option<ReviewOutputEvent>,
