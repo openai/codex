@@ -169,6 +169,9 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Optional HTTP proxy used for outbound network requests.
+    pub http_proxy: Option<String>,
+
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
 
@@ -688,6 +691,9 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Optional HTTP proxy used for outbound network requests.
+    pub http_proxy: Option<String>,
+
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
 
@@ -944,6 +950,14 @@ impl Config {
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
 
+        let http_proxy = config_profile.http_proxy.clone().or(cfg.http_proxy.clone());
+
+        if let Some(proxy) = http_proxy.as_ref() {
+            // SAFETY: Config is loaded during startup before any worker threads are spawned,
+            // so mutating the process environment here cannot race with other threads.
+            unsafe { std::env::set_var("HTTP_PROXY", proxy) };
+        }
+
         let model = model
             .or(config_profile.model)
             .or(cfg.model)
@@ -1034,6 +1048,7 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            http_proxy,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             tools_web_search_request,
@@ -1268,6 +1283,31 @@ exclude_slash_tmp = true
             },
             sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
+    }
+
+    #[test]
+    fn http_proxy_from_config_sets_environment() -> std::io::Result<()> {
+        // SAFETY: The test runs single-threaded, so clearing the environment cannot race.
+        unsafe { std::env::remove_var("HTTP_PROXY") };
+
+        let mut cfg = ConfigToml::default();
+        cfg.http_proxy = Some("http://localhost:8080".to_string());
+        let codex_home = TempDir::new()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.http_proxy.as_deref(), Some("http://localhost:8080"));
+        assert_eq!(
+            std::env::var("HTTP_PROXY").ok().as_deref(),
+            Some("http://localhost:8080")
+        );
+
+        unsafe { std::env::remove_var("HTTP_PROXY") };
+        Ok(())
     }
 
     #[test]
@@ -1645,6 +1685,7 @@ model_verbosity = "high"
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                http_proxy: None,
                 base_instructions: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
@@ -1703,6 +1744,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            http_proxy: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -1776,6 +1818,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            http_proxy: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -1835,6 +1878,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            http_proxy: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
