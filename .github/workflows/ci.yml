@@ -27,12 +27,26 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Run all tasks using workspace filters
+      # build_npm_package.py requires DotSlash when staging releases.
+      - uses: facebook/install-dotslash@v2
 
-      - name: Ensure staging a release works.
+      - name: Stage npm package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./codex-cli/scripts/stage_release.sh
+        run: |
+          set -euo pipefail
+          CODEX_VERSION=0.40.0
+          PACK_OUTPUT="${RUNNER_TEMP}/codex-npm.tgz"
+          python3 ./codex-cli/scripts/build_npm_package.py \
+            --release-version "$CODEX_VERSION" \
+            --pack-output "$PACK_OUTPUT"
+          echo "PACK_OUTPUT=$PACK_OUTPUT" >> "$GITHUB_ENV"
+
+      - name: Upload staged npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-npm-staging
+          path: ${{ env.PACK_OUTPUT }}
 
       - name: Ensure root README.md contains only ASCII and certain Unicode code points
         run: ./scripts/asciicheck.py README.md

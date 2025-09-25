@@ -8,7 +8,6 @@
 //! model-visible history matches the expected sequence of messages.
 
 use super::compact::FIRST_REPLY;
-use super::compact::SUMMARIZE_TRIGGER;
 use super::compact::SUMMARY_TEXT;
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
@@ -16,6 +15,7 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
+use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
@@ -183,11 +183,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let compact_1 = json!(
     {
       "model": "gpt-5-codex",
-      "instructions": "You have exceeded the maximum number of tokens, please stop coding and instead write a short memento message for the next agent. Your note should:
-- Summarize what you finished and what still needs work. If there was a recent update_plan call, repeat its steps verbatim.
-- List outstanding TODOs with file paths / line numbers so they're easy to find.
-- Flag code that needs more tests (edge cases, performance, integration, etc.).
-- Record any open bugs, quirks, or setup steps that will make it easier for the next agent to pick up where you left off.",
+      "instructions": prompt,
       "input": [
         {
           "type": "message",
@@ -235,7 +231,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": "Start Summarization"
+              "text": SUMMARIZATION_PROMPT
             }
           ]
         }
@@ -488,13 +484,14 @@ SUMMARY_ONLY_CONTEXT"
       ],
       "prompt_cache_key": fork_prompt_cache_key
     });
-    let expected = json!([
+    let mut expected = json!([
         user_turn_1,
         compact_1,
         user_turn_2_after_compact,
         usert_turn_3_after_resume,
         user_turn_3_after_fork
     ]);
+    normalize_line_endings(&mut expected);
     assert_eq!(requests.len(), 5);
     assert_eq!(json!(requests), expected);
 }
@@ -580,7 +577,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         .unwrap_or_default()
         .to_string();
 
-    let expected = json!([
+    let mut expected = json!([
       {
         "instructions": prompt,
         "input": [
@@ -637,6 +634,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         ],
       }
     ]);
+    normalize_line_endings(&mut expected);
     let last_request_after_2_compacts = json!([{
         "instructions": requests[requests.len() -1]["instructions"],
         "input": requests[requests.len() -1]["input"],
@@ -698,7 +696,8 @@ async fn mount_initial_flow(server: &MockServer) {
     let match_first = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"")
-            && !body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
+            && !body.contains("You have exceeded the maximum number of tokens")
+            && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
             && !body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
@@ -707,7 +706,7 @@ async fn mount_initial_flow(server: &MockServer) {
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
+        body.contains("You have exceeded the maximum number of tokens")
     };
     mount_sse_once(server, match_compact, sse2).await;
 
@@ -741,7 +740,8 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
     let match_second_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\"")) && body.contains("AFTER_FORK")
+        body.contains("You have exceeded the maximum number of tokens")
+            && body.contains("AFTER_FORK")
     };
     mount_sse_once(server, match_second_compact, sse6).await;
 

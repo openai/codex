@@ -9,6 +9,7 @@ members = [
     "exec",
     "execpolicy",
     "file-search",
+    "git-tooling",
     "linux-sandbox",
     "login",
     "mcp-client",
@@ -18,6 +19,7 @@ members = [
     "protocol",
     "protocol-ts",
     "tui",
+    "utils/readiness",
 ]
 resolver = "2"
 
@@ -39,6 +41,7 @@ codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
 codex-file-search = { path = "file-search" }
+codex-git-tooling = { path = "git-tooling" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-login = { path = "login" }
 codex-mcp-client = { path = "mcp-client" }
@@ -47,6 +50,7 @@ codex-ollama = { path = "ollama" }
 codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
 codex-tui = { path = "tui" }
+codex-utils-readiness = { path = "utils/readiness" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -60,9 +64,10 @@ askama = "0.12"
 assert_cmd = "2"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
+async-trait = "0.1.89"
 base64 = "0.22.1"
 bytes = "1.10.1"
-chrono = "0.4.40"
+chrono = "0.4.42"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
@@ -89,7 +94,6 @@ maplit = "1.0.2"
 mime_guess = "2.0.5"
 multimap = "0.10.0"
 nucleo-matcher = "0.3.1"
-once_cell = "1"
 openssl-sys = "*"
 os_info = "3.12.0"
 owo-colors = "4.2.0"
@@ -118,7 +122,7 @@ strum = "0.27.2"
 strum_macros = "0.27.2"
 supports-color = "3.0.2"
 sys-locale = "0.3.2"
-tempfile = "3.13.0"
+tempfile = "3.23.0"
 textwrap = "0.16.2"
 thiserror = "2.0.16"
 time = "0.3"
@@ -136,7 +140,7 @@ tree-sitter = "0.25.9"
 tree-sitter-bash = "0.25.0"
 ts-rs = "11"
 unicode-segmentation = "1.12.0"
-unicode-width = "0.1"
+unicode-width = "0.2"
 url = "2"
 urlencoding = "2.1"
 uuid = "1"
@@ -188,7 +192,7 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = ["openssl-sys"]
+ignored = ["openssl-sys", "codex-utils-readiness"]
 
 [profile.release]
 lto = "fat"

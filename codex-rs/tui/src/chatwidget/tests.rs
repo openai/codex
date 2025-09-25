@@ -314,7 +314,7 @@ fn make_chatwidget_manual() -> (
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
-        active_exec_cell: None,
+        active_cell: None,
         config: cfg.clone(),
         auth_manager,
         session_header: SessionHeader::new(cfg.model),
@@ -335,6 +335,8 @@ fn make_chatwidget_manual() -> (
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
+        ghost_snapshots: Vec::new(),
+        ghost_snapshots_disabled: false,
     };
     (widget, rx, op_rx)
 }
@@ -382,41 +384,30 @@ fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
 
-    warnings.extend(state.take_warnings(10.0, 55.0));
-    warnings.extend(state.take_warnings(55.0, 10.0));
-    warnings.extend(state.take_warnings(10.0, 80.0));
-    warnings.extend(state.take_warnings(80.0, 10.0));
-    warnings.extend(state.take_warnings(10.0, 95.0));
-    warnings.extend(state.take_warnings(95.0, 10.0));
+    warnings.extend(state.take_warnings(Some(10.0), Some(55.0)));
+    warnings.extend(state.take_warnings(Some(55.0), Some(10.0)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(80.0)));
+    warnings.extend(state.take_warnings(Some(80.0), Some(10.0)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(95.0)));
+    warnings.extend(state.take_warnings(Some(95.0), Some(10.0)));
 
     assert_eq!(
-        warnings.len(),
-        6,
-        "expected one warning per threshold per limit"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 50% of your 5h limit.")),
-        "expected hourly 50% warning (new copy)"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 50% of your weekly limit.")),
-        "expected weekly 50% warning (new copy)"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 90% of your 5h limit.")),
-        "expected hourly 90% warning (new copy)"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 90% of your weekly limit.")),
-        "expected weekly 90% warning (new copy)"
+        warnings,
+        vec![
+            String::from(
+                "Heads up, you've used over 75% of your 5h limit. Run /status for a breakdown."
+            ),
+            String::from(
+                "Heads up, you've used over 75% of your weekly limit. Run /status for a breakdown.",
+            ),
+            String::from(
+                "Heads up, you've used over 95% of your 5h limit. Run /status for a breakdown."
+            ),
+            String::from(
+                "Heads up, you've used over 95% of your weekly limit. Run /status for a breakdown.",
+            ),
+        ],
+        "expected one warning per limit for the highest crossed threshold"
     );
 }
 
@@ -560,9 +551,9 @@ fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, ex
 
 fn active_blob(chat: &ChatWidget) -> String {
     let lines = chat
-        .active_exec_cell
+        .active_cell
         .as_ref()
-        .expect("active exec cell present")
+        .expect("active cell present")
         .display_lines(80);
     lines_to_single_string(&lines)
 }
