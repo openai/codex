@@ -1177,6 +1177,8 @@ pub struct McpListToolsResponseEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ListCustomPromptsResponseEvent {
     pub custom_prompts: Vec<CustomPrompt>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, TS)]

@@ -55,6 +55,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
+    SubmittedPrompt { name: String, text: String },
     Command(SlashCommand),
     None,
 }
@@ -416,15 +417,21 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
-                    // Clear textarea so no residual text remains.
-                    self.textarea.set_text("");
-                    // Capture any needed data from popup before clearing it.
-                    let prompt_content = match sel {
+                    let prompt_info = match sel {
                         CommandItem::UserPrompt(idx) => {
-                            popup.prompt_content(idx).map(str::to_string)
+                            if let (Some(name), Some(contents)) =
+                                (popup.prompt_name(idx), popup.prompt_content(idx))
+                            {
+                                Some((name.to_string(), contents.to_string()))
+                            } else {
+                                None
+                            }
                         }
                         _ => None,
                     };
+                    let current_input = self.textarea.text().to_string();
+                    // Clear textarea so no residual text remains.
+                    self.textarea.set_text("");
                     // Hide popup since an action has been dispatched.
                     self.active_popup = ActivePopup::None;
 
@@ -433,8 +440,19 @@ impl ChatComposer {
                             return (InputResult::Command(cmd), true);
                         }
                         CommandItem::UserPrompt(_) => {
-                            if let Some(contents) = prompt_content {
-                                return (InputResult::Submitted(contents), true);
+                            if let Some((name, contents)) = prompt_info {
+                                let args = Self::parse_prompt_invocation(&current_input)
+                                    .map_or_else(Vec::new, |(_, args)| args);
+                                let substituted =
+                                    Self::apply_positional_parameters(&contents, &args);
+                                self.history.record_local_submission(&substituted);
+                                return (
+                                    InputResult::SubmittedPrompt {
+                                        name,
+                                        text: substituted,
+                                    },
+                                    true,
+                                );
                             }
                             return (InputResult::None, true);
                         }
@@ -821,17 +839,28 @@ impl ChatComposer {
                 }
                 self.pending_pastes.clear();
 
-                // If there is neither text nor attachments, suppress submission entirely.
+                let clean_input = text.clone();
                 let has_attachments = !self.attached_images.is_empty();
-                text = text.trim().to_string();
-                if text.is_empty() && !has_attachments {
+                let mut submission = text.trim().to_string();
+                if submission.is_empty() && !has_attachments {
                     return (InputResult::None, true);
                 }
-                if !text.is_empty() {
-                    self.history.record_local_submission(&text);
+
+                let mut prompt_meta: Option<(String, String)> = None;
+                if let Some((name, expanded)) = self.resolve_custom_prompt_submission(&clean_input)
+                {
+                    submission = expanded.clone();
+                    prompt_meta = Some((name, expanded));
+                }
+
+                if !submission.is_empty() {
+                    self.history.record_local_submission(&submission);
                 }
                 // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
-                (InputResult::Submitted(text), true)
+                match prompt_meta {
+                    Some((name, text)) => (InputResult::SubmittedPrompt { name, text }, true),
+                    None => (InputResult::Submitted(submission), true),
+                }
             }
             input => self.handle_input_basic(input),
         }
@@ -1170,6 +1199,36 @@ impl ChatComposer {
         if let ActivePopup::Command(popup) = &mut self.active_popup {
             popup.set_prompts(prompts);
         }
+    }
+
+    fn resolve_custom_prompt_submission(&self, input: &str) -> Option<(String, String)> {
+        let (name, args) = Self::parse_prompt_invocation(input)?;
+        let prompt = self.custom_prompts.iter().find(|p| p.name == name)?;
+        let substituted = Self::apply_positional_parameters(&prompt.content, &args);
+        Some((name, substituted))
+    }
+
+    fn parse_prompt_invocation(input: &str) -> Option<(String, Vec<String>)> {
+        let first_line = input.lines().next()?.trim();
+        let stripped = first_line.strip_prefix('/')?;
+        let mut parts = stripped.split_whitespace();
+        let name = parts.next()?;
+        if name.is_empty() {
+            return None;
+        }
+        let args = parts.map(std::string::ToString::to_string).collect();
+        Some((name.to_string(), args))
+    }
+
+    fn apply_positional_parameters(template: &str, args: &[String]) -> String {
+        let mut out = template.to_string();
+        for (idx, arg) in args.iter().enumerate() {
+            let placeholder = format!("${{{}}}", idx + 1);
+            if out.contains(&placeholder) {
+                out = out.replace(&placeholder, arg);
+            }
+        }
+        out
     }
 
     /// Synchronize `self.file_search_popup` with the current text in the textarea.
@@ -1863,6 +1922,9 @@ mod tests {
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
+            InputResult::SubmittedPrompt { text, .. } => {
+                panic!("expected command dispatch, but composer submitted prompt text: {text}")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
@@ -1920,6 +1982,9 @@ mod tests {
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
+            }
+            InputResult::SubmittedPrompt { text, .. } => {
+                panic!("expected command dispatch, but composer submitted prompt text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }
@@ -2343,7 +2408,50 @@ mod tests {
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_eq!(InputResult::Submitted(prompt_text.to_string()), result);
+        match result {
+            InputResult::SubmittedPrompt { name, text } => {
+                assert_eq!(name, "my-prompt");
+                assert_eq!(text, prompt_text);
+            }
+            other => panic!("expected SubmittedPrompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn custom_prompt_substitutes_positional_arguments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "greet".to_string(),
+            path: "/tmp/greet.md".into(),
+            content: "Hello ${1} ${2}".to_string(),
+        }]);
+
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'g', 'r', 'e', 'e', 't', ' ', 'A', 'l', 'i', 'c', 'e', ' ', 'B', 'o', 'b',
+            ],
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::SubmittedPrompt { name, text } => {
+                assert_eq!(name, "greet");
+                assert_eq!(text, "Hello Alice Bob");
+            }
+            other => panic!("expected SubmittedPrompt, got {other:?}"),
+        }
     }
 
     #[test]

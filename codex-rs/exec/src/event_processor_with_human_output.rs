@@ -1,6 +1,8 @@
 use codex_common::elapsed::format_duration;
 use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
+use codex_core::hooks::HookRegistry;
+use codex_core::hooks::HookSummary;
 use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -32,6 +34,7 @@ use owo_colors::Style;
 use shlex::try_join;
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -58,6 +61,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     red: Style,
     green: Style,
     cyan: Style,
+    hook_warning: Style,
 
     /// Whether to include `AgentReasoning` events in the output.
     show_agent_reasoning: bool,
@@ -88,6 +92,7 @@ impl EventProcessorWithHumanOutput {
                 red: Style::new().red(),
                 green: Style::new().green(),
                 cyan: Style::new().cyan(),
+                hook_warning: Style::new().yellow().bold(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 answer_started: false,
@@ -106,6 +111,7 @@ impl EventProcessorWithHumanOutput {
                 red: Style::new(),
                 green: Style::new(),
                 cyan: Style::new(),
+                hook_warning: Style::new(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 answer_started: false,
@@ -114,6 +120,32 @@ impl EventProcessorWithHumanOutput {
                 last_message_path,
             }
         }
+    }
+}
+
+fn format_hooks_summary(hooks: Option<&HookRegistry>, hooks_path: Option<&Path>) -> String {
+    match hooks {
+        Some(registry) => {
+            let summaries = registry.summaries();
+            if summaries.is_empty() {
+                "none".to_string()
+            } else {
+                summaries
+                    .into_iter()
+                    .map(|HookSummary { event, commands }| {
+                        if commands.is_empty() {
+                            event
+                        } else {
+                            format!("{} -> {}", event, commands.join(", "))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            }
+        }
+        None => hooks_path
+            .map(|path| format!("failed to load ({})", path.display()))
+            .unwrap_or_else(|| "disabled".to_string()),
     }
 }
 
@@ -149,7 +181,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             VERSION
         );
 
-        let entries = create_config_summary_entries(config);
+        let mut entries = create_config_summary_entries(config);
+        entries.push((
+            "hooks",
+            format_hooks_summary(config.hooks.as_ref(), config.hooks_path.as_deref()),
+        ));
 
         for (key, value) in entries {
             println!("{} {}", format!("{key}:").style(self.bold), value);
@@ -176,7 +212,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_println!(self, "{prefix} {message}");
             }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
-                ts_println!(self, "{}", message.style(self.dimmed));
+                if message.starts_with("Hook warning:") {
+                    ts_println!(self, "{}", message.style(self.hook_warning));
+                } else {
+                    ts_println!(self, "{}", message.style(self.dimmed));
+                }
             }
             EventMsg::StreamError(StreamErrorEvent { message }) => {
                 ts_println!(self, "{}", message.style(self.dimmed));
@@ -577,8 +617,17 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::McpListToolsResponse(_) => {
                 // Currently ignored in exec output.
             }
-            EventMsg::ListCustomPromptsResponse(_) => {
-                // Currently ignored in exec output.
+            EventMsg::ListCustomPromptsResponse(ev) => {
+                if !ev.warnings.is_empty() {
+                    for warning in &ev.warnings {
+                        ts_println!(
+                            self,
+                            "{} {}",
+                            "warning:".style(self.magenta).style(self.bold),
+                            warning
+                        );
+                    }
+                }
             }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
                 TurnAbortReason::Interrupted => {

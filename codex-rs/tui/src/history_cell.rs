@@ -732,8 +732,11 @@ pub(crate) fn new_session_info(
             crate::version::CODEX_CLI_VERSION,
         );
 
+        let hooks_summary =
+            format_hooks_summary(config.hooks.as_ref(), config.hooks_path.as_deref());
+
         // Help lines below the header (new copy and list)
-        let help_lines: Vec<Line<'static>> = vec![
+        let mut help_lines: Vec<Line<'static>> = vec![
             "  To get started, describe a task or try one of these commands:"
                 .dim()
                 .into(),
@@ -759,6 +762,8 @@ pub(crate) fn new_session_info(
                 " - choose what model and reasoning effort to use".dim(),
             ]),
         ];
+        help_lines.push(Line::from(""));
+        help_lines.push(Line::from(vec!["  Hooks: ".dim(), hooks_summary.into()]));
 
         CompositeHistoryCell {
             parts: vec![
@@ -777,6 +782,35 @@ pub(crate) fn new_session_info(
         CompositeHistoryCell {
             parts: vec![Box::new(PlainHistoryCell { lines })],
         }
+    }
+}
+
+fn format_hooks_summary(
+    hooks: Option<&codex_core::hooks::HookRegistry>,
+    hooks_path: Option<&std::path::Path>,
+) -> String {
+    match hooks {
+        Some(registry) => {
+            let summaries = registry.summaries();
+            if summaries.is_empty() {
+                "none".to_string()
+            } else {
+                summaries
+                    .into_iter()
+                    .map(|summary| {
+                        if summary.commands.is_empty() {
+                            summary.event
+                        } else {
+                            format!("{} -> {}", summary.event, summary.commands.join(", "))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            }
+        }
+        None => hooks_path
+            .map(|path| format!("failed to load ({})", path.display()))
+            .unwrap_or_else(|| "disabled".to_string()),
     }
 }
 

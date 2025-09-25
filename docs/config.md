@@ -515,6 +515,64 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 > [!NOTE]
 > Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
 
+## hooks_path
+
+Points to a JSON file that defines lifecycle hooks Codex should execute when specific events occur. Currently the following event is supported:
+
+- `UserPromptSubmit` – fired whenever a user prompt begins a new turn.
+
+Each entry lists one or more command hooks that will be launched via the system shell. Codex writes a JSON payload describing the event to the child process’s `stdin`. The payload includes:
+
+- `event`: the event name (e.g. `"UserPromptSubmit"`).
+- `timestamp`: ISO‑8601 UTC timestamp of the trigger.
+- `conversation_id`: Codex conversation identifier.
+- `cwd`: working directory for the turn.
+- `model`: model slug selected for the turn.
+- `items`: serialized `InputItem`s (text, images, local image paths) sent with the prompt.
+- `prompt_text`: joined text entries, if any.
+
+Sample `hooks.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run ${CLAUDE_HOOKS_PATH:-$PWD/apps/hooks}/user_prompt_submit.py --log-only"
+          },
+          {
+            "type": "command",
+            "command": "uv run ${CLAUDE_HOOKS_PATH:-$PWD/apps/hooks}/send_event.py --source-app Gradewave --event-type UserPromptSubmit --summarize"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Reference the file from `config.toml` using `hooks_path` (paths are resolved relative to the effective `cwd` when not absolute):
+
+```toml
+hooks_path = "hooks.json"
+```
+
+You can scope hooks to a specific project by placing `hooks_path` inside the
+matching `[projects."/path/to/project"]` table. Project-scoped entries override
+the global setting, and relative paths are resolved against that project’s
+working directory:
+
+```toml
+[projects."/home/alice/src/codex"]
+trust_level = "trusted"
+hooks_path = "hooks.json"
+```
+
+Hook failures are logged via `tracing` but do not interrupt the turn.
+
 ## history
 
 By default, Codex CLI records messages sent to the model in `$CODEX_HOME/history.jsonl`. Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.

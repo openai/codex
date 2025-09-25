@@ -9,6 +9,7 @@ use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::git_info::resolve_root_git_project_for_trust;
+use crate::hooks::HookRegistry;
 use crate::model_family::ModelFamily;
 use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
@@ -117,6 +118,12 @@ pub struct Config {
     ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
+
+    /// Optional hook registry used to emit lifecycle events (e.g. user prompt submissions).
+    pub hooks: Option<HookRegistry>,
+
+    /// Path to the hooks JSON file, if specified via config.
+    pub hooks_path: Option<PathBuf>,
 
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
@@ -634,6 +641,9 @@ pub struct ConfigToml {
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
+    /// Optional path to a JSON hooks file defining lifecycle automation.
+    pub hooks_path: Option<PathBuf>,
+
     /// System instructions.
     pub instructions: Option<String>,
 
@@ -731,6 +741,7 @@ impl From<ConfigToml> for UserSavedConfig {
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<String>,
+    pub hooks_path: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -892,6 +903,7 @@ impl Config {
         };
 
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
+        let mut hooks_path = cfg.hooks_path.clone();
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -932,6 +944,59 @@ impl Config {
                     current
                 }
             }
+        };
+
+        if let Some(projects) = cfg.projects.as_ref() {
+            let mut candidate_keys: Vec<String> = Vec::new();
+            let mut add_candidates = |path: &Path| {
+                let key = path.to_string_lossy().to_string();
+                if !candidate_keys.contains(&key) {
+                    candidate_keys.push(key);
+                }
+                if let Ok(canonical) = std::fs::canonicalize(path) {
+                    let canonical_key = canonical.to_string_lossy().to_string();
+                    if !candidate_keys.contains(&canonical_key) {
+                        candidate_keys.push(canonical_key);
+                    }
+                }
+            };
+
+            for ancestor in resolved_cwd.ancestors() {
+                add_candidates(ancestor);
+            }
+            if let Some(root) = resolve_root_git_project_for_trust(&resolved_cwd) {
+                add_candidates(&root);
+            }
+
+            if let Some(project_hooks_path) = candidate_keys.into_iter().find_map(|key| {
+                projects
+                    .get(&key)
+                    .and_then(|project| project.hooks_path.clone())
+            }) {
+                hooks_path = Some(project_hooks_path);
+            }
+        }
+
+        let mut resolved_hooks_path: Option<PathBuf> = None;
+        let hooks = match hooks_path {
+            Some(path) => {
+                let full_path = if path.is_relative() {
+                    resolved_cwd.join(&path)
+                } else {
+                    path
+                };
+                resolved_hooks_path = Some(full_path.clone());
+                match HookRegistry::load_from_path(&full_path) {
+                    Ok(registry) => Some(registry),
+                    Err(err) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("failed to load hooks file {}: {err:#}", full_path.display()),
+                        ));
+                    }
+                }
+            }
+            None => None,
         };
 
         let history = cfg.history.unwrap_or_default();
@@ -1007,6 +1072,8 @@ impl Config {
             sandbox_policy,
             shell_environment_policy,
             notify: cfg.notify,
+            hooks,
+            hooks_path: resolved_hooks_path,
             user_instructions,
             base_instructions,
             mcp_servers: cfg.mcp_servers,
@@ -1268,6 +1335,73 @@ exclude_slash_tmp = true
             },
             sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
+    }
+
+    #[test]
+    fn hooks_path_can_be_configured_per_project() -> std::io::Result<()> {
+        let project_dir = TempDir::new()?;
+        let codex_home = TempDir::new()?;
+        let hooks_file = project_dir.path().join("hooks.json");
+        let hooks_contents =
+            r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"true"}]}]}}"#;
+        std::fs::write(&hooks_file, hooks_contents)?;
+
+        let cfg_toml = format!(
+            "[projects.\"{path}\"]\ntrust_level = \"trusted\"\nhooks_path = \"hooks.json\"\n",
+            path = project_dir.path().display()
+        );
+        let cfg =
+            toml::from_str::<ConfigToml>(&cfg_toml).expect("TOML deserialization should succeed");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(project_dir.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(config.hooks.is_some());
+        assert_eq!(config.hooks_path.as_deref(), Some(hooks_file.as_path()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn hooks_path_in_parent_project_table_applies_to_child_directories() -> std::io::Result<()> {
+        let project_dir = TempDir::new()?;
+        let sub_dir = project_dir.path().join("nested");
+        std::fs::create_dir(&sub_dir)?;
+
+        let hooks_file = project_dir.path().join("hooks.json");
+        let hooks_contents =
+            r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"true"}]}]}}"#;
+        std::fs::write(&hooks_file, hooks_contents)?;
+
+        let cfg_toml = format!(
+            "[projects.\"{path}\"]\ntrust_level = \"trusted\"\nhooks_path = \"{hooks}\"\n",
+            path = project_dir.path().display(),
+            hooks = hooks_file.display()
+        );
+        let cfg =
+            toml::from_str::<ConfigToml>(&cfg_toml).expect("TOML deserialization should succeed");
+
+        let codex_home = TempDir::new()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(sub_dir),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(config.hooks.is_some());
+        assert_eq!(config.hooks_path.as_deref(), Some(hooks_file.as_path()));
+
+        Ok(())
     }
 
     #[test]
@@ -1631,6 +1765,8 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
+                hooks: None,
+                hooks_path: None,
                 cwd: fixture.cwd(),
                 mcp_servers: HashMap::new(),
                 model_providers: fixture.model_provider_map.clone(),
@@ -1689,6 +1825,8 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: None,
+            hooks_path: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
             model_providers: fixture.model_provider_map.clone(),
@@ -1762,6 +1900,8 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: None,
+            hooks_path: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
             model_providers: fixture.model_provider_map.clone(),
@@ -1821,6 +1961,8 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: None,
+            hooks_path: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
             model_providers: fixture.model_provider_map.clone(),

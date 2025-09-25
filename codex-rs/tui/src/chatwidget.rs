@@ -546,7 +546,12 @@ impl ChatWidget {
     }
 
     fn on_background_event(&mut self, message: String) {
-        debug!("BackgroundEvent: {message}");
+        if message.starts_with("Hook warning:") {
+            self.add_to_history(history_cell::new_warning_event(message));
+            self.request_redraw();
+        } else {
+            debug!("BackgroundEvent: {message}");
+        }
     }
 
     fn on_stream_error(&mut self, message: String) {
@@ -944,7 +949,7 @@ impl ChatWidget {
             }
             _ => {
                 match self.bottom_pane.handle_key_event(key_event) {
-                    InputResult::Submitted(text) => {
+                    InputResult::Submitted(text) | InputResult::SubmittedPrompt { text, .. } => {
                         // If a task is running, queue the user input to be sent after the turn completes.
                         let user_message = UserMessage {
                             text,
@@ -1678,10 +1683,22 @@ impl ChatWidget {
     }
 
     fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {
-        let len = ev.custom_prompts.len();
+        let ListCustomPromptsResponseEvent {
+            custom_prompts,
+            warnings,
+        } = ev;
+
+        let len = custom_prompts.len();
         debug!("received {len} custom prompts");
         // Forward to bottom pane so the slash popup can show them now.
-        self.bottom_pane.set_custom_prompts(ev.custom_prompts);
+        self.bottom_pane.set_custom_prompts(custom_prompts);
+
+        if !warnings.is_empty() {
+            for warning in warnings {
+                self.add_to_history(history_cell::new_warning_event(warning));
+            }
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn open_review_popup(&mut self) {

@@ -14,6 +14,7 @@ use crate::review_format::format_review_findings_block;
 use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
+use chrono::Utc;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
@@ -70,6 +71,8 @@ use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
+use crate::hooks::HookRegistry;
+use crate::hooks::UserPromptSubmitPayload;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
@@ -126,7 +129,6 @@ use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
@@ -277,6 +279,7 @@ pub(crate) struct Session {
     unified_exec_manager: UnifiedExecSessionManager,
 
     notifier: UserNotifier,
+    hooks: Option<HookRegistry>,
 
     /// Optional rollout recorder for persisting the conversation transcript so
     /// sessions can be replayed or inspected later.
@@ -480,6 +483,7 @@ impl Session {
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: notify,
+            hooks: config.hooks.clone(),
             state: Mutex::new(state),
             rollout: Mutex::new(Some(rollout_recorder)),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
@@ -520,6 +524,36 @@ impl Session {
             current_task.abort(TurnAbortReason::Replaced);
         }
         state.current_task = Some(task);
+    }
+
+    fn trigger_user_prompt_hook(
+        session: &Arc<Self>,
+        sub_id: String,
+        turn_context: &TurnContext,
+        items: Vec<InputItem>,
+    ) {
+        let Some(hooks) = session.hooks.clone() else {
+            return;
+        };
+
+        let payload = UserPromptSubmitPayload::new(
+            session.conversation_id,
+            turn_context.cwd.clone(),
+            turn_context.client.get_model(),
+            items,
+            Utc::now(),
+        );
+
+        let session_clone = Arc::clone(session);
+        tokio::spawn(async move {
+            if let Err(err) = hooks.trigger_user_prompt_submit(payload).await {
+                let warning = format!("Hook warning: {err:#}");
+                warn!("user_prompt_submit_hook_failed: {err:#}");
+                session_clone
+                    .notify_background_event(&sub_id, warning)
+                    .await;
+            }
+        });
     }
 
     pub async fn remove_task(&self, sub_id: &str) {
@@ -1092,12 +1126,14 @@ impl AgentTask {
         sub_id: String,
         input: Vec<InputItem>,
     ) -> Self {
+        let hook_items = input.clone();
         let handle = {
             let sess = sess.clone();
             let sub_id = sub_id.clone();
             let tc = Arc::clone(&turn_context);
             tokio::spawn(async move { run_task(sess, tc, sub_id, input).await }).abort_handle()
         };
+        Session::trigger_user_prompt_hook(&sess, sub_id.clone(), turn_context.as_ref(), hook_items);
         Self {
             sess,
             sub_id,
@@ -1429,17 +1465,18 @@ async fn submission_loop(
             Op::ListCustomPrompts => {
                 let sub_id = sub.id.clone();
 
-                let custom_prompts: Vec<CustomPrompt> =
-                    if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
-                        crate::custom_prompts::discover_prompts_in(&dir).await
-                    } else {
-                        Vec::new()
-                    };
+                let crate::custom_prompts::PromptDiscoveryResult { prompts, warnings } =
+                    crate::custom_prompts::discover_prompts_for_config(&config).await;
+
+                for warning in &warnings {
+                    warn!("{warning}");
+                }
 
                 let event = Event {
                     id: sub_id,
                     msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
-                        custom_prompts,
+                        custom_prompts: prompts,
+                        warnings,
                     }),
                 };
                 sess.send_event(event).await;
@@ -3630,6 +3667,7 @@ mod tests {
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
+            hooks: None,
             rollout: Mutex::new(None),
             state: Mutex::new(State {
                 history: ConversationHistory::new(),
