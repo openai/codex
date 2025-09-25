@@ -572,12 +572,21 @@ fn parse_rate_limit_window(
     window_minutes_header: &str,
     resets_header: &str,
 ) -> Option<RateLimitWindow> {
-    let used_percent = parse_header_f64(headers, used_percent_header)?;
+    let used_percent: Option<f64> = parse_header_f64(headers, used_percent_header);
 
-    Some(RateLimitWindow {
-        used_percent,
-        window_minutes: parse_header_u64(headers, window_minutes_header),
-        resets_in_seconds: parse_header_u64(headers, resets_header),
+    used_percent.and_then(|used_percent| {
+        let window_minutes = parse_header_u64(headers, window_minutes_header);
+        let resets_in_seconds = parse_header_u64(headers, resets_header);
+
+        let has_data = used_percent != 0.0
+            || window_minutes.is_some_and(|minutes| minutes != 0)
+            || resets_in_seconds.is_some_and(|seconds| seconds != 0);
+
+        has_data.then_some(RateLimitWindow {
+            used_percent,
+            window_minutes,
+            resets_in_seconds,
+        })
     })
 }
 
