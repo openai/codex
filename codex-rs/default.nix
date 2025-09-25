@@ -1,4 +1,4 @@
-{ pkgs, monorep-deps ? [], ... }:
+{ pkgs, ... }:
 let
   env = {
     PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig:$PKG_CONFIG_PATH";
@@ -28,7 +28,7 @@ rec {
   devShell = pkgs.mkShell {
     inherit env;
     name = "codex-rs-dev";
-    packages = monorep-deps ++ [
+    packages = [
       pkgs.cargo
       package
     ];

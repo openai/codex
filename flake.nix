@@ -13,21 +13,12 @@
   outputs = { nixpkgs, flake-utils, rust-overlay, ... }: 
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-        };
         pkgsWithRust = import nixpkgs {
           inherit system;
           overlays = [ rust-overlay.overlays.default ];
         };
-        monorepo-deps = with pkgs; [
-          # for precommit hook
-          pnpm
-          husky
-        ];
         codex-rs = import ./codex-rs {
           pkgs = pkgsWithRust;
-          inherit monorepo-deps;
         };
       in
       {
