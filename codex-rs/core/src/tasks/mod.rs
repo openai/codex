@@ -17,8 +17,6 @@ use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
-use crate::state::TaskAbortFuture;
-use crate::state::TaskAbortHook;
 use crate::state::TaskKind;
 
 pub(crate) use compact::CompactTask;
@@ -68,31 +66,16 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
 
-        let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
-        let task = Arc::new(task);
+        let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
-        let sub_id_for_abort = sub_id.clone();
-
-        let abort_hook: TaskAbortHook = {
-            let session_ctx = Arc::clone(&session_ctx);
-            let task = Arc::clone(&task);
-            Arc::new(move || {
-                let session_ctx = Arc::clone(&session_ctx);
-                let task = Arc::clone(&task);
-                let sub_id = sub_id_for_abort.clone();
-                Box::pin(async move {
-                    task.abort(session_ctx, &sub_id).await;
-                }) as TaskAbortFuture
-            })
-        };
 
         let handle = {
-            let session_ctx = Arc::clone(&session_ctx);
+            let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
             let ctx = Arc::clone(&turn_context);
-            let task = Arc::clone(&task);
+            let task_for_run = Arc::clone(&task);
             let sub_clone = sub_id.clone();
             tokio::spawn(async move {
-                task.run(session_ctx, ctx, sub_clone, input).await;
+                task_for_run.run(session_ctx, ctx, sub_clone, input).await;
             })
             .abort_handle()
         };
@@ -100,7 +83,7 @@ impl Session {
         let running_task = RunningTask {
             handle,
             kind: task_kind,
-            on_abort: Some(abort_hook),
+            task,
         };
         self.register_new_active_task(sub_id, running_task).await;
     }
@@ -165,10 +148,11 @@ impl Session {
         }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
-        task.handle.abort();
-        if let Some(hook) = task.on_abort {
-            hook().await;
-        }
+        let session_task = task.task;
+        let handle = task.handle;
+        handle.abort();
+        let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
+        session_task.abort(session_ctx, &sub_id).await;
 
         let event = Event {
             id: sub_id.clone(),
@@ -177,3 +161,6 @@ impl Session {
         self.send_event(event).await;
     }
 }
+
+#[cfg(test)]
+mod tests {}

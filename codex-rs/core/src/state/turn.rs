@@ -2,8 +2,6 @@
 
 use indexmap::IndexMap;
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::AbortHandle;
@@ -12,6 +10,7 @@ use codex_protocol::models::ResponseInputItem;
 use tokio::sync::oneshot;
 
 use crate::protocol::ReviewDecision;
+use crate::tasks::SessionTask;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
@@ -35,14 +34,11 @@ pub(crate) enum TaskKind {
     Compact,
 }
 
-pub(crate) type TaskAbortFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-pub(crate) type TaskAbortHook = Arc<dyn Fn() -> TaskAbortFuture + Send + Sync + 'static>;
-
 #[derive(Clone)]
 pub(crate) struct RunningTask {
     pub(crate) handle: AbortHandle,
     pub(crate) kind: TaskKind,
-    pub(crate) on_abort: Option<TaskAbortHook>,
+    pub(crate) task: Arc<dyn SessionTask>,
 }
 
 impl ActiveTurn {
