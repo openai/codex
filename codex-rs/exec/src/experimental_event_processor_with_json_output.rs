@@ -125,7 +125,17 @@ impl ExperimentalEventProcessorWithJsonOutput {
     fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ConversationEvent> {
         let item_id = self.get_next_item_id();
 
-        let command_string = ev.command.join(" ");
+        let command_string = match shlex::try_join(ev.command.iter().map(String::as_str)) {
+            Ok(command_string) => command_string,
+            Err(e) => {
+                warn!(
+                    call_id = ev.call_id,
+                    "Failed to stringify command: {e:?}; skipping item.started"
+                );
+                ev.command.join(" ")
+            }
+        };
+
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {

@@ -93,6 +93,7 @@ pub enum CommandExecutionStatus {
 pub struct CommandExecutionItem {
     pub command: String,
     pub aggregated_output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     pub status: CommandExecutionStatus,
 }

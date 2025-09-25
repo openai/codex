@@ -163,7 +163,7 @@ fn exec_command_end_success_produces_completed_command_item() {
             item: ConversationItem {
                 id: "item_0".to_string(),
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
-                    command: "bash -lc echo hi".to_string(),
+                    command: "bash -lc 'echo hi'".to_string(),
                     aggregated_output: String::new(),
                     exit_code: None,
                     status: CommandExecutionStatus::InProgress,
@@ -192,7 +192,7 @@ fn exec_command_end_success_produces_completed_command_item() {
             item: ConversationItem {
                 id: "item_0".to_string(),
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
-                    command: "bash -lc echo hi".to_string(),
+                    command: "bash -lc 'echo hi'".to_string(),
                     aggregated_output: "hi\n".to_string(),
                     exit_code: Some(0),
                     status: CommandExecutionStatus::Completed,
