@@ -184,6 +184,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let expected_instructions = config.model_family.base_instructions.clone();
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -213,7 +214,6 @@ async fn prompt_tools_are_consistent_across_requests() {
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
-    let expected_instructions: &str = include_str!("../../prompt.md");
     // our internal implementation is responsible for keeping tools in sync
     // with the OpenAI schema, so we just verify the tool presence here
     let expected_tools_names: &[&str] = &["shell", "update_plan", "apply_patch", "view_image"];
@@ -546,6 +546,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -655,6 +656,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -671,6 +673,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -766,6 +769,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
             model: default_model,
             effort: default_effort,
             summary: default_summary,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();
@@ -782,6 +786,7 @@ async fn send_user_turn_with_changes_sends_environment_context() {
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            final_output_json_schema: None,
         })
         .await
         .unwrap();

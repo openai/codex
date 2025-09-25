@@ -20,9 +20,9 @@ use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
+use core_test_support::non_sandbox_test;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -42,12 +42,7 @@ use wiremock::matchers::path;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_op_emits_lifecycle_and_review_output() {
     // Skip under Codex sandbox network restrictions.
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Start mock Responses API server. Return a single assistant message whose
     // text is a JSON-encoded ReviewOutputEvent.
@@ -172,12 +167,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn review_op_with_plain_text_emits_review_fallback() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let sse_raw = r#"[
         {"type":"response.output_item.done", "item":{
@@ -226,12 +216,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn review_does_not_emit_agent_message_on_structured_output() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let review_json = serde_json::json!({
         "findings": [
@@ -303,12 +288,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
 /// request uses that model (and not the main chat model).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_uses_custom_review_model_from_config() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Minimal stream: just a completed event
     let sse_raw = r#"[
@@ -361,12 +341,7 @@ async fn review_uses_custom_review_model_from_config() {
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn review_input_isolated_from_parent_history() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Mock server for the single review request
     let sse_raw = r#"[
@@ -542,12 +517,7 @@ async fn review_input_isolated_from_parent_history() {
 /// messages in its request `input`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_history_does_not_leak_into_parent_session() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Respond to both the review request and the subsequent parent request.
     let sse_raw = r#"[

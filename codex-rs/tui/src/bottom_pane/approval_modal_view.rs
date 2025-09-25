@@ -7,7 +7,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::user_approval_widget::ApprovalRequest;
 use crate::user_approval_widget::UserApprovalWidget;
 
-use super::BottomPane;
 use super::BottomPaneView;
 use super::CancellationEvent;
 
@@ -42,12 +41,12 @@ impl ApprovalModalView {
 }
 
 impl BottomPaneView for ApprovalModalView {
-    fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         self.current.handle_key_event(key_event);
         self.maybe_advance();
     }
 
-    fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
+    fn on_ctrl_c(&mut self) -> CancellationEvent {
         self.current.on_ctrl_c();
         self.queue.clear();
         CancellationEvent::Handled
@@ -75,6 +74,7 @@ impl BottomPaneView for ApprovalModalView {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::bottom_pane::BottomPane;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn make_exec_request() -> ApprovalRequest {
@@ -94,7 +94,8 @@ mod tests {
         view.enqueue_request(make_exec_request());
 
         let (tx2, _rx2) = unbounded_channel::<AppEvent>();
-        let mut pane = BottomPane::new(super::super::BottomPaneParams {
+        // Why do we have this?
+        let _pane = BottomPane::new(super::super::BottomPaneParams {
             app_event_tx: AppEventSender::new(tx2),
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
@@ -102,7 +103,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
         });
-        assert_eq!(CancellationEvent::Handled, view.on_ctrl_c(&mut pane));
+        assert_eq!(CancellationEvent::Handled, view.on_ctrl_c());
         assert!(view.queue.is_empty());
         assert!(view.current.is_complete());
         assert!(view.is_complete());

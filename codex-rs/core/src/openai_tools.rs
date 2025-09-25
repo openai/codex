@@ -400,10 +400,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
             }
 
             // Normalize/ensure type
-            let mut ty = map
-                .get("type")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let mut ty = map.get("type").and_then(|v| v.as_str()).map(str::to_string);
 
             // If type is an array (union), pick first supported; else leave to inference
             if ty.is_none()

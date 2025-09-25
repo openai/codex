@@ -2,27 +2,27 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use codex_core::config::Config;
 use codex_core::protocol::Op;
-use once_cell::sync::Lazy;
-use once_cell::sync::OnceCell;
 use serde::Serialize;
 use serde_json::json;
 
 use crate::app_event::AppEvent;
 
-static LOGGER: Lazy<SessionLogger> = Lazy::new(SessionLogger::new);
+static LOGGER: LazyLock<SessionLogger> = LazyLock::new(SessionLogger::new);
 
 struct SessionLogger {
-    file: OnceCell<Mutex<File>>,
+    file: OnceLock<Mutex<File>>,
 }
 
 impl SessionLogger {
     fn new() -> Self {
         Self {
-            file: OnceCell::new(),
+            file: OnceLock::new(),
         }
     }
 
@@ -37,11 +37,7 @@ impl SessionLogger {
         }
 
         let file = opts.open(path)?;
-        // If already initialized, ignore and succeed.
-        if self.file.get().is_some() {
-            return Ok(());
-        }
-        let _ = self.file.set(Mutex::new(file));
+        self.file.get_or_init(|| Mutex::new(file));
         Ok(())
     }
 
