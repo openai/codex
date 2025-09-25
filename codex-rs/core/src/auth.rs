@@ -185,6 +185,17 @@ impl CodexAuth {
     pub fn from_api_key(api_key: &str) -> Self {
         Self::from_api_key_with_client(api_key, crate::default_client::create_client())
     }
+
+    /// Lightweight constructor for tests that avoids the default client setup.
+    /// This skips user-agent detection that relies on system configuration APIs
+    /// which are not available under sandboxed test environments.
+    pub fn from_api_key_for_tests(api_key: &str) -> Self {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build test client");
+        Self::from_api_key_with_client(api_key, client)
+    }
 }
 
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";

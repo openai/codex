@@ -480,8 +480,8 @@ impl BottomPane {
     }
 }
 
-impl BottomPane {
-    pub fn render(&self, area: Rect, buf: &mut Buffer, bg: Option<(u8, u8, u8)>) {
+impl WidgetRef for BottomPane {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [status_area, content] = self.layout(area);
 
         // When a modal view is active, it owns the whole content area.
@@ -495,7 +495,7 @@ impl BottomPane {
             }
 
             // Render the composer in the remaining area.
-            self.composer.render(content, buf, bg);
+            self.composer.render_ref(content, buf);
         }
     }
 }
@@ -616,7 +616,7 @@ mod tests {
 
         // Composer placeholder should be visible somewhere below.
         let mut found_composer = false;
-        for y in 1..area.height.saturating_sub(2) {
+        for y in 1..area.height {
             let mut row = String::new();
             for x in 0..area.width {
                 row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));

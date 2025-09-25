@@ -447,7 +447,7 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert_eq!(intro_text, "> intro");
+        assert_eq!(intro_text, "• intro");
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert_eq!(intro_text, "> intro");
+        assert_eq!(intro_text, "• intro");
 
         let user_first = cells[1]
             .as_any()

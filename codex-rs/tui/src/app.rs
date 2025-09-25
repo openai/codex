@@ -24,6 +24,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::WidgetRef;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -194,11 +195,10 @@ impl App {
                     {
                         return Ok(true);
                     }
-                    let bg = tui.bg();
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
-                            self.chat_widget.render(frame.area(), frame.buffer, bg);
+                            (&self.chat_widget).render_ref(frame.area(), frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }
@@ -232,8 +232,7 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                let mut display =
-                    cell.display_lines_with_bg(tui.terminal.last_known_screen_size.width, tui.bg());
+                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
                     // part of an ongoing stream. Streaming continuations should not

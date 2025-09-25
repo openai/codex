@@ -112,12 +112,36 @@ pub fn create_client() -> reqwest::Client {
     headers.insert("originator", ORIGINATOR.header_value.clone());
     let ua = get_codex_user_agent();
 
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder();
+    if std::env::var("CODEX_DISABLE_SYSTEM_PROXY").is_ok() {
+        builder = builder.no_proxy();
+    }
+    #[cfg(test)]
+    {
+        // When building the core crate's own tests we also disable system proxies;
+        // this branch is not active when the crate is a dependency.
+        builder = builder.no_proxy();
+    }
+    let builder = builder
         // Set UA via dedicated helper to avoid header validation pitfalls
-        .user_agent(ua)
-        .default_headers(headers)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .user_agent(ua.clone())
+        .default_headers(headers.clone());
+
+    builder.build().unwrap_or_else(|_| {
+        let mut retry_builder = reqwest::Client::builder();
+        if std::env::var("CODEX_DISABLE_SYSTEM_PROXY").is_ok() {
+            retry_builder = retry_builder.no_proxy();
+        }
+        #[cfg(test)]
+        {
+            retry_builder = retry_builder.no_proxy();
+        }
+        retry_builder
+            .user_agent(ua)
+            .default_headers(headers)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
 }
 
 #[cfg(test)]

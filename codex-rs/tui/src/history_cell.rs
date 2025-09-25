@@ -5,6 +5,7 @@ use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
+use crate::terminal_palette::default_bg;
 use crate::terminal_palette::terminal_palette;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::ui_consts::LIVE_PREFIX_COLS;
@@ -61,6 +62,12 @@ use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
 
+mod color;
+
+use self::color::blend;
+use self::color::is_light;
+use self::color::perceptual_distance;
+
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
 const STATUS_LIMIT_BAR_EMPTY: &str = " ";
@@ -84,10 +91,6 @@ pub(crate) enum PatchEventType {
 /// scrollable list.
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
-
-    fn display_lines_with_bg(&self, width: u16, _bg: Option<(u8, u8, u8)>) -> Vec<Line<'static>> {
-        self.display_lines(width)
-    }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         self.display_lines(u16::MAX)
@@ -121,82 +124,6 @@ pub(crate) struct UserHistoryCell {
     pub message: String,
 }
 
-fn is_light(bg: (u8, u8, u8)) -> bool {
-    let (r, g, b) = bg;
-    let y = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-    y > 128.0
-}
-
-fn blend(fg: (u8, u8, u8), bg: (u8, u8, u8), alpha: f32) -> (u8, u8, u8) {
-    let r = (fg.0 as f32 * alpha + bg.0 as f32 * (1.0 - alpha)) as u8;
-    let g = (fg.1 as f32 * alpha + bg.1 as f32 * (1.0 - alpha)) as u8;
-    let b = (fg.2 as f32 * alpha + bg.2 as f32 * (1.0 - alpha)) as u8;
-    (r, g, b)
-}
-
-/// Returns the perceptual color distance between two RGB colors.
-/// Uses the CIE76 formula (Euclidean distance in Lab space approximation).
-fn distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
-    // Convert sRGB to linear RGB
-    fn srgb_to_linear(c: u8) -> f32 {
-        let c = c as f32 / 255.0;
-        if c <= 0.04045 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    }
-
-    // Convert RGB to XYZ
-    fn rgb_to_xyz(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
-        let r = srgb_to_linear(r);
-        let g = srgb_to_linear(g);
-        let b = srgb_to_linear(b);
-
-        let x = r * 0.4124 + g * 0.3576 + b * 0.1805;
-        let y = r * 0.2126 + g * 0.7152 + b * 0.0722;
-        let z = r * 0.0193 + g * 0.1192 + b * 0.9505;
-        (x, y, z)
-    }
-
-    // Convert XYZ to Lab
-    fn xyz_to_lab(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
-        // D65 reference white
-        let xr = x / 0.95047;
-        let yr = y / 1.00000;
-        let zr = z / 1.08883;
-
-        fn f(t: f32) -> f32 {
-            if t > 0.008856 {
-                t.powf(1.0 / 3.0)
-            } else {
-                7.787 * t + 16.0 / 116.0
-            }
-        }
-
-        let fx = f(xr);
-        let fy = f(yr);
-        let fz = f(zr);
-
-        let l = 116.0 * fy - 16.0;
-        let a = 500.0 * (fx - fy);
-        let b = 200.0 * (fy - fz);
-        (l, a, b)
-    }
-
-    let (x1, y1, z1) = rgb_to_xyz(a.0, a.1, a.2);
-    let (x2, y2, z2) = rgb_to_xyz(b.0, b.1, b.2);
-
-    let (l1, a1, b1) = xyz_to_lab(x1, y1, z1);
-    let (l2, a2, b2) = xyz_to_lab(x2, y2, z2);
-
-    let dl = l1 - l2;
-    let da = a1 - a2;
-    let db = b1 - b2;
-
-    (dl * dl + da * da + db * db).sqrt()
-}
-
 pub fn user_message_style(terminal_bg: Option<(u8, u8, u8)>) -> Style {
     match terminal_bg {
         Some(bg) => Style::default().bg(user_message_bg(bg)),
@@ -204,6 +131,7 @@ pub fn user_message_style(terminal_bg: Option<(u8, u8, u8)>) -> Style {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> Color {
     let top = if is_light(terminal_bg) {
         (0, 0, 0)
@@ -221,8 +149,8 @@ pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> Color {
     } else if color_level.has_256
         && let Some(palette) = terminal_palette()
         && let Some((i, _)) = palette.into_iter().enumerate().min_by(|(_, a), (_, b)| {
-            distance(*a, target)
-                .partial_cmp(&distance(*b, target))
+            perceptual_distance(*a, target)
+                .partial_cmp(&perceptual_distance(*b, target))
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
     {
@@ -234,19 +162,12 @@ pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> Color {
 
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.display_lines_with_bg(width, None)
-    }
-
-    fn display_lines_with_bg(&self, width: u16, bg: Option<(u8, u8, u8)>) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         // Use ratatui-aware word wrapping and prefixing to avoid lifetime issues.
         let wrap_width = width.saturating_sub(LIVE_PREFIX_COLS); // account for the ▌ prefix and trailing space
 
-        let style = match bg {
-            Some(color) => Style::default().bg(user_message_bg(color)),
-            None => Style::default(),
-        };
+        let style = user_message_style(default_bg());
 
         // Use our ratatui wrapping helpers for correct styling and lifetimes.
         let wrapped = word_wrap_lines(
@@ -292,7 +213,37 @@ impl HistoryCell for ReasoningSummaryCell {
         let summary_lines = self
             .content
             .iter()
-            .map(|l| l.clone().dim().italic())
+            .map(|line| {
+                let mut spans = Vec::with_capacity(line.spans.len());
+                for span in &line.spans {
+                    let base_style = span.style.add_modifier(Modifier::DIM);
+                    let text = span.content.clone().into_owned();
+                    if let Some(pos) = text.find('•') {
+                        let before = &text[..pos];
+                        if !before.is_empty() {
+                            spans.push(Span::styled(
+                                before.to_string(),
+                                base_style.add_modifier(Modifier::ITALIC),
+                            ));
+                        }
+                        let bullet_style = base_style.remove_modifier(Modifier::ITALIC);
+                        spans.push(Span::styled("•".to_string(), bullet_style));
+                        let after = &text[(pos + 1)..];
+                        if !after.is_empty() {
+                            spans.push(Span::styled(
+                                after.to_string(),
+                                base_style.add_modifier(Modifier::ITALIC),
+                            ));
+                        }
+                    } else {
+                        spans.push(Span::styled(
+                            text,
+                            base_style.add_modifier(Modifier::ITALIC),
+                        ));
+                    }
+                }
+                Line::from(spans)
+            })
             .collect::<Vec<_>>();
 
         word_wrap_lines(
@@ -480,7 +431,7 @@ impl ExecCell {
                 // Show an animated spinner while exploring
                 spinner(active_start_time)
             } else {
-                "•".bold()
+                "•".into()
             },
             " ".into(),
             if self.is_active() {

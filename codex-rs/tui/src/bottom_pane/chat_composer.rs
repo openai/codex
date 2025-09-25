@@ -26,9 +26,9 @@ use super::file_search_popup::FileSearchPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
-use crate::history_cell::user_message_bg;
 use crate::history_cell::user_message_style;
 use crate::slash_command::SlashCommand;
+use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::app_event::AppEvent;
@@ -1233,8 +1233,8 @@ impl ChatComposer {
     }
 }
 
-impl ChatComposer {
-    pub fn render(&self, area: Rect, buf: &mut Buffer, bg: Option<(u8, u8, u8)>) {
+impl WidgetRef for ChatComposer {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let (popup_constraint, hint_spacing) = match &self.active_popup {
             ActivePopup::Command(popup) => (
                 Constraint::Max(popup.calculate_required_height(area.width)),
@@ -1250,7 +1250,10 @@ impl ChatComposer {
             Layout::vertical([Constraint::Length(1), Constraint::Min(1), popup_constraint])
                 .areas(area);
         if !matches!(self.active_popup, ActivePopup::None) {
-            buf.set_style(popup_rect, user_message_style(bg));
+            buf.set_style(
+                popup_rect,
+                user_message_style(terminal_palette::default_bg()),
+            );
         }
         match &self.active_popup {
             ActivePopup::Command(popup) => {
@@ -1343,10 +1346,7 @@ impl ChatComposer {
                     .render_ref(hint_rect, buf);
             }
         }
-        let style = match bg {
-            Some(color) => Style::default().bg(user_message_bg(color)),
-            None => Style::default(),
-        };
+        let style = user_message_style(terminal_palette::default_bg());
         let mut block_rect = textarea_rect;
         block_rect.y = textarea_rect.y.saturating_sub(1);
         block_rect.height = textarea_rect.height.saturating_add(2);

@@ -552,8 +552,17 @@ mod tests {
     use codex_core::auth::write_auth_json;
     use codex_core::token_data::IdTokenInfo;
     use codex_core::token_data::TokenData;
+    use std::sync::OnceLock;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+
+    fn init_test_env() {
+        static INIT: OnceLock<()> = OnceLock::new();
+        INIT.get_or_init(|| {
+            // Safe: test setup occurs before other threads interact with env.
+            unsafe { std::env::set_var("CODEX_DISABLE_SYSTEM_PROXY", "1") };
+        });
+    }
 
     fn get_next_codex_home() -> PathBuf {
         static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
@@ -568,6 +577,7 @@ mod tests {
     }
 
     fn make_config() -> Config {
+        init_test_env();
         // Create a unique CODEX_HOME per test to isolate auth.json writes.
         let codex_home = get_next_codex_home();
         std::fs::create_dir_all(&codex_home).expect("create unique CODEX_HOME");

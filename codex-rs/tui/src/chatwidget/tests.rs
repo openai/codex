@@ -43,11 +43,21 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::unbounded_channel;
 
+fn init_test_env() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        // Safe: test setup occurs before other threads interact with env.
+        unsafe { std::env::set_var("CODEX_DISABLE_SYSTEM_PROXY", "1") };
+    });
+}
+
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
+    init_test_env();
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
@@ -276,7 +286,8 @@ async fn helpers_are_available_and_do_not_panic() {
     let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
         "test",
     )));
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key_for_tests("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
@@ -297,6 +308,7 @@ fn make_chatwidget_manual() -> (
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
+    init_test_env();
     let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
@@ -309,7 +321,8 @@ fn make_chatwidget_manual() -> (
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
     });
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::from_api_key_for_tests("test"));
     let widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,

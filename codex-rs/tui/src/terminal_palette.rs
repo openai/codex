@@ -1,10 +1,12 @@
+#[cfg(not(test))]
 use std::sync::OnceLock;
 
-#[cfg(unix)]
+#[cfg(all(unix, not(test)))]
 use std::mem::MaybeUninit;
-#[cfg(unix)]
+#[cfg(all(unix, not(test)))]
 use std::os::fd::RawFd;
 
+#[cfg(not(test))]
 pub fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
     static CACHE: OnceLock<[(u8, u8, u8); 256]> = OnceLock::new();
     if let Some(cached) = CACHE.get() {
@@ -20,7 +22,42 @@ pub fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(test)]
+pub fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
+    None
+}
+
+#[derive(Clone, Copy)]
+pub struct DefaultColors {
+    #[allow(dead_code)]
+    fg: (u8, u8, u8),
+    bg: (u8, u8, u8),
+}
+
+#[cfg(not(test))]
+pub fn default_colors() -> Option<&'static DefaultColors> {
+    static CACHE: OnceLock<Option<DefaultColors>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| query_default_colors().unwrap_or_default())
+        .as_ref()
+}
+
+#[cfg(test)]
+pub fn default_colors() -> Option<&'static DefaultColors> {
+    None
+}
+
+#[allow(dead_code)]
+pub fn default_fg() -> Option<(u8, u8, u8)> {
+    default_colors().map(|c| c.fg)
+}
+
+pub fn default_bg() -> Option<(u8, u8, u8)> {
+    default_colors().map(|c| c.bg)
+}
+
+#[cfg(all(unix, not(test)))]
+#[allow(dead_code)]
 fn query_terminal_palette() -> std::io::Result<Option<[(u8, u8, u8); 256]>> {
     use std::fs::OpenOptions;
     use std::io::ErrorKind;
@@ -97,12 +134,88 @@ fn query_terminal_palette() -> std::io::Result<Option<[(u8, u8, u8); 256]>> {
     Ok(Some(colors))
 }
 
-#[cfg(not(unix))]
+#[cfg(all(unix, not(test)))]
+#[allow(dead_code)]
+fn query_default_colors() -> std::io::Result<Option<DefaultColors>> {
+    use std::fs::OpenOptions;
+    use std::io::ErrorKind;
+    use std::io::IsTerminal;
+    use std::io::Read;
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let mut stdout_handle = std::io::stdout();
+    if !stdout_handle.is_terminal() {
+        return Ok(None);
+    }
+    stdout_handle.write_all(b"\x1b]10;?\x07\x1b]11;?\x07")?;
+    stdout_handle.flush()?;
+
+    let mut tty = match OpenOptions::new().read(true).open("/dev/tty") {
+        Ok(file) => file,
+        Err(_) => return Ok(None),
+    };
+
+    let fd = tty.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(200);
+    let mut buffer = Vec::new();
+    let mut fg = None;
+    let mut bg = None;
+
+    while Instant::now() < deadline {
+        let mut chunk = [0u8; 128];
+        match tty.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buffer.extend_from_slice(&chunk[..n]);
+                if fg.is_none() {
+                    fg = parse_osc_color(&buffer, 10);
+                }
+                if bg.is_none() {
+                    bg = parse_osc_color(&buffer, 11);
+                }
+                if let (Some(fg), Some(bg)) = (fg, bg) {
+                    return Ok(Some(DefaultColors { fg, bg }));
+                }
+            }
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+
+    if fg.is_none() {
+        fg = parse_osc_color(&buffer, 10);
+    }
+    if bg.is_none() {
+        bg = parse_osc_color(&buffer, 11);
+    }
+
+    Ok(fg.zip(bg).map(|(fg, bg)| DefaultColors { fg, bg }))
+}
+
+#[cfg(any(not(unix), test))]
 fn query_terminal_palette() -> std::io::Result<Option<[(u8, u8, u8); 256]>> {
     Ok(None)
 }
 
-#[cfg(unix)]
+#[cfg(any(not(unix), test))]
+fn query_default_colors() -> std::io::Result<Option<DefaultColors>> {
+    Ok(None)
+}
+
+#[cfg(all(unix, not(test)))]
 fn drain_remaining(
     tty: &mut std::fs::File,
     buffer: &mut Vec<u8>,
@@ -140,13 +253,13 @@ fn drain_remaining(
     newly_filled
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(test)))]
 struct TermiosGuard {
     fd: RawFd,
     original: libc::termios,
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(test)))]
 impl Drop for TermiosGuard {
     fn drop(&mut self) {
         unsafe {
@@ -155,7 +268,7 @@ impl Drop for TermiosGuard {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(test)))]
 unsafe fn suppress_echo(fd: RawFd) -> Option<TermiosGuard> {
     let mut termios = MaybeUninit::<libc::termios>::uninit();
     if unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) } != 0 {
@@ -173,7 +286,7 @@ unsafe fn suppress_echo(fd: RawFd) -> Option<TermiosGuard> {
     })
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(test)))]
 fn apply_palette_responses(
     buffer: &mut Vec<u8>,
     palette: &mut [Option<(u8, u8, u8)>; 256],
@@ -224,7 +337,7 @@ fn apply_palette_responses(
     newly_filled
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(test)))]
 fn parse_palette_message(message: &str) -> Option<(usize, (u8, u8, u8))> {
     let mut parts = message.splitn(3, ';');
     if parts.next()? != "4" {
@@ -246,7 +359,7 @@ fn parse_palette_message(message: &str) -> Option<(usize, (u8, u8, u8))> {
     Some((index, (r, g, b)))
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(test)))]
 fn parse_component(component: &str) -> Option<u8> {
     let trimmed = component.trim();
     if trimmed.is_empty() {
@@ -263,4 +376,42 @@ fn parse_component(component: &str) -> Option<u8> {
     };
     let value = u64::from_str_radix(trimmed, 16).ok()?;
     Some(((value * 255 + max / 2) / max) as u8)
+}
+
+#[cfg(all(unix, not(test)))]
+fn parse_osc_color(buffer: &[u8], code: u8) -> Option<(u8, u8, u8)> {
+    let text = std::str::from_utf8(buffer).ok()?;
+    let prefix = match code {
+        10 => "\u{1b}]10;",
+        11 => "\u{1b}]11;",
+        _ => return None,
+    };
+    let start = text.rfind(prefix)?;
+    let after_prefix = &text[start + prefix.len()..];
+    let end_bel = after_prefix.find('\u{7}');
+    let end_st = after_prefix.find("\u{1b}\\");
+    let end_idx = match (end_bel, end_st) {
+        (Some(bel), Some(st)) => bel.min(st),
+        (Some(bel), None) => bel,
+        (None, Some(st)) => st,
+        (None, None) => return None,
+    };
+    let payload = after_prefix[..end_idx].trim();
+    parse_color_payload(payload)
+}
+
+#[cfg(all(unix, not(test)))]
+fn parse_color_payload(payload: &str) -> Option<(u8, u8, u8)> {
+    if payload.is_empty() || payload == "?" {
+        return None;
+    }
+    let (model, values) = payload.split_once(':')?;
+    if model != "rgb" && model != "rgba" {
+        return None;
+    }
+    let mut parts = values.split('/');
+    let r = parse_component(parts.next()?)?;
+    let g = parse_component(parts.next()?)?;
+    let b = parse_component(parts.next()?)?;
+    Some((r, g, b))
 }
