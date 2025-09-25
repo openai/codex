@@ -41,6 +41,7 @@ mod cli;
 mod clipboard_paste;
 pub mod custom_terminal;
 mod diff_render;
+mod exec_cell;
 mod exec_command;
 mod file_search;
 mod frames;
