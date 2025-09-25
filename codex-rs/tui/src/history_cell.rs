@@ -1,3 +1,6 @@
+use crate::color::blend;
+use crate::color::is_light;
+use crate::color::perceptual_distance;
 use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -47,10 +50,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
-
-use crate::color::blend;
-use crate::color::is_light;
-use crate::color::perceptual_distance;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
