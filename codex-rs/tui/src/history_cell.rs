@@ -144,7 +144,7 @@ pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> (u8, u8, u8) {
         (255, 255, 255)
     };
     let bottom = terminal_bg;
-    blend(top, bottom, 0.15)
+    blend(top, bottom, 0.1)
 }
 
 impl HistoryCell for UserHistoryCell {
@@ -249,7 +249,7 @@ impl HistoryCell for AgentMessageCell {
             &self.lines,
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
-                    "> ".into()
+                    "• ".into()
                 } else {
                     "  ".into()
                 })
@@ -1519,7 +1519,7 @@ pub(crate) fn new_mcp_tools_output(
 }
 
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
-    let mut line = vec!["> ".into(), message.into()];
+    let mut line = vec!["• ".into(), message.into()];
     if let Some(hint) = hint {
         line.push(" ".into());
         line.push(hint.dark_gray());
