@@ -7,8 +7,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::mcp_protocol::ConversationId;
-use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -28,26 +26,12 @@ use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::ORIGINATOR;
 use crate::git_info::collect_git_info;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
-
-#[derive(Serialize, Deserialize, Default, Clone)]
-pub struct SessionStateSnapshot {}
-
-#[derive(Serialize, Deserialize, Default, Clone)]
-pub struct SavedSession {
-    pub session: SessionMeta,
-    #[serde(default)]
-    pub items: Vec<ResponseItem>,
-    #[serde(default)]
-    pub state: SessionStateSnapshot,
-    pub session_id: ConversationId,
-}
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.
