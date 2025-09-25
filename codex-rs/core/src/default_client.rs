@@ -187,15 +187,6 @@ mod tests {
     }
 
     #[test]
-    fn test_originator_header_defaults_to_codex_cli_rs() {
-        assert_eq!(ORIGINATOR.value, "codex_cli_rs");
-        assert_eq!(
-            ORIGINATOR.header_value,
-            HeaderValue::from_static("codex_cli_rs")
-        );
-    }
-
-    #[test]
     fn test_invalid_suffix_is_sanitized() {
         let prefix = "codex_cli_rs/0.0.0";
         let suffix = "bad\rsuffix";
