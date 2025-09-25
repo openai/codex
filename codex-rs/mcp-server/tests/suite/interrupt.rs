@@ -11,7 +11,7 @@ use codex_protocol::mcp_protocol::NewConversationParams;
 use codex_protocol::mcp_protocol::NewConversationResponse;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserMessageResponse;
-use core_test_support::non_sandbox_test;
+use core_test_support::skip_if_no_network;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use tempfile::TempDir;
@@ -26,7 +26,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_shell_command_interruption() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     if let Err(err) = shell_command_interruption().await {
         panic!("failure: {err}");
