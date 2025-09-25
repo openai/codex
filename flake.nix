@@ -1,31 +1,50 @@
 {
   description = "Development Nix flake for OpenAI Codex CLI";
 
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
-  };
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { nixpkgs, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        codex-rs = nixpkgs.legacyPackages.${system} ./codex-rs { };
-      in
-      {
-        packages = {
+  outputs = { nixpkgs, ... }:
+    let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      forAllSystems = f: nixpkgs.lib.genAttrs systems f;
+    in
+    {
+      packages = forAllSystems (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          codex-rs = pkgs.callPackage ./codex-rs { };
+        in
+        {
           codex-rs = codex-rs.package;
           default = codex-rs.package;
-        };
+        }
+      );
 
-        devShells = {
+      devShells = forAllSystems (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          codex-rs = pkgs.callPackage ./codex-rs { };
+        in
+        {
           codex-rs = codex-rs.devShell;
           default = codex-rs.devShell;
-        };
+        }
+      );
 
-        apps = {
+      apps = forAllSystems (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          codex-rs = pkgs.callPackage ./codex-rs { };
+        in
+        {
           codex-rs = codex-rs.app;
           default = codex-rs.app;
-        };
-      }
-    );
+        }
+      );
+    };
 }
