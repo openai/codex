@@ -145,7 +145,7 @@ impl StatusHistoryCell {
                         Span::from(" "),
                         Span::from(format_status_limit_summary(row.percent_used)),
                     ];
-                    let base_spans = formatter.full_spans(row.label, value_spans);
+                    let base_spans = formatter.full_spans(row.label.as_str(), value_spans);
                     let base_line = Line::from(base_spans.clone());
 
                     if let Some(resets_at) = row.resets_at.as_ref() {
@@ -176,18 +176,14 @@ impl StatusHistoryCell {
         }
     }
 
-    fn collect_rate_limit_labels(
-        &self,
-        seen: &mut BTreeSet<&'static str>,
-        labels: &mut Vec<&'static str>,
-    ) {
+    fn collect_rate_limit_labels(&self, seen: &mut BTreeSet<String>, labels: &mut Vec<String>) {
         match &self.rate_limits {
             StatusRateLimitData::Available(rows) => {
                 if rows.is_empty() {
                     push_label(labels, seen, "Limits");
                 } else {
                     for row in rows {
-                        push_label(labels, seen, row.label);
+                        push_label(labels, seen, row.label.as_str());
                     }
                 }
             }
@@ -224,9 +220,12 @@ impl HistoryCell for StatusHistoryCell {
             }
         });
 
-        let mut labels: Vec<&'static str> =
-            vec!["Model", "Directory", "Approval", "Sandbox", "Agents.md"];
-        let mut seen: BTreeSet<&'static str> = labels.iter().copied().collect();
+        let mut labels: Vec<String> =
+            vec!["Model", "Directory", "Approval", "Sandbox", "Agents.md"]
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+        let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
 
         if account_value.is_some() {
             push_label(&mut labels, &mut seen, "Account");
@@ -237,7 +236,7 @@ impl HistoryCell for StatusHistoryCell {
         push_label(&mut labels, &mut seen, "Token Usage");
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
-        let formatter = FieldFormatter::from_labels(labels.iter().copied());
+        let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_inner_width);
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
