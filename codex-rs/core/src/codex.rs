@@ -24,7 +24,6 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnContextItem;
 use futures::prelude::*;
 use mcp_types::CallToolResult;
@@ -34,7 +33,6 @@ use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
-use tokio::task::AbortHandle;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -107,7 +105,6 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
-use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
@@ -139,6 +136,7 @@ use codex_protocol::protocol::InitialHistory;
 pub mod compact;
 use self::compact::build_compacted_history;
 use self::compact::collect_user_messages;
+mod tasks;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -493,38 +491,6 @@ impl Session {
         }
 
         Ok((sess, turn_context))
-    }
-
-    pub async fn set_task(&self, task: AgentTask) {
-        let mut state = self.state.lock().await;
-        if let Some(current_task) = state.current_task.take() {
-            current_task.abort(TurnAbortReason::Replaced);
-        }
-        state.current_task = Some(task);
-        if let Some(current_task) = &state.current_task {
-            let mut active = self.active_turn.lock().await;
-            *active = Some(ActiveTurn {
-                sub_id: current_task.sub_id.clone(),
-                turn_state: std::sync::Arc::new(tokio::sync::Mutex::new(
-                    crate::state::TurnState::default(),
-                )),
-            });
-        }
-    }
-
-    pub async fn remove_task(&self, sub_id: &str) {
-        let mut state = self.state.lock().await;
-        if let Some(task) = &state.current_task
-            && task.sub_id == sub_id
-        {
-            state.current_task.take();
-        }
-        let mut active = self.active_turn.lock().await;
-        if let Some(at) = &*active
-            && at.sub_id == sub_id
-        {
-            *active = None;
-        }
     }
 
     fn next_internal_sub_id(&self) -> String {
@@ -1015,13 +981,13 @@ impl Session {
 
     /// Returns the input if there was no task running to inject into
     pub async fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
-        let state = self.state.lock().await;
-        if state.current_task.is_some() {
-            let mut active = self.active_turn.lock().await;
-            if let Some(at) = active.as_mut() {
-                let mut ts = at.turn_state.lock().await;
-                ts.push_pending_input(input.into());
+        let mut active = self.active_turn.lock().await;
+        if let Some(at) = active.as_mut() {
+            if at.is_empty() {
+                return Err(input);
             }
+            let mut ts = at.turn_state.lock().await;
+            ts.push_pending_input(input.into());
             Ok(())
         } else {
             Err(input)
@@ -1031,6 +997,9 @@ impl Session {
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut active = self.active_turn.lock().await;
         if let Some(at) = active.as_mut() {
+            if at.is_empty() {
+                return Vec::with_capacity(0);
+            }
             let mut ts = at.turn_state.lock().await;
             ts.take_pending_input()
         } else {
@@ -1050,29 +1019,22 @@ impl Session {
             .await
     }
 
-    pub async fn interrupt_task(&self) {
+    pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
-        let mut state = self.state.lock().await;
-        let mut active = self.active_turn.lock().await;
-        if let Some(at) = active.as_mut() {
-            let mut ts = at.turn_state.lock().await;
-            ts.clear_pending();
-        }
-        if let Some(task) = state.current_task.take() {
-            task.abort(TurnAbortReason::Interrupted);
-        }
+        self.abort_all_tasks(TurnAbortReason::Interrupted).await;
     }
 
     fn interrupt_task_sync(&self) {
-        if let Ok(mut state) = self.state.try_lock() {
-            if let Ok(mut active) = self.active_turn.try_lock()
-                && let Some(at) = active.as_mut()
-                && let Ok(mut ts) = at.turn_state.try_lock()
-            {
+        if let Ok(mut active) = self.active_turn.try_lock()
+            && let Some(at) = active.as_mut()
+        {
+            if let Ok(mut ts) = at.turn_state.try_lock() {
                 ts.clear_pending();
             }
-            if let Some(task) = state.current_task.take() {
-                task.abort(TurnAbortReason::Interrupted);
+            let tasks = at.drain_tasks();
+            *active = None;
+            for (_sub_id, task) in tasks {
+                task.handle.abort();
             }
         }
     }
@@ -1109,106 +1071,6 @@ pub(crate) struct ExecCommandContext {
 pub(crate) struct ApplyPatchCommandContext {
     pub(crate) user_explicitly_approved_this_action: bool,
     pub(crate) changes: HashMap<PathBuf, FileChange>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum AgentTaskKind {
-    Regular,
-    Review,
-    Compact,
-}
-
-/// A series of Turns in response to user input.
-pub(crate) struct AgentTask {
-    sess: Arc<Session>,
-    sub_id: String,
-    handle: AbortHandle,
-    kind: AgentTaskKind,
-}
-
-impl AgentTask {
-    fn spawn(
-        sess: Arc<Session>,
-        turn_context: Arc<TurnContext>,
-        sub_id: String,
-        input: Vec<InputItem>,
-    ) -> Self {
-        let handle = {
-            let sess = sess.clone();
-            let sub_id = sub_id.clone();
-            let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move { run_task(sess, tc, sub_id, input).await }).abort_handle()
-        };
-        Self {
-            sess,
-            sub_id,
-            handle,
-            kind: AgentTaskKind::Regular,
-        }
-    }
-
-    fn review(
-        sess: Arc<Session>,
-        turn_context: Arc<TurnContext>,
-        sub_id: String,
-        input: Vec<InputItem>,
-    ) -> Self {
-        let handle = {
-            let sess = sess.clone();
-            let sub_id = sub_id.clone();
-            let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move { run_task(sess, tc, sub_id, input).await }).abort_handle()
-        };
-        Self {
-            sess,
-            sub_id,
-            handle,
-            kind: AgentTaskKind::Review,
-        }
-    }
-
-    fn compact(
-        sess: Arc<Session>,
-        turn_context: Arc<TurnContext>,
-        sub_id: String,
-        input: Vec<InputItem>,
-    ) -> Self {
-        let handle = {
-            let sess = sess.clone();
-            let sub_id = sub_id.clone();
-            let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move { compact::run_compact_task(sess, tc, sub_id, input).await })
-                .abort_handle()
-        };
-        Self {
-            sess,
-            sub_id,
-            handle,
-            kind: AgentTaskKind::Compact,
-        }
-    }
-
-    fn abort(self, reason: TurnAbortReason) {
-        // TOCTOU?
-        if !self.handle.is_finished() {
-            self.handle.abort();
-            let sub_id = self.sub_id.clone();
-            let is_review = self.kind == AgentTaskKind::Review;
-            let sess = self.sess;
-            let event = Event {
-                id: sub_id.clone(),
-                msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
-            };
-            tokio::spawn(async move {
-                if is_review {
-                    exit_review_mode(sess.clone(), sub_id.clone(), None).await;
-                }
-                // Ensure active turn state is cleared when a task is aborted.
-                sess.remove_task(&sub_id).await;
-                sess.send_event(event).await;
-            });
-        }
-    }
 }
 
 async fn submission_loop(
@@ -1318,9 +1180,8 @@ async fn submission_loop(
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
                     // no current task, spawn a new one
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
-                    sess.set_task(task).await;
+                    sess.spawn_task_regular(Arc::clone(&turn_context), sub.id, items)
+                        .await;
                 }
             }
             Op::UserTurn {
@@ -1396,10 +1257,9 @@ async fn submission_loop(
                     // Install the new persistent context for subsequent tasks/turns.
                     turn_context = Arc::new(fresh_turn_context);
 
-                    // no current task, spawn a new one with the per‑turn context
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
-                    sess.set_task(task).await;
+                    // no current task, spawn a new one with the per-turn context
+                    sess.spawn_task_regular(Arc::clone(&turn_context), sub.id, items)
+                        .await;
                 }
             }
             Op::ExecApproval { id, decision } => match decision {
@@ -1497,13 +1357,8 @@ async fn submission_loop(
                     }])
                     .await
                 {
-                    compact::spawn_compact_task(
-                        sess.clone(),
-                        Arc::clone(&turn_context),
-                        sub.id,
-                        items,
-                    )
-                    .await;
+                    sess.spawn_task_compact(Arc::clone(&turn_context), sub.id, items)
+                        .await;
                 }
             }
             Op::Shutdown => {
@@ -1648,8 +1503,7 @@ async fn spawn_review_thread(
 
     // Clone sub_id for the upcoming announcement before moving it into the task.
     let sub_id_for_event = sub_id.clone();
-    let task = AgentTask::review(sess.clone(), tc.clone(), sub_id, input);
-    sess.set_task(task).await;
+    sess.spawn_task_review(tc.clone(), sub_id, input).await;
 
     // Announce entering review mode so UIs can switch modes.
     sess.send_event(Event {
@@ -1955,12 +1809,7 @@ async fn run_task(
         .await;
     }
 
-    sess.remove_task(&sub_id).await;
-    let event = Event {
-        id: sub_id,
-        msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
-    };
-    sess.send_event(event).await;
+    sess.on_task_finished(sub_id, last_agent_message).await;
 }
 
 /// Parse the review output; when not valid JSON, build a structured

@@ -683,6 +683,7 @@ dependencies = [
  "env-flags",
  "eventsource-stream",
  "futures",
+ "indexmap 2.10.0",
  "landlock",
  "libc",
  "maplit",
