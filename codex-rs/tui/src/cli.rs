@@ -74,4 +74,10 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+
+    /// Experimental: enable thread shims (multi-session scaffolding, header/status/commands).
+    /// Defaults to off; behavior is unchanged when disabled.
+    #[arg(long = "threads", default_value_t = false)]
+    pub threads: bool,
+    // Removed legacy title summarization flag; superseded by TitleToolShim.
 }

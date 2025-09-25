@@ -1270,6 +1270,7 @@ fn derive_config_from_params(
         include_plan_tool,
         include_apply_patch_tool,
         include_view_image_tool: None,
+        include_session_title_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
     };

@@ -24,8 +24,6 @@ pub(crate) struct StatusIndicatorWidget {
     header: String,
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
-    /// Latest user request summary.
-    request_summary: Option<String>,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -56,7 +54,6 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             queued_messages: Vec::new(),
-            request_summary: None,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -67,24 +64,10 @@ impl StatusIndicatorWidget {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // Status line + optional request summary line + optional blank line + wrapped queued
-        // messages (up to 3 lines per message) + optional ellipsis line per truncated message
-        // + 1 spacer line
+        // Status line + optional blank line + wrapped queued messages (up to 3 lines per message)
+        // + optional ellipsis line per truncated message + 1 spacer line
         let inner_width = width.max(1) as usize;
         let mut total: u16 = 1; // status line
-        if let Some(summary) = &self.request_summary {
-            let summary_width = inner_width.saturating_sub(4); // account for " ⟶ " prefix
-            if summary_width > 0 {
-                let wrapped = textwrap::wrap(summary, summary_width);
-                let lines = wrapped.len().min(2) as u16;
-                total = total.saturating_add(lines);
-                if wrapped.len() > 2 {
-                    total = total.saturating_add(1); // ellipsis line
-                }
-            } else {
-                total = total.saturating_add(1);
-            }
-        }
         if !self.queued_messages.is_empty() {
             total = total.saturating_add(1); // blank line between status and queued messages
         }
@@ -108,6 +91,14 @@ impl StatusIndicatorWidget {
         total.saturating_add(1) // spacer line
     }
 
+    /// Return a one-line snapshot of the current status header with elapsed time.
+    /// Example: "Working (1m 23s)".
+    pub(crate) fn snapshot(&self) -> String {
+        let elapsed = self.elapsed_seconds();
+        let pretty_elapsed = fmt_elapsed_compact(elapsed);
+        format!("{} ({pretty_elapsed})", self.header)
+    }
+
     pub(crate) fn interrupt(&self) {
         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
@@ -124,13 +115,6 @@ impl StatusIndicatorWidget {
         self.queued_messages = queued;
         // Ensure a redraw so changes are visible.
         self.frame_requester.schedule_frame();
-    }
-
-    pub(crate) fn set_request_summary(&mut self, summary: Option<String>) {
-        if self.request_summary != summary {
-            self.request_summary = summary;
-            self.frame_requester.schedule_frame();
-        }
     }
 
     pub(crate) fn pause_timer(&mut self) {
@@ -193,26 +177,9 @@ impl WidgetRef for StatusIndicatorWidget {
             " to interrupt)".dim(),
         ]);
 
-        // Build lines: status, optional summary, queued messages, then spacer.
+        // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(spans));
-        let summary_prefix = " ⟶ ";
-        if let Some(summary) = &self.request_summary {
-            let summary_width = area.width.saturating_sub(summary_prefix.len() as u16) as usize;
-            if summary_width > 0 {
-                let wrapped = textwrap::wrap(summary, summary_width);
-                for (i, piece) in wrapped.iter().take(2).enumerate() {
-                    let prefix = if i == 0 { summary_prefix } else { "    " };
-                    let content = format!("{prefix}{piece}");
-                    lines.push(Line::from(content.dim().italic()));
-                }
-                if wrapped.len() > 2 {
-                    lines.push(Line::from("    …".dim().italic()));
-                }
-            } else {
-                lines.push(Line::from(summary_prefix.dim().italic()));
-            }
-        }
         if !self.queued_messages.is_empty() {
             lines.push(Line::from(""));
         }
@@ -307,31 +274,6 @@ mod tests {
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
-    }
-
-    #[test]
-    fn renders_request_summary_line() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
-        w.set_request_summary(Some("Summarize recent commits".to_string()));
-
-        let area = Rect::new(0, 0, 80, 4);
-        let mut buf = Buffer::empty(area);
-        w.render_ref(area, &mut buf);
-
-        let mut found = false;
-        for y in 0..area.height {
-            let mut line = String::new();
-            for x in 0..area.width {
-                line.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
-            }
-            if line.contains("Summarize recent commits") {
-                found = true;
-                break;
-            }
-        }
-        assert!(found, "expected request summary text in status indicator");
     }
 
     #[test]

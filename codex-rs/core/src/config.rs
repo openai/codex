@@ -121,6 +121,8 @@ pub struct Config {
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
+    /// Optional configurable keymap for TUI shortcuts.
+    pub tui_keymap: Option<crate::config_types::TuiKeymap>,
 
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
@@ -186,6 +188,9 @@ pub struct Config {
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
+
+    /// Include the session title tool (`mcp__session__change_title`).
+    pub include_session_title_tool: bool,
 
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
@@ -841,6 +846,7 @@ pub struct ConfigOverrides {
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
+    pub include_session_title_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
 }
@@ -869,6 +875,7 @@ impl Config {
             include_plan_tool,
             include_apply_patch_tool,
             include_view_image_tool,
+            include_session_title_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
         } = overrides;
@@ -943,6 +950,7 @@ impl Config {
         let include_view_image_tool = include_view_image_tool
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
+        let include_session_title_tool = include_session_title_tool.unwrap_or(false);
 
         let model = model
             .or(config_profile.model)
@@ -1044,6 +1052,7 @@ impl Config {
                 .experimental_use_unified_exec_tool
                 .unwrap_or(false),
             include_view_image_tool,
+            include_session_title_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
@@ -1051,6 +1060,7 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            tui_keymap: cfg.tui.as_ref().and_then(|t| t.keymap.clone()),
         };
         Ok(config)
     }
@@ -1652,9 +1662,11 @@ model_verbosity = "high"
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
                 include_view_image_tool: true,
+                include_session_title_tool: false,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                tui_keymap: None,
             },
             o3_profile_config
         );
@@ -1710,9 +1722,11 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_keymap: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1783,9 +1797,11 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_keymap: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1842,9 +1858,11 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_keymap: None,
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

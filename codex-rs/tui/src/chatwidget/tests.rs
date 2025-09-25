@@ -1,7 +1,6 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::session_id::SessionId;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -286,7 +285,6 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
         auth_manager,
-        session_id: SessionId::new(0),
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -303,7 +301,6 @@ fn make_chatwidget_manual() -> (
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let cfg = test_config();
-    let session_id = SessionId::new(0);
     let bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
         frame_requester: FrameRequester::test_dummy(),
@@ -311,7 +308,6 @@ fn make_chatwidget_manual() -> (
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
-        session_id,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {
@@ -339,7 +335,10 @@ fn make_chatwidget_manual() -> (
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
-        session_id,
+        ghost_snapshots: Vec::new(),
+        ghost_snapshots_disabled: false,
+        shim_header_lines: Vec::new(),
+        shim_status_line: None,
     };
     (widget, rx, op_rx)
 }
@@ -355,31 +354,12 @@ pub(crate) fn make_chatwidget_manual_with_sender() -> (
     (widget, app_event_tx, rx, op_rx)
 }
 
-#[test]
-fn summarize_request_compacts_text() {
-    let summary = ChatWidget::summarize_request(
-        "but please explain how the database migration system works and what fails when running it"
-    );
-    assert_eq!(
-        summary,
-        "Please explain how the database migration system works and…"
-    );
-
-    let truncated = ChatWidget::summarize_request(
-        "list every single integration test failure the pipeline reported in the last forty eight hours and provide remediation steps"
-    );
-    assert_eq!(
-        truncated,
-        "List every single integration test failure the pipeline…"
-    );
-}
-
 fn drain_insert_history(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell { cell, .. } = ev {
+        if let AppEvent::InsertHistoryCell(cell) = ev {
             let mut lines = cell.display_lines(80);
             if !cell.is_stream_continuation() && !out.is_empty() && !lines.is_empty() {
                 lines.insert(0, "".into());
@@ -414,33 +394,22 @@ fn rate_limit_warnings_emit_thresholds() {
     warnings.extend(state.take_warnings(95.0, 10.0));
 
     assert_eq!(
-        warnings.len(),
-        6,
-        "expected one warning per threshold per limit"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 50% of your 5h limit.")),
-        "expected hourly 50% warning (new copy)"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 50% of your weekly limit.")),
-        "expected weekly 50% warning (new copy)"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 90% of your 5h limit.")),
-        "expected hourly 90% warning (new copy)"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("Heads up, you've used over 90% of your weekly limit.")),
-        "expected weekly 90% warning (new copy)"
+        warnings,
+        vec![
+            String::from(
+                "Heads up, you've used over 75% of your 5h limit. Run /status for a breakdown."
+            ),
+            String::from(
+                "Heads up, you've used over 75% of your weekly limit. Run /status for a breakdown.",
+            ),
+            String::from(
+                "Heads up, you've used over 95% of your 5h limit. Run /status for a breakdown."
+            ),
+            String::from(
+                "Heads up, you've used over 95% of your weekly limit. Run /status for a breakdown.",
+            ),
+        ],
+        "expected one warning per limit for the highest crossed threshold"
     );
 }
 
@@ -1079,7 +1048,7 @@ async fn binary_size_transcript_snapshot() {
                     };
                     chat.handle_codex_event(ev);
                     while let Ok(app_ev) = rx.try_recv() {
-                        if let AppEvent::InsertHistoryCell { cell, .. } = app_ev {
+                        if let AppEvent::InsertHistoryCell(cell) = app_ev {
                             let mut lines = cell.display_lines(width);
                             if has_emitted_history
                                 && !cell.is_stream_continuation()
@@ -1104,7 +1073,7 @@ async fn binary_size_transcript_snapshot() {
                 {
                     chat.on_commit_tick();
                     while let Ok(app_ev) = rx.try_recv() {
-                        if let AppEvent::InsertHistoryCell { cell, .. } = app_ev {
+                        if let AppEvent::InsertHistoryCell(cell) = app_ev {
                             let mut lines = cell.display_lines(width);
                             if has_emitted_history
                                 && !cell.is_stream_continuation()
@@ -2216,7 +2185,7 @@ printf 'fenced within fenced\n'
             chat.on_commit_tick();
             let mut inserted_any = false;
             while let Ok(app_ev) = rx.try_recv() {
-                if let AppEvent::InsertHistoryCell { cell, .. } = app_ev {
+                if let AppEvent::InsertHistoryCell(cell) = app_ev {
                     let lines = cell.display_lines(width);
                     crate::insert_history::insert_history_lines_to_writer(
                         &mut term, &mut ansi, lines,

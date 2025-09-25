@@ -41,3 +41,15 @@ test:
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"
+
+# Build codex-cli and symlink it as `codex-dev` into ~/.cargo/bin
+codex-dev-link:
+    cargo build -p codex-cli -q
+    mkdir -p "$HOME/.cargo/bin"
+    ln -sf "$(pwd)/target/debug/codex" "$HOME/.cargo/bin/codex-dev"
+    echo "Linked: $HOME/.cargo/bin/codex-dev -> $(pwd)/target/debug/codex"
+
+# Remove the codex-dev symlink
+codex-dev-unlink:
+    rm -f "$HOME/.cargo/bin/codex-dev"
+    echo "Removed: $HOME/.cargo/bin/codex-dev"

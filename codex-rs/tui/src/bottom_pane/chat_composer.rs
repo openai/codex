@@ -18,9 +18,8 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
-use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
-use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
@@ -89,7 +88,7 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
-    thread_indicator: Option<String>,
+    footer_extra: Option<Line<'static>>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -133,7 +132,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
-            thread_indicator: None,
+            footer_extra: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -141,41 +140,31 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let thread_extra =
-            if matches!(self.active_popup, ActivePopup::None) && self.thread_indicator.is_some() {
-                1
-            } else {
-                0
-            };
         // Leave 1 column for the left border and 1 column for left padding
+        let footer_height = if matches!(self.active_popup, ActivePopup::None) {
+            // Dynamic: include extra footer line if one is set.
+            FOOTER_HEIGHT_WITH_HINT + if self.footer_extra.is_some() { 1 } else { 0 }
+        } else {
+            0
+        };
         self.textarea
             .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
             + match &self.active_popup {
-                ActivePopup::None => FOOTER_HEIGHT_WITH_HINT + thread_extra,
+                ActivePopup::None => footer_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
 
-    pub(crate) fn set_thread_indicator(&mut self, indicator: Option<String>) {
-        if self.thread_indicator != indicator {
-            self.thread_indicator = indicator;
-        }
-    }
-
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let thread_extra =
-            if matches!(self.active_popup, ActivePopup::None) && self.thread_indicator.is_some() {
-                1
-            } else {
-                0
-            };
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
-            ActivePopup::None => Constraint::Max(FOOTER_HEIGHT_WITH_HINT + thread_extra),
+            ActivePopup::None => Constraint::Max(
+                FOOTER_HEIGHT_WITH_HINT + if self.footer_extra.is_some() { 1 } else { 0 },
+            ),
         };
         let [textarea_rect, _] =
             Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
@@ -1251,13 +1240,15 @@ impl ChatComposer {
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
     }
+
+    pub(crate) fn set_footer_extra_line(&mut self, line: Option<Line<'static>>) {
+        self.footer_extra = line;
+    }
 }
 
 impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let thread_active =
-            matches!(self.active_popup, ActivePopup::None) && self.thread_indicator.is_some();
-        let thread_height_extra = if thread_active { 1 } else { 0 };
+        let extra_height = if self.footer_extra.is_some() { 1 } else { 0 };
         let (popup_constraint, hint_spacing) = match &self.active_popup {
             ActivePopup::Command(popup) => (
                 Constraint::Max(popup.calculate_required_height(area.width)),
@@ -1265,12 +1256,8 @@ impl WidgetRef for ChatComposer {
             ),
             ActivePopup::File(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
             ActivePopup::None => (
-                Constraint::Length(FOOTER_HEIGHT_WITH_HINT + thread_height_extra),
-                if thread_active {
-                    0
-                } else {
-                    FOOTER_SPACING_HEIGHT
-                },
+                Constraint::Length(FOOTER_HEIGHT_WITH_HINT + extra_height),
+                FOOTER_SPACING_HEIGHT,
             ),
         };
         let [textarea_rect, popup_rect] =
@@ -1283,34 +1270,18 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                Clear.render(popup_rect, buf);
-                let mut hint_rect = popup_rect;
-                let mut thread_rect = None;
-                if thread_active {
-                    let chunks = Layout::vertical([
-                        Constraint::Length(FOOTER_SPACING_HEIGHT),
-                        Constraint::Length(1),
-                        Constraint::Length(FOOTER_HINT_HEIGHT),
-                    ])
-                    .split(popup_rect);
-                    thread_rect = Some(chunks[1]);
-                    hint_rect = chunks[2];
-                } else if hint_spacing > 0 {
-                    let chunks = Layout::vertical([
+                let hint_lines =
+                    FOOTER_HINT_HEIGHT + if self.footer_extra.is_some() { 1 } else { 0 };
+                let hint_rect = if hint_spacing > 0 {
+                    let [_, hint_rect] = Layout::vertical([
                         Constraint::Length(hint_spacing),
-                        Constraint::Length(FOOTER_HINT_HEIGHT),
+                        Constraint::Length(hint_lines),
                     ])
-                    .split(popup_rect);
-                    hint_rect = chunks[1];
-                }
-
-                if let (Some(indicator), Some(thread_area)) = (&self.thread_indicator, thread_rect)
-                {
-                    Line::from(indicator.clone())
-                        .style(Style::default().add_modifier(Modifier::DIM))
-                        .render_ref(thread_area, buf);
-                }
-
+                    .areas(popup_rect);
+                    hint_rect
+                } else {
+                    popup_rect
+                };
                 let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
                     let ctrl_c_followup = if self.is_task_running {
                         " to interrupt"
@@ -1378,9 +1349,24 @@ impl WidgetRef for ChatComposer {
                     }
                 }
 
-                Line::from(hint)
-                    .style(Style::default().dim())
-                    .render_ref(hint_rect, buf);
+                if let Some(extra) = &self.footer_extra {
+                    // Render session status line above controls tooltips line, no spacing between them.
+                    let [extra_line, hint_line] = Layout::vertical([
+                        Constraint::Length(1),
+                        Constraint::Length(FOOTER_HINT_HEIGHT),
+                    ])
+                    .areas(hint_rect);
+                    // Session line (already styled by shim)
+                    Paragraph::new(vec![extra.clone()]).render_ref(extra_line, buf);
+                    // Controls tooltips line (dim)
+                    Line::from(hint)
+                        .style(Style::default().dim())
+                        .render_ref(hint_line, buf);
+                } else {
+                    Line::from(hint)
+                        .style(Style::default().dim())
+                        .render_ref(hint_rect, buf);
+                }
             }
         }
         let border_style = if self.has_focus {
@@ -1936,7 +1922,7 @@ mod tests {
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
-        assert_eq!(composer.textarea.text(), "/clear ");
+        assert_eq!(composer.textarea.text(), "/compact ");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
     }
 

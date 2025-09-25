@@ -2,95 +2,6 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-/// Produce a compact request summary suitable for thread titles or status lines.
-pub(crate) fn concise_request_summary(
-    text: &str,
-    max_words: usize,
-    max_len: usize,
-) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let normalized = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() {
-        return None;
-    }
-
-    let mut clauses: Vec<&str> = normalized
-        .split(&['.', '?', '!'][..])
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    let mut clause = clauses
-        .pop()
-        .or_else(|| clauses.first().copied())
-        .unwrap_or(&normalized);
-
-    for conjunction in ["but", "and", "so"] {
-        let lowered = clause.to_ascii_lowercase();
-        let prefix = format!("{conjunction} ");
-        if lowered.starts_with(&prefix) {
-            clause = clause[prefix.len()..].trim_start();
-            break;
-        }
-    }
-
-    let mut summary = String::new();
-    let mut word_count = 0;
-    let mut truncated = false;
-    let mut words_iter = clause.split_whitespace().peekable();
-
-    for word in words_iter.by_ref() {
-        let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '\'');
-        if cleaned.is_empty() {
-            continue;
-        }
-        let additional_len = cleaned.len() + if summary.is_empty() { 0 } else { 1 };
-        if summary.len() + additional_len > max_len || word_count >= max_words {
-            truncated = true;
-            break;
-        }
-        if !summary.is_empty() {
-            summary.push(' ');
-        }
-        summary.push_str(cleaned);
-        word_count += 1;
-    }
-
-    if summary.is_empty() {
-        let mut fallback = normalized.chars().take(max_len).collect::<String>();
-        if normalized.len() > fallback.len() {
-            fallback.push('…');
-        }
-        return Some(capitalize_first(&fallback));
-    }
-
-    if truncated
-        || words_iter.any(|w| {
-            !w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '\'')
-                .is_empty()
-        })
-    {
-        summary.push('…');
-    }
-
-    Some(capitalize_first(&summary))
-}
-
-fn capitalize_first(text: &str) -> String {
-    let mut chars = text.chars();
-    if let Some(first) = chars.next() {
-        let mut result = first.to_uppercase().collect::<String>();
-        result.push_str(chars.as_str());
-        result
-    } else {
-        String::new()
-    }
-}
-
 /// Truncate a tool result to fit within the given height and width. If the text is valid JSON, we format it in a compact way before truncating.
 /// This is a best-effort approach that may not work perfectly for text where 1 grapheme is rendered as multiple terminal cells.
 pub(crate) fn format_and_truncate_tool_result(
@@ -610,20 +521,5 @@ mod tests {
         assert_eq!(format_json_compact("false").unwrap(), "false");
         assert_eq!(format_json_compact("null").unwrap(), "null");
         assert_eq!(format_json_compact(r#""string""#).unwrap(), r#""string""#);
-    }
-
-    #[test]
-    fn concise_summary_prefers_last_clause() {
-        let text =
-            "The Statue of Liberty stands 305 feet tall. But how tall is the replica in Las Vegas?";
-        let summary = concise_request_summary(text, 8, 60).expect("summary");
-        assert_eq!(summary, "How tall is the replica in Las Vegas");
-    }
-
-    #[test]
-    fn concise_summary_handles_short_text() {
-        let text = "summarize recent commits";
-        let summary = concise_request_summary(text, 8, 60).expect("summary");
-        assert_eq!(summary, "Summarize recent commits");
     }
 }

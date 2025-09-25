@@ -13,10 +13,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use std::time::Duration;
-
-use crate::session_id::SessionId;
 
 mod approval_modal_view;
 mod bottom_pane_view;
@@ -59,7 +59,6 @@ pub(crate) struct BottomPane {
 
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
-    session_id: SessionId,
 
     has_input_focus: bool,
     is_task_running: bool,
@@ -70,8 +69,8 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
-    /// Most recent user request summary shown with the status indicator.
-    current_request_summary: Option<String>,
+    /// Optional single-line status override (used when not running a task).
+    status_override: Option<Line<'static>>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -81,7 +80,6 @@ pub(crate) struct BottomPaneParams {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
-    pub(crate) session_id: SessionId,
 }
 
 impl BottomPane {
@@ -99,14 +97,13 @@ impl BottomPane {
             view_stack: Vec::new(),
             app_event_tx: params.app_event_tx,
             frame_requester: params.frame_requester,
-            session_id: params.session_id,
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
             status: None,
             queued_user_messages: Vec::new(),
+            status_override: None,
             esc_backtrack_hint: false,
-            current_request_summary: None,
         }
     }
 
@@ -119,6 +116,18 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// If the active view is a list selection popup accepting updates,
+    /// refresh its items and request a redraw. Returns true if updated.
+    pub(crate) fn try_refresh_selection_items(&mut self, items: Vec<SelectionItem>) -> bool {
+        if let Some(view) = self.view_stack.last_mut()
+            && view.update_items(items)
+        {
+            self.request_redraw();
+            return true;
+        }
+        false
+    }
+
     pub fn desired_height(&self, width: u16) -> u16 {
         // Always reserve one blank row above the pane for visual spacing.
         let top_margin = 1;
@@ -126,11 +135,21 @@ impl BottomPane {
         // Base height depends on whether a modal/overlay is active.
         let base = match self.active_view().as_ref() {
             Some(view) => view.desired_height(width),
-            None => self.composer.desired_height(width).saturating_add(
-                self.status
+            None => {
+                let status_height = self
+                    .status
                     .as_ref()
-                    .map_or(0, |status| status.desired_height(width)),
-            ),
+                    .map_or(0, |status| status.desired_height(width));
+                let override_height = if self.status.is_none() {
+                    self.status_override.as_ref().map_or(0, |_| 1)
+                } else {
+                    0
+                };
+                self.composer
+                    .desired_height(width)
+                    .saturating_add(status_height)
+                    .saturating_add(override_height)
+            }
         };
         // Account for bottom padding rows. Top spacing is handled in layout().
         base.saturating_add(Self::BOTTOM_PAD_LINES)
@@ -158,8 +177,16 @@ impl BottomPane {
                     .status
                     .as_ref()
                     .map_or(0, |status| status.desired_height(area.width));
-                Layout::vertical([Constraint::Length(status_height), Constraint::Min(1)])
-                    .areas(area)
+                let override_height = if self.status.is_none() {
+                    self.status_override.as_ref().map_or(0, |_| 1)
+                } else {
+                    0
+                };
+                Layout::vertical([
+                    Constraint::Max(status_height + override_height),
+                    Constraint::Min(1),
+                ])
+                .areas(area)
             }
         }
     }
@@ -335,7 +362,6 @@ impl BottomPane {
                 ));
             }
             if let Some(status) = self.status.as_mut() {
-                status.set_request_summary(self.current_request_summary.clone());
                 status.set_queued_messages(self.queued_user_messages.clone());
             }
             self.request_redraw();
@@ -345,15 +371,20 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.is_task_running
+    }
+
+    pub(crate) fn status_snapshot(&self) -> Option<String> {
+        self.status
+            .as_ref()
+            .map(super::status_indicator_widget::StatusIndicatorWidget::snapshot)
+    }
+
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
         self.push_view(Box::new(view));
-    }
-
-    pub(crate) fn set_thread_indicator(&mut self, indicator: Option<String>) {
-        self.composer.set_thread_indicator(indicator);
-        self.request_redraw();
     }
 
     /// Update the queued messages shown under the status header.
@@ -361,14 +392,6 @@ impl BottomPane {
         self.queued_user_messages = queued.clone();
         if let Some(status) = self.status.as_mut() {
             status.set_queued_messages(queued);
-        }
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_request_summary(&mut self, summary: Option<String>) {
-        self.current_request_summary = summary.clone();
-        if let Some(status) = self.status.as_mut() {
-            status.set_request_summary(summary);
         }
         self.request_redraw();
     }
@@ -383,10 +406,6 @@ impl BottomPane {
         self.composer.is_empty()
     }
 
-    pub(crate) fn is_task_running(&self) -> bool {
-        self.is_task_running
-    }
-
     /// Return true when the pane is in the regular composer state without any
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
@@ -399,6 +418,27 @@ impl BottomPane {
     pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
         self.composer.set_token_usage(token_info);
         self.request_redraw();
+    }
+
+    /// Set an extra footer line to render under the standard control hints.
+    pub(crate) fn set_footer_extra_line(&mut self, line: Option<Line<'static>>) {
+        self.composer.set_footer_extra_line(line);
+        self.request_redraw();
+    }
+
+    /// Optional status override line used by shims; rendered when no task is running.
+    #[allow(dead_code)]
+    pub(crate) fn set_status_override_line(&mut self, line: Option<Line<'static>>) {
+        // Only show override when there is no running status indicator
+        if self.status.is_none() {
+            // Create the field if missing (older struct versions won't have it)
+            // SAFETY: We rely on the struct having the field; initialized in new().
+            #[allow(clippy::needless_return)]
+            {
+                self.status_override = line;
+            }
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
@@ -420,7 +460,7 @@ impl BottomPane {
         };
 
         // Otherwise create a new approval modal overlay.
-        let modal = ApprovalModalView::new(request, self.app_event_tx.clone(), self.session_id);
+        let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
         self.pause_status_timer_for_modal();
         self.push_view(Box::new(modal));
     }
@@ -515,6 +555,8 @@ impl WidgetRef for &BottomPane {
             // If a status indicator is active, render it above the composer.
             if let Some(status) = &self.status {
                 status.render_ref(status_area, buf);
+            } else if let Some(line) = &self.status_override {
+                Paragraph::new(vec![line.clone()]).render_ref(status_area, buf);
             }
 
             // Render the composer in the remaining area.
@@ -550,7 +592,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            session_id: SessionId::new(0),
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -571,7 +612,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            session_id: SessionId::new(0),
         });
 
         // Create an approval modal (active view).
@@ -603,7 +643,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            session_id: SessionId::new(0),
         });
 
         // Start a running task so the status indicator is active above the composer.
@@ -662,80 +701,6 @@ mod tests {
     }
 
     #[test]
-    fn thread_indicator_renders_above_controls() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = BottomPane::new(BottomPaneParams {
-            app_event_tx: tx,
-            frame_requester: FrameRequester::test_dummy(),
-            has_input_focus: true,
-            enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
-            disable_paste_burst: false,
-            session_id: SessionId::new(0),
-        });
-
-        pane.set_thread_indicator(Some("Thread: ⎇ #main → thread-1".to_string()));
-
-        let height = pane.desired_height(40).max(6);
-        let area = Rect::new(0, 0, 40, height);
-        let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
-
-        let mut composer_row = None;
-        let mut thread_row = None;
-        let mut controls_row = None;
-        for y in 0..area.height {
-            let mut line = String::new();
-            for x in 0..area.width {
-                line.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
-            }
-            if thread_row.is_none() && line.contains("Thread:") {
-                thread_row = Some(y);
-            }
-            if composer_row.is_none() && line.contains("Ask Codex") {
-                composer_row = Some(y);
-            }
-            if controls_row.is_none() && line.contains("⏎ send") {
-                controls_row = Some(y);
-            }
-        }
-
-        let thread_row = thread_row.expect("thread indicator row");
-        let composer_row = composer_row.expect("composer row");
-        let controls_row = controls_row.expect("controls row");
-        assert!(
-            composer_row <= thread_row && thread_row < controls_row,
-            "expected thread indicator between composer and controls (composer={composer_row}, thread={thread_row}, controls={controls_row})"
-        );
-
-        assert!(
-            thread_row > composer_row + 1,
-            "expected blank spacer between composer and thread indicator"
-        );
-        let mut spacer = String::new();
-        for x in 0..area.width {
-            spacer.push(
-                buf[(x, thread_row - 1)]
-                    .symbol()
-                    .chars()
-                    .next()
-                    .unwrap_or(' '),
-            );
-        }
-        assert!(
-            spacer.trim().is_empty(),
-            "expected spacer row to be blank but saw: {spacer:?}"
-        );
-
-        assert_eq!(
-            controls_row,
-            thread_row + 1,
-            "expected controls row immediately below thread indicator (thread={thread_row}, controls={controls_row})"
-        );
-    }
-
-    #[test]
     fn status_indicator_visible_during_command_execution() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -746,7 +711,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            session_id: SessionId::new(0),
         });
 
         // Begin a task: show initial status.
@@ -778,7 +742,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            session_id: SessionId::new(0),
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -830,7 +793,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            session_id: SessionId::new(0),
         });
 
         pane.set_task_running(true);

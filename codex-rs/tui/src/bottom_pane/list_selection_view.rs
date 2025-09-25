@@ -31,7 +31,6 @@ pub(crate) struct SelectionItem {
     pub search_value: Option<String>,
 }
 
-#[derive(Default)]
 pub(crate) struct SelectionViewParams {
     pub title: String,
     pub subtitle: Option<String>,
@@ -39,6 +38,23 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
+    pub show_numbers: bool,
+    pub show_current_suffix: bool,
+}
+
+impl Default for SelectionViewParams {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            subtitle: None,
+            footer_hint: None,
+            items: Vec::new(),
+            is_searchable: false,
+            search_placeholder: None,
+            show_numbers: true,
+            show_current_suffix: true,
+        }
+    }
 }
 
 pub(crate) struct ListSelectionView {
@@ -53,6 +69,8 @@ pub(crate) struct ListSelectionView {
     search_query: String,
     search_placeholder: Option<String>,
     filtered_indices: Vec<usize>,
+    show_numbers: bool,
+    show_current_suffix: bool,
 }
 
 impl ListSelectionView {
@@ -82,6 +100,8 @@ impl ListSelectionView {
                 None
             },
             filtered_indices: Vec::new(),
+            show_numbers: params.show_numbers,
+            show_current_suffix: params.show_current_suffix,
         };
         s.apply_filter();
         s
@@ -161,13 +181,17 @@ impl ListSelectionView {
                     let is_selected = self.state.selected_idx == Some(visible_idx);
                     let prefix = if is_selected { '>' } else { ' ' };
                     let name = item.name.as_str();
-                    let name_with_marker = if item.is_current {
+                    let name_with_marker = if self.show_current_suffix && item.is_current {
                         format!("{name} (current)")
                     } else {
                         item.name.clone()
                     };
-                    let n = visible_idx + 1;
-                    let display_name = format!("{prefix} {n}. {name_with_marker}");
+                    let display_name = if self.show_numbers {
+                        let n = visible_idx + 1;
+                        format!("{prefix} {n}. {name_with_marker}")
+                    } else {
+                        format!("{prefix} {name_with_marker}")
+                    };
                     GenericDisplayRow {
                         name: display_name,
                         match_indices: None,
@@ -384,6 +408,17 @@ impl BottomPaneView for ListSelectionView {
             let footer_para = Paragraph::new(hint.clone().dim());
             footer_para.render(footer_area, buf);
         }
+    }
+
+    fn update_items(&mut self, items: Vec<super::SelectionItem>) -> bool {
+        // Only refresh items for the thread manager popup to avoid
+        // accidental updates to unrelated selection views.
+        if self.title != "Manage Sessions" {
+            return false;
+        }
+        self.items = items;
+        self.apply_filter();
+        true
     }
 }
 

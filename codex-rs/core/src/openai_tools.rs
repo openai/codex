@@ -67,6 +67,8 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    // Optional: include a lightweight session title update tool
+    pub include_session_title_tool: bool,
     pub experimental_unified_exec_tool: bool,
 }
 
@@ -77,6 +79,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) include_web_search_request: bool,
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
+    pub(crate) include_session_title_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
 }
 
@@ -89,6 +92,7 @@ impl ToolsConfig {
             include_web_search_request,
             use_streamable_shell_tool,
             include_view_image_tool,
+            include_session_title_tool,
             experimental_unified_exec_tool,
         } = params;
         let shell_type = if *use_streamable_shell_tool {
@@ -117,6 +121,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
+            include_session_title_tool: *include_session_title_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
         }
     }
@@ -271,6 +276,36 @@ fn create_view_image_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_session_title_tool() -> OpenAiTool {
+    // name is intentionally prefixed with mcp__ to align with other MCP-like tools
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "title".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Concise 3–8 word title describing the current session/thread".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "reason".to_string(),
+        JsonSchema::String {
+            description: Some("Optional rationale for the chosen title".to_string()),
+        },
+    );
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "mcp__session__change_title".to_string(),
+        description: "Set or update the current session/thread title.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["title".to_string()]),
             additional_properties: Some(false),
         },
     })
@@ -526,6 +561,10 @@ pub(crate) fn get_openai_tools(
     if config.include_view_image_tool {
         tools.push(create_view_image_tool());
     }
+
+    if config.include_session_title_tool {
+        tools.push(create_session_title_tool());
+    }
     if let Some(mcp_tools) = mcp_tools {
         // Ensure deterministic ordering to maximize prompt cache hits.
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
@@ -587,6 +626,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             experimental_unified_exec_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
@@ -607,6 +647,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             experimental_unified_exec_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
@@ -627,6 +668,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             experimental_unified_exec_tool: true,
         });
         let tools = get_openai_tools(
@@ -731,6 +773,7 @@ mod tests {
             include_web_search_request: false,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             experimental_unified_exec_tool: true,
         });
 
@@ -807,6 +850,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             experimental_unified_exec_tool: true,
         });
 
@@ -868,6 +912,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             experimental_unified_exec_tool: true,
         });
 
@@ -924,6 +969,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             experimental_unified_exec_tool: true,
         });
 
@@ -983,6 +1029,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_session_title_tool: false,
             experimental_unified_exec_tool: true,
         });
 

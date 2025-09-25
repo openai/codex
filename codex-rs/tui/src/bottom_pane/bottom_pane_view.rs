@@ -46,4 +46,10 @@ pub(crate) trait BottomPaneView {
     ) -> Option<ApprovalRequest> {
         Some(request)
     }
+
+    /// Optionally update the list items for selection views. Returns true if
+    /// the view accepted and applied the update.
+    fn update_items(&mut self, _items: Vec<super::SelectionItem>) -> bool {
+        false
+    }
 }

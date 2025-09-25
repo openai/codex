@@ -5,10 +5,6 @@ impl SessionId {
     pub(crate) const fn new(raw: u64) -> Self {
         Self(raw)
     }
-
-    pub(crate) const fn raw(self) -> u64 {
-        self.0
-    }
 }
 
 impl std::fmt::Display for SessionId {

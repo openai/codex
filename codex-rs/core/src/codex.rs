@@ -460,6 +460,7 @@ impl Session {
                 include_web_search_request: config.tools_web_search_request,
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 include_view_image_tool: config.include_view_image_tool,
+                include_session_title_tool: config.include_session_title_tool,
                 experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
             }),
             user_instructions,
@@ -1227,6 +1228,7 @@ async fn submission_loop(
                     include_web_search_request: config.tools_web_search_request,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
+                    include_session_title_tool: config.include_session_title_tool,
                     experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
                 });
 
@@ -1314,6 +1316,7 @@ async fn submission_loop(
                             use_streamable_shell_tool: config
                                 .use_experimental_streamable_shell_tool,
                             include_view_image_tool: config.include_view_image_tool,
+                            include_session_title_tool: config.include_session_title_tool,
                             experimental_unified_exec_tool: config
                                 .use_experimental_unified_exec_tool,
                         }),
@@ -1539,6 +1542,7 @@ async fn spawn_review_thread(
         include_web_search_request: false,
         use_streamable_shell_tool: false,
         include_view_image_tool: false,
+        include_session_title_tool: false,
         experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
     });
 
@@ -2418,6 +2422,42 @@ async fn handle_function_call(
                 call_id,
             )
             .await
+        }
+        "mcp__session__change_title" => {
+            #[derive(Deserialize)]
+            struct TitleArgs {
+                title: String,
+                #[allow(dead_code)]
+                #[serde(default)]
+                reason: Option<String>,
+            }
+            let args = match serde_json::from_str::<TitleArgs>(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            // Notify front-end via a background event (shim will consume and update UI)
+            let event = Event {
+                id: sub_id.clone(),
+                msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                    message: format!("codex:set_session_title:{}", args.title),
+                }),
+            };
+            sess.send_event(event).await;
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("session title updated to: {}", args.title),
+                    success: Some(true),
+                },
+            }
         }
         "unified_exec" => {
             #[derive(Deserialize)]
@@ -3595,6 +3635,7 @@ mod tests {
             include_web_search_request: config.tools_web_search_request,
             use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
             include_view_image_tool: config.include_view_image_tool,
+            include_session_title_tool: config.include_session_title_tool,
             experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
         });
         let turn_context = TurnContext {

@@ -110,28 +110,16 @@ pub(crate) async fn append_entry(
     // Ensure permissions.
     ensure_owner_only_permissions(&history_file).await?;
 
-    // Perform a blocking write under an advisory write lock using std::fs.
+    // Perform a blocking write under an advisory lock implemented via a sidecar
+    // lock file to avoid using unstable std::fs File locking APIs.
     tokio::task::spawn_blocking(move || -> Result<()> {
-        // Retry a few times to avoid indefinite blocking when contended.
-        for _ in 0..MAX_RETRIES {
-            match history_file.try_lock() {
-                Ok(()) => {
-                    // While holding the exclusive lock, write the full line.
-                    history_file.write_all(line.as_bytes())?;
-                    history_file.flush()?;
-                    return Ok(());
-                }
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    std::thread::sleep(RETRY_SLEEP);
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::WouldBlock,
-            "could not acquire exclusive lock on history file after multiple attempts",
-        ))
+        let lock_guard = acquire_exclusive_history_lock(&path)?;
+        // While holding the exclusive lock, write the full line.
+        history_file.write_all(line.as_bytes())?;
+        history_file.flush()?;
+        // Ensure guard isn't dropped until after write/flush completes.
+        drop(lock_guard);
+        Ok(())
     })
     .await??;
 
@@ -215,44 +203,32 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
 
     // Open & lock file for reading using a shared lock.
     // Retry a few times to avoid indefinite blocking.
-    for _ in 0..MAX_RETRIES {
-        let lock_result = file.try_lock_shared();
+    // Wait briefly if a writer holds the lock file.
+    if !wait_for_history_unlock(&path) {
+        return None;
+    }
 
-        match lock_result {
-            Ok(()) => {
-                let reader = BufReader::new(&file);
-                for (idx, line_res) in reader.lines().enumerate() {
-                    let line = match line_res {
-                        Ok(l) => l,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "failed to read line from history file");
-                            return None;
-                        }
-                    };
-
-                    if idx == offset {
-                        match serde_json::from_str::<HistoryEntry>(&line) {
-                            Ok(entry) => return Some(entry),
-                            Err(e) => {
-                                tracing::warn!(error = %e, "failed to parse history entry");
-                                return None;
-                            }
-                        }
-                    }
-                }
-                // Not found at requested offset.
-                return None;
-            }
-            Err(std::fs::TryLockError::WouldBlock) => {
-                std::thread::sleep(RETRY_SLEEP);
-            }
+    let reader = BufReader::new(&file);
+    for (idx, line_res) in reader.lines().enumerate() {
+        let line = match line_res {
+            Ok(l) => l,
             Err(e) => {
-                tracing::warn!(error = %e, "failed to acquire shared lock on history file");
+                tracing::warn!(error = %e, "failed to read line from history file");
                 return None;
+            }
+        };
+
+        if idx == offset {
+            match serde_json::from_str::<HistoryEntry>(&line) {
+                Ok(entry) => return Some(entry),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse history entry");
+                    return None;
+                }
             }
         }
     }
-
+    // Not found at requested offset.
     None
 }
 
@@ -283,4 +259,77 @@ async fn ensure_owner_only_permissions(file: &File) -> Result<()> {
 async fn ensure_owner_only_permissions(_file: &File) -> Result<()> {
     // For now, on non-Unix, simply succeed.
     Ok(())
+}
+
+/// Acquire an exclusive lock for the history file by creating a sidecar
+/// `*.lock` file with `create_new(true)`. Returns a guard that removes the lock
+/// file when dropped. Retries a few times if the lock already exists.
+fn acquire_exclusive_history_lock(path: &std::path::Path) -> Result<HistoryLockGuard> {
+    let mut lock_path = PathBuf::from(path);
+    let lock_file_name = match lock_path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => format!("{name}.lock"),
+        None => "history.lock".to_string(),
+    };
+    lock_path.set_file_name(lock_file_name);
+
+    for _ in 0..MAX_RETRIES {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(f) => {
+                // Best-effort ensure permissions on Unix
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+                }
+                return Ok(HistoryLockGuard { lock_path });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::thread::sleep(RETRY_SLEEP);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        "could not acquire exclusive history lock after multiple attempts",
+    ))
+}
+
+/// Wait until the history lock file is not present, retrying up to MAX_RETRIES.
+#[cfg(unix)]
+fn wait_for_history_unlock(path: &std::path::Path) -> bool {
+    let mut lock_path = PathBuf::from(path);
+    let lock_file_name = match lock_path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => format!("{name}.lock"),
+        None => "history.lock".to_string(),
+    };
+    lock_path.set_file_name(lock_file_name);
+
+    for _ in 0..MAX_RETRIES {
+        if !lock_path.exists() {
+            return true;
+        }
+        std::thread::sleep(RETRY_SLEEP);
+    }
+    false
+}
+
+#[cfg(not(unix))]
+fn wait_for_history_unlock(_path: &std::path::Path) -> bool {
+    true
+}
+
+struct HistoryLockGuard {
+    lock_path: PathBuf,
+}
+
+impl Drop for HistoryLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.lock_path);
+    }
 }

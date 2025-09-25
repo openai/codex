@@ -1,21 +1,23 @@
 //! Support for `-c key=value` overrides shared across Codex CLI tools.
 //!
-//! This module provides a [`CliConfigOverrides`] struct that can be embedded
-//! into a `clap`-derived CLI struct using `#[clap(flatten)]`. Each occurrence
-//! of `-c key=value` (or `--config key=value`) will be collected as a raw
-//! string. Helper methods are provided to convert the raw strings into
-//! key/value pairs as well as to apply them onto a mutable
-//! `serde_json::Value` representing the configuration tree.
+//! When the `cli` feature is enabled, this module exposes a `CliConfigOverrides`
+//! type usable with `clap`. Without the feature, a stub struct is provided so
+//! the crate can compile without pulling in `clap`/`toml`/`serde`.
 
+#[cfg(feature = "cli")]
 use clap::ArgAction;
+#[cfg(feature = "cli")]
 use clap::Parser;
+#[cfg(feature = "cli")]
 use serde::de::Error as SerdeError;
+#[cfg(feature = "cli")]
 use toml::Value;
 
 /// CLI option that captures arbitrary configuration overrides specified as
 /// `-c key=value`. It intentionally keeps both halves **unparsed** so that the
 /// calling code can decide how to interpret the right-hand side.
-#[derive(Parser, Debug, Default, Clone)]
+#[cfg_attr(feature = "cli", derive(Parser))]
+#[derive(Debug, Default, Clone)]
 pub struct CliConfigOverrides {
     /// Override a configuration value that would otherwise be loaded from
     /// `~/.codex/config.toml`. Use a dotted path (`foo.bar.baz`) to override
@@ -26,17 +28,20 @@ pub struct CliConfigOverrides {
     ///   - `-c model="o3"`
     ///   - `-c 'sandbox_permissions=["disk-full-read-access"]'`
     ///   - `-c shell_environment_policy.inherit=all`
-    #[arg(
+    #[cfg_attr(
+        feature = "cli",
+        arg(
         short = 'c',
         long = "config",
         value_name = "key=value",
         action = ArgAction::Append,
         global = true,
-    )]
+    ))]
     pub raw_overrides: Vec<String>,
 }
 
 impl CliConfigOverrides {
+    #[cfg(feature = "cli")]
     /// Parse the raw strings captured from the CLI into a list of `(path,
     /// value)` tuples where `value` is a `serde_json::Value`.
     pub fn parse_overrides(&self) -> Result<Vec<(String, Value)>, String> {
@@ -76,6 +81,7 @@ impl CliConfigOverrides {
             .collect()
     }
 
+    #[cfg(feature = "cli")]
     /// Apply all parsed overrides onto `target`. Intermediate objects will be
     /// created as necessary. Values located at the destination path will be
     /// replaced.
@@ -90,6 +96,7 @@ impl CliConfigOverrides {
 
 /// Apply a single override onto `root`, creating intermediate objects as
 /// necessary.
+#[cfg(feature = "cli")]
 fn apply_single_override(root: &mut Value, path: &str, value: Value) {
     use toml::value::Table;
 
@@ -132,6 +139,7 @@ fn apply_single_override(root: &mut Value, path: &str, value: Value) {
     }
 }
 
+#[cfg(feature = "cli")]
 fn parse_toml_value(raw: &str) -> Result<Value, toml::de::Error> {
     let wrapped = format!("_x_ = {raw}");
     let table: toml::Table = toml::from_str(&wrapped)?;

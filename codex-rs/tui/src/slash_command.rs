@@ -13,15 +13,14 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    Thread,
+    Session,
     Approvals,
     Review,
     New,
     Init,
-    Thread,
-    Clear,
-    Close,
-    Threads,
     Compact,
+    Undo,
     Diff,
     Mention,
     Status,
@@ -36,19 +35,18 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
-            SlashCommand::New => "start a new thread with empty context",
+            SlashCommand::New => "start a new chat during a conversation",
+            SlashCommand::Session => "manage sessions and threads",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
-            SlashCommand::Thread => "start a new thread with the current context",
-            SlashCommand::Clear => "clear the current thread's context",
-            SlashCommand::Close => "close the current thread and optionally summarize",
-            SlashCommand::Threads => "switch between existing threads",
-            SlashCommand::Review => "review my changes and find issues",
+            SlashCommand::Review => "review my current changes and find issues",
+            SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Thread => "fork current session into a new thread",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
@@ -66,18 +64,18 @@ impl SlashCommand {
     /// Whether this command can be run while a task is in progress.
     pub fn available_during_task(self) -> bool {
         match self {
-            SlashCommand::New
-            | SlashCommand::Init
-            | SlashCommand::Thread
-            | SlashCommand::Clear
-            | SlashCommand::Close
+            // Allow creating a new session/thread while a task is running.
+            SlashCommand::New => true,
+            SlashCommand::Thread => true,
+            SlashCommand::Session => true,
+            SlashCommand::Init
             | SlashCommand::Compact
+            | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Approvals
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
-            | SlashCommand::Threads
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
@@ -91,5 +89,20 @@ impl SlashCommand {
 
 /// Return all built-in commands in a Vec paired with their command string.
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
-    SlashCommand::iter().map(|c| (c.command(), c)).collect()
+    let show_beta_features = beta_features_enabled();
+
+    SlashCommand::iter()
+        .filter(|cmd| {
+            if *cmd == SlashCommand::Undo {
+                show_beta_features
+            } else {
+                true
+            }
+        })
+        .map(|c| (c.command(), c))
+        .collect()
+}
+
+fn beta_features_enabled() -> bool {
+    std::env::var_os("BETA_FEATURE").is_some()
 }

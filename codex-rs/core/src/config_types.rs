@@ -175,6 +175,22 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Optional keymap to override default keyboard shortcuts in the TUI.
+    #[serde(default)]
+    pub keymap: Option<TuiKeymap>,
+}
+
+/// TUI keymap customization. Each field uses a small string spec, e.g.
+/// "ctrl-]", "ctrl-\\", "ctrl-left", "ctrl-right", "ctrl-shift-n".
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct TuiKeymap {
+    pub open_threads: Option<String>,
+    pub toggle_header: Option<String>,
+    pub new_session: Option<String>,
+    pub fork_thread: Option<String>,
+    pub prev_thread: Option<String>,
+    pub next_thread: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]

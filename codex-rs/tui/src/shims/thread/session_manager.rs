@@ -3,9 +3,9 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
+use super::session_id::SessionId;
 use crate::chatwidget::ChatWidget;
 use crate::history_cell::HistoryCell;
-use crate::session_id::SessionId;
 use codex_protocol::mcp_protocol::ConversationId;
 
 #[derive(Clone, Debug)]
@@ -180,6 +180,10 @@ impl SessionManager {
             .and_then(|s| if s.trim().is_empty() { None } else { Some(s) })
     }
 
+    pub(crate) fn display_summary_for_index_owned(&self, idx: usize) -> Option<String> {
+        self.display_summary_for_index(idx).map(|s| s.to_string())
+    }
+
     fn label_for_title(&self, title: &str) -> String {
         if title == "main" {
             "#main".to_string()
@@ -337,9 +341,9 @@ impl DerefMut for SessionManager {
 
 #[cfg(test)]
 mod tests {
+    use super::session_id::SessionId;
     use super::*;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
-    use crate::session_id::SessionId;
 
     #[test]
     fn thread_path_includes_parent() {
@@ -381,7 +385,10 @@ mod tests {
         manager.refresh_thread_paths();
 
         let display_path = manager.display_thread_path_of(child_idx);
-        assert_eq!(display_path, vec!["#main".to_string(), "thread-1".to_string()]);
+        assert_eq!(
+            display_path,
+            vec!["#main".to_string(), "thread-1".to_string()]
+        );
 
         let display_label = manager.display_label_for_index(child_idx);
         assert_eq!(display_label, "thread-1");
@@ -397,7 +404,8 @@ mod tests {
         let mut manager = SessionManager::single(widget, SessionId::new(0));
 
         let (child_widget, _tx2, _rx2, _op_rx2) = make_chatwidget_manual_with_sender();
-        let child_idx = manager.add_session(child_widget, "thread-1".to_string(), SessionId::new(1));
+        let child_idx =
+            manager.add_session(child_widget, "thread-1".to_string(), SessionId::new(1));
         if let Some(handle) = manager.session_mut(child_idx) {
             handle.origin = Some(ThreadOrigin {
                 parent_index: 0,
@@ -407,18 +415,18 @@ mod tests {
             handle.auto_name_kind = Some(AutoNameKind::Child);
         }
 
-        assert!(manager.update_display_title(
-            child_idx,
-            Some("Summarize failing tests".to_string())
-        ));
-        assert!(manager
-            .sessions()
-            .get(child_idx)
-            .and_then(|h| h.auto_name_kind)
-            .is_none());
-        assert!(!manager.update_display_title(
-            child_idx,
-            Some("Summarize failing tests".to_string())
-        ));
+        assert!(
+            manager.update_display_title(child_idx, Some("Summarize failing tests".to_string()))
+        );
+        assert!(
+            manager
+                .sessions()
+                .get(child_idx)
+                .and_then(|h| h.auto_name_kind)
+                .is_none()
+        );
+        assert!(
+            !manager.update_display_title(child_idx, Some("Summarize failing tests".to_string()))
+        );
     }
 }

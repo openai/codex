@@ -4,7 +4,6 @@ use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
 use crate::app_event_sender::AppEventSender;
-use crate::session_id::SessionId;
 use crate::user_approval_widget::ApprovalRequest;
 use crate::user_approval_widget::UserApprovalWidget;
 
@@ -16,20 +15,14 @@ pub(crate) struct ApprovalModalView {
     current: UserApprovalWidget,
     queue: Vec<ApprovalRequest>,
     app_event_tx: AppEventSender,
-    session_id: SessionId,
 }
 
 impl ApprovalModalView {
-    pub fn new(
-        request: ApprovalRequest,
-        app_event_tx: AppEventSender,
-        session_id: SessionId,
-    ) -> Self {
+    pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         Self {
-            current: UserApprovalWidget::new(request, app_event_tx.clone(), session_id),
+            current: UserApprovalWidget::new(request, app_event_tx.clone()),
             queue: Vec::new(),
             app_event_tx,
-            session_id,
         }
     }
 
@@ -42,7 +35,7 @@ impl ApprovalModalView {
         if self.current.is_complete()
             && let Some(req) = self.queue.pop()
         {
-            self.current = UserApprovalWidget::new(req, self.app_event_tx.clone(), self.session_id);
+            self.current = UserApprovalWidget::new(req, self.app_event_tx.clone());
         }
     }
 }
@@ -97,7 +90,7 @@ mod tests {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let first = make_exec_request();
-        let mut view = ApprovalModalView::new(first, tx, SessionId::new(0));
+        let mut view = ApprovalModalView::new(first, tx);
         view.enqueue_request(make_exec_request());
 
         let (tx2, _rx2) = unbounded_channel::<AppEvent>();
@@ -109,7 +102,6 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
-            session_id: SessionId::new(0),
         });
         assert_eq!(CancellationEvent::Handled, view.on_ctrl_c());
         assert!(view.queue.is_empty());

@@ -129,20 +129,8 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     }
 
     match event {
-        AppEvent::CodexEvent {
-            session_id,
-            conversation_id,
-            event,
-        } => {
-            let value = json!({
-                "ts": now_ts(),
-                "dir": "to_tui",
-                "kind": "codex_event",
-                "session_id": session_id.raw(),
-                "conversation_id": conversation_id,
-                "payload": event,
-            });
-            LOGGER.write_json_line(value);
+        AppEvent::CodexEvent(ev) => {
+            write_record("to_tui", "codex_event", ev);
         }
         AppEvent::NewSession => {
             let value = json!({
@@ -152,17 +140,11 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
             });
             LOGGER.write_json_line(value);
         }
-        AppEvent::InsertHistoryCell {
-            session_id,
-            conversation_id,
-            cell,
-        } => {
+        AppEvent::InsertHistoryCell(cell) => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",
                 "kind": "insert_history_cell",
-                "session_id": session_id.raw(),
-                "conversation_id": conversation_id,
                 "lines": cell.transcript_lines().len(),
             });
             LOGGER.write_json_line(value);

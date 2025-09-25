@@ -3,9 +3,6 @@ use std::path::PathBuf;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
-use codex_protocol::mcp_protocol::ConversationId;
-
-use crate::session_id::SessionId;
 
 use crate::history_cell::HistoryCell;
 
@@ -16,14 +13,9 @@ use codex_core::protocol_config_types::ReasoningEffort;
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
-    CodexEvent {
-        session_id: SessionId,
-        conversation_id: ConversationId,
-        event: Event,
-    },
+    CodexEvent(Event),
 
     /// Start a new session.
-    #[allow(dead_code)]
     NewSession,
 
     /// Request to exit the application gracefully.
@@ -49,48 +41,11 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
-    InsertHistoryCell {
-        session_id: SessionId,
-        conversation_id: Option<ConversationId>,
-        cell: Box<dyn HistoryCell>,
-    },
+    InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,
     StopCommitAnimation,
     CommitTick,
-
-    /// Begin creating a new conversation thread derived from the active session.
-    StartThread,
-
-    /// Start a brand-new blank thread while keeping existing ones alive.
-    NewBlankThread,
-
-    /// Clear the currently active thread back to an empty context.
-    ClearActiveThread,
-
-    /// Prompt the user to close the active thread.
-    PromptCloseActiveThread,
-
-    /// Provide the latest user input so the app can derive a thread name.
-    SuggestThreadName {
-        session_id: SessionId,
-        text: String,
-    },
-
-    /// Toggle thread picker showing active conversations.
-    ToggleThreadPicker,
-
-    /// Switch to the specified thread index.
-    SwitchThread(usize),
-
-    /// User invoked `/quit`; app decides whether to exit or close thread.
-    QuitRequested,
-
-    /// Close a specific thread, optionally preparing a summary for the parent.
-    CloseThread {
-        index: usize,
-        summarize: bool,
-    },
 
     /// Update the current reasoning effort in the running app and widget.
     UpdateReasoningEffort(Option<ReasoningEffort>),
@@ -121,4 +76,16 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+
+    /// Open the thread manager popup (like /model).
+    OpenThreadManager,
+
+    /// Switch active thread by index (0-based; 0 is main).
+    SwitchThread(usize),
+
+    /// Create a child thread under the given parent index.
+    NewChildThread(usize),
+
+    /// Create a child thread under the current active session (fork full context).
+    ForkChildOfActive,
 }

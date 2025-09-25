@@ -1,17 +1,13 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::chat_host::ChatHost;
 use crate::chatwidget::ChatWidget;
-use crate::chatwidget::ThreadPickerEntry;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::resume_picker::ResumeSelection;
-use crate::session_id::SessionId;
-use crate::session_manager::AutoNameKind;
-use crate::session_manager::SessionManager;
-use crate::session_manager::ThreadOrigin;
-use crate::text_formatting::concise_request_summary;
+use crate::shims::HostApi;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_ansi_escape::ansi_escape_line;
@@ -20,11 +16,6 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
-use codex_core::protocol::BackgroundEventEvent;
-use codex_core::protocol::ConversationPathResponseEvent;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -33,7 +24,6 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -45,6 +35,8 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 // use uuid::Uuid;
+use crate::shims::EventOutcome;
+use crate::shims::ShimStack;
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -55,7 +47,7 @@ pub struct AppExitInfo {
 pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
     pub(crate) app_event_tx: AppEventSender,
-    pub(crate) chat_widget: SessionManager,
+    pub(crate) chat: ChatHost,
     pub(crate) auth_manager: Arc<AuthManager>,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
@@ -63,6 +55,8 @@ pub(crate) struct App {
     pub(crate) active_profile: Option<String>,
 
     pub(crate) file_search: FileSearchManager,
+
+    pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -76,23 +70,79 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
-
+    // Optional shim stack for feature modules
+    pub(crate) shims: ShimStack,
+    // Whether to enable thread shims and multi-session host
+    threads_enabled: bool,
+    // Pending request to fork the current conversation into a child thread.
     thread_fork_pending: Option<ThreadForkPending>,
-    next_session_id: u64,
 }
 
+#[derive(Debug, Clone)]
 struct ThreadForkPending {
-    base_id: ConversationId,
-    title: String,
+    parent_idx: usize,
+    base_id: Option<ConversationId>,
 }
 
 impl App {
-    pub(super) fn alloc_session_id(&mut self) -> SessionId {
-        let id = SessionId::new(self.next_session_id);
-        self.next_session_id = self.next_session_id.saturating_add(1);
-        id
+    // Build resolved keymap (defaults overridden by config.tui.keymap)
+    fn resolve_keymap(&self) -> ResolvedKeymap {
+        let cfg = self.config.tui_keymap.as_ref();
+        ResolvedKeymap {
+            open_threads: cfg
+                .and_then(|m| m.open_threads.clone())
+                .unwrap_or_else(|| "ctrl-]".to_string()),
+            new_session: cfg
+                .and_then(|m| m.new_session.clone())
+                .unwrap_or_else(|| "ctrl-shift-n".to_string()),
+            fork_thread: cfg
+                .and_then(|m| m.fork_thread.clone())
+                .unwrap_or_else(|| "ctrl-shift-t".to_string()),
+            prev_thread: cfg
+                .and_then(|m| m.prev_thread.clone())
+                .unwrap_or_else(|| "ctrl-left".to_string()),
+            next_thread: cfg
+                .and_then(|m| m.next_thread.clone())
+                .unwrap_or_else(|| "ctrl-right".to_string()),
+        }
     }
 
+    // Matches a KeyEvent against a small string spec like "ctrl-]", "ctrl-\\",
+    // "ctrl-left", "ctrl-right", "ctrl-shift-n".
+    fn matches_key(&self, ev: &KeyEvent, spec: &str) -> bool {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyModifiers;
+        let s = spec.to_ascii_lowercase();
+        let ctrl = s.contains("ctrl");
+        let shift = s.contains("shift");
+        // Extract last token as the key (rightmost after '-')
+        let key_token = s.split('-').next_back().unwrap_or("");
+        let has_ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
+        let has_shift = ev.modifiers.contains(KeyModifiers::SHIFT);
+        if ctrl != has_ctrl || (shift && !has_shift) || (!shift && has_shift && ctrl) {
+            // require ctrl match; require shift only when specified
+            return false;
+        }
+        match key_token {
+            "]" => matches!(ev.code, KeyCode::Char(']')),
+            "\\" => matches!(ev.code, KeyCode::Char('\\')),
+            "left" => matches!(ev.code, KeyCode::Left),
+            "right" => matches!(ev.code, KeyCode::Right),
+            // single char like 'n' or 't'
+            k if k.len() == 1 => {
+                if let Some(ch) = k.chars().next() {
+                    match ev.code {
+                        KeyCode::Char(c) => c.to_ascii_lowercase() == ch,
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
@@ -101,6 +151,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
+        enable_thread_shims: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -109,9 +160,6 @@ impl App {
         let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-
-        let next_session_id_raw: u64 = 1;
-        let main_session_id = SessionId::new(0);
 
         let chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
@@ -123,7 +171,6 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    session_id: main_session_id,
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -146,7 +193,6 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    session_id: main_session_id,
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -161,31 +207,63 @@ impl App {
         let mut app = Self {
             server: conversation_manager,
             app_event_tx,
-            chat_widget: SessionManager::single(chat_widget, main_session_id),
+            chat: ChatHost::from_initial(chat_widget, enable_thread_shims),
             auth_manager: auth_manager.clone(),
             config,
             active_profile,
             file_search,
             enhanced_keys_supported,
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            shims: ShimStack::new(),
+            threads_enabled: enable_thread_shims,
             thread_fork_pending: None,
-            next_session_id: next_session_id_raw,
         };
 
-        app.update_active_thread_header();
+        if enable_thread_shims {
+            use crate::shims::thread::commands::ThreadCommandShim;
+            use crate::shims::thread::header::ThreadHeaderShim;
+            use crate::shims::thread::status::ThreadStatusShim;
+            use crate::shims::title_tool::TitleToolShim;
+            // Enable status + commands + title tool shims; omit footer hints to keep footer clean.
+            app.shims.push(ThreadHeaderShim::new());
+            app.shims.push(ThreadStatusShim::new());
+            app.shims.push(ThreadCommandShim::new());
+            app.shims.push(TitleToolShim::new());
+        }
+        // Title summary shim removed; TitleToolShim handles title updates now.
 
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
 
         tui.frame_requester().schedule_frame();
 
+        // Seed initial shim decorations so early header insert can include shim lines.
+        {
+            let mut header_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+            let mut status_line: Option<ratatui::text::Line<'static>> = None;
+            app.shims
+                .augment_header_with_host(&mut header_lines, &app.chat);
+            app.shims
+                .augment_status_line_with_host(&mut status_line, &app.chat);
+            app.chat.set_shim_decorations(header_lines, status_line);
+        }
+
         while select! {
-            Some(event) = app_event_rx.recv() => {
-                app.handle_event(tui, event).await?
+            Some(mut event) = app_event_rx.recv() => {
+                if app
+                    .shims
+                    .on_app_event_with_host(&mut event, &mut app.chat)
+                    == EventOutcome::Consumed
+                {
+                    true
+                } else {
+                    app.handle_event(tui, event).await?
+                }
             }
             Some(event) = tui_events.next() => {
                 app.handle_tui_event(tui, event).await?
@@ -194,7 +272,7 @@ impl App {
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            conversation_id: app.chat_widget.conversation_id(),
+            conversation_id: app.chat.conversation_id(),
         })
     }
 
@@ -208,6 +286,13 @@ impl App {
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
+                    if self
+                        .shims
+                        .on_key_event_with_host(&key_event, &mut self.chat)
+                        == EventOutcome::Consumed
+                    {
+                        return Ok(true);
+                    }
                     self.handle_key_event(tui, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
@@ -216,21 +301,26 @@ impl App {
                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
                     // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
                     let pasted = pasted.replace("\r", "\n");
-                    self.chat_widget.handle_paste(pasted);
+                    self.chat.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
-                    self.chat_widget.maybe_post_pending_notification(tui);
-                    if self
-                        .chat_widget
-                        .handle_paste_burst_tick(tui.frame_requester())
-                    {
+                    self.chat.maybe_post_pending_notification(tui);
+                    // Allow shims to compute optional header/status decorations.
+                    let mut header_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+                    let mut status_line: Option<ratatui::text::Line<'static>> = None;
+                    self.shims
+                        .augment_header_with_host(&mut header_lines, &self.chat);
+                    self.shims
+                        .augment_status_line_with_host(&mut status_line, &self.chat);
+                    self.chat.set_shim_decorations(header_lines, status_line);
+                    if self.chat.handle_paste_burst_tick(tui.frame_requester()) {
                         return Ok(true);
                     }
                     tui.draw(
-                        self.chat_widget.desired_height(tui.terminal.size()?.width),
+                        self.chat.desired_height(tui.terminal.size()?.width),
                         |frame| {
-                            frame.render_widget_ref(&*self.chat_widget, frame.area());
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            frame.render_widget_ref(&self.chat, frame.area());
+                            if let Some((x, y)) = self.chat.cursor_pos(frame.area()) {
                                 frame.set_cursor_position((x, y));
                             }
                         },
@@ -244,7 +334,6 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
-                let session_id = self.alloc_session_id();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -253,41 +342,36 @@ impl App {
                     initial_images: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
-                    session_id,
                 };
-                self.chat_widget =
-                    SessionManager::single(ChatWidget::new(init, self.server.clone()), session_id);
+                let widget = ChatWidget::new(init, self.server.clone());
+                // In threads mode, append as top-level (root) when already using Multi.
+                match &mut self.chat {
+                    ChatHost::Multi(m) if self.threads_enabled => {
+                        let id = m.next_session_id();
+                        let idx = m.add_top_level_session(widget, id);
+                        m.switch_active(idx);
+                    }
+                    _ => {
+                        self.chat = ChatHost::from_initial(widget, self.threads_enabled);
+                    }
+                }
+                // Refresh shim decorations after creating a thread (update header overlay).
+                let mut header_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+                let mut status_line: Option<ratatui::text::Line<'static>> = None;
+                self.shims
+                    .augment_header_with_host(&mut header_lines, &self.chat);
+                self.shims
+                    .augment_status_line_with_host(&mut status_line, &self.chat);
+                self.chat.set_shim_decorations(header_lines, status_line);
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::InsertHistoryCell {
-                session_id,
-                conversation_id,
-                cell,
-            } => {
+            AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                let target_idx = self
-                    .chat_widget
-                    .index_for_session_id(session_id)
-                    .or_else(|| {
-                        conversation_id
-                            .as_ref()
-                            .and_then(|id| self.chat_widget.index_for_conversation_id(id))
-                    })
-                    .unwrap_or_else(|| self.chat_widget.active_index());
-                let is_active = target_idx == self.chat_widget.active_index();
-
-                if let Some(handle) = self.chat_widget.session_mut(target_idx) {
-                    handle.transcript_cells.push(cell.clone());
-                }
-
-                if !is_active {
-                    return Ok(true);
-                }
-
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     t.insert_cell(cell.clone());
                     tui.frame_requester().schedule_frame();
                 }
+                self.transcript_cells.push(cell.clone());
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
@@ -306,33 +390,6 @@ impl App {
                         tui.insert_history_lines(display);
                     }
                 }
-            }
-            AppEvent::StartThread => {
-                self.on_start_thread_request();
-            }
-            AppEvent::NewBlankThread => {
-                self.on_new_blank_thread(tui);
-            }
-            AppEvent::ClearActiveThread => {
-                self.clear_active_thread(tui);
-            }
-            AppEvent::PromptCloseActiveThread => {
-                self.prompt_close_active_thread();
-            }
-            AppEvent::SuggestThreadName { session_id, text } => {
-                self.on_suggest_thread_name(tui, session_id, text);
-            }
-            AppEvent::ToggleThreadPicker => {
-                self.toggle_thread_picker();
-            }
-            AppEvent::SwitchThread(idx) => {
-                self.switch_thread(tui, idx, true);
-            }
-            AppEvent::QuitRequested => {
-                self.on_quit_requested();
-            }
-            AppEvent::CloseThread { index, summarize } => {
-                self.close_thread(tui, index, summarize);
             }
             AppEvent::StartCommitAnimation => {
                 if self
@@ -354,58 +411,33 @@ impl App {
                 self.commit_anim_running.store(false, Ordering::Release);
             }
             AppEvent::CommitTick => {
-                self.chat_widget.on_commit_tick();
+                self.chat.on_commit_tick();
             }
-            AppEvent::CodexEvent {
-                session_id,
-                conversation_id,
-                event,
-            } => {
-                let msg = event.msg.clone();
-                let target_idx = self
-                    .chat_widget
-                    .index_for_session_id(session_id)
-                    .or_else(|| self.chat_widget.index_for_conversation_id(&conversation_id))
-                    .unwrap_or_else(|| self.chat_widget.active_index());
-                let is_active = target_idx == self.chat_widget.active_index();
-                let increment_unread = !is_active && Self::event_marks_unread(&msg);
-
-                if is_active {
-                    self.chat_widget.handle_codex_event(event);
-                } else if let Some(handle) = self.chat_widget.session_mut(target_idx) {
-                    handle.widget.handle_codex_event(event);
-                } else {
-                    self.chat_widget.handle_codex_event(event);
-                }
-
-                if let Some(handle) = self.chat_widget.session_mut(target_idx) {
-                    if increment_unread {
-                        handle.unread_count = handle.unread_count.saturating_add(1);
-                        tui.frame_requester().schedule_frame();
-                    }
-
-                    match msg {
-                        EventMsg::SessionConfigured(configured) => {
-                            handle.conversation_id = Some(configured.session_id);
-                        }
-                        _ => {
-                            handle.conversation_id = handle.widget.conversation_id();
-                        }
-                    }
+            AppEvent::CodexEvent(event) => {
+                // Forward event to chat widget(s)
+                self.chat.handle_codex_event(event);
+                // If the thread manager is open, refresh its items live.
+                // Rebuild the items using the same logic as when opening.
+                if self.threads_enabled {
+                    let items = self.build_thread_selection_items();
+                    let _ = self.chat.refresh_thread_popup(items);
                 }
             }
             AppEvent::ConversationHistory(ev) => {
-                if !self.on_conversation_history_for_thread(tui, &ev).await? {
+                if self.thread_fork_pending.is_some() {
+                    self.on_conversation_history_for_thread_fork(tui, ev)
+                        .await?;
+                } else {
                     self.on_conversation_history_for_backtrack(tui, ev).await?;
                 }
             }
             AppEvent::ExitRequest => {
                 return Ok(false);
             }
-            AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
+            AppEvent::CodexOp(op) => self.chat.submit_op(op),
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
-                self.chat_widget.on_diff_complete();
+                self.chat.on_diff_complete();
                 // Enter alternate screen using TUI helper and build pager lines
                 let _ = tui.enter_alt_screen();
                 let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
@@ -425,13 +457,13 @@ impl App {
                 }
             }
             AppEvent::FileSearchResult { query, matches } => {
-                self.chat_widget.apply_file_search_result(query, matches);
+                self.chat.apply_file_search_result(query, matches);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
-                self.chat_widget.set_model(&model);
+                self.chat.set_model(&model);
                 self.config.model = model.clone();
                 if let Some(family) = find_family_for_model(&model) {
                     self.config.model_family = family;
@@ -444,12 +476,12 @@ impl App {
                 {
                     Ok(()) => {
                         if let Some(profile) = profile {
-                            self.chat_widget.add_info_message(
+                            self.chat.add_info_message(
                                 format!("Model changed to {model} for {profile} profile"),
                                 None,
                             );
                         } else {
-                            self.chat_widget
+                            self.chat
                                 .add_info_message(format!("Model changed to {model}"), None);
                         }
                     }
@@ -459,627 +491,348 @@ impl App {
                             "failed to persist model selection"
                         );
                         if let Some(profile) = profile {
-                            self.chat_widget.add_error_message(format!(
+                            self.chat.add_error_message(format!(
                                 "Failed to save model for profile `{profile}`: {err}"
                             ));
                         } else {
-                            self.chat_widget
+                            self.chat
                                 .add_error_message(format!("Failed to save default model: {err}"));
                         }
                     }
                 }
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
-                self.chat_widget.set_approval_policy(policy);
+                self.chat.set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
-                self.chat_widget.set_sandbox_policy(policy);
+                self.chat.set_sandbox_policy(policy);
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
-                self.chat_widget.show_review_branch_picker(&cwd).await;
+                self.chat.show_review_branch_picker(&cwd).await;
             }
             AppEvent::OpenReviewCommitPicker(cwd) => {
-                self.chat_widget.show_review_commit_picker(&cwd).await;
+                self.chat.show_review_commit_picker(&cwd).await;
             }
             AppEvent::OpenReviewCustomPrompt => {
-                self.chat_widget.show_review_custom_prompt();
+                self.chat.show_review_custom_prompt();
+            }
+            AppEvent::OpenThreadManager => {
+                // Build a list of actions similar to /model
+                let mut items: Vec<crate::bottom_pane::SelectionItem> = Vec::new();
+                // Actions
+                let current_parent = self.chat.active_index();
+                // New session (top-level)
+                items.push(crate::bottom_pane::SelectionItem {
+                    name: "New session".to_string(),
+                    description: Some("Create new session".to_string()),
+                    is_current: false,
+                    actions: vec![Box::new(
+                        move |tx: &crate::app_event_sender::AppEventSender| {
+                            tx.send(AppEvent::NewSession);
+                        },
+                    )],
+                    dismiss_on_select: true,
+                    search_value: None,
+                });
+                // New thread (fork) — child of current
+                items.push(crate::bottom_pane::SelectionItem {
+                    name: "New thread (fork)".to_string(),
+                    description: Some("Create a child thread, keeping all context".to_string()),
+                    is_current: false,
+                    actions: vec![Box::new(
+                        move |tx: &crate::app_event_sender::AppEventSender| {
+                            tx.send(AppEvent::NewChildThread(current_parent));
+                        },
+                    )],
+                    dismiss_on_select: true,
+                    search_value: None,
+                });
+
+                let items_extra = self.build_thread_selection_items();
+                items.extend(items_extra);
+
+                // Delegate to the widget to show the popup
+                // Use a compact FN-key toolbar in the popup footer to avoid cluttering main chat.
+                let km = self.resolve_keymap();
+                let toolbar = format!(
+                    "{} Prev   {} Next   {} New   {} Fork   Enter Select   Esc Back",
+                    km.prev_thread.to_uppercase(),
+                    km.next_thread.to_uppercase(),
+                    km.new_session.to_uppercase(),
+                    km.fork_thread.to_uppercase()
+                );
+                self.chat.open_thread_popup_with_hint(items, Some(toolbar));
+            }
+
+            AppEvent::ForkChildOfActive => {
+                let parent_idx = self.chat.active_index();
+                if let Some(base_id) = self.chat.conversation_id() {
+                    self.thread_fork_pending = Some(ThreadForkPending {
+                        parent_idx,
+                        base_id: Some(base_id),
+                    });
+                    self.chat.submit_op(codex_core::protocol::Op::GetPath);
+                } else {
+                    // No current conversation yet; create empty child.
+                    self.app_event_tx.send(AppEvent::NewChildThread(parent_idx));
+                }
+            }
+            AppEvent::SwitchThread(index) => {
+                self.chat.switch_to(index);
+                // Refresh header/status decorations after switching
+                let mut header_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+                let mut status_line: Option<ratatui::text::Line<'static>> = None;
+                self.shims
+                    .augment_header_with_host(&mut header_lines, &self.chat);
+                self.shims
+                    .augment_status_line_with_host(&mut status_line, &self.chat);
+                self.chat.set_shim_decorations(header_lines, status_line);
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::NewChildThread(parent_idx) => {
+                // Fork current conversation into a child of parent_idx, keeping context.
+                if let Some(base_id) = self.chat.conversation_id() {
+                    self.thread_fork_pending = Some(ThreadForkPending {
+                        parent_idx,
+                        base_id: Some(base_id),
+                    });
+                    self.chat.submit_op(codex_core::protocol::Op::GetPath);
+                } else {
+                    // If no conversation yet, fall back to an empty child session.
+                    let init = crate::chatwidget::ChatWidgetInit {
+                        config: self.config.clone(),
+                        frame_requester: tui.frame_requester(),
+                        app_event_tx: self.app_event_tx.clone(),
+                        initial_prompt: None,
+                        initial_images: Vec::new(),
+                        enhanced_keys_supported: self.enhanced_keys_supported,
+                        auth_manager: self.auth_manager.clone(),
+                    };
+                    let widget = ChatWidget::new(init, self.server.clone());
+                    match &mut self.chat {
+                        ChatHost::Multi(m) if self.threads_enabled => {
+                            let id = m.next_session_id();
+                            let idx = m.add_child_session(parent_idx, widget, id);
+                            m.switch_active(idx);
+                        }
+                        _ => {
+                            self.chat = ChatHost::from_initial(widget, self.threads_enabled);
+                        }
+                    }
+                    let mut header_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+                    let mut status_line: Option<ratatui::text::Line<'static>> = None;
+                    self.shims
+                        .augment_header_with_host(&mut header_lines, &self.chat);
+                    self.shims
+                        .augment_status_line_with_host(&mut status_line, &self.chat);
+                    self.chat.set_shim_decorations(header_lines, status_line);
+                    tui.frame_requester().schedule_frame();
+                }
             }
         }
         Ok(true)
+    }
+
+    /// Build selection items for the thread manager popup based on the current
+    /// chat host state.
+    fn build_thread_selection_items(&self) -> Vec<crate::bottom_pane::SelectionItem> {
+        let mut items: Vec<crate::bottom_pane::SelectionItem> = Vec::new();
+        // Tree view of sessions using parent indices and titles
+        let count = self.chat.session_count();
+        let active = self.chat.active_index();
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); count];
+        let mut roots: Vec<usize> = Vec::new();
+        for i in 0..count {
+            if let Some(p) = self.chat.session_parent_index(i) {
+                if p < count {
+                    children[p].push(i);
+                } else {
+                    roots.push(i);
+                }
+            } else {
+                roots.push(i);
+            }
+        }
+        fn push_items(
+            items: &mut Vec<crate::bottom_pane::SelectionItem>,
+            chat: &crate::chat_host::ChatHost,
+            children: &Vec<Vec<usize>>,
+            idx: usize,
+            depth: usize,
+            active: usize,
+        ) {
+            let indent = "  ".repeat(depth);
+            // Compute display label independent of topic title.
+            let display_label = if chat.session_parent_index(idx).is_none() {
+                if idx == 0 {
+                    "main".to_string()
+                } else {
+                    // Root sessions (besides main) are named main-1, main-2, ...
+                    let ordinal = {
+                        let mut n = 0usize;
+                        for r in 0..chat.session_count() {
+                            if chat.session_parent_index(r).is_none() {
+                                if r == 0 {
+                                    continue;
+                                }
+                                n += 1;
+                                if r == idx {
+                                    break;
+                                }
+                            }
+                        }
+                        n
+                    };
+                    format!("main-{ordinal}")
+                }
+            } else {
+                // Child sessions are numbered relative to siblings: #1, #2, ...
+                if let Some(parent) = chat.session_parent_index(idx)
+                    && let Some(sibs) = children.get(parent)
+                {
+                    match sibs.iter().position(|&c| c == idx) {
+                        Some(pos) => format!("#{}", pos + 1),
+                        None => "#1".to_string(),
+                    }
+                } else {
+                    "#1".to_string()
+                }
+            };
+            let label = format!("{indent}{display_label}");
+            let current = idx == active;
+            // Build description: topic title and optional status
+            let topic = chat.session_title_at(idx).unwrap_or_default();
+            let status = chat.status_snapshot_at(idx).unwrap_or_default();
+            let mut desc = String::new();
+            if !topic.trim().is_empty() {
+                desc.push_str(&topic);
+            }
+            if !status.trim().is_empty() {
+                if !desc.is_empty() {
+                    desc.push_str("   ");
+                }
+                desc.push_str("‣ ");
+                desc.push_str(&status);
+            }
+            let description = if desc.is_empty() { None } else { Some(desc) };
+            items.push(crate::bottom_pane::SelectionItem {
+                name: label,
+                description,
+                is_current: current,
+                actions: vec![Box::new(
+                    move |tx: &crate::app_event_sender::AppEventSender| {
+                        tx.send(AppEvent::SwitchThread(idx));
+                    },
+                )],
+                dismiss_on_select: true,
+                search_value: None,
+            });
+            for &c in &children[idx] {
+                push_items(items, chat, children, c, depth + 1, active);
+            }
+        }
+        if count > 0 {
+            // Show main first if present
+            if roots.contains(&0) {
+                push_items(&mut items, &self.chat, &children, 0, 0, active);
+            }
+            for &r in roots.iter().filter(|&&r| r != 0) {
+                push_items(&mut items, &self.chat, &children, r, 0, active);
+            }
+        }
+        items
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
-        self.chat_widget.token_usage()
+        self.chat.token_usage()
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.chat_widget.set_reasoning_effort(effort);
+        self.chat.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
     }
 
-    fn on_start_thread_request(&mut self) {
-        let Some(base_id) = self.chat_widget.conversation_id() else {
-            self.chat_widget.add_error_message(
-                "Cannot create a thread before the session is configured.".to_string(),
-            );
-            return;
-        };
-
-        if self.thread_fork_pending.is_some() {
-            self.chat_widget
-                .add_info_message("Thread creation already in progress.".to_string(), None);
-            return;
-        }
-
-        let title = self.next_child_thread_title();
-        self.thread_fork_pending = Some(ThreadForkPending {
-            base_id,
-            title: title.clone(),
-        });
-        self.chat_widget
-            .add_info_message(format!("Creating {title}..."), None);
-        self.app_event_tx.send(AppEvent::CodexOp(Op::GetPath));
-    }
-
-    fn on_new_blank_thread(&mut self, tui: &mut tui::Tui) {
-        let title = self.next_top_level_thread_title();
-
-        let session_id = self.alloc_session_id();
-        let init = crate::chatwidget::ChatWidgetInit {
-            config: self.config.clone(),
-            frame_requester: tui.frame_requester(),
-            app_event_tx: self.app_event_tx.clone(),
-            initial_prompt: None,
-            initial_images: Vec::new(),
-            enhanced_keys_supported: self.enhanced_keys_supported,
-            auth_manager: self.auth_manager.clone(),
-            session_id,
-        };
-
-        let widget = ChatWidget::new(init, self.server.clone());
-        let idx = self.chat_widget.add_session(widget, title, session_id);
-        if let Some(handle) = self.chat_widget.session_mut(idx) {
-            handle.auto_name_kind = Some(AutoNameKind::TopLevel);
-            handle.display_title = None;
-        }
-        self.chat_widget.refresh_thread_paths();
-
-        self.chat_widget.switch_active(idx);
-        if let Some(handle) = self.chat_widget.session_mut(idx) {
-            handle.widget.clear_request_summary();
-        }
-        self.apply_display_labels_for(idx);
-
-        self.has_emitted_history_lines = false;
-        self.deferred_history_lines.clear();
-        self.overlay = None;
-        self.render_transcript_once(tui);
-        self.chat_widget.set_composer_text(String::new());
-        let path_display = self.chat_widget.display_thread_path_string_active();
-        self.chat_widget
-            .add_info_message(format!("Started {path_display}"), None);
-        tui.frame_requester().schedule_frame();
-    }
-
-    fn clear_active_thread(&mut self, tui: &mut tui::Tui) {
-        let idx = self.chat_widget.active_index();
-        let (_title, origin, session_id) = match self.chat_widget.sessions().get(idx) {
-            Some(session) => (
-                session.title.clone(),
-                session.origin.clone(),
-                session.session_id,
-            ),
-            None => {
-                self.chat_widget
-                    .add_error_message("Active thread not found.".to_string());
-                return;
-            }
-        };
-        let init = crate::chatwidget::ChatWidgetInit {
-            config: self.config.clone(),
-            frame_requester: tui.frame_requester(),
-            app_event_tx: self.app_event_tx.clone(),
-            initial_prompt: None,
-            initial_images: Vec::new(),
-            enhanced_keys_supported: self.enhanced_keys_supported,
-            auth_manager: self.auth_manager.clone(),
-            session_id,
-        };
-
-        let new_widget = ChatWidget::new(init, self.server.clone());
-
-        if let Some(handle) = self.chat_widget.session_mut(idx) {
-            handle.widget = new_widget;
-            handle.transcript_cells.clear();
-            handle.conversation_id = None;
-            handle.unread_count = 0;
-            handle.origin = origin;
-            handle.auto_name_kind = if handle.origin.is_some() {
-                Some(AutoNameKind::Child)
-            } else {
-                Some(AutoNameKind::TopLevel)
-            };
-            handle.display_title = None;
-        } else {
-            self.chat_widget
-                .add_error_message("Active thread not found.".to_string());
-            return;
-        }
-
-        self.chat_widget.refresh_thread_paths();
-        self.chat_widget.switch_active(idx);
-        if let Some(handle) = self.chat_widget.session_mut(idx) {
-            handle.widget.clear_request_summary();
-        }
-        let display_label = self.chat_widget.display_label_for_index(idx);
-        let display_path = self.chat_widget.display_thread_path_of(idx);
-        self.chat_widget.set_active_title(display_label);
-        self.chat_widget.set_active_thread_path(display_path);
-
-        self.has_emitted_history_lines = false;
-        self.deferred_history_lines.clear();
-        self.overlay = None;
-        self.render_transcript_once(tui);
-        self.chat_widget.set_composer_text(String::new());
-        let label = self.chat_widget.display_label_for_index(idx);
-        let summary = self
-            .chat_widget
-            .display_summary_for_index(idx)
-            .map(str::to_string);
-        if let Some(summary) = summary {
-            self.chat_widget
-                .add_info_message(format!("Cleared {label} — {summary}"), None);
-        } else {
-            self.chat_widget
-                .add_info_message(format!("Cleared {label}"), None);
-        }
-        tui.frame_requester().schedule_frame();
-    }
-
-    fn toggle_thread_picker(&mut self) {
-        if self.chat_widget.len() <= 1 {
-            self.chat_widget
-                .add_info_message("No other threads yet.".to_string(), None);
-            return;
-        }
-
-        let active_idx = self.chat_widget.active_index();
-        let entries: Vec<ThreadPickerEntry> = self
-            .chat_widget
-            .sessions()
-            .iter()
-            .enumerate()
-            .map(|(idx, session)| ThreadPickerEntry {
-                index: idx,
-                title: self.chat_widget.display_label_for_index(idx),
-                conversation_id: session.conversation_id,
-                is_active: idx == active_idx,
-                unread_count: session.unread_count,
-                path: self.chat_widget.display_thread_path_of(idx),
-            })
-            .collect();
-
-        self.chat_widget.open_thread_picker(entries);
-    }
-
-    fn prompt_close_active_thread(&mut self) {
-        if self.chat_widget.len() <= 1 {
-            self.chat_widget.add_error_message(
-                "Cannot close the only active conversation. Use /clear or /quit instead."
-                    .to_string(),
-            );
-            return;
-        }
-
-        let idx = self.chat_widget.active_index();
-        let (title, origin) = match self.chat_widget.sessions().get(idx) {
-            Some(session) => (session.title.clone(), session.origin.clone()),
-            None => {
-                self.chat_widget
-                    .add_error_message("Active thread not found.".to_string());
-                return;
-            }
-        };
-
-        let Some(origin) = origin else {
-            self.chat_widget.add_error_message(
-                "Active thread does not have a parent conversation to return to.".to_string(),
-            );
-            return;
-        };
-
-        let parent_label = self.parent_label_for_origin(&origin);
-        self.chat_widget
-            .open_quit_thread_prompt(idx, title, parent_label);
-    }
-
-    fn switch_thread(&mut self, tui: &mut tui::Tui, idx: usize, announce: bool) {
-        if idx == self.chat_widget.active_index() {
-            return;
-        }
-        if !self.chat_widget.switch_active(idx) {
-            self.chat_widget
-                .add_error_message(format!("Thread {idx} not found."));
-            return;
-        }
-
-        self.has_emitted_history_lines = false;
-        self.deferred_history_lines.clear();
-        self.overlay = None;
-        self.render_transcript_once(tui);
-        self.apply_display_labels_for(idx);
-        if announce {
-            let label = self.chat_widget.display_label_for_index(idx);
-            let summary = self
-                .chat_widget
-                .display_summary_for_index(idx)
-                .map(str::to_string);
-            if let Some(summary) = summary {
-                self.chat_widget
-                    .add_info_message(format!("Switched to {label} — {summary}"), None);
-            } else {
-                self.chat_widget
-                    .add_info_message(format!("Switched to {label}"), None);
-            }
-        }
-        tui.frame_requester().schedule_frame();
-    }
-
-    fn switch_thread_relative(&mut self, tui: &mut tui::Tui, delta: isize) {
-        let len = self.chat_widget.len();
-        if len <= 1 {
-            self.chat_widget
-                .add_info_message("No other threads yet.".to_string(), None);
-            return;
-        }
-
-        let current = self.chat_widget.active_index();
-        let len_isize = len as isize;
-        let next = ((current as isize + delta).rem_euclid(len_isize)) as usize;
-        if next == current {
-            return;
-        }
-
-        self.switch_thread(tui, next, false);
-    }
-
-    fn close_thread(&mut self, tui: &mut tui::Tui, idx: usize, summarize: bool) {
-        if self.chat_widget.len() <= 1 {
-            self.chat_widget
-                .add_error_message("Cannot close the only active conversation.".to_string());
-            return;
-        }
-
-        let child_display = self.chat_widget.display_label_for_index(idx);
-        let (_child_id, origin, new_entries) = {
-            let Some(child_session) = self.chat_widget.sessions().get(idx) else {
-                self.chat_widget
-                    .add_error_message(format!("Thread {idx} not found."));
-                return;
-            };
-            let Some(origin) = child_session.origin.clone() else {
-                self.chat_widget.add_error_message(
-                    "This thread does not have a parent conversation to return to.".to_string(),
-                );
-                return;
-            };
-            let new_entries = child_session
-                .transcript_cells
-                .len()
-                .saturating_sub(origin.parent_snapshot_len);
-            (child_session.title.clone(), origin, new_entries)
-        };
-
-        if !self.chat_widget.remove_session(idx) {
-            self.chat_widget
-                .add_error_message("Failed to close thread.".to_string());
-            return;
-        }
-
-        let parent_idx = self.resolve_parent_index(&origin);
-        if self.chat_widget.len() == 0 {
-            self.app_event_tx.send(AppEvent::ExitRequest);
-            return;
-        }
-        let parent_idx = parent_idx.min(self.chat_widget.len().saturating_sub(1));
-        self.switch_thread(tui, parent_idx, false);
-
-        if summarize {
-            let summary_text = self.build_summary_text(&child_display, new_entries);
-            self.chat_widget.set_composer_text(summary_text);
-            self.chat_widget.add_info_message(
-                format!(
-                    "Review the summary for '{child_display}', edit if needed, then send it to share updates."
-                ),
-                None,
-            );
-        } else {
-            self.chat_widget
-                .add_info_message(format!("Closed thread '{child_display}'."), None);
-        }
-    }
-
-    fn resolve_parent_index(&self, origin: &ThreadOrigin) -> usize {
-        self.chat_widget.parent_index_for(origin).unwrap_or(0)
-    }
-
-    fn parent_label_for_origin(&self, origin: &ThreadOrigin) -> Option<String> {
-        self.chat_widget
-            .parent_index_for(origin)
-            .map(|idx| self.chat_widget.display_thread_path_of(idx).join("/"))
-    }
-
-    fn event_marks_unread(msg: &EventMsg) -> bool {
-        matches!(
-            msg,
-            EventMsg::AgentMessage(_)
-                | EventMsg::BackgroundEvent(BackgroundEventEvent { .. })
-                | EventMsg::TaskComplete(TaskCompleteEvent {
-                    last_agent_message: Some(_),
-                    ..
-                })
-        )
-    }
-
-    fn build_summary_text(&self, title: &str, new_entries: usize) -> String {
-        let plural = if new_entries == 1 { "" } else { "s" };
-        if new_entries == 0 {
-            format!("Thread '{title}' summary (no new messages since fork):\n- Notes:\n  - ")
-        } else {
-            format!(
-                "Thread '{title}' summary ({new_entries} new message{plural} since fork):\n- Key updates:\n  - "
-            )
-        }
-    }
-
-    fn next_child_thread_title(&self) -> String {
-        let existing = self
-            .chat_widget
-            .sessions()
-            .iter()
-            .filter(|s| s.origin.is_some())
-            .count();
-        let next = existing + 1;
-        format!("thread-{next}")
-    }
-
-    fn next_top_level_thread_title(&self) -> String {
-        let top_level = self
-            .chat_widget
-            .sessions()
-            .iter()
-            .filter(|s| s.origin.is_none())
-            .count();
-        format!("#main-{top_level}")
-    }
-
-    fn on_suggest_thread_name(&mut self, tui: &mut tui::Tui, session_id: SessionId, text: String) {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-        let Some(idx) = self.chat_widget.index_for_session_id(session_id) else {
-            return;
-        };
-        if self
-            .chat_widget
-            .sessions()
-            .get(idx)
-            .and_then(|handle| handle.auto_name_kind)
-            .is_none()
-        {
-            return;
-        }
-
-        let Some(summary) = Self::topic_summary(trimmed) else {
-            if let Some(handle) = self.chat_widget.session_mut(idx) {
-                handle.auto_name_kind = None;
-            }
-            return;
-        };
-
-        if self
-            .chat_widget
-            .update_display_title(idx, Some(summary))
-        {
-            if self.chat_widget.active_index() == idx {
-                self.apply_display_labels_for(idx);
-                let label = self.chat_widget.display_label_for_index(idx);
-                let display_summary = self
-                    .chat_widget
-                    .display_summary_for_index(idx)
-                    .map(str::to_string);
-                if let Some(display_summary) = display_summary {
-                    self.chat_widget
-                        .add_info_message(format!("Named thread '{label}' — {display_summary}"), None);
-                } else {
-                    self.chat_widget
-                        .add_info_message(format!("Named thread '{label}'"), None);
-                }
-            }
-            tui.frame_requester().schedule_frame();
-        }
-    }
-
-    fn topic_summary(text: &str) -> Option<String> {
-        concise_request_summary(text, 10, 60)
-    }
-
-    fn apply_display_labels_for(&mut self, idx: usize) {
-        let base_label = self.chat_widget.display_label_for_index(idx);
-        let title = if let Some(summary) = self.chat_widget.display_summary_for_index(idx) {
-            format!("{base_label} • {summary}")
-        } else {
-            base_label
-        };
-        let path = self.chat_widget.display_thread_path_of(idx);
-        self.chat_widget.set_active_title(title);
-        self.chat_widget.set_active_thread_path(path);
-        self.update_active_thread_header();
-    }
-
-    fn update_active_thread_header(&mut self) {
-        let path = self
-            .chat_widget
-            .display_thread_path_of(self.chat_widget.active_index());
-        self.chat_widget.set_active_thread_path(path);
-    }
-
-    fn on_quit_requested(&mut self) {
-        let additional_threads = self.chat_widget.len().saturating_sub(1);
-
-        if additional_threads > 0 {
-            let plural = if additional_threads == 1 { "" } else { "s" };
-            self.chat_widget.add_info_message(
-                format!("Warning: exiting will close {additional_threads} open thread{plural}."),
-                Some("Use /close to summarize a thread before quitting.".to_string()),
-            );
-        }
-
-        self.app_event_tx.send(AppEvent::ExitRequest);
-    }
-
-    async fn on_conversation_history_for_thread(
+    async fn on_conversation_history_for_thread_fork(
         &mut self,
         tui: &mut tui::Tui,
-        ev: &ConversationPathResponseEvent,
-    ) -> Result<bool> {
-        let pending = match self.thread_fork_pending.take() {
-            Some(pending) if pending.base_id == ev.conversation_id => pending,
-            Some(pending) => {
-                self.thread_fork_pending = Some(pending);
-                return Ok(false);
-            }
-            None => return Ok(false),
+        ev: codex_core::protocol::ConversationPathResponseEvent,
+    ) -> color_eyre::eyre::Result<()> {
+        let Some(pending) = self.thread_fork_pending.take() else {
+            return Ok(());
         };
-        let cfg = self.config.clone();
-        let path = ev.path.clone();
-
-        match self
+        if let Some(base) = pending.base_id
+            && ev.conversation_id != base
+        {
+            // Not for our pending fork; keep waiting.
+            self.thread_fork_pending = Some(pending);
+            return Ok(());
+        }
+        let new_conv = self
             .server
-            .resume_conversation_from_rollout(cfg.clone(), path, self.auth_manager.clone())
+            .resume_conversation_from_rollout(
+                self.config.clone(),
+                ev.path.clone(),
+                self.auth_manager.clone(),
+            )
             .await
-        {
-            Ok(new_conv) => {
-                let session_id = self.alloc_session_id();
-                self.install_thread_session(tui, cfg, new_conv, pending.title, session_id);
-            }
-            Err(err) => {
-                self.chat_widget
-                    .add_error_message(format!("Failed to create thread: {err}"));
-            }
-        }
+            .wrap_err("failed to fork session from rollout path")?;
 
-        Ok(true)
-    }
-
-    fn install_thread_session(
-        &mut self,
-        tui: &mut tui::Tui,
-        cfg: Config,
-        new_conv: codex_core::NewConversation,
-        title: String,
-        session_id: SessionId,
-    ) {
-        let parent_index = self.chat_widget.active_index();
-        let parent_conversation_id = self
-            .chat_widget
-            .sessions()
-            .get(parent_index)
-            .and_then(|s| s.conversation_id);
-        let parent_snapshot_len = self
-            .chat_widget
-            .sessions()
-            .get(parent_index)
-            .map(|s| s.transcript_cells.len())
-            .unwrap_or(0);
-
-        let base_transcript = self.chat_widget.active_transcript().clone();
-        let session_configured = new_conv.session_configured.clone();
-
+        let conv = new_conv.conversation;
+        let session_configured = new_conv.session_configured;
         let init = crate::chatwidget::ChatWidgetInit {
-            config: cfg,
+            config: self.config.clone(),
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             initial_prompt: None,
             initial_images: Vec::new(),
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
-            session_id,
         };
+        let widget =
+            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
 
-        let new_widget = crate::chatwidget::ChatWidget::new_from_existing(
-            init,
-            new_conv.conversation,
-            new_conv.session_configured,
-        );
-
-        let new_index = self.chat_widget.add_session(new_widget, title, session_id);
-        if let Some(handle) = self.chat_widget.session_mut(new_index) {
-            handle.transcript_cells = base_transcript;
-            handle.conversation_id = Some(session_configured.session_id);
-            handle.origin = Some(SessionManager::thread_origin(
-                parent_index,
-                parent_conversation_id,
-                parent_snapshot_len,
-            ));
-            handle.auto_name_kind = Some(AutoNameKind::Child);
+        match &mut self.chat {
+            ChatHost::Multi(m) if self.threads_enabled => {
+                let id = m.next_session_id();
+                let idx = m.add_child_session(pending.parent_idx, widget, id);
+                m.switch_active(idx);
+            }
+            _ => {
+                self.chat = ChatHost::from_initial(widget, self.threads_enabled);
+            }
         }
-
-        self.chat_widget.refresh_thread_paths();
-        self.chat_widget.switch_active(new_index);
-        if let Some(handle) = self.chat_widget.session_mut(new_index) {
-            handle.widget.clear_request_summary();
-        }
-        self.apply_display_labels_for(new_index);
-        self.chat_widget
-            .set_active_conversation_id(session_configured.session_id);
-
-        self.has_emitted_history_lines = false;
-        self.deferred_history_lines.clear();
-        self.overlay = None;
-        self.render_transcript_once(tui);
-        let label = self.chat_widget.display_label_for_index(new_index);
-        let summary = self
-            .chat_widget
-            .display_summary_for_index(new_index)
-            .map(str::to_string);
-        if let Some(summary) = summary {
-            self.chat_widget
-                .add_info_message(format!("Switched to {label} — {summary}"), None);
-        } else {
-            self.chat_widget
-                .add_info_message(format!("Switched to {label}"), None);
-        }
+        let mut header_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+        let mut status_line: Option<ratatui::text::Line<'static>> = None;
+        self.shims
+            .augment_header_with_host(&mut header_lines, &self.chat);
+        self.shims
+            .augment_status_line_with_host(&mut status_line, &self.chat);
+        self.chat.set_shim_decorations(header_lines, status_line);
         tui.frame_requester().schedule_frame();
+        Ok(())
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        // Helper: configurable key bindings
+        let keymap = self.resolve_keymap();
         match key_event {
-            KeyEvent {
-                code: KeyCode::F(7),
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
-                self.switch_thread_relative(tui, -1);
+            // New session
+            KeyEvent { .. } if self.matches_key(&key_event, &keymap.new_session) => {
+                self.app_event_tx.send(AppEvent::NewSession);
             }
-            KeyEvent {
-                code: KeyCode::F(8),
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
-                self.switch_thread_relative(tui, 1);
+            // Fork child thread
+            KeyEvent { .. } if self.matches_key(&key_event, &keymap.fork_thread) => {
+                self.app_event_tx.send(AppEvent::ForkChildOfActive);
             }
             KeyEvent {
                 code: KeyCode::Char('t'),
-                modifiers: KeyModifiers::CONTROL,
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                let transcript = self.chat_widget.active_transcript().clone();
-                self.overlay = Some(Overlay::new_transcript(transcript));
+                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
@@ -1090,12 +843,10 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                if self.chat_widget.is_normal_backtrack_mode()
-                    && self.chat_widget.composer_is_empty()
-                {
+                if self.chat.is_normal_backtrack_mode() && self.chat.composer_is_empty() {
                     self.handle_backtrack_esc_key(tui);
                 } else {
-                    self.chat_widget.handle_key_event(key_event);
+                    self.chat.handle_key_event(key_event);
                 }
             }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
@@ -1105,10 +856,36 @@ impl App {
                 ..
             } if self.backtrack.primed
                 && self.backtrack.nth_user_message != usize::MAX
-                && self.chat_widget.composer_is_empty() =>
+                && self.chat.composer_is_empty() =>
             {
                 // Delegate to helper for clarity; preserves behavior.
                 self.confirm_backtrack_from_main();
+            }
+            // Open thread manager
+            KeyEvent { .. } if self.matches_key(&key_event, &keymap.open_threads) => {
+                self.app_event_tx.send(AppEvent::OpenThreadManager);
+            }
+            // Ctrl-Shift-N : New session
+            KeyEvent {
+                code: KeyCode::Char('n'),
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                modifiers,
+                ..
+            } if modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                && modifiers.contains(crossterm::event::KeyModifiers::SHIFT) =>
+            {
+                self.app_event_tx.send(AppEvent::NewSession);
+            }
+            // Ctrl-Shift-T : New thread (fork)
+            KeyEvent {
+                code: KeyCode::Char('t'),
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                modifiers,
+                ..
+            } if modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                && modifiers.contains(crossterm::event::KeyModifiers::SHIFT) =>
+            {
+                self.app_event_tx.send(AppEvent::ForkChildOfActive);
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -1120,12 +897,12 @@ impl App {
                 if key_event.code != KeyCode::Esc && self.backtrack.primed {
                     self.reset_backtrack_state();
                 }
-                self.chat_widget.handle_key_event(key_event);
+                self.chat.handle_key_event(key_event);
             }
             _ => {
                 // Ignore Release key events.
             }
-        };
+        }
     }
 }
 
@@ -1152,7 +929,8 @@ mod tests {
 
     fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
-        let config = chat_widget.config_ref().clone();
+        let chat = ChatHost::single(chat_widget);
+        let config = chat.config_ref().clone();
 
         let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
             "Test API Key",
@@ -1161,24 +939,24 @@ mod tests {
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
 
-        let session_id = chat_widget.session_id();
-
         App {
             server,
             app_event_tx,
-            chat_widget: SessionManager::single(chat_widget, session_id),
+            chat,
             auth_manager,
             config,
             active_profile: None,
             file_search,
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            shims: ShimStack::new(),
+            threads_enabled: false,
             thread_fork_pending: None,
-            next_session_id: session_id.raw().saturating_add(1),
         }
     }
 
@@ -1186,7 +964,7 @@ mod tests {
     fn update_reasoning_effort_updates_config() {
         let mut app = make_test_app();
         app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
-        app.chat_widget
+        app.chat
             .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
         app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
@@ -1196,7 +974,7 @@ mod tests {
             Some(ReasoningEffortConfig::High)
         );
         assert_eq!(
-            app.chat_widget.config_ref().model_reasoning_effort,
+            app.chat.config_ref().model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
     }
@@ -1227,23 +1005,18 @@ mod tests {
                 initial_messages: None,
                 rollout_path: PathBuf::new(),
             };
-            let path = if is_first {
-                vec!["main".to_string()]
-            } else {
-                vec!["main".to_string(), "fork".to_string()]
-            };
             Arc::new(new_session_info(
-                app.chat_widget.config_ref(),
+                app.chat.config_ref(),
                 event,
                 is_first,
-                &path,
+                Vec::new(),
             )) as Arc<dyn HistoryCell>
         };
 
         // Simulate the transcript after trimming for a fork, replaying history, and
         // appending the edited turn. The session header separates the retained history
         // from the forked conversation's replayed turns.
-        *app.chat_widget.active_transcript_mut() = vec![
+        app.transcript_cells = vec![
             make_header(true),
             user_cell("first question"),
             agent_cell("answer first"),
@@ -1256,12 +1029,11 @@ mod tests {
             agent_cell("answer edited"),
         ];
 
-        assert_eq!(user_count(app.chat_widget.active_transcript()), 2);
+        assert_eq!(user_count(&app.transcript_cells), 2);
 
         app.backtrack.base_id = Some(ConversationId::new());
         app.backtrack.primed = true;
-        app.backtrack.nth_user_message =
-            user_count(app.chat_widget.active_transcript()).saturating_sub(1);
+        app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
 
         app.confirm_backtrack_from_main();
 
@@ -1269,5 +1041,12 @@ mod tests {
         assert_eq!(nth, 1);
         assert_eq!(prefill, "follow-up (edited)");
     }
-
+}
+#[derive(Clone)]
+struct ResolvedKeymap {
+    open_threads: String,
+    new_session: String,
+    fork_thread: String,
+    prev_thread: String,
+    next_thread: String,
 }

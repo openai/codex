@@ -4,7 +4,9 @@
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
     "format": "prettier --check *.json *.md .github/workflows/*.yml **/*.js",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml **/*.js"
+    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml **/*.js",
+    "codex:dev-link": "bash -lc 'cd codex-rs && just codex-dev-link'",
+    "codex:dev-unlink": "bash -lc 'cd codex-rs && just codex-dev-unlink'"
   },
   "devDependencies": {
     "prettier": "^3.5.3"

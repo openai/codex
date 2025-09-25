@@ -10,7 +10,6 @@ use tokio::sync::mpsc::unbounded_channel;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::session_id::SessionId;
 
 /// Spawn the agent bootstrapper and op forwarding loop, returning the
 /// `UnboundedSender<Op>` used by the UI to submit operations.
@@ -18,14 +17,13 @@ pub(crate) fn spawn_agent(
     config: Config,
     app_event_tx: AppEventSender,
     server: Arc<ConversationManager>,
-    session_id: SessionId,
 ) -> UnboundedSender<Op> {
     let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
         let NewConversation {
-            conversation_id,
+            conversation_id: _,
             conversation,
             session_configured,
         } = match server.new_conversation(config).await {
@@ -43,11 +41,7 @@ pub(crate) fn spawn_agent(
             id: "".to_string(),
             msg: codex_core::protocol::EventMsg::SessionConfigured(session_configured),
         };
-        app_event_tx_clone.send(AppEvent::CodexEvent {
-            session_id,
-            conversation_id,
-            event: ev,
-        });
+        app_event_tx_clone.send(AppEvent::CodexEvent(ev));
 
         let conversation_clone = conversation.clone();
         tokio::spawn(async move {
@@ -59,13 +53,8 @@ pub(crate) fn spawn_agent(
             }
         });
 
-        let event_tx = app_event_tx_clone;
         while let Ok(event) = conversation.next_event().await {
-            event_tx.send(AppEvent::CodexEvent {
-                session_id,
-                conversation_id,
-                event,
-            });
+            app_event_tx_clone.send(AppEvent::CodexEvent(event));
         }
     });
 
@@ -79,23 +68,17 @@ pub(crate) fn spawn_agent_from_existing(
     conversation: std::sync::Arc<CodexConversation>,
     session_configured: codex_core::protocol::SessionConfiguredEvent,
     app_event_tx: AppEventSender,
-    session_id: SessionId,
 ) -> UnboundedSender<Op> {
     let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
         // Forward the captured `SessionConfigured` event so it can be rendered in the UI.
-        let conversation_id = session_configured.session_id;
         let ev = codex_core::protocol::Event {
             id: "".to_string(),
             msg: codex_core::protocol::EventMsg::SessionConfigured(session_configured),
         };
-        app_event_tx_clone.send(AppEvent::CodexEvent {
-            session_id,
-            conversation_id,
-            event: ev,
-        });
+        app_event_tx_clone.send(AppEvent::CodexEvent(ev));
 
         let conversation_clone = conversation.clone();
         tokio::spawn(async move {
@@ -108,11 +91,7 @@ pub(crate) fn spawn_agent_from_existing(
         });
 
         while let Ok(event) = conversation.next_event().await {
-            app_event_tx_clone.send(AppEvent::CodexEvent {
-                session_id,
-                conversation_id,
-                event,
-            });
+            app_event_tx_clone.send(AppEvent::CodexEvent(event));
         }
     });
 
