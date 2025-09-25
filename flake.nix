@@ -35,16 +35,5 @@
           default = codex-rs.devShell;
         }
       );
-
-      apps = forAllSystems (system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-          codex-rs = pkgs.callPackage ./codex-rs { };
-        in
-        {
-          codex-rs = codex-rs.app;
-          default = codex-rs.app;
-        }
-      );
     };
 }

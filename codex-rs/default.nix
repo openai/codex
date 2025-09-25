@@ -38,8 +38,4 @@ rec {
       ${pkgs.rustPlatform.cargoSetupHook}
     '';
   };
-  app = {
-    type = "app";
-    program = "${package}/bin/codex";
-  };
 }
