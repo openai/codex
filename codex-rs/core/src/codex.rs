@@ -379,7 +379,7 @@ impl Session {
 
         let mcp_fut = McpConnectionManager::new(
             config.mcp_servers.clone(),
-            config.experimental_use_rmcp_client,
+            config.use_experimental_use_rmcp_client,
         );
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);

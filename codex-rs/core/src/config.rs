@@ -184,7 +184,7 @@ pub struct Config {
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
-    pub experimental_use_rmcp_client: bool,
+    pub use_experimental_use_rmcp_client: bool,
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
@@ -1046,7 +1046,7 @@ impl Config {
             use_experimental_unified_exec_tool: cfg
                 .experimental_use_unified_exec_tool
                 .unwrap_or(false),
-            experimental_use_rmcp_client: cfg.experimental_use_rmcp_client.unwrap_or(false),
+            use_experimental_use_rmcp_client: cfg.experimental_use_rmcp_client.unwrap_or(false),
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
@@ -1655,7 +1655,7 @@ model_verbosity = "high"
                 tools_web_search_request: false,
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
-                experimental_use_rmcp_client: false,
+                use_experimental_use_rmcp_client: false,
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
@@ -1714,7 +1714,7 @@ model_verbosity = "high"
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
-            experimental_use_rmcp_client: false,
+            use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
@@ -1788,7 +1788,7 @@ model_verbosity = "high"
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
-            experimental_use_rmcp_client: false,
+            use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
@@ -1848,7 +1848,7 @@ model_verbosity = "high"
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
-            experimental_use_rmcp_client: false,
+            use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
