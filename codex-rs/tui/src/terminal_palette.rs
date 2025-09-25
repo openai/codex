@@ -1,34 +1,22 @@
 use std::sync::OnceLock;
 
-use tracing::info;
-
 #[cfg(unix)]
 use std::mem::MaybeUninit;
 #[cfg(unix)]
 use std::os::fd::RawFd;
 
 pub fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
-    static CACHE: OnceLock<Option<[(u8, u8, u8); 256]>> = OnceLock::new();
+    static CACHE: OnceLock<[(u8, u8, u8); 256]> = OnceLock::new();
     if let Some(cached) = CACHE.get() {
-        info!("terminal_palette: returning cached palette");
-        return cached.clone();
+        return Some(*cached);
     }
 
-    info!("terminal_palette: querying terminal 256-color palette via OSC 4");
     match query_terminal_palette() {
         Ok(Some(palette)) => {
-            info!("terminal_palette: successfully captured palette");
-            let _ = CACHE.set(Some(palette.clone()));
-            Some(palette)
+            let _ = CACHE.set(palette);
+            CACHE.get().copied()
         }
-        Ok(None) => {
-            info!("terminal_palette: terminal did not return a palette");
-            None
-        }
-        Err(err) => {
-            info!("terminal_palette: failed to query palette: {err:?}");
-            None
-        }
+        _ => None,
     }
 }
 
@@ -56,7 +44,6 @@ fn query_terminal_palette() -> std::io::Result<Option<[(u8, u8, u8); 256]>> {
         write!(tty, "\x1b]4;{};?\x07", index)?;
     }
     tty.flush()?;
-    info!("terminal_palette: wrote OSC 4 queries to tty");
 
     let fd = tty.as_raw_fd();
     let _termios_guard = unsafe { suppress_echo(fd) };
@@ -81,9 +68,6 @@ fn query_terminal_palette() -> std::io::Result<Option<[(u8, u8, u8); 256]>> {
                 let newly = apply_palette_responses(&mut buffer, &mut palette);
                 if newly > 0 {
                     remaining = remaining.saturating_sub(newly);
-                    info!(
-                        "terminal_palette: parsed {newly} entries from immediate read; remaining {remaining}"
-                    );
                 }
             }
             Err(err) if err.kind() == ErrorKind::WouldBlock => {
@@ -94,82 +78,10 @@ fn query_terminal_palette() -> std::io::Result<Option<[(u8, u8, u8); 256]>> {
         }
     }
 
-    let parsed = apply_palette_responses(&mut buffer, &mut palette);
-    if parsed > 0 {
-        remaining = remaining.saturating_sub(parsed);
-        info!(
-            "terminal_palette: parsed {parsed} entries after initial loop; remaining {remaining}"
-        );
-    }
-    let drained = drain_remaining(&mut tty, &mut buffer, &mut palette);
-    if drained > 0 {
-        remaining = remaining.saturating_sub(drained);
-        info!("terminal_palette: parsed {drained} entries from drain; remaining {remaining}");
-    }
+    remaining = remaining.saturating_sub(apply_palette_responses(&mut buffer, &mut palette));
+    remaining = remaining.saturating_sub(drain_remaining(&mut tty, &mut buffer, &mut palette));
 
     if remaining > 0 {
-        let missing: Vec<usize> = palette
-            .iter()
-            .enumerate()
-            .filter_map(|(index, value)| value.is_none().then_some(index))
-            .collect();
-        if !missing.is_empty() {
-            info!(
-                missing_count = missing.len(),
-                "terminal_palette: retrying {} missing entries",
-                missing.len()
-            );
-            buffer.clear();
-            for &index in &missing {
-                write!(tty, "\x1b]4;{};?\x07", index)?;
-            }
-            tty.flush()?;
-
-            let retry_deadline = Instant::now() + Duration::from_millis(500);
-            while remaining > 0 && Instant::now() < retry_deadline {
-                let mut chunk = [0u8; 512];
-                match tty.read(&mut chunk) {
-                    Ok(0) => break,
-                    Ok(read) => {
-                        buffer.extend_from_slice(&chunk[..read]);
-                        let newly = apply_palette_responses(&mut buffer, &mut palette);
-                        if newly > 0 {
-                            remaining = remaining.saturating_sub(newly);
-                            info!(
-                                "terminal_palette: parsed {newly} retry entries; remaining {remaining}"
-                            );
-                        }
-                    }
-                    Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-                    Err(err) => {
-                        info!("terminal_palette: tty read error during retry: {err}");
-                        break;
-                    }
-                }
-            }
-
-            let parsed_retry = apply_palette_responses(&mut buffer, &mut palette);
-            if parsed_retry > 0 {
-                remaining = remaining.saturating_sub(parsed_retry);
-                info!(
-                    "terminal_palette: parsed {parsed_retry} entries after retry loop; remaining {remaining}"
-                );
-            }
-            let drained_retry = drain_remaining(&mut tty, &mut buffer, &mut palette);
-            if drained_retry > 0 {
-                remaining = remaining.saturating_sub(drained_retry);
-                info!(
-                    "terminal_palette: parsed {drained_retry} entries from retry drain; remaining {remaining}"
-                );
-            }
-        }
-    }
-
-    if remaining > 0 {
-        info!("terminal_palette: gave up with {remaining} entries missing");
         return Ok(None);
     }
 
@@ -220,10 +132,7 @@ fn drain_remaining(
                 std::thread::sleep(Duration::from_millis(5));
             }
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-            Err(err) => {
-                info!("terminal_palette: tty read error during drain: {err}");
-                break;
-            }
+            Err(_) => break,
         }
     }
 
