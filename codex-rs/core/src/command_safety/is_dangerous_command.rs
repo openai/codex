@@ -1,14 +1,14 @@
 use crate::bash::try_parse_bash;
 use crate::bash::try_parse_word_only_commands_sequence;
 
-const DANGEROUS_COMMAND_PREFIXES: &[&str] = &["git reset"];
+const DANGEROUS_COMMANDS: &[&str] = &["git reset"];
 
 pub fn command_might_be_dangerous(command: &[String]) -> bool {
-    if starts_with_dangerous_prefix(command) {
+    if contains_dangerous_command(command) {
         return true;
     }
 
-    // Support `bash -lc "<script>"` where the any part of the script might start with a dangerous prefix.
+    // Support `bash -lc "<script>"` where the any part of the script might contain a dangerous command.
     if let [bash, flag, script] = command
         && bash == "bash"
         && flag == "-lc"
@@ -16,7 +16,7 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
         && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
         && all_commands
             .iter()
-            .any(|cmd| starts_with_dangerous_prefix(cmd))
+            .any(|cmd| contains_dangerous_command(cmd))
     {
         return true;
     }
@@ -24,16 +24,16 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
     false
 }
 
-fn starts_with_dangerous_prefix(command: &[String]) -> bool {
+fn contains_dangerous_command(command: &[String]) -> bool {
     if command.is_empty() {
         return false;
     }
 
     let command_string = command.join(" ");
 
-    DANGEROUS_COMMAND_PREFIXES
+    DANGEROUS_COMMANDS
         .iter()
-        .any(|dangerous| command_string.trim().starts_with(dangerous))
+        .any(|dangerous| command_string.trim().contains(dangerous))
 }
 
 #[cfg(test)]
@@ -83,6 +83,25 @@ mod tests {
             "bash",
             "-lc",
             "git status"
+        ])));
+    }
+
+    #[test]
+    fn sudo_git_reset_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "sudo",
+            "git",
+            "reset",
+            "--hard"
+        ])));
+    }
+
+    #[test]
+    fn usr_bin_git_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&[
+            "/usr/bin/git",
+            "reset",
+            "--hard"
         ])));
     }
 }
