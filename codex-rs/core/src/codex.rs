@@ -671,9 +671,23 @@ impl Session {
         }
     }
 
-    pub async fn add_approved_command(&self, cmd: Vec<String>) {
-        let mut state = self.state.lock().await;
-        state.add_approved_command(cmd);
+    pub async fn remember_approved_command(
+        &self,
+        command_for_display: &[String],
+        executed_command: &[String],
+    ) {
+        let same = command_for_display == executed_command;
+        let display_vec = command_for_display.to_vec();
+        let executed_vec = if same {
+            None
+        } else {
+            Some(executed_command.to_vec())
+        };
+
+        self.add_approved_command(display_vec).await;
+        if let Some(exec_vec) = executed_vec {
+            self.add_approved_command(exec_vec).await;
+        }
     }
 
     /// Records input items: always append to conversation history and
@@ -2814,7 +2828,8 @@ async fn handle_container_exec_with_params(
             match decision {
                 ReviewDecision::Approved => (),
                 ReviewDecision::ApprovedForSession => {
-                    sess.add_approved_command(params.command.clone()).await;
+                    sess.remember_approved_command(&command_for_display, &params.command)
+                        .await;
                 }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
                     return Err(FunctionCallError::RespondToModel(
@@ -2960,7 +2975,11 @@ async fn handle_sandbox_error(
             // remainder of the session so future
             // executions skip the sandbox directly.
             // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
-            sess.add_approved_command(params.command.clone()).await;
+            sess.remember_approved_command(
+                &exec_command_context.command_for_display,
+                &params.command,
+            )
+            .await;
             // Inform UI we are retrying without sandbox.
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
@@ -3334,6 +3353,25 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    #[test]
+    fn remember_approved_command_records_both_variants() {
+        let (session, _) = make_session_and_context();
+        let original = vec!["bash".to_string(), "-lc".to_string(), "ls".to_string()];
+        let translated = vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "bash -lc ls".to_string(),
+        ];
+
+        tokio_test::block_on(session.remember_approved_command(&original, &translated));
+
+        let approved =
+            tokio_test::block_on(async { session.state.lock().await.approved_commands.clone() });
+
+        assert!(approved.contains(&original));
+        assert!(approved.contains(&translated));
+    }
     #[test]
     fn prefers_structured_content_when_present() {
         let ctr = CallToolResult {
