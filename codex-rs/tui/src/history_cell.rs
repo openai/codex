@@ -1232,10 +1232,20 @@ pub(crate) fn new_mcp_tools_output(
 
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
 
-        if !cfg.command.is_empty() {
-            let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
-
-            lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+        match (&cfg.command, &cfg.url) {
+            (Some(command), None) => {
+                let args = if cfg.args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", cfg.args.join(" "))
+                };
+                let cmd_display = format!("{command}{args}");
+                lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+            }
+            (None, Some(url)) => {
+                lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
+            }
+            _ => {}
         }
 
         if names.is_empty() {

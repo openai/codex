@@ -314,27 +314,44 @@ pub fn write_global_mcp_servers(
         for (name, config) in servers {
             let mut entry = TomlTable::new();
             entry.set_implicit(false);
-            entry["command"] = toml_edit::value(config.command.clone());
+            match (&config.command, &config.url) {
+                (Some(command), None) => {
+                    entry["command"] = toml_edit::value(command.clone());
 
-            if !config.args.is_empty() {
-                let mut args = TomlArray::new();
-                for arg in &config.args {
-                    args.push(arg.clone());
-                }
-                entry["args"] = TomlItem::Value(args.into());
-            }
+                    if !config.args.is_empty() {
+                        let mut args = TomlArray::new();
+                        for arg in &config.args {
+                            args.push(arg.clone());
+                        }
+                        entry["args"] = TomlItem::Value(args.into());
+                    }
 
-            if let Some(env) = &config.env
-                && !env.is_empty()
-            {
-                let mut env_table = TomlTable::new();
-                env_table.set_implicit(false);
-                let mut pairs: Vec<_> = env.iter().collect();
-                pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                for (key, value) in pairs {
-                    env_table.insert(key, toml_edit::value(value.clone()));
+                    if let Some(env) = &config.env
+                        && !env.is_empty()
+                    {
+                        let mut env_table = TomlTable::new();
+                        env_table.set_implicit(false);
+                        let mut pairs: Vec<_> = env.iter().collect();
+                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        for (key, value) in pairs {
+                            env_table.insert(key, toml_edit::value(value.clone()));
+                        }
+                        entry["env"] = TomlItem::Table(env_table);
+                    }
                 }
-                entry["env"] = TomlItem::Table(env_table);
+                (None, Some(url)) => {
+                    entry["url"] = toml_edit::value(url.clone());
+                    if let Some(token) = &config.bearer_token {
+                        entry["bearer_token"] = toml_edit::value(token.clone());
+                    }
+                }
+                _ => {
+                    tracing::warn!(
+                        "skipping MCP server `{}` with invalid transport configuration",
+                        name
+                    );
+                    continue;
+                }
             }
 
             if let Some(timeout) = config.startup_timeout_sec {
@@ -1294,9 +1311,11 @@ exclude_slash_tmp = true
         servers.insert(
             "docs".to_string(),
             McpServerConfig {
-                command: "echo".to_string(),
+                command: Some("echo".to_string()),
                 args: vec!["hello".to_string()],
                 env: None,
+                url: None,
+                bearer_token: None,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
                 tool_timeout_sec: Some(Duration::from_secs(5)),
             },
@@ -1307,7 +1326,7 @@ exclude_slash_tmp = true
         let loaded = load_global_mcp_servers(codex_home.path())?;
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
-        assert_eq!(docs.command, "echo");
+        assert_eq!(docs.command, Some("echo".to_string()));
         assert_eq!(docs.args, vec!["hello".to_string()]);
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_secs(3)));
         assert_eq!(docs.tool_timeout_sec, Some(Duration::from_secs(5)));

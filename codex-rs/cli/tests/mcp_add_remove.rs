@@ -26,9 +26,11 @@ fn add_and_remove_server_updates_global_config() -> Result<()> {
     let servers = load_global_mcp_servers(codex_home.path())?;
     assert_eq!(servers.len(), 1);
     let docs = servers.get("docs").expect("server should exist");
-    assert_eq!(docs.command, "echo");
+    assert_eq!(docs.command.as_deref(), Some("echo"));
     assert_eq!(docs.args, vec!["hello".to_string()]);
     assert!(docs.env.is_none());
+    assert!(docs.url.is_none());
+    assert!(docs.bearer_token.is_none());
 
     let mut remove_cmd = codex_command(codex_home.path())?;
     remove_cmd

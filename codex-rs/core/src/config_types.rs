@@ -15,13 +15,20 @@ use serde::de::Error as SerdeError;
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
-    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 
     #[serde(default)]
     pub args: Vec<String>,
 
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearer_token: Option<String>,
 
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
@@ -43,11 +50,16 @@ impl<'de> Deserialize<'de> for McpServerConfig {
     {
         #[derive(Deserialize)]
         struct RawMcpServerConfig {
-            command: String,
+            #[serde(default)]
+            command: Option<String>,
             #[serde(default)]
             args: Vec<String>,
             #[serde(default)]
             env: Option<HashMap<String, String>>,
+            #[serde(default)]
+            url: Option<String>,
+            #[serde(default)]
+            bearer_token: Option<String>,
             #[serde(default)]
             startup_timeout_sec: Option<f64>,
             #[serde(default)]
@@ -67,13 +79,106 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             (None, None) => None,
         };
 
+        let command = raw.command.and_then(normalize_string_option);
+        let url = raw.url.and_then(normalize_string_option);
+
+        let has_command = command.is_some();
+        let has_url = url.is_some();
+
+        if has_command && has_url {
+            return Err(SerdeError::custom(
+                "MCP server config must not set both `command` and `url`",
+            ));
+        }
+
+        if !has_command && !has_url {
+            return Err(SerdeError::custom(
+                "MCP server config must set either `command` or `url`",
+            ));
+        }
+
+        if has_url {
+            if !raw.args.is_empty() {
+                return Err(SerdeError::custom(
+                    "`args` is not supported when configuring MCP servers via `url`",
+                ));
+            }
+            if raw.env.as_ref().is_some_and(|env| !env.is_empty()) {
+                return Err(SerdeError::custom(
+                    "`env` is not supported when configuring MCP servers via `url`",
+                ));
+            }
+        }
+
         Ok(Self {
-            command: raw.command,
+            command,
             args: raw.args,
             env: raw.env,
+            url,
+            bearer_token: raw.bearer_token.and_then(normalize_string_option),
             startup_timeout_sec,
             tool_timeout_sec: raw.tool_timeout_sec,
         })
+    }
+}
+
+fn normalize_string_option(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn deserialize_command_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            args = ["hello", "world"]
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(cfg.command.as_deref(), Some("echo"));
+        assert_eq!(cfg.args, vec!["hello", "world"]);
+        assert!(cfg.url.is_none());
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+            bearer_token = "secret"
+        "#,
+        )
+        .expect("should deserialize http config");
+
+        assert_eq!(cfg.url.as_deref(), Some("https://example.com/mcp"));
+        assert_eq!(cfg.bearer_token.as_deref(), Some("secret"));
+        assert!(cfg.command.is_none());
+        assert!(cfg.args.is_empty());
+        assert!(cfg.env.is_none());
+    }
+
+    #[test]
+    fn deserialize_rejects_invalid_transport_combo() {
+        let err = toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            url = "https://example.com"
+        "#,
+        )
+        .expect_err("should reject command+url");
+
+        assert!(err.to_string().contains("must not set both"));
     }
 }
 

@@ -145,9 +145,11 @@ fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<(
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
     let new_entry = McpServerConfig {
-        command: command_bin,
+        command: Some(command_bin),
         args: command_args,
         env: env_map,
+        url: None,
+        bearer_token: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
     };
@@ -211,6 +213,8 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
                     "command": cfg.command,
                     "args": cfg.args,
                     "env": env,
+                    "url": cfg.url,
+                    "bearer_token": cfg.bearer_token,
                     "startup_timeout_sec": cfg
                         .startup_timeout_sec
                         .map(|timeout| timeout.as_secs_f64()),
@@ -232,27 +236,36 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
 
     let mut rows: Vec<[String; 4]> = Vec::new();
     for (name, cfg) in entries {
-        let args = if cfg.args.is_empty() {
-            "-".to_string()
-        } else {
-            cfg.args.join(" ")
-        };
-
-        let env = match cfg.env.as_ref() {
-            None => "-".to_string(),
-            Some(map) if map.is_empty() => "-".to_string(),
-            Some(map) => {
-                let mut pairs: Vec<_> = map.iter().collect();
-                pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                pairs
-                    .into_iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+        let (command_display, args_display, env_display) = match (&cfg.command, &cfg.url) {
+            (Some(command), None) => {
+                let args = if cfg.args.is_empty() {
+                    "-".to_string()
+                } else {
+                    cfg.args.join(" ")
+                };
+                let env_str = match cfg.env.as_ref() {
+                    None => "-".to_string(),
+                    Some(map) if map.is_empty() => "-".to_string(),
+                    Some(map) => {
+                        let mut pairs: Vec<_> = map.iter().collect();
+                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        pairs
+                            .into_iter()
+                            .map(|(k, v)| format!("{k}={v}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                };
+                (command.clone(), args, env_str)
             }
+            (None, Some(url)) => {
+                let bearer = cfg.bearer_token.clone().unwrap_or_else(|| "-".to_string());
+                (url.clone(), "-".to_string(), bearer)
+            }
+            _ => ("-".to_string(), "-".to_string(), "-".to_string()),
         };
 
-        rows.push([name.clone(), cfg.command.clone(), args, env]);
+        rows.push([name.clone(), command_display, args_display, env_display]);
     }
 
     let mut widths = ["Name".len(), "Command".len(), "Args".len(), "Env".len()];
@@ -311,6 +324,8 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
             "command": server.command,
             "args": server.args,
             "env": env,
+            "url": server.url,
+            "bearer_token": server.bearer_token,
             "startup_timeout_sec": server
                 .startup_timeout_sec
                 .map(|timeout| timeout.as_secs_f64()),
@@ -323,27 +338,39 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     }
 
     println!("{}", get_args.name);
-    println!("  command: {}", server.command);
-    let args = if server.args.is_empty() {
-        "-".to_string()
-    } else {
-        server.args.join(" ")
-    };
-    println!("  args: {args}");
-    let env_display = match server.env.as_ref() {
-        None => "-".to_string(),
-        Some(map) if map.is_empty() => "-".to_string(),
-        Some(map) => {
-            let mut pairs: Vec<_> = map.iter().collect();
-            pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-            pairs
-                .into_iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+    match (&server.command, &server.url) {
+        (Some(command), None) => {
+            println!("  command: {command}");
+            let args = if server.args.is_empty() {
+                "-".to_string()
+            } else {
+                server.args.join(" ")
+            };
+            println!("  args: {args}");
+            let env_display = match server.env.as_ref() {
+                None => "-".to_string(),
+                Some(map) if map.is_empty() => "-".to_string(),
+                Some(map) => {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs
+                        .into_iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            };
+            println!("  env: {env_display}");
         }
-    };
-    println!("  env: {env_display}");
+        (None, Some(url)) => {
+            println!("  url: {url}");
+            let bearer = server.bearer_token.as_deref().unwrap_or("-");
+            println!("  bearer_token: {bearer}");
+        }
+        _ => {
+            println!("  command/url: -");
+        }
+    }
     if let Some(timeout) = server.startup_timeout_sec {
         println!("  startup_timeout_sec: {}", timeout.as_secs_f64());
     }

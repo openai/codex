@@ -118,6 +118,17 @@ impl McpClientAdapter {
         }
     }
 
+    async fn new_streamable_http_client(
+        url: String,
+        bearer_token: Option<String>,
+        params: mcp_types::InitializeRequestParams,
+        startup_timeout: Duration,
+    ) -> Result<Self> {
+        let client = Arc::new(RmcpClient::new_streamable_http_client(url, bearer_token)?);
+        client.initialize(params, Some(startup_timeout)).await?;
+        Ok(McpClientAdapter::Rmcp(client))
+    }
+
     async fn list_tools(
         &self,
         params: Option<mcp_types::ListToolsRequestParams>,
@@ -188,16 +199,52 @@ impl McpConnectionManager {
                 continue;
             }
 
+            let has_command = cfg.command.is_some();
+            let has_url = cfg.url.is_some();
+
+            if has_command && has_url {
+                errors.insert(
+                    server_name.clone(),
+                    anyhow!(
+                        "MCP server `{}` must not set both `command` and `url`",
+                        server_name
+                    ),
+                );
+                continue;
+            }
+
+            if !has_command && !has_url {
+                errors.insert(
+                    server_name.clone(),
+                    anyhow!(
+                        "MCP server `{}` must set either `command` or `url`",
+                        server_name
+                    ),
+                );
+                continue;
+            }
+
+            if cfg.url.is_some() && !use_rmcp_client {
+                info!(
+                    "skipping MCP server `{}` configured with url because rmcp client is disabled",
+                    server_name
+                );
+                continue;
+            }
+
             let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
             let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
 
             let use_rmcp_client_flag = use_rmcp_client;
             join_set.spawn(async move {
                 let McpServerConfig {
-                    command, args, env, ..
+                    command,
+                    args,
+                    env,
+                    url,
+                    bearer_token,
+                    ..
                 } = cfg;
-                let command_os: OsString = command.into();
-                let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
                 let params = mcp_types::InitializeRequestParams {
                     capabilities: ClientCapabilities {
                         experimental: None,
@@ -219,16 +266,31 @@ impl McpConnectionManager {
                     protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                 };
 
-                let client = McpClientAdapter::new_stdio_client(
-                    use_rmcp_client_flag,
-                    command_os,
-                    args_os,
-                    env,
-                    params,
-                    startup_timeout,
-                )
-                .await
-                .map(|c| (c, startup_timeout));
+                let client = match (command, url) {
+                    (Some(command), None) => {
+                        let command_os: OsString = command.into();
+                        let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
+                        McpClientAdapter::new_stdio_client(
+                            use_rmcp_client_flag,
+                            command_os,
+                            args_os,
+                            env,
+                            params.clone(),
+                            startup_timeout,
+                        )
+                        .await
+                        .map(|c| (c, startup_timeout))
+                    }
+                    (None, Some(url)) => McpClientAdapter::new_streamable_http_client(
+                        url,
+                        bearer_token,
+                        params,
+                        startup_timeout,
+                    )
+                    .await
+                    .map(|c| (c, startup_timeout)),
+                    _ => Err(anyhow!("invalid MCP server transport configuration")),
+                };
 
                 ((server_name, tool_timeout), client)
             });
