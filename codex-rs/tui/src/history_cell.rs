@@ -2,7 +2,6 @@ use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
-use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 pub(crate) use crate::status::RateLimitSnapshotDisplay;
@@ -280,6 +279,58 @@ pub(crate) struct ExecCall {
 pub(crate) struct ExecCell {
     calls: Vec<ExecCall>,
 }
+
+#[derive(Clone, Copy)]
+struct PrefixedBlock {
+    initial_prefix: &'static str,
+    subsequent_prefix: &'static str,
+}
+
+impl PrefixedBlock {
+    const fn new(initial_prefix: &'static str, subsequent_prefix: &'static str) -> Self {
+        Self {
+            initial_prefix,
+            subsequent_prefix,
+        }
+    }
+
+    fn wrap_width(self, total_width: u16) -> usize {
+        let prefix_width = UnicodeWidthStr::width(self.initial_prefix)
+            .max(UnicodeWidthStr::width(self.subsequent_prefix));
+        usize::from(total_width).saturating_sub(prefix_width).max(1)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ExecDisplayLayout {
+    command_continuation: PrefixedBlock,
+    command_continuation_max_lines: usize,
+    output_block: PrefixedBlock,
+    output_max_lines: usize,
+}
+
+impl ExecDisplayLayout {
+    const fn new(
+        command_continuation: PrefixedBlock,
+        command_continuation_max_lines: usize,
+        output_block: PrefixedBlock,
+        output_max_lines: usize,
+    ) -> Self {
+        Self {
+            command_continuation,
+            command_continuation_max_lines,
+            output_block,
+            output_max_lines,
+        }
+    }
+}
+
+const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
+    PrefixedBlock::new("  │ ", "  │ "),
+    2,
+    PrefixedBlock::new("  └ ", "    "),
+    5,
+);
 impl HistoryCell for ExecCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.is_exploring_cell() {
@@ -440,12 +491,13 @@ impl ExecCell {
     }
 
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        use textwrap::Options as TwOptions;
+        use textwrap::WordSplitter;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         let [call] = &self.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
         };
+        let layout = EXEC_DISPLAY_LAYOUT;
         let success = call.output.as_ref().map(|o| o.exit_code == 0);
         let bullet = match success {
             Some(true) => "•".green().bold(),
@@ -453,60 +505,136 @@ impl ExecCell {
             None => spinner(call.start_time),
         };
         let title = if self.is_active() { "Running" } else { "Ran" };
+
+        let mut header_line =
+            Line::from(vec![bullet.clone(), " ".into(), title.bold(), " ".into()]);
+        let header_prefix_width = header_line.width();
+
         let cmd_display = strip_bash_lc_and_escape(&call.command);
-
-        // If the command fits on the same line as the header at the current width,
-        // show a single compact line: "• Ran <command>". Use the width of
-        // "• Running " (including trailing space) as the reserved prefix width.
-        // If the command contains newlines, always use the multi-line variant.
-        let reserved = "• Running ".width();
-
-        let mut body_lines: Vec<Line<'static>> = Vec::new();
-
         let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd_display);
 
-        if highlighted_lines.len() == 1
-            && highlighted_lines[0].width() < (width as usize).saturating_sub(reserved)
-        {
-            let mut line = Line::from(vec![bullet, " ".into(), title.bold(), " ".into()]);
-            line.extend(highlighted_lines[0].clone());
-            lines.push(line);
-        } else {
-            lines.push(vec![bullet, " ".into(), title.bold()].into());
+        let continuation_wrap_width = layout.command_continuation.wrap_width(width);
+        let continuation_opts = crate::wrapping::RtOptions::new(continuation_wrap_width)
+            .word_splitter(WordSplitter::NoHyphenation);
 
-            for hl_line in highlighted_lines.iter() {
-                let opts = crate::wrapping::RtOptions::new((width as usize).saturating_sub(4))
-                    .initial_indent("".into())
-                    .subsequent_indent("    ".into())
-                    // Hyphenation likes to break words on hyphens, which is bad for bash scripts --because-of-flags.
-                    .word_splitter(textwrap::WordSplitter::NoHyphenation);
-                let wrapped_borrowed = crate::wrapping::word_wrap_line(hl_line, opts);
-                body_lines.extend(wrapped_borrowed.iter().map(|l| line_to_static(l)));
+        let mut continuation_lines: Vec<Line<'static>> = Vec::new();
+
+        if let Some((first, rest)) = highlighted_lines.split_first() {
+            let available_first_width = (width as usize).saturating_sub(header_prefix_width).max(1);
+            let first_opts = crate::wrapping::RtOptions::new(available_first_width)
+                .word_splitter(WordSplitter::NoHyphenation);
+            let mut first_wrapped: Vec<Line<'static>> = Vec::new();
+            push_owned_lines(
+                &crate::wrapping::word_wrap_line(first, first_opts),
+                &mut first_wrapped,
+            );
+            let mut first_wrapped_iter = first_wrapped.into_iter();
+            if let Some(first_segment) = first_wrapped_iter.next() {
+                header_line.extend(first_segment);
+            }
+            continuation_lines.extend(first_wrapped_iter);
+
+            for line in rest {
+                push_owned_lines(
+                    &crate::wrapping::word_wrap_line(line, continuation_opts.clone()),
+                    &mut continuation_lines,
+                );
             }
         }
-        if let Some(output) = call.output.as_ref()
-            && output.exit_code != 0
-        {
-            let out = output_lines(
+
+        lines.push(header_line);
+
+        let continuation_lines = Self::limit_lines_from_start(
+            &continuation_lines,
+            layout.command_continuation_max_lines,
+        );
+        if !continuation_lines.is_empty() {
+            lines.extend(prefix_lines(
+                continuation_lines,
+                Span::from(layout.command_continuation.initial_prefix).dim(),
+                Span::from(layout.command_continuation.subsequent_prefix).dim(),
+            ));
+        }
+
+        if let Some(output) = call.output.as_ref() {
+            let raw_output_lines = output_lines(
                 Some(output),
                 OutputLinesParams {
                     only_err: false,
                     include_angle_pipe: false,
                     include_prefix: false,
                 },
-            )
-            .into_iter()
-            .join("\n");
-            if !out.trim().is_empty() {
-                // Wrap the output.
-                for line in out.lines() {
-                    let wrapped = textwrap::wrap(line, TwOptions::new(width as usize - 4));
-                    body_lines.extend(wrapped.into_iter().map(|l| Line::from(l.to_string().dim())));
-                }
+            );
+            let trimmed_output =
+                Self::truncate_lines_middle(&raw_output_lines, layout.output_max_lines);
+
+            let mut wrapped_output: Vec<Line<'static>> = Vec::new();
+            let output_wrap_width = layout.output_block.wrap_width(width);
+            let output_opts = crate::wrapping::RtOptions::new(output_wrap_width)
+                .word_splitter(WordSplitter::NoHyphenation);
+            for line in trimmed_output {
+                push_owned_lines(
+                    &crate::wrapping::word_wrap_line(&line, output_opts.clone()),
+                    &mut wrapped_output,
+                );
+            }
+
+            if !wrapped_output.is_empty() {
+                lines.extend(prefix_lines(
+                    wrapped_output,
+                    Span::from(layout.output_block.initial_prefix).dim(),
+                    Span::from(layout.output_block.subsequent_prefix),
+                ));
             }
         }
-        lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
+
         lines
+    }
+
+    fn limit_lines_from_start(lines: &[Line<'static>], keep: usize) -> Vec<Line<'static>> {
+        if lines.len() <= keep {
+            return lines.to_vec();
+        }
+        if keep == 0 {
+            return vec![Self::ellipsis_line(lines.len())];
+        }
+
+        let mut out: Vec<Line<'static>> = lines[..keep].to_vec();
+        out.push(Self::ellipsis_line(lines.len() - keep));
+        out
+    }
+
+    fn truncate_lines_middle(lines: &[Line<'static>], max: usize) -> Vec<Line<'static>> {
+        if max == 0 {
+            return Vec::new();
+        }
+        if lines.len() <= max {
+            return lines.to_vec();
+        }
+        if max == 1 {
+            return vec![Self::ellipsis_line(lines.len())];
+        }
+
+        let head = (max - 1) / 2;
+        let tail = max - head - 1;
+        let mut out: Vec<Line<'static>> = Vec::new();
+
+        if head > 0 {
+            out.extend(lines[..head].iter().cloned());
+        }
+
+        let omitted = lines.len().saturating_sub(head + tail);
+        out.push(Self::ellipsis_line(omitted));
+
+        if tail > 0 {
+            out.extend(lines[lines.len() - tail..].iter().cloned());
+        }
+
+        out
+    }
+
+    fn ellipsis_line(omitted: usize) -> Line<'static> {
+        Line::from(vec![format!("… +{omitted} lines").dim()])
     }
 }
 
