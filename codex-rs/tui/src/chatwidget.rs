@@ -427,12 +427,20 @@ impl ChatWidget {
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
-            let combined = self
+            let queued_text = self
                 .queued_user_messages
                 .iter()
                 .map(|m| m.text.clone())
                 .collect::<Vec<_>>()
                 .join("\n");
+            let existing_text = self.bottom_pane.composer_text();
+            let combined = if existing_text.is_empty() {
+                queued_text
+            } else if queued_text.is_empty() {
+                existing_text
+            } else {
+                format!("{queued_text}\n{existing_text}")
+            };
             self.bottom_pane.set_composer_text(combined);
             // Clear the queue and update the status indicator list.
             self.queued_user_messages.clear();

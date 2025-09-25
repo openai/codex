@@ -1299,6 +1299,40 @@ fn interrupt_restores_queued_messages_into_composer() {
     let _ = drain_insert_history(&mut rx);
 }
 
+#[test]
+fn interrupt_prepends_queued_messages_before_existing_composer_text() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane.set_task_running(true);
+    chat.bottom_pane
+        .set_composer_text("current draft".to_string());
+
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "first queued\nsecond queued\ncurrent draft"
+    );
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(
+        op_rx.try_recv().is_err(),
+        "unexpected outbound op after interrupt"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
 // Snapshot test: ChatWidget at very small heights (idle)
 // Ensures overall layout behaves when terminal height is extremely constrained.
 #[test]
