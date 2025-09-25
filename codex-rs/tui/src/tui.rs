@@ -277,6 +277,9 @@ impl Tui {
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        // Cache this to avoid contention with the event reader.
+        supports_color::on_cached(supports_color::Stream::Stdout);
+        let _ = crate::terminal_palette::terminal_palette();
         let bg = query_background_color().unwrap_or(None);
 
         Self {

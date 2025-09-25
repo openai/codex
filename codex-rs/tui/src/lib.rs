@@ -62,6 +62,7 @@ mod shimmer;
 mod slash_command;
 mod status_indicator_widget;
 mod streaming;
+mod terminal_palette;
 mod text_formatting;
 mod tui;
 mod ui_consts;

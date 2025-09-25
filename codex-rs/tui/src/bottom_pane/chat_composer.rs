@@ -16,8 +16,6 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
@@ -1340,17 +1338,14 @@ impl ChatComposer {
                     .render_ref(hint_rect, buf);
             }
         }
-        let bg = match bg {
-            Some(bg) => {
-                let (r, g, b) = user_message_bg(bg);
-                Style::default().bg(Color::Rgb(r, g, b))
-            }
+        let style = match bg {
+            Some(color) => Style::default().bg(user_message_bg(color)),
             None => Style::default(),
         };
         let mut block_rect = textarea_rect;
         block_rect.y = textarea_rect.y.saturating_sub(1);
         block_rect.height = textarea_rect.height.saturating_add(2);
-        Block::default().style(bg).render_ref(block_rect, buf);
+        Block::default().style(style).render_ref(block_rect, buf);
         buf.set_span(
             textarea_rect.x,
             textarea_rect.y,
