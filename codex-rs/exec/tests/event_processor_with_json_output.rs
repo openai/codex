@@ -222,7 +222,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
             item: ConversationItem {
                 id: "item_0".to_string(),
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
-                    command: "sh -c exit 1".to_string(),
+                    command: "sh -c 'exit 1'".to_string(),
                     aggregated_output: String::new(),
                     exit_code: None,
                     status: CommandExecutionStatus::InProgress,
@@ -251,7 +251,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
             item: ConversationItem {
                 id: "item_0".to_string(),
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
-                    command: "sh -c exit 1".to_string(),
+                    command: "sh -c 'exit 1'".to_string(),
                     aggregated_output: String::new(),
                     exit_code: Some(1),
                     status: CommandExecutionStatus::Failed,
