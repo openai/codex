@@ -1,6 +1,3 @@
-use crate::color::blend;
-use crate::color::is_light;
-use crate::color::perceptual_distance;
 use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -8,8 +5,8 @@ use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
+use crate::style::user_message_style;
 use crate::terminal_palette::default_bg;
-use crate::terminal_palette::terminal_palette;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
@@ -103,42 +100,6 @@ pub(crate) struct UserHistoryCell {
     pub message: String,
 }
 
-pub fn user_message_style(terminal_bg: Option<(u8, u8, u8)>) -> Style {
-    match terminal_bg {
-        Some(bg) => Style::default().bg(user_message_bg(bg)),
-        None => Style::default(),
-    }
-}
-
-#[allow(clippy::disallowed_methods)]
-pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> Color {
-    let top = if is_light(terminal_bg) {
-        (0, 0, 0)
-    } else {
-        (255, 255, 255)
-    };
-    let bottom = terminal_bg;
-    let Some(color_level) = supports_color::on_cached(supports_color::Stream::Stdout) else {
-        return Color::default();
-    };
-    let target = blend(top, bottom, 0.1);
-    if color_level.has_16m {
-        let (r, g, b) = target;
-        Color::Rgb(r, g, b)
-    } else if color_level.has_256
-        && let Some(palette) = terminal_palette()
-        && let Some((i, _)) = palette.into_iter().enumerate().min_by(|(_, a), (_, b)| {
-            perceptual_distance(*a, target)
-                .partial_cmp(&perceptual_distance(*b, target))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    {
-        Color::Indexed(i as u8)
-    } else {
-        Color::default()
-    }
-}
-
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -193,35 +154,19 @@ impl HistoryCell for ReasoningSummaryCell {
             .content
             .iter()
             .map(|line| {
-                let mut spans = Vec::with_capacity(line.spans.len());
-                for span in &line.spans {
-                    let base_style = span.style.add_modifier(Modifier::DIM);
-                    let text = span.content.clone().into_owned();
-                    if let Some(pos) = text.find('•') {
-                        let before = &text[..pos];
-                        if !before.is_empty() {
-                            spans.push(Span::styled(
-                                before.to_string(),
-                                base_style.add_modifier(Modifier::ITALIC),
-                            ));
-                        }
-                        let bullet_style = base_style.remove_modifier(Modifier::ITALIC);
-                        spans.push(Span::styled("•".to_string(), bullet_style));
-                        let after = &text[(pos + 1)..];
-                        if !after.is_empty() {
-                            spans.push(Span::styled(
-                                after.to_string(),
-                                base_style.add_modifier(Modifier::ITALIC),
-                            ));
-                        }
-                    } else {
-                        spans.push(Span::styled(
-                            text,
-                            base_style.add_modifier(Modifier::ITALIC),
-                        ));
-                    }
-                }
-                Line::from(spans)
+                Line::from(
+                    line.spans
+                        .iter()
+                        .map(|span| {
+                            Span::styled(
+                                span.content.clone().into_owned(),
+                                span.style
+                                    .add_modifier(Modifier::ITALIC)
+                                    .add_modifier(Modifier::DIM),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
             })
             .collect::<Vec<_>>();
 

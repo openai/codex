@@ -26,8 +26,8 @@ use super::file_search_popup::FileSearchPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
-use crate::history_cell::user_message_style;
 use crate::slash_command::SlashCommand;
+use crate::style::user_message_style;
 use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
 
