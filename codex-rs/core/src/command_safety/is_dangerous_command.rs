@@ -89,10 +89,7 @@ mod tests {
     #[test]
     fn sudo_git_reset_is_dangerous() {
         assert!(command_might_be_dangerous(&vec_str(&[
-            "sudo",
-            "git",
-            "reset",
-            "--hard"
+            "sudo", "git", "reset", "--hard"
         ])));
     }
 
