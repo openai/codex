@@ -93,7 +93,7 @@ pub enum CommandExecutionStatus {
 pub struct CommandExecutionItem {
     pub command: String,
     pub aggregated_output: String,
-    pub exit_code: i32,
+    pub exit_code: Option<i32>,
     pub status: CommandExecutionStatus,
 }
 

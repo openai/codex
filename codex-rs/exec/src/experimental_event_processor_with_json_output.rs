@@ -33,6 +33,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use tracing::error;
+use tracing::warn;
 
 pub struct ExperimentalEventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
@@ -44,7 +45,7 @@ pub struct ExperimentalEventProcessorWithJsonOutput {
 
 #[derive(Debug, Clone)]
 struct RunningCommand {
-    command: Vec<String>,
+    command: String,
     item_id: String,
 }
 
@@ -124,11 +125,11 @@ impl ExperimentalEventProcessorWithJsonOutput {
     fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ConversationEvent> {
         let item_id = self.get_next_item_id();
 
-        // Remember the command and the item id so we can complete the same item later.
+        let command_string = ev.command.join(" ");
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
-                command: ev.command.clone(),
+                command: command_string.clone(),
                 item_id: item_id.clone(),
             },
         );
@@ -136,10 +137,9 @@ impl ExperimentalEventProcessorWithJsonOutput {
         let item = ConversationItem {
             id: item_id,
             details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
-                command: ev.command.join(" "),
+                command: command_string,
                 aggregated_output: String::new(),
-                // Exit code is unknown until completion; use 0 as a placeholder.
-                exit_code: 0,
+                exit_code: None,
                 status: CommandExecutionStatus::InProgress,
             }),
         };
@@ -194,10 +194,15 @@ impl ExperimentalEventProcessorWithJsonOutput {
     }
 
     fn handle_exec_command_end(&mut self, ev: &ExecCommandEndEvent) -> Vec<ConversationEvent> {
-        let (command, item_id) = match self.running_commands.remove(&ev.call_id) {
-            Some(RunningCommand { command, item_id }) => (command.join(" "), item_id),
-            None => (String::new(), self.get_next_item_id()),
+        let Some(RunningCommand { command, item_id }) = self.running_commands.remove(&ev.call_id)
+        else {
+            warn!(
+                call_id = ev.call_id,
+                "ExecCommandEnd without matching ExecCommandBegin; skipping item.completed"
+            );
+            return Vec::new();
         };
+        let command = command;
         let status = if ev.exit_code == 0 {
             CommandExecutionStatus::Completed
         } else {
@@ -209,7 +214,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
             details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
                 command,
                 aggregated_output: ev.aggregated_output.clone(),
-                exit_code: ev.exit_code,
+                exit_code: Some(ev.exit_code),
                 status,
             }),
         };

@@ -165,7 +165,7 @@ fn exec_command_end_success_produces_completed_command_item() {
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
                     command: "bash -lc echo hi".to_string(),
                     aggregated_output: String::new(),
-                    exit_code: 0,
+                    exit_code: None,
                     status: CommandExecutionStatus::InProgress,
                 }),
             },
@@ -194,7 +194,7 @@ fn exec_command_end_success_produces_completed_command_item() {
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
                     command: "bash -lc echo hi".to_string(),
                     aggregated_output: "hi\n".to_string(),
-                    exit_code: 0,
+                    exit_code: Some(0),
                     status: CommandExecutionStatus::Completed,
                 }),
             },
@@ -224,7 +224,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
                     command: "sh -c exit 1".to_string(),
                     aggregated_output: String::new(),
-                    exit_code: 0,
+                    exit_code: None,
                     status: CommandExecutionStatus::InProgress,
                 }),
             },
@@ -253,12 +253,33 @@ fn exec_command_end_failure_produces_failed_command_item() {
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
                     command: "sh -c exit 1".to_string(),
                     aggregated_output: String::new(),
-                    exit_code: 1,
+                    exit_code: Some(1),
                     status: CommandExecutionStatus::Failed,
                 }),
             },
         })]
     );
+}
+
+#[test]
+fn exec_command_end_without_begin_is_ignored() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+
+    // End event arrives without a prior Begin; should produce no conversation events.
+    let end_only = event(
+        "c1",
+        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "no-begin".to_string(),
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: String::new(),
+            exit_code: 0,
+            duration: Duration::from_millis(1),
+            formatted_output: String::new(),
+        }),
+    );
+    let out = ep.collect_conversation_events(&end_only);
+    assert!(out.is_empty());
 }
 
 #[test]
