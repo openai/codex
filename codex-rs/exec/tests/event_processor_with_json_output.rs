@@ -16,6 +16,7 @@ use codex_exec::exec_events::ConversationEvent;
 use codex_exec::exec_events::ConversationItem;
 use codex_exec::exec_events::ConversationItemDetails;
 use codex_exec::exec_events::ItemCompletedEvent;
+use codex_exec::exec_events::ItemStartedEvent;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
 use codex_exec::exec_events::ReasoningItem;
@@ -156,7 +157,20 @@ fn exec_command_end_success_produces_completed_command_item() {
         }),
     );
     let out_begin = ep.collect_conversation_events(&begin);
-    assert!(out_begin.is_empty());
+    assert_eq!(
+        out_begin,
+        vec![ConversationEvent::ItemStarted(ItemStartedEvent {
+            item: ConversationItem {
+                id: "item_0".to_string(),
+                details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+                    command: "bash -lc echo hi".to_string(),
+                    aggregated_output: String::new(),
+                    exit_code: 0,
+                    status: CommandExecutionStatus::InProgress,
+                }),
+            },
+        })]
+    );
 
     // End (success) -> item.completed (item_0)
     let end_ok = event(
@@ -202,7 +216,20 @@ fn exec_command_end_failure_produces_failed_command_item() {
             parsed_cmd: Vec::new(),
         }),
     );
-    assert!(ep.collect_conversation_events(&begin).is_empty());
+    assert_eq!(
+        ep.collect_conversation_events(&begin),
+        vec![ConversationEvent::ItemStarted(ItemStartedEvent {
+            item: ConversationItem {
+                id: "item_0".to_string(),
+                details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+                    command: "sh -c exit 1".to_string(),
+                    aggregated_output: String::new(),
+                    exit_code: 0,
+                    status: CommandExecutionStatus::InProgress,
+                }),
+            },
+        })]
+    );
 
     // End (failure) -> item.completed (item_0)
     let end_fail = event(

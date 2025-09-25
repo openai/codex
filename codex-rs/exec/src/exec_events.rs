@@ -8,6 +8,8 @@ use ts_rs::TS;
 pub enum ConversationEvent {
     #[serde(rename = "session.created")]
     SessionCreated(SessionCreatedEvent),
+    #[serde(rename = "item.started")]
+    ItemStarted(ItemStartedEvent),
     #[serde(rename = "item.completed")]
     ItemCompleted(ItemCompletedEvent),
     #[serde(rename = "error")]
@@ -18,6 +20,12 @@ pub enum ConversationEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct SessionCreatedEvent {
     pub session_id: String,
+}
+
+/// Payload describing the start of an existing conversation item.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct ItemStartedEvent {
+    pub item: ConversationItem,
 }
 
 /// Payload describing the completion of an existing conversation item.
