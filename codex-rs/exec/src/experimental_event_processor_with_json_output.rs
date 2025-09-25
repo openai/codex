@@ -202,7 +202,6 @@ impl ExperimentalEventProcessorWithJsonOutput {
             );
             return Vec::new();
         };
-        let command = command;
         let status = if ev.exit_code == 0 {
             CommandExecutionStatus::Completed
         } else {
