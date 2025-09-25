@@ -2813,6 +2813,7 @@ async fn handle_container_exec_with_params(
         }
     };
 
+    let mut remember_for_session = false;
     let sandbox_type = match safety {
         SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
         SafetyCheck::AskUser => {
@@ -2828,8 +2829,7 @@ async fn handle_container_exec_with_params(
             match decision {
                 ReviewDecision::Approved => (),
                 ReviewDecision::ApprovedForSession => {
-                    sess.remember_approved_command(&command_for_display, &params.command)
-                        .await;
+                    remember_for_session = true;
                 }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
                     return Err(FunctionCallError::RespondToModel(
@@ -2867,6 +2867,12 @@ async fn handle_container_exec_with_params(
     };
 
     let params = maybe_translate_shell_command(params, sess, turn_context);
+
+    if remember_for_session {
+        sess.remember_approved_command(&command_for_display, &params.command)
+            .await;
+    }
+
     let output_result = sess
         .run_exec_with_events(
             turn_diff_tracker,
