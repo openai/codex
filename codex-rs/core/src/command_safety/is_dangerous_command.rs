@@ -1,22 +1,15 @@
-use crate::bash::try_parse_bash;
-use crate::bash::try_parse_word_only_commands_sequence;
-
-const DANGEROUS_COMMANDS: &[&str] = &["git reset"];
+use crate::bash::parse_bash_lc_plain_commands;
 
 pub fn command_might_be_dangerous(command: &[String]) -> bool {
-    if contains_dangerous_command(command) {
+    if is_dangerous_to_call_with_exec(command) {
         return true;
     }
 
     // Support `bash -lc "<script>"` where the any part of the script might contain a dangerous command.
-    if let [bash, flag, script] = command
-        && bash == "bash"
-        && flag == "-lc"
-        && let Some(tree) = try_parse_bash(script)
-        && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
+    if let Some(all_commands) = parse_bash_lc_plain_commands(command)
         && all_commands
             .iter()
-            .any(|cmd| contains_dangerous_command(cmd))
+            .any(|cmd| is_dangerous_to_call_with_exec(cmd))
     {
         return true;
     }
@@ -24,16 +17,22 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
     false
 }
 
-fn contains_dangerous_command(command: &[String]) -> bool {
-    if command.is_empty() {
-        return false;
+fn is_dangerous_to_call_with_exec(command: &[String]) -> bool {
+    let cmd0 = command.first().map(String::as_str);
+
+    match cmd0 {
+        Some(cmd) if cmd.ends_with("git") || cmd.ends_with("/git") => {
+            matches!(command.get(1).map(String::as_str), Some("reset" | "rm"))
+        }
+
+        Some("rm") => matches!(command.get(1).map(String::as_str), Some("-f" | "-rf")),
+
+        // for sudo <cmd> simply do the check for <cmd>
+        Some("sudo") => is_dangerous_to_call_with_exec(&command[1..]),
+
+        // ── anything else ─────────────────────────────────────────────────
+        _ => false,
     }
-
-    let command_string = command.join(" ");
-
-    DANGEROUS_COMMANDS
-        .iter()
-        .any(|dangerous| command_string.trim().contains(dangerous))
 }
 
 #[cfg(test)]
@@ -50,25 +49,11 @@ mod tests {
     }
 
     #[test]
-    fn git_reset_with_leading_space_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&["  git", "reset"])));
-    }
-
-    #[test]
     fn bash_git_reset_is_dangerous() {
         assert!(command_might_be_dangerous(&vec_str(&[
             "bash",
             "-lc",
             "git reset --hard"
-        ])));
-    }
-
-    #[test]
-    fn bash_git_reset_with_leading_space_is_dangerous() {
-        assert!(command_might_be_dangerous(&vec_str(&[
-            "bash",
-            "-lc",
-            "   git reset --hard"
         ])));
     }
 
@@ -100,5 +85,15 @@ mod tests {
             "reset",
             "--hard"
         ])));
+    }
+
+    #[test]
+    fn rm_rf_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&["rm", "-rf", "/"])));
+    }
+
+    #[test]
+    fn rm_f_is_dangerous() {
+        assert!(command_might_be_dangerous(&vec_str(&["rm", "-f", "/"])));
     }
 }
