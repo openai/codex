@@ -20,9 +20,13 @@ use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::service::{self};
 use rmcp::transport::child_process::TokioChildProcess;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time;
+use tracing::info;
+use tracing::warn;
 
 use crate::logging_client_handler::LoggingClientHandler;
 use crate::utils::convert_call_tool_result;
@@ -52,17 +56,37 @@ impl RmcpClient {
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
     ) -> io::Result<Self> {
-        let mut command = Command::new(program);
+        let program_name = program.to_string_lossy().into_owned();
+        let mut command = Command::new(&program);
         command
             .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
             .env_clear()
             .envs(create_env_for_mcp_server(env))
-            .args(args);
+            .args(&args);
 
-        let (transport, _stderr) = TokioChildProcess::builder(command).spawn()?;
+        let (transport, stderr) = TokioChildProcess::builder(command)
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        if let Some(stderr) = stderr {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stderr).lines();
+                loop {
+                    match reader.next_line().await {
+                        Ok(Some(line)) => {
+                            info!("MCP server stderr ({program_name}): {line}");
+                        }
+                        Ok(None) => break,
+                        Err(error) => {
+                            warn!("Failed to read MCP server stderr ({program_name}): {error}");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
 
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {

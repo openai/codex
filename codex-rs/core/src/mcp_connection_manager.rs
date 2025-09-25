@@ -99,6 +99,25 @@ enum McpClientAdapter {
 }
 
 impl McpClientAdapter {
+    async fn new_stdio_client(
+        use_rmcp_client: bool,
+        program: OsString,
+        args: Vec<OsString>,
+        env: Option<HashMap<String, String>>,
+        params: mcp_types::InitializeRequestParams,
+        startup_timeout: Duration,
+    ) -> Result<Self> {
+        if use_rmcp_client {
+            let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
+            client.initialize(params, Some(startup_timeout)).await?;
+            Ok(McpClientAdapter::Rmcp(client))
+        } else {
+            let client = Arc::new(McpClient::new_stdio_client(program, args, env).await?);
+            client.initialize(params, Some(startup_timeout)).await?;
+            Ok(McpClientAdapter::Legacy(client))
+        }
+    }
+
     async fn list_tools(
         &self,
         params: Option<mcp_types::ListToolsRequestParams>,
@@ -170,7 +189,6 @@ impl McpConnectionManager {
             }
 
             let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
-
             let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
 
             let use_rmcp_client_flag = use_rmcp_client;
@@ -178,8 +196,8 @@ impl McpConnectionManager {
                 let McpServerConfig {
                     command, args, env, ..
                 } = cfg;
-                let command_os = OsString::from(command);
-                let args_os: Vec<OsString> = args.into_iter().map(OsString::from).collect();
+                let command_os: OsString = command.into();
+                let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
                 let params = mcp_types::InitializeRequestParams {
                     capabilities: ClientCapabilities {
                         experimental: None,
@@ -201,29 +219,16 @@ impl McpConnectionManager {
                     protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                 };
 
-                let client = if use_rmcp_client_flag {
-                    match RmcpClient::new_stdio_client(command_os, args_os, env).await {
-                        Ok(client) => {
-                            let client = Arc::new(client);
-                            match client.initialize(params, Some(startup_timeout)).await {
-                                Ok(_) => Ok((McpClientAdapter::Rmcp(client), startup_timeout)),
-                                Err(e) => Err(e),
-                            }
-                        }
-                        Err(e) => Err(e.into()),
-                    }
-                } else {
-                    match McpClient::new_stdio_client(command_os, args_os, env).await {
-                        Ok(client) => {
-                            let client = Arc::new(client);
-                            match client.initialize(params, Some(startup_timeout)).await {
-                                Ok(_) => Ok((McpClientAdapter::Legacy(client), startup_timeout)),
-                                Err(e) => Err(e),
-                            }
-                        }
-                        Err(e) => Err(e.into()),
-                    }
-                };
+                let client = McpClientAdapter::new_stdio_client(
+                    use_rmcp_client_flag,
+                    command_os,
+                    args_os,
+                    env,
+                    params,
+                    startup_timeout,
+                )
+                .await
+                .map(|c| (c, startup_timeout));
 
                 ((server_name, tool_timeout), client)
             });
