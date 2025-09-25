@@ -184,6 +184,8 @@ pub struct Config {
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
+    /// If set to `true`, use the experimental official Rust MCP client.
+    /// https://github.com/modelcontextprotocol/rust-sdk
     pub use_experimental_use_rmcp_client: bool,
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
