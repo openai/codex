@@ -60,6 +60,7 @@ mod resume_picker;
 mod session_log;
 mod shimmer;
 mod slash_command;
+mod status;
 mod status_indicator_widget;
 mod streaming;
 mod text_formatting;
@@ -570,7 +571,6 @@ mod tests {
         // Create a unique CODEX_HOME per test to isolate auth.json writes.
         let codex_home = get_next_codex_home();
         std::fs::create_dir_all(&codex_home).expect("create unique CODEX_HOME");
-
         Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),

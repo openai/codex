@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,7 +9,9 @@ use std::time::Duration;
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
+use crate::function_tool::FunctionCallError;
 use crate::review_format::format_review_findings_block;
+use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
@@ -30,6 +31,7 @@ use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
+use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
@@ -98,7 +100,7 @@ use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
-use crate::protocol::RateLimitSnapshotEvent;
+use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
 use crate::protocol::SandboxPolicy;
@@ -108,7 +110,6 @@ use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
-use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
@@ -117,6 +118,8 @@ use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
+use crate::state::ActiveTurn;
+use crate::state::SessionServices;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
@@ -186,7 +189,7 @@ impl Codex {
             base_instructions: config.base_instructions.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
-            notify: config.notify.clone(),
+            notify: UserNotifier::new(config.notify.clone()),
             cwd: config.cwd.clone(),
         };
 
@@ -250,17 +253,7 @@ impl Codex {
     }
 }
 
-/// Mutable state of the agent
-#[derive(Default)]
-struct State {
-    approved_commands: HashSet<Vec<String>>,
-    current_task: Option<AgentTask>,
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
-    pending_input: Vec<ResponseInputItem>,
-    history: ConversationHistory,
-    token_info: Option<TokenUsageInfo>,
-    latest_rate_limits: Option<RateLimitSnapshotEvent>,
-}
+use crate::state::SessionState;
 
 /// Context for an initialized model agent
 ///
@@ -268,23 +261,9 @@ struct State {
 pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
-
-    /// Manager for external MCP servers/tools.
-    mcp_connection_manager: McpConnectionManager,
-    session_manager: ExecSessionManager,
-    unified_exec_manager: UnifiedExecSessionManager,
-
-    /// External notifier command (will be passed as args to exec()). When
-    /// `None` this feature is disabled.
-    notify: Option<Vec<String>>,
-
-    /// Optional rollout recorder for persisting the conversation transcript so
-    /// sessions can be replayed or inspected later.
-    rollout: Mutex<Option<RolloutRecorder>>,
-    state: Mutex<State>,
-    codex_linux_sandbox_exe: Option<PathBuf>,
-    user_shell: shell::Shell,
-    show_raw_agent_reasoning: bool,
+    state: Mutex<SessionState>,
+    active_turn: Mutex<Option<ActiveTurn>>,
+    services: SessionServices,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -303,6 +282,7 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
+    pub(crate) final_output_json_schema: Option<Value>,
 }
 
 impl TurnContext {
@@ -335,10 +315,7 @@ struct ConfigureSession {
     /// How to sandbox commands executed in the system
     sandbox_policy: SandboxPolicy,
 
-    /// Optional external notifier command tokens. Present only when the
-    /// client wants the agent to spawn a program after each completed
-    /// turn.
-    notify: Option<Vec<String>>,
+    notify: UserNotifier,
 
     /// Working directory that should be treated as the *root* of the
     /// session. All relative paths supplied by the model as well as the
@@ -414,10 +391,7 @@ impl Session {
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
         // Create the mutable state for the Session.
-        let state = State {
-            history: ConversationHistory::new(),
-            ..Default::default()
-        };
+        let state = SessionState::new();
 
         // Handle MCP manager result and record any startup failures.
         let (mcp_connection_manager, failed_clients) = match mcp_res {
@@ -473,19 +447,25 @@ impl Session {
             shell_environment_policy: config.shell_environment_policy.clone(),
             cwd,
             is_review_mode: false,
+            final_output_json_schema: None,
         };
-        let sess = Arc::new(Session {
-            conversation_id,
-            tx_event: tx_event.clone(),
+        let services = SessionServices {
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
-            notify,
-            state: Mutex::new(state),
+            notifier: notify,
             rollout: Mutex::new(Some(rollout_recorder)),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+        };
+
+        let sess = Arc::new(Session {
+            conversation_id,
+            tx_event: tx_event.clone(),
+            state: Mutex::new(state),
+            active_turn: Mutex::new(None),
+            services,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -521,6 +501,15 @@ impl Session {
             current_task.abort(TurnAbortReason::Replaced);
         }
         state.current_task = Some(task);
+        if let Some(current_task) = &state.current_task {
+            let mut active = self.active_turn.lock().await;
+            *active = Some(ActiveTurn {
+                sub_id: current_task.sub_id.clone(),
+                turn_state: std::sync::Arc::new(tokio::sync::Mutex::new(
+                    crate::state::TurnState::default(),
+                )),
+            });
+        }
     }
 
     pub async fn remove_task(&self, sub_id: &str) {
@@ -529,6 +518,12 @@ impl Session {
             && task.sub_id == sub_id
         {
             state.current_task.take();
+        }
+        let mut active = self.active_turn.lock().await;
+        if let Some(at) = &*active
+            && at.sub_id == sub_id
+        {
+            *active = None;
         }
     }
 
@@ -586,13 +581,19 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
-    ) -> oneshot::Receiver<ReviewDecision> {
+    ) -> ReviewDecision {
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut state = self.state.lock().await;
-            state.pending_approvals.insert(sub_id, tx_approve)
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval(sub_id, tx_approve)
+                }
+                None => None,
+            }
         };
         if prev_entry.is_some() {
             warn!("Overwriting existing pending approval for sub_id: {event_id}");
@@ -608,7 +609,7 @@ impl Session {
             }),
         };
         self.send_event(event).await;
-        rx_approve
+        rx_approve.await.unwrap_or_default()
     }
 
     pub async fn request_patch_approval(
@@ -623,8 +624,14 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut state = self.state.lock().await;
-            state.pending_approvals.insert(sub_id, tx_approve)
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval(sub_id, tx_approve)
+                }
+                None => None,
+            }
         };
         if prev_entry.is_some() {
             warn!("Overwriting existing pending approval for sub_id: {event_id}");
@@ -645,8 +652,14 @@ impl Session {
 
     pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
         let entry = {
-            let mut state = self.state.lock().await;
-            state.pending_approvals.remove(sub_id)
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_approval(sub_id)
+                }
+                None => None,
+            }
         };
         match entry {
             Some(tx_approve) => {
@@ -660,7 +673,7 @@ impl Session {
 
     pub async fn add_approved_command(&self, cmd: Vec<String>) {
         let mut state = self.state.lock().await;
-        state.approved_commands.insert(cmd);
+        state.add_approved_command(cmd);
     }
 
     /// Records input items: always append to conversation history and
@@ -700,7 +713,12 @@ impl Session {
     /// Append ResponseItems to the in-memory conversation history only.
     async fn record_into_history(&self, items: &[ResponseItem]) {
         let mut state = self.state.lock().await;
-        state.history.record_items(items.iter());
+        state.record_items(items.iter());
+    }
+
+    async fn replace_history(&self, items: Vec<ResponseItem>) {
+        let mut state = self.state.lock().await;
+        state.replace_history(items);
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -721,14 +739,14 @@ impl Session {
             Some(turn_context.cwd.clone()),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
-            Some(self.user_shell.clone()),
+            Some(self.user_shell().clone()),
         )));
         items
     }
 
     async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         let recorder = {
-            let guard = self.rollout.lock().await;
+            let guard = self.services.rollout.lock().await;
             guard.clone()
         };
         if let Some(rec) = recorder
@@ -738,33 +756,47 @@ impl Session {
         }
     }
 
+    pub(crate) async fn history_snapshot(&self) -> Vec<ResponseItem> {
+        let state = self.state.lock().await;
+        state.history_snapshot()
+    }
+
     async fn update_token_usage_info(
         &self,
+        sub_id: &str,
         turn_context: &TurnContext,
         token_usage: Option<&TokenUsage>,
     ) {
-        let mut state = self.state.lock().await;
-        if let Some(token_usage) = token_usage {
-            let info = TokenUsageInfo::new_or_append(
-                &state.token_info,
-                &Some(token_usage.clone()),
-                turn_context.client.get_model_context_window(),
-            );
-            state.token_info = info;
+        {
+            let mut state = self.state.lock().await;
+            if let Some(token_usage) = token_usage {
+                state.update_token_info_from_usage(
+                    token_usage,
+                    turn_context.client.get_model_context_window(),
+                );
+            }
         }
+        self.send_token_count_event(sub_id).await;
     }
 
-    async fn update_rate_limits(&self, new_rate_limits: RateLimitSnapshotEvent) {
-        let mut state = self.state.lock().await;
-        state.latest_rate_limits = Some(new_rate_limits);
+    async fn update_rate_limits(&self, sub_id: &str, new_rate_limits: RateLimitSnapshot) {
+        {
+            let mut state = self.state.lock().await;
+            state.set_rate_limits(new_rate_limits);
+        }
+        self.send_token_count_event(sub_id).await;
     }
 
-    async fn get_token_count_event(&self) -> TokenCountEvent {
-        let state = self.state.lock().await;
-        TokenCountEvent {
-            info: state.token_info.clone(),
-            rate_limits: state.latest_rate_limits.clone(),
-        }
+    async fn send_token_count_event(&self, sub_id: &str) {
+        let (info, rate_limits) = {
+            let state = self.state.lock().await;
+            state.token_info_and_rate_limits()
+        };
+        let event = Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::TokenCount(TokenCountEvent { info, rate_limits }),
+        };
+        self.send_event(event).await;
     }
 
     /// Record a user input item to conversation history and also persist a
@@ -777,7 +809,7 @@ impl Session {
 
         // Derive user message events and persist only UserMessage to rollout
         let msgs =
-            map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning);
+            map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning());
         let user_msgs: Vec<RolloutItem> = msgs
             .into_iter()
             .filter_map(|m| match m {
@@ -976,16 +1008,20 @@ impl Session {
     pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
         let history = {
             let state = self.state.lock().await;
-            state.history.contents()
+            state.history_snapshot()
         };
         [history, extra].concat()
     }
 
     /// Returns the input if there was no task running to inject into
     pub async fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
-        let mut state = self.state.lock().await;
+        let state = self.state.lock().await;
         if state.current_task.is_some() {
-            state.pending_input.push(input.into());
+            let mut active = self.active_turn.lock().await;
+            if let Some(at) = active.as_mut() {
+                let mut ts = at.turn_state.lock().await;
+                ts.push_pending_input(input.into());
+            }
             Ok(())
         } else {
             Err(input)
@@ -993,13 +1029,12 @@ impl Session {
     }
 
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut state = self.state.lock().await;
-        if state.pending_input.is_empty() {
-            Vec::with_capacity(0)
+        let mut active = self.active_turn.lock().await;
+        if let Some(at) = active.as_mut() {
+            let mut ts = at.turn_state.lock().await;
+            ts.take_pending_input()
         } else {
-            let mut ret = Vec::new();
-            std::mem::swap(&mut ret, &mut state.pending_input);
-            ret
+            Vec::with_capacity(0)
         }
     }
 
@@ -1009,7 +1044,8 @@ impl Session {
         tool: &str,
         arguments: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
-        self.mcp_connection_manager
+        self.services
+            .mcp_connection_manager
             .call_tool(server, tool, arguments)
             .await
     }
@@ -1017,8 +1053,11 @@ impl Session {
     pub async fn interrupt_task(&self) {
         info!("interrupt received: abort current task, if any");
         let mut state = self.state.lock().await;
-        state.pending_approvals.clear();
-        state.pending_input.clear();
+        let mut active = self.active_turn.lock().await;
+        if let Some(at) = active.as_mut() {
+            let mut ts = at.turn_state.lock().await;
+            ts.clear_pending();
+        }
         if let Some(task) = state.current_task.take() {
             task.abort(TurnAbortReason::Interrupted);
         }
@@ -1026,41 +1065,28 @@ impl Session {
 
     fn interrupt_task_sync(&self) {
         if let Ok(mut state) = self.state.try_lock() {
-            state.pending_approvals.clear();
-            state.pending_input.clear();
+            if let Ok(mut active) = self.active_turn.try_lock()
+                && let Some(at) = active.as_mut()
+                && let Ok(mut ts) = at.turn_state.try_lock()
+            {
+                ts.clear_pending();
+            }
             if let Some(task) = state.current_task.take() {
                 task.abort(TurnAbortReason::Interrupted);
             }
         }
     }
 
-    /// Spawn the configured notifier (if any) with the given JSON payload as
-    /// the last argument. Failures are logged but otherwise ignored so that
-    /// notification issues do not interfere with the main workflow.
-    fn maybe_notify(&self, notification: UserNotification) {
-        let Some(notify_command) = &self.notify else {
-            return;
-        };
+    pub(crate) fn notifier(&self) -> &UserNotifier {
+        &self.services.notifier
+    }
 
-        if notify_command.is_empty() {
-            return;
-        }
+    fn user_shell(&self) -> &shell::Shell {
+        &self.services.user_shell
+    }
 
-        let Ok(json) = serde_json::to_string(&notification) else {
-            error!("failed to serialise notification payload");
-            return;
-        };
-
-        let mut command = std::process::Command::new(&notify_command[0]);
-        if notify_command.len() > 1 {
-            command.args(&notify_command[1..]);
-        }
-        command.arg(json);
-
-        // Fire-and-forget – we do not wait for completion.
-        if let Err(e) = command.spawn() {
-            warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
-        }
+    fn show_raw_agent_reasoning(&self) -> bool {
+        self.services.show_raw_agent_reasoning
     }
 }
 
@@ -1146,16 +1172,13 @@ impl AgentTask {
         turn_context: Arc<TurnContext>,
         sub_id: String,
         input: Vec<InputItem>,
-        compact_instructions: String,
     ) -> Self {
         let handle = {
             let sess = sess.clone();
             let sub_id = sub_id.clone();
             let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move {
-                compact::run_compact_task(sess, tc, sub_id, input, compact_instructions).await
-            })
-            .abort_handle()
+            tokio::spawn(async move { compact::run_compact_task(sess, tc, sub_id, input).await })
+                .abort_handle()
         };
         Self {
             sess,
@@ -1169,15 +1192,19 @@ impl AgentTask {
         // TOCTOU?
         if !self.handle.is_finished() {
             self.handle.abort();
+            let sub_id = self.sub_id.clone();
+            let is_review = self.kind == AgentTaskKind::Review;
+            let sess = self.sess;
             let event = Event {
-                id: self.sub_id.clone(),
+                id: sub_id.clone(),
                 msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
-            let sess = self.sess;
             tokio::spawn(async move {
-                if self.kind == AgentTaskKind::Review {
-                    exit_review_mode(sess.clone(), self.sub_id, None).await;
+                if is_review {
+                    exit_review_mode(sess.clone(), sub_id.clone(), None).await;
                 }
+                // Ensure active turn state is cleared when a task is aborted.
+                sess.remove_task(&sub_id).await;
                 sess.send_event(event).await;
             });
         }
@@ -1269,6 +1296,7 @@ async fn submission_loop(
                     shell_environment_policy: prev.shell_environment_policy.clone(),
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
+                    final_output_json_schema: None,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1303,6 +1331,7 @@ async fn submission_loop(
                 model,
                 effort,
                 summary,
+                final_output_json_schema,
             } => {
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
@@ -1353,6 +1382,7 @@ async fn submission_loop(
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
                         is_review_mode: false,
+                        final_output_json_schema,
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1432,7 +1462,7 @@ async fn submission_loop(
                 let sub_id = sub.id.clone();
 
                 // This is a cheap lookup from the connection manager's cache.
-                let tools = sess.mcp_connection_manager.list_all_tools();
+                let tools = sess.services.mcp_connection_manager.list_all_tools();
                 let event = Event {
                     id: sub_id,
                     msg: EventMsg::McpListToolsResponse(
@@ -1463,7 +1493,7 @@ async fn submission_loop(
                 // Attempt to inject input into current task
                 if let Err(items) = sess
                     .inject_input(vec![InputItem::Text {
-                        text: compact::COMPACT_TRIGGER_TEXT.to_string(),
+                        text: compact::SUMMARIZATION_PROMPT.to_string(),
                     }])
                     .await
                 {
@@ -1482,7 +1512,7 @@ async fn submission_loop(
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.
                 let recorder_opt = {
-                    let mut guard = sess.rollout.lock().await;
+                    let mut guard = sess.services.rollout.lock().await;
                     guard.take()
                 };
                 if let Some(rec) = recorder_opt
@@ -1509,7 +1539,7 @@ async fn submission_loop(
                 let sub_id = sub.id.clone();
                 // Flush rollout writes before returning the path so readers observe a consistent file.
                 let (path, rec_opt) = {
-                    let guard = sess.rollout.lock().await;
+                    let guard = sess.services.rollout.lock().await;
                     match guard.as_ref() {
                         Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
                         None => {
@@ -1607,6 +1637,7 @@ async fn spawn_review_thread(
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
+        final_output_json_schema: None,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1883,11 +1914,12 @@ async fn run_task(
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
-                    sess.maybe_notify(UserNotification::AgentTurnComplete {
-                        turn_id: sub_id.clone(),
-                        input_messages: turn_input_messages,
-                        last_assistant_message: last_agent_message.clone(),
-                    });
+                    sess.notifier()
+                        .notify(&UserNotification::AgentTurnComplete {
+                            turn_id: sub_id.clone(),
+                            input_messages: turn_input_messages,
+                            last_assistant_message: last_agent_message.clone(),
+                        });
                     break;
                 }
                 continue;
@@ -1965,13 +1997,14 @@ async fn run_turn(
 ) -> CodexResult<TurnRunResult> {
     let tools = get_openai_tools(
         &turn_context.tools_config,
-        Some(sess.mcp_connection_manager.list_all_tools()),
+        Some(sess.services.mcp_connection_manager.list_all_tools()),
     );
 
     let prompt = Prompt {
         input,
         tools,
         base_instructions_override: turn_context.base_instructions.clone(),
+        output_schema: turn_context.final_output_json_schema.clone(),
     };
 
     let mut retries = 0;
@@ -1980,9 +2013,14 @@ async fn run_turn(
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
-            Err(e @ (CodexErr::UsageLimitReached(_) | CodexErr::UsageNotIncluded)) => {
-                return Err(e);
+            Err(CodexErr::UsageLimitReached(e)) => {
+                let rate_limits = e.rate_limits.clone();
+                if let Some(rate_limits) = rate_limits {
+                    sess.update_rate_limits(&sub_id, rate_limits).await;
+                }
+                return Err(CodexErr::UsageLimitReached(e));
             }
+            Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -2155,20 +2193,13 @@ async fn try_run_turn(
             ResponseEvent::RateLimits(snapshot) => {
                 // Update internal state with latest rate limits, but defer sending until
                 // token usage is available to avoid duplicate TokenCount events.
-                sess.update_rate_limits(snapshot).await;
+                sess.update_rate_limits(sub_id, snapshot).await;
             }
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
             } => {
-                sess.update_token_usage_info(turn_context, token_usage.as_ref())
-                    .await;
-                let token_event = sess.get_token_count_event().await;
-                let _ = sess
-                    .send_event(Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(token_event),
-                    })
+                sess.update_token_usage_info(sub_id, turn_context, token_usage.as_ref())
                     .await;
 
                 let unified_diff = turn_diff_tracker.get_unified_diff();
@@ -2216,7 +2247,7 @@ async fn try_run_turn(
                 sess.send_event(event).await;
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
-                if sess.show_raw_agent_reasoning {
+                if sess.show_raw_agent_reasoning() {
                     let event = Event {
                         id: sub_id.to_string(),
                         msg: EventMsg::AgentReasoningRawContentDelta(
@@ -2246,18 +2277,43 @@ async fn handle_response_item(
             ..
         } => {
             info!("FunctionCall: {name}({arguments})");
-            Some(
-                handle_function_call(
+            if let Some((server, tool_name)) =
+                sess.services.mcp_connection_manager.parse_tool_name(&name)
+            {
+                let resp = handle_mcp_tool_call(
+                    sess,
+                    sub_id,
+                    call_id.clone(),
+                    server,
+                    tool_name,
+                    arguments,
+                )
+                .await;
+                Some(resp)
+            } else {
+                let result = handle_function_call(
                     sess,
                     turn_context,
                     turn_diff_tracker,
                     sub_id.to_string(),
                     name,
                     arguments,
-                    call_id,
+                    call_id.clone(),
                 )
-                .await,
-            )
+                .await;
+
+                let output = match result {
+                    Ok(content) => FunctionCallOutputPayload {
+                        content,
+                        success: Some(true),
+                    },
+                    Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
+                        content: msg,
+                        success: Some(false),
+                    },
+                };
+                Some(ResponseInputItem::FunctionCallOutput { call_id, output })
+            }
         }
         ResponseItem::LocalShellCall {
             id,
@@ -2290,17 +2346,32 @@ async fn handle_response_item(
             };
 
             let exec_params = to_exec_params(params, turn_context);
-            Some(
-                handle_container_exec_with_params(
+            {
+                let result = handle_container_exec_with_params(
                     exec_params,
                     sess,
                     turn_context,
                     turn_diff_tracker,
                     sub_id.to_string(),
-                    effective_call_id,
+                    effective_call_id.clone(),
                 )
-                .await,
-            )
+                .await;
+
+                let output = match result {
+                    Ok(content) => FunctionCallOutputPayload {
+                        content,
+                        success: Some(true),
+                    },
+                    Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
+                        content: msg,
+                        success: Some(false),
+                    },
+                };
+                Some(ResponseInputItem::FunctionCallOutput {
+                    call_id: effective_call_id,
+                    output,
+                })
+            }
         }
         ResponseItem::CustomToolCall {
             id: _,
@@ -2308,18 +2379,24 @@ async fn handle_response_item(
             name,
             input,
             status: _,
-        } => Some(
-            handle_custom_tool_call(
+        } => {
+            let result = handle_custom_tool_call(
                 sess,
                 turn_context,
                 turn_diff_tracker,
                 sub_id.to_string(),
                 name,
                 input,
-                call_id,
+                call_id.clone(),
             )
-            .await,
-        ),
+            .await;
+
+            let output = match result {
+                Ok(content) => content,
+                Err(FunctionCallError::RespondToModel(msg)) => msg,
+            };
+            Some(ResponseInputItem::CustomToolCallOutput { call_id, output })
+        }
         ResponseItem::FunctionCallOutput { .. } => {
             debug!("unexpected FunctionCallOutput from stream");
             None
@@ -2338,7 +2415,7 @@ async fn handle_response_item(
                     trace!("suppressing assistant Message in review mode");
                     Vec::new()
                 }
-                _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning),
+                _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning()),
             };
             for msg in msgs {
                 let event = Event {
@@ -2356,22 +2433,17 @@ async fn handle_response_item(
 
 async fn handle_unified_exec_tool_call(
     sess: &Session,
-    call_id: String,
     session_id: Option<String>,
     arguments: Vec<String>,
     timeout_ms: Option<u64>,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     let parsed_session_id = if let Some(session_id) = session_id {
         match session_id.parse::<i32>() {
             Ok(parsed) => Some(parsed),
             Err(output) => {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.to_string(),
-                    output: FunctionCallOutputPayload {
-                        content: format!("invalid session_id: {session_id} due to error {output}"),
-                        success: Some(false),
-                    },
-                };
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "invalid session_id: {session_id} due to error {output:?}"
+                )));
             }
         }
     } else {
@@ -2384,40 +2456,30 @@ async fn handle_unified_exec_tool_call(
         timeout_ms,
     };
 
-    let result = sess.unified_exec_manager.handle_request(request).await;
+    let value = sess
+        .services
+        .unified_exec_manager
+        .handle_request(request)
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("unified exec failed: {err:?}"))
+        })?;
 
-    let output_payload = match result {
-        Ok(value) => {
-            #[derive(Serialize)]
-            struct SerializedUnifiedExecResult<'a> {
-                session_id: Option<String>,
-                output: &'a str,
-            }
-
-            match serde_json::to_string(&SerializedUnifiedExecResult {
-                session_id: value.session_id.map(|id| id.to_string()),
-                output: &value.output,
-            }) {
-                Ok(serialized) => FunctionCallOutputPayload {
-                    content: serialized,
-                    success: Some(true),
-                },
-                Err(err) => FunctionCallOutputPayload {
-                    content: format!("failed to serialize unified exec output: {err}"),
-                    success: Some(false),
-                },
-            }
-        }
-        Err(err) => FunctionCallOutputPayload {
-            content: format!("unified exec failed: {err}"),
-            success: Some(false),
-        },
-    };
-
-    ResponseInputItem::FunctionCallOutput {
-        call_id,
-        output: output_payload,
+    #[derive(Serialize)]
+    struct SerializedUnifiedExecResult {
+        session_id: Option<String>,
+        output: String,
     }
+
+    serde_json::to_string(&SerializedUnifiedExecResult {
+        session_id: value.session_id.map(|id| id.to_string()),
+        output: value.output,
+    })
+    .map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to serialize unified exec output: {err:?}"
+        ))
+    })
 }
 
 async fn handle_function_call(
@@ -2428,15 +2490,10 @@ async fn handle_function_call(
     name: String,
     arguments: String,
     call_id: String,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     match name.as_str() {
         "container.exec" | "shell" => {
-            let params = match parse_container_exec_arguments(arguments, turn_context, &call_id) {
-                Ok(params) => params,
-                Err(output) => {
-                    return *output;
-                }
-            };
+            let params = parse_container_exec_arguments(arguments, turn_context, &call_id)?;
             handle_container_exec_with_params(
                 params,
                 sess,
@@ -2457,74 +2514,41 @@ async fn handle_function_call(
                 timeout_ms: Option<u64>,
             }
 
-            let args = match serde_json::from_str::<UnifiedExecArgs>(&arguments) {
-                Ok(args) => args,
-                Err(err) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {err}"),
-                            success: Some(false),
-                        },
-                    };
-                }
-            };
+            let args: UnifiedExecArgs = serde_json::from_str(&arguments).map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {err:?}"
+                ))
+            })?;
 
-            handle_unified_exec_tool_call(
-                sess,
-                call_id,
-                args.session_id,
-                args.input,
-                args.timeout_ms,
-            )
-            .await
+            handle_unified_exec_tool_call(sess, args.session_id, args.input, args.timeout_ms).await
         }
         "view_image" => {
             #[derive(serde::Deserialize)]
             struct SeeImageArgs {
                 path: String,
             }
-            let args = match serde_json::from_str::<SeeImageArgs>(&arguments) {
-                Ok(a) => a,
-                Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: Some(false),
-                        },
-                    };
-                }
-            };
+            let args: SeeImageArgs = serde_json::from_str(&arguments).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {e:?}"
+                ))
+            })?;
             let abs = turn_context.resolve_path(Some(args.path));
-            let output = match sess
-                .inject_input(vec![InputItem::LocalImage { path: abs }])
+            sess.inject_input(vec![InputItem::LocalImage { path: abs }])
                 .await
-            {
-                Ok(()) => FunctionCallOutputPayload {
-                    content: "attached local image path".to_string(),
-                    success: Some(true),
-                },
-                Err(_) => FunctionCallOutputPayload {
-                    content: "unable to attach image (no active task)".to_string(),
-                    success: Some(false),
-                },
-            };
-            ResponseInputItem::FunctionCallOutput { call_id, output }
+                .map_err(|_| {
+                    FunctionCallError::RespondToModel(
+                        "unable to attach image (no active task)".to_string(),
+                    )
+                })?;
+
+            Ok("attached local image path".to_string())
         }
         "apply_patch" => {
-            let args = match serde_json::from_str::<ApplyPatchToolArgs>(&arguments) {
-                Ok(a) => a,
-                Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: None,
-                        },
-                    };
-                }
-            };
+            let args: ApplyPatchToolArgs = serde_json::from_str(&arguments).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {e:?}"
+                ))
+            })?;
             let exec_params = ExecParams {
                 command: vec!["apply_patch".to_string(), args.input.clone()],
                 cwd: turn_context.cwd.clone(),
@@ -2546,69 +2570,41 @@ async fn handle_function_call(
         "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
         EXEC_COMMAND_TOOL_NAME => {
             // TODO(mbolin): Sandbox check.
-            let exec_params = match serde_json::from_str::<ExecCommandParams>(&arguments) {
-                Ok(params) => params,
-                Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: Some(false),
-                        },
-                    };
-                }
-            };
+            let exec_params: ExecCommandParams = serde_json::from_str(&arguments).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to parse function arguments: {e:?}"
+                ))
+            })?;
             let result = sess
+                .services
                 .session_manager
                 .handle_exec_command_request(exec_params)
                 .await;
-            let function_call_output = crate::exec_command::result_into_payload(result);
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: function_call_output,
+            match result {
+                Ok(output) => Ok(output.to_text_output()),
+                Err(err) => Err(FunctionCallError::RespondToModel(err)),
             }
         }
         WRITE_STDIN_TOOL_NAME => {
-            let write_stdin_params = match serde_json::from_str::<WriteStdinParams>(&arguments) {
-                Ok(params) => params,
-                Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse function arguments: {e}"),
-                            success: Some(false),
-                        },
-                    };
-                }
-            };
+            let write_stdin_params =
+                serde_json::from_str::<WriteStdinParams>(&arguments).map_err(|e| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse function arguments: {e:?}"
+                    ))
+                })?;
+
             let result = sess
+                .services
                 .session_manager
                 .handle_write_stdin_request(write_stdin_params)
-                .await;
-            let function_call_output: FunctionCallOutputPayload =
-                crate::exec_command::result_into_payload(result);
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: function_call_output,
-            }
+                .await
+                .map_err(FunctionCallError::RespondToModel)?;
+
+            Ok(result.to_text_output())
         }
-        _ => {
-            match sess.mcp_connection_manager.parse_tool_name(&name) {
-                Some((server, tool_name)) => {
-                    handle_mcp_tool_call(sess, &sub_id, call_id, server, tool_name, arguments).await
-                }
-                None => {
-                    // Unknown function: reply with structured failure so the model can adapt.
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("unsupported call: {name}"),
-                            success: None,
-                        },
-                    }
-                }
-            }
-        }
+        _ => Err(FunctionCallError::RespondToModel(format!(
+            "unsupported call: {name}"
+        ))),
     }
 }
 
@@ -2620,7 +2616,7 @@ async fn handle_custom_tool_call(
     name: String,
     input: String,
     call_id: String,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     info!("CustomToolCall: {name} {input}");
     match name.as_str() {
         "apply_patch" => {
@@ -2632,7 +2628,8 @@ async fn handle_custom_tool_call(
                 with_escalated_permissions: None,
                 justification: None,
             };
-            let resp = handle_container_exec_with_params(
+
+            handle_container_exec_with_params(
                 exec_params,
                 sess,
                 turn_context,
@@ -2640,26 +2637,13 @@ async fn handle_custom_tool_call(
                 sub_id,
                 call_id,
             )
-            .await;
-
-            // Convert function-call style output into a custom tool call output
-            match resp {
-                ResponseInputItem::FunctionCallOutput { call_id, output } => {
-                    ResponseInputItem::CustomToolCallOutput {
-                        call_id,
-                        output: output.content,
-                    }
-                }
-                // Pass through if already a custom tool output or other variant
-                other => other,
-            }
+            .await
         }
         _ => {
             debug!("unexpected CustomToolCall from stream");
-            ResponseInputItem::CustomToolCallOutput {
-                call_id,
-                output: format!("unsupported custom tool call: {name}"),
-            }
+            Err(FunctionCallError::RespondToModel(format!(
+                "unsupported custom tool call: {name}"
+            )))
         }
     }
 }
@@ -2678,23 +2662,13 @@ fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> Ex
 fn parse_container_exec_arguments(
     arguments: String,
     turn_context: &TurnContext,
-    call_id: &str,
-) -> Result<ExecParams, Box<ResponseInputItem>> {
-    // parse command
-    match serde_json::from_str::<ShellToolCallParams>(&arguments) {
-        Ok(shell_tool_call_params) => Ok(to_exec_params(shell_tool_call_params, turn_context)),
-        Err(e) => {
-            // allow model to re-sample
-            let output = ResponseInputItem::FunctionCallOutput {
-                call_id: call_id.to_string(),
-                output: FunctionCallOutputPayload {
-                    content: format!("failed to parse function arguments: {e}"),
-                    success: None,
-                },
-            };
-            Err(Box::new(output))
-        }
-    }
+    _call_id: &str,
+) -> Result<ExecParams, FunctionCallError> {
+    serde_json::from_str::<ShellToolCallParams>(&arguments)
+        .map(|p| to_exec_params(p, turn_context))
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
+        })
 }
 
 pub struct ExecInvokeArgs<'a> {
@@ -2711,12 +2685,12 @@ fn maybe_translate_shell_command(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ExecParams {
-    let should_translate = matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
+    let should_translate = matches!(sess.user_shell(), crate::shell::Shell::PowerShell(_))
         || turn_context.shell_environment_policy.use_profile;
 
     if should_translate
         && let Some(command) = sess
-            .user_shell
+            .user_shell()
             .format_default_shell_invocation(params.command.clone())
     {
         return ExecParams { command, ..params };
@@ -2731,20 +2705,14 @@ async fn handle_container_exec_with_params(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     call_id: String,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     if params.with_escalated_permissions.unwrap_or(false)
         && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
     {
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: format!(
-                    "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-                    policy = turn_context.approval_policy
-                ),
-                success: None,
-            },
-        };
+        return Err(FunctionCallError::RespondToModel(format!(
+            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+            policy = turn_context.approval_policy
+        )));
     }
 
     // check if this was a patch, and apply it if so
@@ -2761,13 +2729,9 @@ async fn handle_container_exec_with_params(
             // It looks like an invocation of `apply_patch`, but we
             // could not resolve it into a patch that would apply
             // cleanly. Return to model for resample.
-            return ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("error: {parse_error:#}"),
-                    success: None,
-                },
-            };
+            return Err(FunctionCallError::RespondToModel(format!(
+                "error: {parse_error:#?}"
+            )));
         }
         MaybeApplyPatchVerified::ShellParseError(error) => {
             trace!("Failed to parse shell command, {error:?}");
@@ -2785,13 +2749,9 @@ async fn handle_container_exec_with_params(
                 .ok()
                 .map(|p| p.to_string_lossy().to_string());
             let Some(path_to_codex) = path_to_codex else {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: "failed to determine path to codex executable".to_string(),
-                        success: None,
-                    },
-                };
+                return Err(FunctionCallError::RespondToModel(
+                    "failed to determine path to codex executable".to_string(),
+                ));
             };
 
             let params = ExecParams {
@@ -2830,7 +2790,7 @@ async fn handle_container_exec_with_params(
                     &params.command,
                     turn_context.approval_policy,
                     &turn_context.sandbox_policy,
-                    &state.approved_commands,
+                    state.approved_commands_ref(),
                     params.with_escalated_permissions.unwrap_or(false),
                 )
             };
@@ -2842,7 +2802,7 @@ async fn handle_container_exec_with_params(
     let sandbox_type = match safety {
         SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
         SafetyCheck::AskUser => {
-            let rx_approve = sess
+            let decision = sess
                 .request_command_approval(
                     sub_id.clone(),
                     call_id.clone(),
@@ -2851,19 +2811,15 @@ async fn handle_container_exec_with_params(
                     params.justification.clone(),
                 )
                 .await;
-            match rx_approve.await.unwrap_or_default() {
+            match decision {
                 ReviewDecision::Approved => (),
                 ReviewDecision::ApprovedForSession => {
                     sess.add_approved_command(params.command.clone()).await;
                 }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: "exec command rejected by user".to_string(),
-                            success: None,
-                        },
-                    };
+                    return Err(FunctionCallError::RespondToModel(
+                        "exec command rejected by user".to_string(),
+                    ));
                 }
             }
             // No sandboxing is applied because the user has given
@@ -2873,13 +2829,9 @@ async fn handle_container_exec_with_params(
             SandboxType::None
         }
         SafetyCheck::Reject { reason } => {
-            return ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("exec command rejected: {reason}"),
-                    success: None,
-                },
-            };
+            return Err(FunctionCallError::RespondToModel(format!(
+                "exec command rejected: {reason:?}"
+            )));
         }
     };
 
@@ -2909,7 +2861,7 @@ async fn handle_container_exec_with_params(
                 sandbox_type,
                 sandbox_policy: &turn_context.sandbox_policy,
                 sandbox_cwd: &turn_context.cwd,
-                codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
+                codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
                 stdout_stream: if exec_command_context.apply_patch.is_some() {
                     None
                 } else {
@@ -2926,15 +2878,11 @@ async fn handle_container_exec_with_params(
     match output_result {
         Ok(output) => {
             let ExecToolCallOutput { exit_code, .. } = &output;
-
-            let is_success = *exit_code == 0;
             let content = format_exec_output(&output);
-            ResponseInputItem::FunctionCallOutput {
-                call_id: call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    content,
-                    success: Some(is_success),
-                },
+            if *exit_code == 0 {
+                Ok(content)
+            } else {
+                Err(FunctionCallError::RespondToModel(content))
             }
         }
         Err(CodexErr::Sandbox(error)) => {
@@ -2949,13 +2897,9 @@ async fn handle_container_exec_with_params(
             )
             .await
         }
-        Err(e) => ResponseInputItem::FunctionCallOutput {
-            call_id: call_id.clone(),
-            output: FunctionCallOutputPayload {
-                content: format!("execution error: {e}"),
-                success: None,
-            },
-        },
+        Err(e) => Err(FunctionCallError::RespondToModel(format!(
+            "execution error: {e:?}"
+        ))),
     }
 }
 
@@ -2967,35 +2911,23 @@ async fn handle_sandbox_error(
     sandbox_type: SandboxType,
     sess: &Session,
     turn_context: &TurnContext,
-) -> ResponseInputItem {
+) -> Result<String, FunctionCallError> {
     let call_id = exec_command_context.call_id.clone();
     let sub_id = exec_command_context.sub_id.clone();
     let cwd = exec_command_context.cwd.clone();
 
     if let SandboxErr::Timeout { output } = &error {
         let content = format_exec_output(output);
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content,
-                success: Some(false),
-            },
-        };
+        return Err(FunctionCallError::RespondToModel(content));
     }
 
     // Early out if either the user never wants to be asked for approval, or
     // we're letting the model manage escalation requests. Otherwise, continue
     match turn_context.approval_policy {
         AskForApproval::Never | AskForApproval::OnRequest => {
-            return ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!(
-                        "failed in sandbox {sandbox_type:?} with execution error: {error}"
-                    ),
-                    success: Some(false),
-                },
-            };
+            return Err(FunctionCallError::RespondToModel(format!(
+                "failed in sandbox {sandbox_type:?} with execution error: {error:?}"
+            )));
         }
         AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
     }
@@ -3012,7 +2944,7 @@ async fn handle_sandbox_error(
     sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
         .await;
 
-    let rx_approve = sess
+    let decision = sess
         .request_command_approval(
             sub_id.clone(),
             call_id.clone(),
@@ -3022,7 +2954,7 @@ async fn handle_sandbox_error(
         )
         .await;
 
-    match rx_approve.await.unwrap_or_default() {
+    match decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
             // Persist this command as pre‑approved for the
             // remainder of the session so future
@@ -3044,7 +2976,7 @@ async fn handle_sandbox_error(
                         sandbox_type: SandboxType::None,
                         sandbox_policy: &turn_context.sandbox_policy,
                         sandbox_cwd: &turn_context.cwd,
-                        codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
+                        codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
                         stdout_stream: if exec_command_context.apply_patch.is_some() {
                             None
                         } else {
@@ -3061,36 +2993,23 @@ async fn handle_sandbox_error(
             match retry_output_result {
                 Ok(retry_output) => {
                     let ExecToolCallOutput { exit_code, .. } = &retry_output;
-
-                    let is_success = *exit_code == 0;
                     let content = format_exec_output(&retry_output);
-
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id: call_id.clone(),
-                        output: FunctionCallOutputPayload {
-                            content,
-                            success: Some(is_success),
-                        },
+                    if *exit_code == 0 {
+                        Ok(content)
+                    } else {
+                        Err(FunctionCallError::RespondToModel(content))
                     }
                 }
-                Err(e) => ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        content: format!("retry failed: {e}"),
-                        success: None,
-                    },
-                },
+                Err(e) => Err(FunctionCallError::RespondToModel(format!(
+                    "retry failed: {e}"
+                ))),
             }
         }
         ReviewDecision::Denied | ReviewDecision::Abort => {
             // Fall through to original failure handling.
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: "exec command rejected by user".to_string(),
-                    success: None,
-                },
-            }
+            Err(FunctionCallError::RespondToModel(
+                "exec command rejected by user".to_string(),
+            ))
         }
     }
 }
@@ -3398,7 +3317,7 @@ mod tests {
             }),
         ));
 
-        let actual = tokio_test::block_on(async { session.state.lock().await.history.contents() });
+        let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
         assert_eq!(expected, actual);
     }
 
@@ -3411,7 +3330,7 @@ mod tests {
             session.record_initial_history(&turn_context, InitialHistory::Forked(rollout_items)),
         );
 
-        let actual = tokio_test::block_on(async { session.state.lock().await.history.contents() });
+        let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
         assert_eq!(expected, actual);
     }
 
@@ -3635,22 +3554,24 @@ mod tests {
             shell_environment_policy: config.shell_environment_policy.clone(),
             tools_config,
             is_review_mode: false,
+            final_output_json_schema: None,
+        };
+        let services = SessionServices {
+            mcp_connection_manager: McpConnectionManager::default(),
+            session_manager: ExecSessionManager::default(),
+            unified_exec_manager: UnifiedExecSessionManager::default(),
+            notifier: UserNotifier::default(),
+            rollout: Mutex::new(None),
+            codex_linux_sandbox_exe: None,
+            user_shell: shell::Shell::Unknown,
+            show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         };
         let session = Session {
             conversation_id,
             tx_event,
-            mcp_connection_manager: McpConnectionManager::default(),
-            session_manager: ExecSessionManager::default(),
-            unified_exec_manager: UnifiedExecSessionManager::default(),
-            notify: None,
-            rollout: Mutex::new(None),
-            state: Mutex::new(State {
-                history: ConversationHistory::new(),
-                ..Default::default()
-            }),
-            codex_linux_sandbox_exe: None,
-            user_shell: shell::Shell::Unknown,
-            show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            state: Mutex::new(SessionState::new()),
+            active_turn: Mutex::new(None),
+            services,
             next_internal_sub_id: AtomicU64::new(0),
         };
         (session, turn_context)
@@ -3811,8 +3732,8 @@ mod tests {
         )
         .await;
 
-        let ResponseInputItem::FunctionCallOutput { output, .. } = resp else {
-            panic!("expected FunctionCallOutput");
+        let Err(FunctionCallError::RespondToModel(output)) = resp else {
+            panic!("expected error result");
         };
 
         let expected = format!(
@@ -3820,7 +3741,7 @@ mod tests {
             policy = turn_context.approval_policy
         );
 
-        pretty_assertions::assert_eq!(output.content, expected);
+        pretty_assertions::assert_eq!(output, expected);
 
         // Now retry the same command WITHOUT escalated permissions; should succeed.
         // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
@@ -3836,9 +3757,7 @@ mod tests {
         )
         .await;
 
-        let ResponseInputItem::FunctionCallOutput { output, .. } = resp2 else {
-            panic!("expected FunctionCallOutput on retry");
-        };
+        let output = resp2.expect("expected Ok result");
 
         #[derive(Deserialize, PartialEq, Eq, Debug)]
         struct ResponseExecMetadata {
@@ -3852,10 +3771,9 @@ mod tests {
         }
 
         let exec_output: ResponseExecOutput =
-            serde_json::from_str(&output.content).expect("valid exec output json");
+            serde_json::from_str(&output).expect("valid exec output json");
 
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
-        pretty_assertions::assert_eq!(output.success, Some(true));
     }
 }

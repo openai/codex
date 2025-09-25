@@ -8,6 +8,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 
 pub mod responses;
+pub mod test_codex;
 
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
@@ -172,6 +173,26 @@ macro_rules! skip_if_no_network {
         }
     }};
     ($return_value:expr $(,)?) => {{
+        if ::std::env::var($crate::sandbox_network_env_var()).is_ok() {
+            println!(
+                "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            );
+            return ::core::result::Result::Ok(());
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! non_sandbox_test {
+    () => {{
+        if ::std::env::var($crate::sandbox_network_env_var()).is_ok() {
+            println!(
+                "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            );
+            return;
+        }
+    }};
+    (result $(,)?) => {{
         if ::std::env::var($crate::sandbox_network_env_var()).is_ok() {
             println!(
                 "Skipping test because it cannot execute when network is disabled in a Codex sandbox."

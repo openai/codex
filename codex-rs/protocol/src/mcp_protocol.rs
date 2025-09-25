@@ -702,15 +702,16 @@ impl ServerNotification {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     #[test]
-    fn serialize_new_conversation() {
+    fn serialize_new_conversation() -> Result<()> {
         let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: NewConversationParams {
-                model: Some("gpt-5".to_string()),
+                model: Some("gpt-5-codex".to_string()),
                 profile: None,
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
@@ -726,12 +727,13 @@ mod tests {
                 "method": "newConversation",
                 "id": 42,
                 "params": {
-                    "model": "gpt-5",
+                    "model": "gpt-5-codex",
                     "approvalPolicy": "on-request"
                 }
             }),
-            serde_json::to_value(&request).unwrap(),
+            serde_json::to_value(&request)?,
         );
+        Ok(())
     }
 
     #[test]
@@ -741,23 +743,25 @@ mod tests {
     }
 
     #[test]
-    fn conversation_id_serializes_as_plain_string() {
-        let id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+    fn conversation_id_serializes_as_plain_string() -> Result<()> {
+        let id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
 
         assert_eq!(
             json!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
-            serde_json::to_value(id).unwrap()
+            serde_json::to_value(id)?
         );
+        Ok(())
     }
 
     #[test]
-    fn conversation_id_deserializes_from_plain_string() {
+    fn conversation_id_deserializes_from_plain_string() -> Result<()> {
         let id: ConversationId =
-            serde_json::from_value(json!("67e55044-10b1-426f-9247-bb680e5fe0c8")).unwrap();
+            serde_json::from_value(json!("67e55044-10b1-426f-9247-bb680e5fe0c8"))?;
 
         assert_eq!(
-            ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
+            ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?,
             id,
         );
+        Ok(())
     }
 }
