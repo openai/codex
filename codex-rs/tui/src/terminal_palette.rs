@@ -41,7 +41,7 @@ fn query_terminal_palette() -> std::io::Result<Option<[(u8, u8, u8); 256]>> {
     };
 
     for index in 0..256 {
-        write!(tty, "\x1b]4;{};?\x07", index)?;
+        write!(tty, "\x1b]4;{index};?\x07")?;
     }
     tty.flush()?;
 
@@ -158,13 +158,13 @@ impl Drop for TermiosGuard {
 #[cfg(unix)]
 unsafe fn suppress_echo(fd: RawFd) -> Option<TermiosGuard> {
     let mut termios = MaybeUninit::<libc::termios>::uninit();
-    if libc::tcgetattr(fd, termios.as_mut_ptr()) != 0 {
+    if unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) } != 0 {
         return None;
     }
-    let termios = termios.assume_init();
+    let termios = unsafe { termios.assume_init() };
     let mut modified = termios;
     modified.c_lflag &= !(libc::ECHO | libc::ECHONL);
-    if libc::tcsetattr(fd, libc::TCSANOW, &modified) != 0 {
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &modified) } != 0 {
         return None;
     }
     Some(TermiosGuard {
@@ -180,12 +180,7 @@ fn apply_palette_responses(
 ) -> usize {
     let mut newly_filled = 0;
 
-    loop {
-        let start = match buffer.windows(2).position(|window| window == [0x1b, b']']) {
-            Some(pos) => pos,
-            None => break,
-        };
-
+    while let Some(start) = buffer.windows(2).position(|window| window == [0x1b, b']']) {
         if start > 0 {
             buffer.drain(..start);
             continue;
@@ -218,11 +213,11 @@ fn apply_palette_responses(
         let processed = end + terminator_len;
         buffer.drain(..processed);
 
-        if let Some((slot, color)) = parsed {
-            if palette[slot].is_none() {
-                palette[slot] = Some(color);
-                newly_filled += 1;
-            }
+        if let Some((slot, color)) = parsed
+            && palette[slot].is_none()
+        {
+            palette[slot] = Some(color);
+            newly_filled += 1;
         }
     }
 

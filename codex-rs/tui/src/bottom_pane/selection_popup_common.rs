@@ -8,9 +8,6 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
@@ -119,15 +116,21 @@ pub(crate) fn render_rows(
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,
     max_results: usize,
-    _dim_non_selected: bool,
     empty_message: &str,
+    include_border: bool,
 ) {
-    // Always draw a dim left border to match other popups.
-    let block = Block::default()
-        .borders(Borders::LEFT)
-        .border_type(BorderType::QuadrantOutside)
-        .border_style(Style::default().add_modifier(Modifier::DIM));
-    block.render(area, buf);
+    if include_border {
+        use ratatui::widgets::Block;
+        use ratatui::widgets::BorderType;
+        use ratatui::widgets::Borders;
+
+        // Always draw a dim left border to match other popups.
+        let block = Block::default()
+            .borders(Borders::LEFT)
+            .border_type(BorderType::QuadrantOutside)
+            .border_style(Style::default().add_modifier(Modifier::DIM));
+        block.render(area, buf);
+    }
 
     // Content renders to the right of the border with the same live prefix
     // padding used by the composer so the popup aligns with the input text.

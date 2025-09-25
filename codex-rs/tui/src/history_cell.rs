@@ -197,6 +197,13 @@ fn distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
     (dl * dl + da * da + db * db).sqrt()
 }
 
+pub fn user_message_style(terminal_bg: Option<(u8, u8, u8)>) -> Style {
+    match terminal_bg {
+        Some(bg) => Style::default().bg(user_message_bg(bg)),
+        None => Style::default(),
+    }
+}
+
 pub fn user_message_bg(terminal_bg: (u8, u8, u8)) -> Color {
     let top = if is_light(terminal_bg) {
         (0, 0, 0)

@@ -27,6 +27,7 @@ use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::history_cell::user_message_bg;
+use crate::history_cell::user_message_style;
 use crate::slash_command::SlashCommand;
 use codex_protocol::custom_prompts::CustomPrompt;
 
@@ -1248,6 +1249,9 @@ impl ChatComposer {
         let [_, textarea_rect, popup_rect] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(1), popup_constraint])
                 .areas(area);
+        if !matches!(self.active_popup, ActivePopup::None) {
+            buf.set_style(popup_rect, user_message_style(bg));
+        }
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -1333,6 +1337,7 @@ impl ChatComposer {
                     }
                 }
 
+                hint.insert(0, Span::from("  "));
                 Line::from(hint)
                     .style(Style::default().dim())
                     .render_ref(hint_rect, buf);
