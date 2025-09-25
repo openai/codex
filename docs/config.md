@@ -143,6 +143,20 @@ model_provider = "ollama"
 model = "mistral"
 ```
 
+## http_proxy
+
+Sets an HTTP proxy that Codex should use for outbound network requests. The value
+is forwarded to the standard `HTTP_PROXY` environment variable before Codex
+creates its HTTP client, so any proxy supported by reqwest/hyper will be
+honoured.
+
+```toml
+http_proxy = "http://localhost:8080"
+```
+
+When Codex is running inside the seatbelt sandbox, proxies are disabled just
+like other external network access.
+
 ## approval_policy
 
 Determines when the user should be prompted to approve whether Codex can execute a command:
@@ -650,6 +664,7 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `model_supports_reasoning_summaries` | boolean | Force‑enable reasoning summaries. |
 | `model_reasoning_summary_format` | `none` \| `experimental` | Force reasoning summary format. |
 | `chatgpt_base_url` | string | Base URL for ChatGPT auth flow. |
+| `http_proxy` | string | Forwarded to `HTTP_PROXY` for outbound requests. |
 | `experimental_resume` | string (path) | Resume JSONL path (internal/experimental). |
 | `experimental_instructions_file` | string (path) | Replace built‑in instructions (experimental). |
 | `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool. |
