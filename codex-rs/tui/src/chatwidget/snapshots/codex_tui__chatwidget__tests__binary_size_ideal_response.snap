@@ -1,12 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: visible_after
+expression: "lines[start_idx..].join(\"\\n\")"
 ---
-/init - create an AGENTS.md file with instructions for Codex
-  /status - show current session configuration
-  /approvals - choose what Codex can do without approval
-  /model - choose what model and reasoning effort to use
-
 • I need to check the codex-rs repository to explain why the project's binaries
   are large. The user is likely seeking specifics about the setup: are Rust
   builds static, what features are enabled, and is debug information included?

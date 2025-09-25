@@ -1144,7 +1144,7 @@ async fn binary_size_transcript_snapshot() {
     // Prefer the first assistant content line (blockquote '>' prefix) after the marker;
     // fallback to the first non-empty, non-'thinking' line.
     let start_idx = (last_marker_line_idx + 1..lines.len())
-        .find(|&idx| lines[idx].trim_start().starts_with('>'))
+        .find(|&idx| lines[idx].trim_start().starts_with('•'))
         .unwrap_or_else(|| {
             (last_marker_line_idx + 1..lines.len())
                 .find(|&idx| {
@@ -1154,28 +1154,8 @@ async fn binary_size_transcript_snapshot() {
                 .expect("no content line found after marker")
         });
 
-    let mut compare_lines: Vec<String> = Vec::new();
-    // Ensure the first line is trimmed-left to match the fixture shape.
-    compare_lines.push(lines[start_idx].trim_start().to_string());
-    compare_lines.extend(lines[(start_idx + 1)..].iter().cloned());
-    let visible_after = compare_lines.join("\n");
-
-    // Normalize: drop a leading 'thinking' line if present to avoid coupling
-    // to whether the reasoning header is rendered in history.
-    fn drop_leading_thinking(s: &str) -> String {
-        let mut it = s.lines();
-        let first = it.next();
-        let rest = it.collect::<Vec<_>>().join("\n");
-        if first.is_some_and(|l| l.trim() == "thinking") {
-            rest
-        } else {
-            s.to_string()
-        }
-    }
-    let visible_after = drop_leading_thinking(&visible_after);
-
     // Snapshot the normalized visible transcript following the banner.
-    assert_snapshot!("binary_size_ideal_response", visible_after);
+    assert_snapshot!("binary_size_ideal_response", lines[start_idx..].join("\n"));
 }
 
 //

@@ -1973,7 +1973,7 @@ impl ChatWidget {
 impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
-        self.bottom_pane.render_ref(bottom_pane_area, buf);
+        (&self.bottom_pane).render_ref(bottom_pane_area, buf);
         if !active_cell_area.is_empty()
             && let Some(cell) = &self.active_cell
         {
