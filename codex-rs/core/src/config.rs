@@ -2535,6 +2535,24 @@ model_verbosity = "high"
     }
 
     #[test]
+    fn test_did_user_set_custom_approval_policy_or_sandbox_mode_defaults_no() -> anyhow::Result<()>
+    {
+        let fixture = create_test_fixture()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            ConfigOverrides {
+                ..Default::default()
+            },
+            fixture.codex_home(),
+        )?;
+
+        assert!(config.did_user_set_custom_approval_policy_or_sandbox_mode);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_set_project_trusted_writes_explicit_tables() -> anyhow::Result<()> {
         let project_dir = Path::new("/some/path");
         let mut doc = DocumentMut::new();
