@@ -93,7 +93,7 @@ fn status_snapshot_includes_reasoning_details() {
         }),
         secondary: Some(RateLimitWindow {
             used_percent: 45.0,
-            window_minutes: Some(1_440),
+            window_minutes: Some(10080),
             resets_in_seconds: Some(1_200),
         }),
     };
@@ -132,15 +132,11 @@ fn status_snapshot_includes_monthly_limit() {
 
     let snapshot = RateLimitSnapshot {
         primary: Some(RateLimitWindow {
-            used_percent: 55.0,
-            window_minutes: Some(300),
-            resets_in_seconds: Some(600),
-        }),
-        secondary: Some(RateLimitWindow {
             used_percent: 12.0,
             window_minutes: Some(43_200),
             resets_in_seconds: Some(86_400),
         }),
+        secondary: None,
     };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 5, 6, 7, 8, 9)
