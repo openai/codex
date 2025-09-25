@@ -1354,7 +1354,7 @@ impl ChatComposer {
         buf.set_span(
             textarea_rect.x,
             textarea_rect.y,
-            &"›".cyan(),
+            &"›".bold(),
             textarea_rect.width,
         );
         let mut textarea_rect = textarea_rect;
