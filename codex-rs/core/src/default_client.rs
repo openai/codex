@@ -1,3 +1,4 @@
+use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
 use std::sync::Mutex;
@@ -20,7 +21,6 @@ use std::sync::Mutex;
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
-
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
@@ -133,19 +133,27 @@ pub fn create_client() -> reqwest::Client {
     headers.insert("originator", ORIGINATOR.header_value.clone());
     let ua = get_codex_user_agent();
 
-    let builder = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers);
+    if is_sandboxed() {
+        builder = builder.no_proxy();
+    } else {
+        builder = apply_env_proxy(builder);
+    }
 
-    apply_env_proxy(builder)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+fn is_sandboxed() -> bool {
+    std::env::var(CODEX_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_test_support::skip_if_no_network;
 
     #[test]
     fn test_get_codex_user_agent() {
@@ -155,6 +163,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_client_sets_default_headers() {
+        skip_if_no_network!();
+
         use wiremock::Mock;
         use wiremock::MockServer;
         use wiremock::ResponseTemplate;

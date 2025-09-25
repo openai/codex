@@ -93,12 +93,53 @@ fn status_snapshot_includes_reasoning_details() {
         }),
         secondary: Some(RateLimitWindow {
             used_percent: 45.0,
-            window_minutes: Some(1_440),
+            window_minutes: Some(10080),
             resets_in_seconds: Some(1_200),
         }),
     };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+        .single()
+        .expect("timestamp");
+    let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
+
+    let composite = new_status_output(&config, &usage, &None, Some(&rate_display));
+    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[test]
+fn status_snapshot_includes_monthly_limit() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.model = "gpt-5-codex".to_string();
+    config.model_provider_id = "openai".to_string();
+    config.cwd = PathBuf::from("/workspace/tests");
+
+    let usage = TokenUsage {
+        input_tokens: 800,
+        cached_input_tokens: 0,
+        output_tokens: 400,
+        reasoning_output_tokens: 0,
+        total_tokens: 1_200,
+    };
+
+    let snapshot = RateLimitSnapshot {
+        primary: Some(RateLimitWindow {
+            used_percent: 12.0,
+            window_minutes: Some(43_200),
+            resets_in_seconds: Some(86_400),
+        }),
+        secondary: None,
+    };
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 5, 6, 7, 8, 9)
         .single()
         .expect("timestamp");
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
@@ -179,5 +220,31 @@ fn status_snapshot_truncates_in_narrow_terminal() {
     }
     let sanitized = sanitize_directory(rendered_lines).join("\n");
 
+    assert_snapshot!(sanitized);
+}
+
+#[test]
+fn status_snapshot_shows_missing_limits_message() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home);
+    config.model = "gpt-5-codex".to_string();
+    config.cwd = PathBuf::from("/workspace/tests");
+
+    let usage = TokenUsage {
+        input_tokens: 500,
+        cached_input_tokens: 0,
+        output_tokens: 250,
+        reasoning_output_tokens: 0,
+        total_tokens: 750,
+    };
+
+    let composite = new_status_output(&config, &usage, &None, None);
+    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
 }
