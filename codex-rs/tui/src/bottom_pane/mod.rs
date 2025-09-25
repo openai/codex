@@ -149,7 +149,9 @@ impl BottomPane {
                 let status_height = self
                     .status
                     .as_ref()
-                    .map_or(0, |status| status.desired_height(area.width));
+                    .map_or(0, |status| status.desired_height(area.width))
+                    .min(area.height.saturating_sub(1));
+
                 Layout::vertical([Constraint::Max(status_height), Constraint::Min(1)]).areas(area)
             }
         }
@@ -505,6 +507,7 @@ mod tests {
     use crate::app_event::AppEvent;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use ratatui::widgets::Widget;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn exec_request() -> ApprovalRequest {
@@ -554,7 +557,7 @@ mod tests {
         // Render and verify the top row does not include an overlay.
         let area = Rect::new(0, 0, 60, 6);
         let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
+        pane.render(area, &mut buf);
 
         let mut r0 = String::new();
         for x in 0..area.width {
@@ -603,7 +606,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(120));
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
+        pane.render(area, &mut buf);
         let mut row1 = String::new();
         for x in 0..area.width {
             row1.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
@@ -653,7 +656,7 @@ mod tests {
         // Use a height that allows the status line to be visible above the composer.
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
+        pane.render(area, &mut buf);
 
         let mut row0 = String::new();
         for x in 0..area.width {
@@ -689,7 +692,7 @@ mod tests {
         );
         let area = Rect::new(0, 0, 30, height);
         let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
+        pane.render(area, &mut buf);
 
         // Row 1 contains the status header (row 0 is the spacer)
         let mut top = String::new();
@@ -734,7 +737,7 @@ mod tests {
         // Height=2 → status on one row, composer on the other.
         let area2 = Rect::new(0, 0, 20, 2);
         let mut buf2 = Buffer::empty(area2);
-        (&pane).render_ref(area2, &mut buf2);
+        pane.render(area2, &mut buf2);
         let mut row0 = String::new();
         let mut row1 = String::new();
         for x in 0..area2.width {
@@ -754,7 +757,7 @@ mod tests {
         // Height=1 → no padding; single row is the composer (status hidden).
         let area1 = Rect::new(0, 0, 20, 1);
         let mut buf1 = Buffer::empty(area1);
-        (&pane).render_ref(area1, &mut buf1);
+        pane.render(area1, &mut buf1);
         let mut only = String::new();
         for x in 0..area1.width {
             only.push(buf1[(x, 0)].symbol().chars().next().unwrap_or(' '));

@@ -97,8 +97,6 @@ enum ActivePopup {
 }
 
 const FOOTER_HINT_HEIGHT: u16 = 1;
-const FOOTER_SPACING_HEIGHT: u16 = 1;
-const FOOTER_HEIGHT_WITH_HINT: u16 = FOOTER_HINT_HEIGHT + FOOTER_SPACING_HEIGHT;
 
 impl ChatComposer {
     pub fn new(
@@ -137,32 +135,40 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // Leave 1 column for the left border and 1 column for left padding
         self.textarea
             .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
-            + 1
+            + 2
             + match &self.active_popup {
-                ActivePopup::None => FOOTER_HEIGHT_WITH_HINT,
+                ActivePopup::None => FOOTER_HINT_HEIGHT,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
 
-    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+    fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
-            ActivePopup::None => Constraint::Max(FOOTER_HEIGHT_WITH_HINT),
+            ActivePopup::None => Constraint::Max(FOOTER_HINT_HEIGHT),
         };
-        let [_, textarea_rect, _] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(1), popup_constraint])
-                .areas(area);
-        let mut textarea_rect = textarea_rect;
-        // Leave 1 for border and 1 for padding
+        let mut area = area;
+        // Leave an empty row at the top, unless there isn't room.
+        if area.height > 1 {
+            area.height -= 1;
+            area.y += 1;
+        }
+        let [composer_rect, popup_rect] =
+            Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
+        let mut textarea_rect = composer_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
         textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
+        [composer_rect, textarea_rect, popup_rect]
+    }
+
+    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        let [_, textarea_rect, _] = self.layout_areas(area);
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
@@ -1234,20 +1240,7 @@ impl ChatComposer {
 
 impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let (popup_constraint, hint_spacing) = match &self.active_popup {
-            ActivePopup::Command(popup) => (
-                Constraint::Max(popup.calculate_required_height(area.width)),
-                0,
-            ),
-            ActivePopup::File(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
-            ActivePopup::None => (
-                Constraint::Length(FOOTER_HEIGHT_WITH_HINT),
-                FOOTER_SPACING_HEIGHT,
-            ),
-        };
-        let [_, textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(1), popup_constraint])
-                .areas(area);
+        let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
         if !matches!(self.active_popup, ActivePopup::None) {
             buf.set_style(
                 popup_rect,
@@ -1262,16 +1255,6 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let hint_rect = if hint_spacing > 0 {
-                    let [_, hint_rect] = Layout::vertical([
-                        Constraint::Length(hint_spacing),
-                        Constraint::Length(FOOTER_HINT_HEIGHT),
-                    ])
-                    .areas(popup_rect);
-                    hint_rect
-                } else {
-                    popup_rect
-                };
                 let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
                     let ctrl_c_followup = if self.is_task_running {
                         " to interrupt"
@@ -1342,23 +1325,20 @@ impl WidgetRef for ChatComposer {
                 hint.insert(0, Span::from("  "));
                 Line::from(hint)
                     .style(Style::default().dim())
-                    .render_ref(hint_rect, buf);
+                    .render_ref(popup_rect, buf);
             }
         }
         let style = user_message_style(terminal_palette::default_bg());
-        let mut block_rect = textarea_rect;
-        block_rect.y = textarea_rect.y.saturating_sub(1);
-        block_rect.height = textarea_rect.height.saturating_add(2);
+        let mut block_rect = composer_rect;
+        block_rect.y = composer_rect.y.saturating_sub(1);
+        block_rect.height = composer_rect.height.saturating_add(1);
         Block::default().style(style).render_ref(block_rect, buf);
         buf.set_span(
-            textarea_rect.x,
-            textarea_rect.y,
+            composer_rect.x,
+            composer_rect.y,
             &"›".bold(),
-            textarea_rect.width,
+            composer_rect.width,
         );
-        let mut textarea_rect = textarea_rect;
-        textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
-        textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
 
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
