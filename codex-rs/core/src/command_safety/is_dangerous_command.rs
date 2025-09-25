@@ -12,8 +12,7 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
     if let [bash, flag, script] = command
         && bash == "bash"
         && flag == "-lc"
-    {
-        if let Some(tree) = try_parse_bash(script)
+        && let Some(tree) = try_parse_bash(script)
             && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
             && all_commands
                 .iter()
@@ -21,7 +20,6 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
         {
             return true;
         }
-    }
 
     false
 }
