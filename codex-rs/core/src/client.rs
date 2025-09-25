@@ -43,6 +43,7 @@ use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::RateLimitSnapshot;
+use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
@@ -183,18 +184,22 @@ impl ModelClient {
 
         let input_with_instructions = prompt.get_formatted_input();
 
-        // Only include `text.verbosity` for GPT-5 family models
-        let text = if self.config.model_family.family == "gpt-5" {
-            create_text_param_for_request(self.config.model_verbosity, &prompt.output_schema)
-        } else {
-            if self.config.model_verbosity.is_some() {
-                warn!(
-                    "model_verbosity is set but ignored for non-gpt-5 model family: {}",
-                    self.config.model_family.family
-                );
+        let verbosity = match &self.config.model_family.family {
+            family if family == "gpt-5" => self.config.model_verbosity,
+            _ => {
+                if self.config.model_verbosity.is_some() {
+                    warn!(
+                        "model_verbosity is set but ignored for non-gpt-5 model family: {}",
+                        self.config.model_family.family
+                    );
+                }
+
+                None
             }
-            None
         };
+
+        // Only include `text.verbosity` for GPT-5 family models
+        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
 
         // In general, we want to explicitly send `store: false` when using the Responses API,
         // but in practice, the Azure Responses API rejects `store: false`:
@@ -415,9 +420,6 @@ struct SseEvent {
 }
 
 #[derive(Debug, Deserialize)]
-struct ResponseCreated {}
-
-#[derive(Debug, Deserialize)]
 struct ResponseCompleted {
     id: String,
     usage: Option<ResponseCompletedUsage>,
@@ -488,19 +490,39 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
 }
 
 fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
-    let primary_used_percent = parse_header_f64(headers, "x-codex-primary-used-percent")?;
-    let secondary_used_percent = parse_header_f64(headers, "x-codex-secondary-used-percent")?;
-    let primary_to_secondary_ratio_percent =
-        parse_header_f64(headers, "x-codex-primary-over-secondary-limit-percent")?;
-    let primary_window_minutes = parse_header_u64(headers, "x-codex-primary-window-minutes")?;
-    let secondary_window_minutes = parse_header_u64(headers, "x-codex-secondary-window-minutes")?;
+    let primary = parse_rate_limit_window(
+        headers,
+        "x-codex-primary-used-percent",
+        "x-codex-primary-window-minutes",
+        "x-codex-primary-reset-after-seconds",
+    );
 
-    Some(RateLimitSnapshot {
-        primary_used_percent,
-        secondary_used_percent,
-        primary_to_secondary_ratio_percent,
-        primary_window_minutes,
-        secondary_window_minutes,
+    let secondary = parse_rate_limit_window(
+        headers,
+        "x-codex-secondary-used-percent",
+        "x-codex-secondary-window-minutes",
+        "x-codex-secondary-reset-after-seconds",
+    );
+
+    if primary.is_none() && secondary.is_none() {
+        return None;
+    }
+
+    Some(RateLimitSnapshot { primary, secondary })
+}
+
+fn parse_rate_limit_window(
+    headers: &HeaderMap,
+    used_percent_header: &str,
+    window_minutes_header: &str,
+    resets_header: &str,
+) -> Option<RateLimitWindow> {
+    let used_percent = parse_header_f64(headers, used_percent_header)?;
+
+    Some(RateLimitWindow {
+        used_percent,
+        window_minutes: parse_header_u64(headers, window_minutes_header),
+        resets_in_seconds: parse_header_u64(headers, resets_header),
     })
 }
 

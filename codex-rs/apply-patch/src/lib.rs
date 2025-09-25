@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::Utf8Error;
+use std::sync::LazyLock;
 
 use anyhow::Context;
 use anyhow::Result;
-use once_cell::sync::Lazy;
 pub use parser::Hunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
@@ -351,7 +351,7 @@ fn extract_apply_patch_from_bash(
     // also run an arbitrary query against the AST. This is useful for understanding
     // how tree-sitter parses the script and whether the query syntax is correct. Be sure
     // to test both positive and negative cases.
-    static APPLY_PATCH_QUERY: Lazy<Query> = Lazy::new(|| {
+    static APPLY_PATCH_QUERY: LazyLock<Query> = LazyLock::new(|| {
         let language = BASH.into();
         #[expect(clippy::expect_used)]
         Query::new(

@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use codex_core::config::Config;
 use ratatui::text::Line;
 
@@ -94,59 +92,6 @@ impl MarkdownStreamCollector {
         // Reset collector state for next stream.
         self.clear();
         out
-    }
-}
-
-pub(crate) struct StepResult {
-    pub history: Vec<Line<'static>>, // lines to insert into history this step
-}
-
-/// Streams already-rendered rows into history while computing the newest K
-/// rows to show in a live overlay.
-pub(crate) struct AnimatedLineStreamer {
-    queue: VecDeque<Line<'static>>,
-}
-
-impl AnimatedLineStreamer {
-    pub fn new() -> Self {
-        Self {
-            queue: VecDeque::new(),
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.queue.clear();
-    }
-
-    pub fn enqueue(&mut self, lines: Vec<Line<'static>>) {
-        for l in lines {
-            self.queue.push_back(l);
-        }
-    }
-
-    pub fn step(&mut self) -> StepResult {
-        let mut history = Vec::new();
-        // Move exactly one per tick to animate gradual insertion.
-        let burst = if self.queue.is_empty() { 0 } else { 1 };
-        for _ in 0..burst {
-            if let Some(l) = self.queue.pop_front() {
-                history.push(l);
-            }
-        }
-
-        StepResult { history }
-    }
-
-    pub fn drain_all(&mut self) -> StepResult {
-        let mut history = Vec::new();
-        while let Some(l) = self.queue.pop_front() {
-            history.push(l);
-        }
-        StepResult { history }
-    }
-
-    pub fn is_idle(&self) -> bool {
-        self.queue.is_empty()
     }
 }
 
