@@ -185,7 +185,7 @@ impl RateLimitWarningState {
     }
 }
 
-fn get_limits_duration(windows_minutes: u64) -> String {
+pub(crate) fn get_limits_duration(windows_minutes: u64) -> String {
     const MINUTES_PER_HOUR: u64 = 60;
     const MINUTES_PER_DAY: u64 = 24 * MINUTES_PER_HOUR;
     const MINUTES_PER_WEEK: u64 = 7 * MINUTES_PER_DAY;
