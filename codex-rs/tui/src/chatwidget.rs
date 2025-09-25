@@ -132,7 +132,9 @@ impl RateLimitWarningState {
     fn take_warnings(
         &mut self,
         secondary_used_percent: Option<f64>,
+        secondary_window_minutes: Option<u64>,
         primary_used_percent: Option<f64>,
+        primary_window_minutes: Option<u64>,
     ) -> Vec<String> {
         let reached_secondary_cap =
             matches!(secondary_used_percent, Some(percent) if percent == 100.0);
@@ -152,8 +154,11 @@ impl RateLimitWarningState {
                 self.secondary_index += 1;
             }
             if let Some(threshold) = highest_secondary {
+                let limit_label = secondary_window_minutes
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "weekly".to_string());
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your weekly limit. Run /status for a breakdown."
+                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
                 ));
             }
         }
@@ -167,13 +172,36 @@ impl RateLimitWarningState {
                 self.primary_index += 1;
             }
             if let Some(threshold) = highest_primary {
+                let limit_label = primary_window_minutes
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "5h".to_string());
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your 5h limit. Run /status for a breakdown."
+                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
                 ));
             }
         }
 
         warnings
+    }
+}
+
+fn get_limits_duration(windows_minutes: u64) -> String {
+    const MINUTES_PER_HOUR: u64 = 60;
+    const MINUTES_PER_DAY: u64 = 24 * MINUTES_PER_HOUR;
+    const MINUTES_PER_WEEK: u64 = 7 * MINUTES_PER_DAY;
+    const MINUTES_PER_MONTH: u64 = 30 * MINUTES_PER_DAY;
+    const ROUNDING_BIAS_MINUTES: u64 = 3;
+
+    if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
+        let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
+        let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
+        format!("{hours}h")
+    } else if windows_minutes <= MINUTES_PER_WEEK.saturating_add(ROUNDING_BIAS_MINUTES) {
+        "weekly".to_string()
+    } else if windows_minutes <= MINUTES_PER_MONTH.saturating_add(ROUNDING_BIAS_MINUTES) {
+        "monthly".to_string()
+    } else {
+        "annual".to_string()
     }
 }
 
@@ -377,7 +405,15 @@ impl ChatWidget {
                     .secondary
                     .as_ref()
                     .map(|window| window.used_percent),
+                snapshot
+                    .secondary
+                    .as_ref()
+                    .and_then(|window| window.window_minutes),
                 snapshot.primary.as_ref().map(|window| window.used_percent),
+                snapshot
+                    .primary
+                    .as_ref()
+                    .and_then(|window| window.window_minutes),
             );
 
             let display = history_cell::rate_limit_snapshot_display(&snapshot, Local::now());
