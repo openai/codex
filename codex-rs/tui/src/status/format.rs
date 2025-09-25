@@ -22,7 +22,7 @@ impl FieldFormatter {
             .max()
             .unwrap_or(0);
         let indent_width = UnicodeWidthStr::width(Self::INDENT);
-        let value_offset = indent_width + label_width + 3;
+        let value_offset = indent_width + label_width + 1 + 3;
 
         Self {
             indent: Self::INDENT,
@@ -66,20 +66,14 @@ impl FieldFormatter {
         let mut buf = String::with_capacity(self.value_offset);
         buf.push_str(self.indent);
 
-        let mut used = 0usize;
-        for ch in label.chars() {
-            buf.push(ch);
-            used += UnicodeWidthChar::width(ch).unwrap_or(0);
-        }
-
-        while used < self.label_width {
-            buf.push(' ');
-            used += 1;
-        }
-
-        buf.push(' ');
+        buf.push_str(label);
         buf.push(':');
-        buf.push(' ');
+
+        let label_width = UnicodeWidthStr::width(label);
+        let padding = 3 + self.label_width.saturating_sub(label_width);
+        for _ in 0..padding {
+            buf.push(' ');
+        }
 
         Span::from(buf).dim()
     }

@@ -113,12 +113,12 @@ impl StatusHistoryCell {
 
         vec![
             Span::from(total_fmt),
-            Span::from(" total ").dim(),
+            Span::from(" total "),
             Span::from(" (").dim(),
-            Span::from(input_fmt),
+            Span::from(input_fmt).dim(),
             Span::from(" input").dim(),
             Span::from(" + ").dim(),
-            Span::from(output_fmt),
+            Span::from(output_fmt).dim(),
             Span::from(" output").dim(),
             Span::from(")").dim(),
         ]
