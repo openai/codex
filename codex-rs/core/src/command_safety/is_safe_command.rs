@@ -2,6 +2,14 @@ use crate::bash::try_parse_bash;
 use crate::bash::try_parse_word_only_commands_sequence;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use super::windows_safe_commands::is_safe_command_windows;
+        if is_safe_command_windows(command) {
+            return true;
+        }
+    }
+
     if is_safe_to_call_with_exec(command) {
         return true;
     }
@@ -24,7 +32,6 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
     {
         return true;
     }
-
     false
 }
 
@@ -160,9 +167,10 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::string::ToString;
 
     fn vec_str(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| s.to_string()).collect()
+        args.iter().map(ToString::to_string).collect()
     }
 
     #[test]
