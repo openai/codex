@@ -30,37 +30,6 @@ const STATUS_LIMIT_BAR_FILLED: &str = "█";
 const STATUS_LIMIT_BAR_EMPTY: &str = "░";
 const RESET_BULLET: &str = "·";
 
-fn label_display(label: &str) -> String {
-    format!(" {label}: ")
-}
-
-fn label_span(label: &str) -> Span<'static> {
-    Span::from(label_display(label)).dim()
-}
-
-fn label_width(label: &str) -> usize {
-    UnicodeWidthStr::width(label_display(label).as_str())
-}
-
-#[derive(Debug)]
-struct StatusField {
-    label: &'static str,
-    value: Vec<Span<'static>>,
-}
-
-impl StatusField {
-    fn text(label: &'static str, value: impl Into<String>) -> Self {
-        Self {
-            label,
-            value: vec![Span::from(value.into())],
-        }
-    }
-
-    fn spans(label: &'static str, value: Vec<Span<'static>>) -> Self {
-        Self { label, value }
-    }
-}
-
 #[derive(Debug, Default)]
 struct StatusRows {
     lines: Vec<Line<'static>>,
@@ -79,23 +48,144 @@ impl StatusRows {
         self.lines.push(Line::from(spans));
     }
 
-    fn push_field(&mut self, field: StatusField) {
-        let mut spans = Vec::with_capacity(field.value.len() + 1);
-        spans.push(label_span(field.label));
-        spans.extend(field.value);
-        self.lines.push(Line::from(spans));
+    fn extend_lines<I>(&mut self, lines: I)
+    where
+        I: IntoIterator<Item = Line<'static>>,
+    {
+        self.lines.extend(lines);
     }
 
-    fn extend_fields<I>(&mut self, fields: I)
-    where
-        I: IntoIterator<Item = StatusField>,
-    {
-        for field in fields {
-            self.push_field(field);
+    fn into_lines(self) -> Vec<Line<'static>> {
+        self.lines
+    }
+}
+
+#[derive(Debug, Default)]
+struct LabelCollector {
+    labels: Vec<&'static str>,
+}
+
+impl LabelCollector {
+    fn include(&mut self, label: &'static str) {
+        if !self.labels.contains(&label) {
+            self.labels.push(label);
         }
     }
 
-    fn extend_lines<I>(&mut self, lines: I)
+    fn extend<I>(&mut self, labels: I)
+    where
+        I: IntoIterator<Item = &'static str>,
+    {
+        for label in labels {
+            self.include(label);
+        }
+    }
+
+    fn as_slice(&self) -> &[&'static str] {
+        &self.labels
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LabelFormatter {
+    label_width: usize,
+    value_offset: usize,
+    value_prefix: String,
+}
+
+impl LabelFormatter {
+    const INDENT: &'static str = " ";
+
+    fn new(labels: &[&str]) -> Self {
+        let label_width = labels
+            .iter()
+            .map(|label| UnicodeWidthStr::width(*label))
+            .max()
+            .unwrap_or(0);
+        let indent_width = UnicodeWidthStr::width(Self::INDENT);
+        let value_offset = indent_width + label_width + 3;
+        let value_prefix = " ".repeat(value_offset);
+
+        Self {
+            label_width,
+            value_offset,
+            value_prefix,
+        }
+    }
+
+    fn label_span(&self, label: &str) -> Span<'static> {
+        let mut buf = String::with_capacity(self.value_offset);
+        buf.push_str(Self::INDENT);
+
+        let mut used = 0usize;
+        for ch in label.chars() {
+            buf.push(ch);
+            used += UnicodeWidthChar::width(ch).unwrap_or(0);
+        }
+
+        while used < self.label_width {
+            buf.push(' ');
+            used += 1;
+        }
+
+        buf.push(' ');
+        buf.push(':');
+        buf.push(' ');
+
+        Span::from(buf).dim()
+    }
+
+    fn build_line(&self, label: &str, mut value_spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+        let mut spans = Vec::with_capacity(value_spans.len() + 1);
+        spans.push(self.label_span(label));
+        spans.append(&mut value_spans);
+        spans
+    }
+
+    fn value_indent_span(&self) -> Span<'static> {
+        Span::from(self.value_prefix.clone()).dim()
+    }
+
+    fn value_offset(&self) -> usize {
+        self.value_offset
+    }
+
+    fn value_width(&self, available_inner_width: usize) -> usize {
+        available_inner_width.saturating_sub(self.value_offset())
+    }
+
+    fn continuation_line(&self, mut spans: Vec<Span<'static>>) -> Line<'static> {
+        let mut line_spans = Vec::with_capacity(spans.len() + 1);
+        line_spans.push(self.value_indent_span());
+        line_spans.append(&mut spans);
+        Line::from(line_spans)
+    }
+}
+
+#[derive(Debug)]
+struct AlignedLinesBuilder<'a> {
+    formatter: &'a LabelFormatter,
+    lines: Vec<Line<'static>>,
+}
+
+impl<'a> AlignedLinesBuilder<'a> {
+    fn new(formatter: &'a LabelFormatter) -> Self {
+        Self {
+            formatter,
+            lines: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, label: &'static str, value_spans: Vec<Span<'static>>) {
+        self.lines
+            .push(Line::from(self.formatter.build_line(label, value_spans)));
+    }
+
+    fn push_blank(&mut self) {
+        self.lines.push(Line::from(Vec::<Span<'static>>::new()));
+    }
+
+    fn extend<I>(&mut self, lines: I)
     where
         I: IntoIterator<Item = Line<'static>>,
     {
@@ -123,7 +213,6 @@ pub(crate) fn new_status_output(
 struct StatusTokenUsageData {
     total: u64,
     input: u64,
-    cached_input: u64,
     output: u64,
 }
 
@@ -188,7 +277,6 @@ impl StatusHistoryCell {
         let token_usage = StatusTokenUsageData {
             total: usage.blended_total(),
             input: usage.non_cached_input(),
-            cached_input: usage.cached_input_tokens,
             output: usage.output_tokens,
         };
         let rate_limits = compose_rate_limit_data(rate_limits);
@@ -207,61 +295,14 @@ impl StatusHistoryCell {
         }
     }
 
-    fn primary_fields(&self, inner_width: usize) -> Vec<StatusField> {
-        let mut fields = Vec::new();
-        let mut model_spans = vec![Span::from(self.model_name.clone())];
-        if !self.model_details.is_empty() {
-            model_spans.push(Span::from(" (").dim());
-            model_spans.push(Span::from(self.model_details.join(", ")).dim());
-            model_spans.push(Span::from(")").dim());
-        }
-        fields.push(StatusField::spans("Model", model_spans));
-
-        let directory_width = inner_width.saturating_sub(label_width("Directory"));
-        let directory = format_directory_display(&self.directory, Some(directory_width));
-        fields.push(StatusField::text("Directory", directory));
-
-        fields.push(StatusField::text("Approval", self.approval.clone()));
-        fields.push(StatusField::text("Sandbox", self.sandbox.clone()));
-        fields.push(StatusField::text("Agents.md", self.agents_summary.clone()));
-
-        fields
-    }
-
-    fn account_field(&self) -> Option<StatusField> {
-        let account = self.account.as_ref()?;
-        let value = match account {
-            StatusAccountDisplay::ChatGpt { email, plan } => match (email, plan) {
-                (Some(email), Some(plan)) => format!("{email} ({plan})"),
-                (Some(email), None) => email.clone(),
-                (None, Some(plan)) => plan.clone(),
-                (None, None) => "ChatGPT".to_string(),
-            },
-            StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
-            }
-        };
-
-        Some(StatusField::text("Account", value))
-    }
-
-    fn session_field(&self) -> Option<StatusField> {
-        self.session_id
-            .as_ref()
-            .map(|session| StatusField::text("Session", session.clone()))
-    }
-
-    fn token_usage_field(&self) -> StatusField {
-        StatusField::spans("Token Usage", self.token_usage_spans())
-    }
-
     fn token_usage_spans(&self) -> Vec<Span<'static>> {
         let total_fmt = format_tokens_compact(self.token_usage.total);
         let input_fmt = format_tokens_compact(self.token_usage.input);
         let output_fmt = format_tokens_compact(self.token_usage.output);
 
-        let mut spans: Vec<Span<'static>> = vec![
+        vec![
             Span::from(total_fmt),
+            Span::from(" total ").dim(),
             Span::from(" (").dim(),
             Span::from(input_fmt),
             Span::from(" input").dim(),
@@ -269,44 +310,32 @@ impl StatusHistoryCell {
             Span::from(output_fmt),
             Span::from(" output").dim(),
             Span::from(")").dim(),
-        ];
-
-        if self.token_usage.cached_input > 0 {
-            let cached_fmt = format_tokens_compact(self.token_usage.cached_input);
-            spans.push(Span::from(" + ").dim());
-            spans.push(Span::from(format!("{cached_fmt} cached input")).dim());
-        }
-
-        spans
+        ]
     }
 
-    fn rate_limit_lines(&self, available_inner_width: usize) -> Vec<Line<'static>> {
+    fn rate_limit_lines(
+        &self,
+        available_inner_width: usize,
+        formatter: &LabelFormatter,
+    ) -> Vec<Line<'static>> {
         match &self.rate_limits {
             StatusRateLimitData::Available(rows_data) => {
                 if rows_data.is_empty() {
-                    return vec![Line::from(vec![
-                        label_span("Limits"),
-                        Span::from("data not available yet").dim(),
-                    ])];
+                    return vec![Line::from(formatter.build_line(
+                        "Limits",
+                        vec![Span::from("data not available yet").dim()],
+                    ))];
                 }
 
-                let mut lines = Vec::new();
-
-                let label_width = rows_data
-                    .iter()
-                    .map(|row| UnicodeWidthStr::width(row.label))
-                    .max()
-                    .unwrap_or(0);
-                let resets_indent = format!("  {:<label_width$}  ", "");
+                let mut lines = Vec::with_capacity(rows_data.len() * 2);
 
                 for row in rows_data {
-                    let padded = format!("{label:<label_width$}", label = row.label);
-                    let base_spans = vec![
-                        Span::from(format!(" {padded}: ")).dim(),
+                    let value_spans = vec![
                         Span::from(render_status_limit_progress_bar(row.percent_used)),
                         Span::from(" "),
                         Span::from(format_status_limit_summary(row.percent_used)),
                     ];
+                    let base_spans = formatter.build_line(row.label, value_spans);
 
                     if let Some(resets_at) = row.resets_at.as_ref() {
                         let resets_span =
@@ -321,9 +350,7 @@ impl StatusHistoryCell {
                             lines.push(Line::from(inline_spans));
                         } else {
                             lines.push(Line::from(base_spans));
-                            lines.push(
-                                vec![Span::from(resets_indent.clone()).dim(), resets_span].into(),
-                            );
+                            lines.push(formatter.continuation_line(vec![resets_span]));
                         }
                     } else {
                         lines.push(Line::from(base_spans));
@@ -333,11 +360,26 @@ impl StatusHistoryCell {
                 lines
             }
             StatusRateLimitData::Missing => {
-                vec![Line::from(vec![
-                    label_span("Limits"),
-                    Span::from("data not available yet").dim(),
-                ])]
+                vec![Line::from(formatter.build_line(
+                    "Limits",
+                    vec![Span::from("data not available yet").dim()],
+                ))]
             }
+        }
+    }
+
+    fn collect_rate_limit_labels(&self, collector: &mut LabelCollector) {
+        match &self.rate_limits {
+            StatusRateLimitData::Available(rows) => {
+                if rows.is_empty() {
+                    collector.include("Limits");
+                } else {
+                    for row in rows {
+                        collector.include(row.label);
+                    }
+                }
+            }
+            StatusRateLimitData::Missing => collector.include("Limits"),
         }
     }
 }
@@ -346,31 +388,73 @@ impl HistoryCell for StatusHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut rows = StatusRows::new();
         rows.push_line(vec![
-            Span::from(">_ ").dim(),
+            Span::from(format!("{}>_ ", LabelFormatter::INDENT)).dim(),
             Span::from("OpenAI Codex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{CODEX_CLI_VERSION})")).dim(),
         ]);
         rows.push_blank();
-        rows.extend_fields(self.primary_fields(usize::MAX));
-
-        if let Some(account) = self.account_field() {
-            rows.push_field(account);
-        }
-
-        if let Some(session) = self.session_field() {
-            rows.push_field(session);
-        }
-
-        rows.push_blank();
-        rows.push_field(self.token_usage_field());
-
         let available_inner_width = usize::from(width.saturating_sub(4));
         if available_inner_width == 0 {
             return Vec::new();
         }
 
-        rows.extend_lines(self.rate_limit_lines(available_inner_width));
+        let account_value = self.account.as_ref().map(|account| match account {
+            StatusAccountDisplay::ChatGpt { email, plan } => match (email, plan) {
+                (Some(email), Some(plan)) => format!("{email} ({plan})"),
+                (Some(email), None) => email.clone(),
+                (None, Some(plan)) => plan.clone(),
+                (None, None) => "ChatGPT".to_string(),
+            },
+            StatusAccountDisplay::ApiKey => {
+                "API key configured (run codex login to use ChatGPT)".to_string()
+            }
+        });
+
+        let mut label_collector = LabelCollector::default();
+        label_collector.extend(["Model", "Directory", "Approval", "Sandbox", "Agents.md"]);
+        if account_value.is_some() {
+            label_collector.include("Account");
+        }
+        if self.session_id.is_some() {
+            label_collector.include("Session");
+        }
+        label_collector.include("Token Usage");
+        self.collect_rate_limit_labels(&mut label_collector);
+
+        let formatter = LabelFormatter::new(label_collector.as_slice());
+        let value_width = formatter.value_width(available_inner_width);
+
+        let mut model_spans = vec![Span::from(self.model_name.clone())];
+        if !self.model_details.is_empty() {
+            model_spans.push(Span::from(" (").dim());
+            model_spans.push(Span::from(self.model_details.join(", ")).dim());
+            model_spans.push(Span::from(")").dim());
+        }
+
+        let directory_value = format_directory_display(&self.directory, Some(value_width));
+
+        let mut aligned = AlignedLinesBuilder::new(&formatter);
+        aligned.push("Model", model_spans);
+        aligned.push("Directory", vec![Span::from(directory_value)]);
+        aligned.push("Approval", vec![Span::from(self.approval.clone())]);
+        aligned.push("Sandbox", vec![Span::from(self.sandbox.clone())]);
+        aligned.push("Agents.md", vec![Span::from(self.agents_summary.clone())]);
+
+        if let Some(account_value) = account_value {
+            aligned.push("Account", vec![Span::from(account_value)]);
+        }
+
+        if let Some(session) = self.session_id.as_ref() {
+            aligned.push("Session", vec![Span::from(session.clone())]);
+        }
+
+        aligned.push_blank();
+        aligned.push("Token Usage", self.token_usage_spans());
+
+        aligned.extend(self.rate_limit_lines(available_inner_width, &formatter));
+
+        rows.extend_lines(aligned.into_lines());
 
         let lines = rows.into_lines();
         let content_width = lines.iter().map(line_display_width).max().unwrap_or(0);
@@ -432,14 +516,14 @@ pub(crate) fn rate_limit_snapshot_display(
 fn compose_model_display(config: &Config, entries: &[(&str, String)]) -> (String, Vec<String>) {
     let mut details: Vec<String> = Vec::new();
     if let Some((_, effort)) = entries.iter().find(|(k, _)| *k == "reasoning effort") {
-        details.push(format!("reasoning {}", title_case(effort)));
+        details.push(format!("reasoning {}", effort.to_ascii_lowercase()));
     }
     if let Some((_, summary)) = entries.iter().find(|(k, _)| *k == "reasoning summaries") {
         let summary = summary.trim();
         if summary.eq_ignore_ascii_case("none") || summary.eq_ignore_ascii_case("off") {
             details.push("summaries off".to_string());
         } else if !summary.is_empty() {
-            details.push(format!("summaries {}", title_case(summary)));
+            details.push(format!("summaries {}", summary.to_ascii_lowercase()));
         }
     }
 
@@ -513,7 +597,7 @@ fn compose_account_display(config: &Config) -> Option<StatusAccountDisplay> {
 fn compose_rate_limit_data(snapshot: Option<&RateLimitSnapshotDisplay>) -> StatusRateLimitData {
     match snapshot {
         Some(snapshot) => {
-            let mut rows = Vec::new();
+            let mut rows = Vec::with_capacity(2);
 
             if let Some(primary) = snapshot.primary.as_ref() {
                 rows.push(StatusRateLimitRow {
@@ -807,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn status_card_preserves_cached_input_when_space_allows() {
+    fn status_card_token_usage_excludes_cached_tokens() {
         let temp_home = TempDir::new().expect("temp home");
         let mut config = test_config(&temp_home);
         config.model = "gpt-5-codex".to_string();
@@ -825,8 +909,8 @@ mod tests {
         let rendered = render_lines(&composite.display_lines(120));
 
         assert!(
-            rendered.iter().any(|line| line.contains("cached input")),
-            "expected cached input tokens to remain visible, got: {rendered:?}"
+            rendered.iter().all(|line| !line.contains("cached")),
+            "cached tokens should not be displayed, got: {rendered:?}"
         );
     }
 
