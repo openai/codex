@@ -18,6 +18,7 @@ members = [
     "ollama",
     "protocol",
     "protocol-ts",
+    "rmcp-client",
     "tui",
     "utils/readiness",
 ]
@@ -48,6 +49,7 @@ codex-mcp-client = { path = "mcp-client" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
 codex-protocol = { path = "protocol" }
+codex-rmcp-client = { path = "rmcp-client" }
 codex-protocol-ts = { path = "protocol-ts" }
 codex-tui = { path = "tui" }
 codex-utils-readiness = { path = "utils/readiness" }

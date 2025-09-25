@@ -21,6 +21,7 @@ chrono = { workspace = true, features = ["serde"] }
 codex-apply-patch = { workspace = true }
 codex-file-search = { workspace = true }
 codex-mcp-client = { workspace = true }
+codex-rmcp-client = { workspace = true }
 codex-protocol = { workspace = true }
 dirs = { workspace = true }
 env-flags = { workspace = true }
