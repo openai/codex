@@ -75,7 +75,7 @@ fn agent_reasoning_produces_item_completed_reasoning() {
         out,
         vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
             item: ConversationItem {
-                id: "itm_0".to_string(),
+                id: "item_0".to_string(),
                 details: ConversationItemDetails::Reasoning(ReasoningItem {
                     text: "thinking...".to_string(),
                 }),
@@ -98,7 +98,7 @@ fn agent_message_produces_item_completed_assistant_message() {
         out,
         vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
             item: ConversationItem {
-                id: "itm_0".to_string(),
+                id: "item_0".to_string(),
                 details: ConversationItemDetails::AssistantMessage(AssistantMessageItem {
                     text: "hello".to_string(),
                 }),
@@ -158,7 +158,7 @@ fn exec_command_end_success_produces_completed_command_item() {
     let out_begin = ep.collect_conversation_events(&begin);
     assert!(out_begin.is_empty());
 
-    // End (success) -> item.completed (itm_0)
+    // End (success) -> item.completed (item_0)
     let end_ok = event(
         "c2",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
@@ -176,7 +176,7 @@ fn exec_command_end_success_produces_completed_command_item() {
         out_ok,
         vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
             item: ConversationItem {
-                id: "itm_0".to_string(),
+                id: "item_0".to_string(),
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
                     command: "bash -lc echo hi".to_string(),
                     aggregated_output: "hi\n".to_string(),
@@ -204,7 +204,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
     );
     assert!(ep.collect_conversation_events(&begin).is_empty());
 
-    // End (failure) -> item.completed (itm_0)
+    // End (failure) -> item.completed (item_0)
     let end_fail = event(
         "c2",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
@@ -222,7 +222,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
         out_fail,
         vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
             item: ConversationItem {
-                id: "itm_0".to_string(),
+                id: "item_0".to_string(),
                 details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
                     command: "sh -c exit 1".to_string(),
                     aggregated_output: String::new(),
@@ -272,7 +272,7 @@ fn patch_apply_success_produces_item_completed_patchapply() {
     let out_begin = ep.collect_conversation_events(&begin);
     assert!(out_begin.is_empty());
 
-    // End (success) -> item.completed (itm_0)
+    // End (success) -> item.completed (item_0)
     let end = event(
         "p2",
         EventMsg::PatchApplyEnd(PatchApplyEndEvent {
@@ -288,7 +288,7 @@ fn patch_apply_success_produces_item_completed_patchapply() {
     // Validate structure without relying on HashMap iteration order
     match &out_end[0] {
         ConversationEvent::ItemCompleted(ItemCompletedEvent { item }) => {
-            assert_eq!(&item.id, "itm_0");
+            assert_eq!(&item.id, "item_0");
             match &item.details {
                 ConversationItemDetails::FileChange(file_update) => {
                     assert_eq!(file_update.status, PatchApplyStatus::Completed);
@@ -340,7 +340,7 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
     );
     assert!(ep.collect_conversation_events(&begin).is_empty());
 
-    // End (failure) -> item.completed (itm_0) with Failed status
+    // End (failure) -> item.completed (item_0) with Failed status
     let end = event(
         "p2",
         EventMsg::PatchApplyEnd(PatchApplyEndEvent {
@@ -355,7 +355,7 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
 
     match &out_end[0] {
         ConversationEvent::ItemCompleted(ItemCompletedEvent { item }) => {
-            assert_eq!(&item.id, "itm_0");
+            assert_eq!(&item.id, "item_0");
             match &item.details {
                 ConversationItemDetails::FileChange(file_update) => {
                     assert_eq!(file_update.status, PatchApplyStatus::Failed);

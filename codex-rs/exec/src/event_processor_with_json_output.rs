@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
@@ -32,18 +34,18 @@ use codex_core::protocol::TaskCompleteEvent;
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
-    next_event_id: u64,
-    running_command: Option<Vec<String>>,
-    running_patch_apply: Option<PatchApplyBeginEvent>,
+    next_event_id: AtomicU64,
+    running_commands: HashMap<String, Vec<String>>,
+    running_patch_applies: HashMap<String, PatchApplyBeginEvent>,
 }
 
 impl EventProcessorWithJsonOutput {
     pub fn new(last_message_path: Option<PathBuf>) -> Self {
         Self {
             last_message_path,
-            next_event_id: 0,
-            running_command: None,
-            running_patch_apply: None,
+            next_event_id: AtomicU64::new(0),
+            running_commands: HashMap::new(),
+            running_patch_applies: HashMap::new(),
         }
     }
 
@@ -66,14 +68,17 @@ impl EventProcessorWithJsonOutput {
         }
     }
 
-    fn get_next_item_id(&mut self) -> String {
-        let id = format!("itm_{}", self.next_event_id);
-        self.next_event_id += 1;
+    fn get_next_item_id(&self) -> String {
+        let id = format!(
+            "item_{}",
+            self.next_event_id
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        );
         id
     }
 
     fn handle_session_configured(
-        &mut self,
+        &self,
         payload: &SessionConfiguredEvent,
     ) -> Vec<ConversationEvent> {
         vec![ConversationEvent::SessionCreated(SessionCreatedEvent {
@@ -81,7 +86,7 @@ impl EventProcessorWithJsonOutput {
         })]
     }
 
-    fn handle_agent_message(&mut self, payload: &AgentMessageEvent) -> Vec<ConversationEvent> {
+    fn handle_agent_message(&self, payload: &AgentMessageEvent) -> Vec<ConversationEvent> {
         let item = ConversationItem {
             id: self.get_next_item_id(),
 
@@ -95,7 +100,7 @@ impl EventProcessorWithJsonOutput {
         })]
     }
 
-    fn handle_reasoning_event(&mut self, ev: &AgentReasoningEvent) -> Vec<ConversationEvent> {
+    fn handle_reasoning_event(&self, ev: &AgentReasoningEvent) -> Vec<ConversationEvent> {
         let item = ConversationItem {
             id: self.get_next_item_id(),
 
@@ -109,13 +114,15 @@ impl EventProcessorWithJsonOutput {
         })]
     }
     fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ConversationEvent> {
-        self.running_command = Some(ev.command.clone());
+        self.running_commands
+            .insert(ev.call_id.clone(), ev.command.clone());
 
         Vec::new()
     }
 
     fn handle_patch_apply_begin(&mut self, ev: &PatchApplyBeginEvent) -> Vec<ConversationEvent> {
-        self.running_patch_apply = Some(ev.clone());
+        self.running_patch_applies
+            .insert(ev.call_id.clone(), ev.clone());
 
         Vec::new()
     }
@@ -129,7 +136,7 @@ impl EventProcessorWithJsonOutput {
     }
 
     fn handle_patch_apply_end(&mut self, ev: &PatchApplyEndEvent) -> Vec<ConversationEvent> {
-        if let Some(running_patch_apply) = self.running_patch_apply.take() {
+        if let Some(running_patch_apply) = self.running_patch_applies.remove(&ev.call_id) {
             let status = if ev.success {
                 PatchApplyStatus::Completed
             } else {
@@ -160,11 +167,11 @@ impl EventProcessorWithJsonOutput {
     }
 
     fn handle_exec_command_end(&mut self, ev: &ExecCommandEndEvent) -> Vec<ConversationEvent> {
-        let command = if let Some(command) = self.running_command.take() {
-            command.join(" ")
-        } else {
-            "".to_string()
-        };
+        let command = self
+            .running_commands
+            .remove(&ev.call_id)
+            .map(|command| command.join(" "))
+            .unwrap_or_default();
         let status = if ev.exit_code == 0 {
             CommandExecutionStatus::Completed
         } else {
