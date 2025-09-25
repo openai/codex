@@ -360,6 +360,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn dangerous_command_not_allowed_if_not_explicitly_approved() {
         let command = vec!["git".to_string(), "reset".to_string(), "--hard".to_string()];
         let approval_policy = AskForApproval::Never;
