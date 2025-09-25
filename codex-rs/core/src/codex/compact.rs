@@ -55,7 +55,7 @@ pub(super) async fn run_inline_auto_compact_task(
     let input = vec![InputItem::Text {
         text: SUMMARIZATION_PROMPT.to_string(),
     }];
-    run_compact_task_inner(sess, turn_context, sub_id, input, None, false).await;
+    run_compact_task_inner(sess, turn_context, sub_id, input, false).await;
 }
 
 pub(super) async fn run_compact_task(
@@ -71,15 +71,7 @@ pub(super) async fn run_compact_task(
         }),
     };
     sess.send_event(start_event).await;
-    run_compact_task_inner(
-        sess.clone(),
-        turn_context,
-        sub_id.clone(),
-        input,
-        None,
-        true,
-    )
-    .await;
+    run_compact_task_inner(sess.clone(), turn_context, sub_id.clone(), input, true).await;
     let event = Event {
         id: sub_id,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
@@ -94,7 +86,6 @@ async fn run_compact_task_inner(
     turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
-    instructions_override: Option<String>,
     remove_task_on_completion: bool,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
@@ -104,9 +95,7 @@ async fn run_compact_task_inner(
 
     let prompt = Prompt {
         input: turn_input,
-        tools: Vec::new(),
-        base_instructions_override: instructions_override,
-        output_schema: None,
+        ..Default::default()
     };
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();

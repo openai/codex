@@ -20,7 +20,6 @@ similar = { workspace = true }
 thiserror = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
-once_cell = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
