@@ -184,18 +184,22 @@ impl ModelClient {
 
         let input_with_instructions = prompt.get_formatted_input();
 
-        // Only include `text.verbosity` for GPT-5 family models
-        let text = if self.config.model_family.family == "gpt-5" {
-            create_text_param_for_request(self.config.model_verbosity, &prompt.output_schema)
-        } else {
-            if self.config.model_verbosity.is_some() {
-                warn!(
-                    "model_verbosity is set but ignored for non-gpt-5 model family: {}",
-                    self.config.model_family.family
-                );
+        let verbosity = match &self.config.model_family.family {
+            family if family == "gpt-5" => self.config.model_verbosity,
+            _ => {
+                if self.config.model_verbosity.is_some() {
+                    warn!(
+                        "model_verbosity is set but ignored for non-gpt-5 model family: {}",
+                        self.config.model_family.family
+                    );
+                }
+
+                None
             }
-            None
         };
+
+        // Only include `text.verbosity` for GPT-5 family models
+        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
 
         // In general, we want to explicitly send `store: false` when using the Responses API,
         // but in practice, the Azure Responses API rejects `store: false`:
