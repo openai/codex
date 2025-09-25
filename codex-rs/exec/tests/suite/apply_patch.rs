@@ -50,7 +50,7 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
     use crate::suite::common::run_e2e_exec_test;
     use core_test_support::skip_if_no_network;
 
-    skip_if_no_network!(result);
+    skip_if_no_network!(Ok(()));
 
     let tmp_cwd = tempdir().expect("failed to create temp dir");
     let tmp_path = tmp_cwd.path().to_path_buf();
@@ -90,7 +90,7 @@ async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
     use crate::suite::common::run_e2e_exec_test;
     use core_test_support::skip_if_no_network;
 
-    skip_if_no_network!(result);
+    skip_if_no_network!(Ok(()));
 
     let tmp_cwd = tempdir().expect("failed to create temp dir");
     let freeform_add_patch = r#"*** Begin Patch

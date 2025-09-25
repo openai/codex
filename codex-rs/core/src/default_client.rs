@@ -130,11 +130,60 @@ fn is_sandboxed() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_test_support::skip_if_no_network;
 
     #[test]
     fn test_get_codex_user_agent() {
         let user_agent = get_codex_user_agent();
         assert!(user_agent.starts_with("codex_cli_rs/"));
+    }
+
+    #[tokio::test]
+    async fn test_create_client_sets_default_headers() {
+        skip_if_no_network!();
+
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+
+        let client = create_client();
+
+        // Spin up a local mock server and capture a request.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let resp = client
+            .get(server.uri())
+            .send()
+            .await
+            .expect("failed to send request");
+        assert!(resp.status().is_success());
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("failed to fetch received requests");
+        assert!(!requests.is_empty());
+        let headers = &requests[0].headers;
+
+        // originator header is set to the provided value
+        let originator_header = headers
+            .get("originator")
+            .expect("originator header missing");
+        assert_eq!(originator_header.to_str().unwrap(), "codex_cli_rs");
+
+        // User-Agent matches the computed Codex UA for that originator
+        let expected_ua = get_codex_user_agent();
+        let ua_header = headers
+            .get("user-agent")
+            .expect("user-agent header missing");
+        assert_eq!(ua_header.to_str().unwrap(), expected_ua);
     }
 
     #[test]
