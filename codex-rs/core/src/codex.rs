@@ -671,6 +671,11 @@ impl Session {
         }
     }
 
+    pub async fn add_approved_command(&self, cmd: Vec<String>) {
+        let mut state = self.state.lock().await;
+        state.add_approved_command(cmd);
+    }
+
     pub async fn remember_approved_command(
         &self,
         command_for_display: &[String],
@@ -3372,8 +3377,9 @@ mod tests {
 
         tokio_test::block_on(session.remember_approved_command(&original, &translated));
 
-        let approved =
-            tokio_test::block_on(async { session.state.lock().await.approved_commands.clone() });
+        let approved = tokio_test::block_on(async {
+            session.state.lock().await.approved_commands_ref().clone()
+        });
 
         assert!(approved.contains(&original));
         assert!(approved.contains(&translated));
