@@ -2,6 +2,7 @@ use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
+use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 pub(crate) use crate::status::RateLimitSnapshotDisplay;
