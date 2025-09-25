@@ -43,21 +43,11 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::unbounded_channel;
 
-fn init_test_env() {
-    static INIT: OnceLock<()> = OnceLock::new();
-    INIT.get_or_init(|| {
-        // Safe: test setup occurs before other threads interact with env.
-        unsafe { std::env::set_var("CODEX_DISABLE_SYSTEM_PROXY", "1") };
-    });
-}
-
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
-    init_test_env();
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
@@ -307,7 +297,6 @@ fn make_chatwidget_manual() -> (
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
-    init_test_env();
     let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
