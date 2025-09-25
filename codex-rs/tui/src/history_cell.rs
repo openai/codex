@@ -5,36 +5,26 @@ use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
+pub(crate) use crate::status::RateLimitSnapshotDisplay;
+pub(crate) use crate::status::new_status_output;
+pub(crate) use crate::status::rate_limit_snapshot_display;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
-use chrono::DateTime;
-use chrono::Duration as ChronoDuration;
-use chrono::Local;
 use codex_ansi_escape::ansi_escape_line;
-use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
-use codex_core::auth::get_auth_file;
-use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
 use codex_core::config_types::ReasoningSummaryFormat;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
-use codex_core::project_doc::discover_project_doc_paths;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
-use codex_core::protocol::RateLimitSnapshot;
-use codex_core::protocol::RateLimitWindow;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::mcp_protocol::ConversationId;
-use codex_protocol::num_format::format_with_separators;
 use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
@@ -51,7 +41,6 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::any::Any;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
@@ -59,10 +48,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
-
-const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
-const STATUS_LIMIT_BAR_FILLED: &str = "█";
-const STATUS_LIMIT_BAR_EMPTY: &str = " ";
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
@@ -227,6 +212,12 @@ impl HistoryCell for AgentMessageCell {
 #[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
+}
+
+impl PlainHistoryCell {
+    pub(crate) fn new(lines: Vec<Line<'static>>) -> Self {
+        Self { lines }
+    }
 }
 
 impl HistoryCell for PlainHistoryCell {
@@ -637,9 +628,9 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
-const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
+pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
-fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
+pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
     if width < 4 {
         return None;
     }
@@ -647,8 +638,28 @@ fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
     Some(inner_width)
 }
 
-fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    let content_width = lines
+/// Render `lines` inside a border sized to the widest span in the content.
+pub(crate) fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    with_border_internal(lines, None)
+}
+
+/// Render `lines` inside a border whose inner width is at least `inner_width`.
+///
+/// This is useful when callers have already clamped their content to a
+/// specific width and want the border math centralized here instead of
+/// duplicating padding logic in the TUI widgets themselves.
+pub(crate) fn with_border_with_inner_width(
+    lines: Vec<Line<'static>>,
+    inner_width: usize,
+) -> Vec<Line<'static>> {
+    with_border_internal(lines, Some(inner_width))
+}
+
+fn with_border_internal(
+    lines: Vec<Line<'static>>,
+    forced_inner_width: Option<usize>,
+) -> Vec<Line<'static>> {
+    let max_line_width = lines
         .iter()
         .map(|line| {
             line.iter()
@@ -657,6 +668,9 @@ fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
         })
         .max()
         .unwrap_or(0);
+    let content_width = forced_inner_width
+        .unwrap_or(max_line_width)
+        .max(max_line_width);
 
     let mut out = Vec::with_capacity(lines.len() + 2);
     let border_inner_width = content_width + 2;
@@ -683,30 +697,10 @@ fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
     out
 }
 
-fn title_case(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    let mut chars = s.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return String::new(),
-    };
-    let rest: String = chars.as_str().to_ascii_lowercase();
-    first.to_uppercase().collect::<String>() + &rest
-}
-
-fn pretty_provider_name(id: &str) -> String {
-    if id.eq_ignore_ascii_case("openai") {
-        "OpenAI".to_string()
-    } else {
-        title_case(id)
-    }
-}
 /// Return the emoji followed by a hair space (U+200A).
 /// Using only the hair space avoids excessive padding after the emoji while
 /// still providing a small visual gap across terminals.
-fn padded_emoji(emoji: &str) -> String {
+pub(crate) fn padded_emoji(emoji: &str) -> String {
     format!("{emoji}\u{200A}")
 }
 
@@ -923,6 +917,12 @@ impl HistoryCell for SessionHeaderHistoryCell {
 #[derive(Debug)]
 pub(crate) struct CompositeHistoryCell {
     parts: Vec<Box<dyn HistoryCell>>,
+}
+
+impl CompositeHistoryCell {
+    pub(crate) fn new(parts: Vec<Box<dyn HistoryCell>>) -> Self {
+        Self { parts }
+    }
 }
 
 impl HistoryCell for CompositeHistoryCell {
@@ -1182,228 +1182,6 @@ pub(crate) fn new_warning_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell {
         lines: vec![vec![format!("⚠ {message}").yellow()].into()],
     }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RateLimitWindowDisplay {
-    pub used_percent: f64,
-    pub resets_at: Option<String>,
-}
-
-impl RateLimitWindowDisplay {
-    fn from_window(window: &RateLimitWindow, captured_at: DateTime<Local>) -> Self {
-        let resets_at = window
-            .resets_in_seconds
-            .and_then(|seconds| i64::try_from(seconds).ok())
-            .and_then(|secs| captured_at.checked_add_signed(ChronoDuration::seconds(secs)))
-            .map(|dt| dt.format("%b %-d, %Y %-I:%M %p").to_string());
-
-        Self {
-            used_percent: window.used_percent,
-            resets_at,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RateLimitSnapshotDisplay {
-    pub primary: Option<RateLimitWindowDisplay>,
-    pub secondary: Option<RateLimitWindowDisplay>,
-}
-
-pub(crate) fn rate_limit_snapshot_display(
-    snapshot: &RateLimitSnapshot,
-    captured_at: DateTime<Local>,
-) -> RateLimitSnapshotDisplay {
-    RateLimitSnapshotDisplay {
-        primary: snapshot
-            .primary
-            .as_ref()
-            .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
-        secondary: snapshot
-            .secondary
-            .as_ref()
-            .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
-    }
-}
-
-pub(crate) fn new_status_output(
-    config: &Config,
-    usage: &TokenUsage,
-    session_id: &Option<ConversationId>,
-    rate_limits: Option<&RateLimitSnapshotDisplay>,
-) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push("/status".magenta().into());
-
-    let config_entries = create_config_summary_entries(config);
-    let lookup = |k: &str| -> String {
-        config_entries
-            .iter()
-            .find(|(key, _)| *key == k)
-            .map(|(_, v)| v.clone())
-            .unwrap_or_default()
-    };
-
-    // 📂 Workspace
-    lines.push(vec![padded_emoji("📂").into(), "Workspace".bold()].into());
-    // Path (home-relative, e.g., ~/code/project)
-    let cwd_str = match relativize_to_home(&config.cwd) {
-        Some(rel) if !rel.as_os_str().is_empty() => {
-            let sep = std::path::MAIN_SEPARATOR;
-            format!("~{sep}{}", rel.display())
-        }
-        Some(_) => "~".to_string(),
-        None => config.cwd.display().to_string(),
-    };
-    lines.push(vec!["  • Path: ".into(), cwd_str.into()].into());
-    // Approval mode (as-is)
-    lines.push(vec!["  • Approval Mode: ".into(), lookup("approval").into()].into());
-    // Sandbox (simplified name only)
-    let sandbox_name = match &config.sandbox_policy {
-        SandboxPolicy::DangerFullAccess => "danger-full-access",
-        SandboxPolicy::ReadOnly => "read-only",
-        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-    };
-    lines.push(vec!["  • Sandbox: ".into(), sandbox_name.into()].into());
-
-    // AGENTS.md files discovered via core's project_doc logic
-    let agents_list = {
-        match discover_project_doc_paths(config) {
-            Ok(paths) => {
-                let mut rels: Vec<String> = Vec::new();
-                for p in paths {
-                    let display = if let Some(parent) = p.parent() {
-                        if parent == config.cwd {
-                            "AGENTS.md".to_string()
-                        } else {
-                            let mut cur = config.cwd.as_path();
-                            let mut ups = 0usize;
-                            let mut reached = false;
-                            while let Some(c) = cur.parent() {
-                                if cur == parent {
-                                    reached = true;
-                                    break;
-                                }
-                                cur = c;
-                                ups += 1;
-                            }
-                            if reached {
-                                let up = format!("..{}", std::path::MAIN_SEPARATOR);
-                                format!("{}AGENTS.md", up.repeat(ups))
-                            } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
-                                stripped.display().to_string()
-                            } else {
-                                p.display().to_string()
-                            }
-                        }
-                    } else {
-                        p.display().to_string()
-                    };
-                    rels.push(display);
-                }
-                rels
-            }
-            Err(_) => Vec::new(),
-        }
-    };
-    if agents_list.is_empty() {
-        lines.push("  • AGENTS files: (none)".into());
-    } else {
-        lines.push(vec!["  • AGENTS files: ".into(), agents_list.join(", ").into()].into());
-    }
-    lines.push("".into());
-
-    // 👤 Account (only if ChatGPT tokens exist), shown under the first block
-    let auth_file = get_auth_file(&config.codex_home);
-    let auth = try_read_auth_json(&auth_file).ok();
-    let is_chatgpt_auth = auth
-        .as_ref()
-        .and_then(|auth| auth.tokens.as_ref())
-        .is_some();
-    if is_chatgpt_auth
-        && let Some(auth) = auth.as_ref()
-        && let Some(tokens) = auth.tokens.clone()
-    {
-        lines.push(vec![padded_emoji("👤").into(), "Account".bold()].into());
-        lines.push("  • Signed in with ChatGPT".into());
-
-        let info = tokens.id_token;
-        if let Some(email) = &info.email {
-            lines.push(vec!["  • Login: ".into(), email.clone().into()].into());
-        }
-
-        match auth.openai_api_key.as_deref() {
-            Some(key) if !key.is_empty() => {
-                lines.push("  • Using API key. Run codex login to use ChatGPT plan".into());
-            }
-            _ => {
-                let plan_text = info
-                    .get_chatgpt_plan_type()
-                    .map(|s| title_case(&s))
-                    .unwrap_or_else(|| "Unknown".to_string());
-                lines.push(vec!["  • Plan: ".into(), plan_text.into()].into());
-            }
-        }
-
-        lines.push("".into());
-    }
-
-    // 🧠 Model
-    lines.push(vec![padded_emoji("🧠").into(), "Model".bold()].into());
-    lines.push(vec!["  • Name: ".into(), config.model.clone().into()].into());
-    let provider_disp = pretty_provider_name(&config.model_provider_id);
-    lines.push(vec!["  • Provider: ".into(), provider_disp.into()].into());
-    // Only show Reasoning fields if present in config summary
-    let reff = lookup("reasoning effort");
-    if !reff.is_empty() {
-        lines.push(vec!["  • Reasoning Effort: ".into(), title_case(&reff).into()].into());
-    }
-    let rsum = lookup("reasoning summaries");
-    if !rsum.is_empty() {
-        lines.push(vec!["  • Reasoning Summaries: ".into(), title_case(&rsum).into()].into());
-    }
-
-    lines.push("".into());
-
-    // 💻 Client
-    let cli_version = crate::version::CODEX_CLI_VERSION;
-    lines.push(vec![padded_emoji("💻").into(), "Client".bold()].into());
-    lines.push(vec!["  • CLI Version: ".into(), cli_version.into()].into());
-    lines.push("".into());
-
-    // 📊 Token Usage
-    lines.push(vec!["📊 ".into(), "Token Usage".bold()].into());
-    if let Some(session_id) = session_id {
-        lines.push(vec!["  • Session ID: ".into(), session_id.to_string().into()].into());
-    }
-    // Input: <input> [+ <cached> cached]
-    let mut input_line_spans: Vec<Span<'static>> = vec![
-        "  • Input: ".into(),
-        format_with_separators(usage.non_cached_input()).into(),
-    ];
-    if usage.cached_input_tokens > 0 {
-        let cached = usage.cached_input_tokens;
-        input_line_spans.push(format!(" (+ {cached} cached)").into());
-    }
-    lines.push(Line::from(input_line_spans));
-    // Output: <output>
-    lines.push(Line::from(vec![
-        "  • Output: ".into(),
-        format_with_separators(usage.output_tokens).into(),
-    ]));
-    // Total: <total>
-    lines.push(Line::from(vec![
-        "  • Total: ".into(),
-        format_with_separators(usage.blended_total()).into(),
-    ]));
-
-    if is_chatgpt_auth {
-        lines.push("".into());
-        lines.extend(build_status_limit_lines(rate_limits));
-    }
-
-    PlainHistoryCell { lines }
 }
 
 /// Render a summary of configured MCP servers from the current `Config`.
@@ -1758,82 +1536,6 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         ")".into(),
     ];
     invocation_spans.into()
-}
-
-fn build_status_limit_lines(snapshot: Option<&RateLimitSnapshotDisplay>) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> =
-        vec![vec![padded_emoji("⏱️").into(), "Usage Limits".bold()].into()];
-
-    match snapshot {
-        Some(snapshot) => {
-            let mut windows: Vec<(&str, &RateLimitWindowDisplay)> = Vec::new();
-            if let Some(primary) = snapshot.primary.as_ref() {
-                windows.push(("5h limit", primary));
-            }
-            if let Some(secondary) = snapshot.secondary.as_ref() {
-                windows.push(("Weekly limit", secondary));
-            }
-
-            if windows.is_empty() {
-                lines.push("  • No rate limit data available.".into());
-            } else {
-                let label_width = windows
-                    .iter()
-                    .map(|(label, _)| UnicodeWidthStr::width(*label))
-                    .max()
-                    .unwrap_or(0);
-
-                for (label, window) in windows {
-                    lines.push(build_status_limit_line(
-                        label,
-                        window.used_percent,
-                        label_width,
-                    ));
-                    if let Some(resets_at) = window.resets_at.as_deref() {
-                        lines.push(build_status_reset_line(resets_at));
-                    }
-                }
-            }
-        }
-        None => lines.push("  • Send a message to load usage data.".into()),
-    }
-
-    lines
-}
-
-fn build_status_limit_line(label: &str, percent_used: f64, label_width: usize) -> Line<'static> {
-    let clamped_percent = percent_used.clamp(0.0, 100.0);
-    let progress = render_status_limit_progress_bar(clamped_percent);
-    let summary = format_status_limit_summary(clamped_percent);
-
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(5);
-    let padded_label = format!("{label:<label_width$}");
-    spans.push(format!("  • {padded_label}: ").into());
-    spans.push(progress.into());
-    spans.push(" ".into());
-    spans.push(summary.into());
-
-    Line::from(spans)
-}
-
-fn build_status_reset_line(resets_at: &str) -> Line<'static> {
-    vec!["    ".into(), format!("Resets at: {resets_at}").dim()].into()
-}
-
-fn render_status_limit_progress_bar(percent_used: f64) -> String {
-    let ratio = (percent_used / 100.0).clamp(0.0, 1.0);
-    let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
-    let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
-    let empty = STATUS_LIMIT_BAR_SEGMENTS.saturating_sub(filled);
-    format!(
-        "[{}{}]",
-        STATUS_LIMIT_BAR_FILLED.repeat(filled),
-        STATUS_LIMIT_BAR_EMPTY.repeat(empty)
-    )
-}
-
-fn format_status_limit_summary(percent_used: f64) -> String {
-    format!("{percent_used:.0}% used")
 }
 
 #[cfg(test)]
