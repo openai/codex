@@ -61,6 +61,7 @@ mod resume_picker;
 mod session_log;
 mod shimmer;
 mod slash_command;
+mod status;
 mod status_indicator_widget;
 mod streaming;
 mod terminal_palette;

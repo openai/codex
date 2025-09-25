@@ -151,18 +151,12 @@ async fn run_compact_task_inner(
     if remove_task_on_completion {
         sess.remove_task(&sub_id).await;
     }
-    let history_snapshot = {
-        let state = sess.state.lock().await;
-        state.history.contents()
-    };
+    let history_snapshot = sess.history_snapshot().await;
     let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
     let user_messages = collect_user_messages(&history_snapshot);
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
-    {
-        let mut state = sess.state.lock().await;
-        state.history.replace(new_history);
-    }
+    sess.replace_history(new_history).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
@@ -270,8 +264,7 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                let mut state = sess.state.lock().await;
-                state.history.record_items(std::slice::from_ref(&item));
+                sess.record_into_history(std::slice::from_ref(&item)).await;
             }
             Ok(ResponseEvent::Completed { .. }) => {
                 return Ok(());
