@@ -2277,7 +2277,9 @@ async fn handle_response_item(
             ..
         } => {
             info!("FunctionCall: {name}({arguments})");
-            if let Some((server, tool_name)) = sess.mcp_connection_manager.parse_tool_name(&name) {
+            if let Some((server, tool_name)) =
+                sess.services.mcp_connection_manager.parse_tool_name(&name)
+            {
                 let resp = handle_mcp_tool_call(
                     sess,
                     sub_id,
@@ -2454,7 +2456,8 @@ async fn handle_unified_exec_tool_call(
         timeout_ms,
     };
 
-    let value = sess.services
+    let value = sess
+        .services
         .unified_exec_manager
         .handle_request(request)
         .await
