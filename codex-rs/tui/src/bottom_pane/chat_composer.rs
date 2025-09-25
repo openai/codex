@@ -25,6 +25,10 @@ use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
+use super::footer::CtrlCReminderState;
+use super::footer::FooterContent;
+use super::footer::ShortcutsState;
+use super::footer::footer_spans;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
@@ -37,7 +41,6 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
-use crate::key_hint;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
@@ -1263,41 +1266,17 @@ impl WidgetRef for ChatComposer {
                 } else {
                     popup_rect
                 };
-                let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
-                    let ctrl_c_followup = if self.is_task_running {
-                        " to interrupt"
-                    } else {
-                        " to quit"
-                    };
-                    vec![
-                        " ".into(),
-                        key_hint::ctrl('C'),
-                        " again".into(),
-                        ctrl_c_followup.into(),
-                    ]
+                let content = if self.ctrl_c_quit_hint {
+                    FooterContent::CtrlCReminder(CtrlCReminderState {
+                        is_task_running: self.is_task_running,
+                    })
                 } else {
-                    let newline_hint_key = if self.use_shift_enter_hint {
-                        key_hint::shift('⏎')
-                    } else {
-                        key_hint::ctrl('J')
-                    };
-                    vec![
-                        key_hint::plain('⏎'),
-                        " send   ".into(),
-                        newline_hint_key,
-                        " newline   ".into(),
-                        key_hint::ctrl('T'),
-                        " transcript   ".into(),
-                        key_hint::ctrl('C'),
-                        " quit".into(),
-                    ]
+                    FooterContent::Shortcuts(ShortcutsState {
+                        use_shift_enter_hint: self.use_shift_enter_hint,
+                        esc_backtrack_hint: self.esc_backtrack_hint,
+                    })
                 };
-
-                if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
-                    hint.push("   ".into());
-                    hint.push(key_hint::plain("Esc"));
-                    hint.push(" edit prev".into());
-                }
+                let mut hint = footer_spans(content);
 
                 // Append token/context usage info to the footer hints when available.
                 if let Some(token_usage_info) = &self.token_usage_info {
