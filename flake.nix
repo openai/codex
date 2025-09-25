@@ -20,19 +20,8 @@
           codex-rs = pkgs.callPackage ./codex-rs { };
         in
         {
-          codex-rs = codex-rs.package;
-          default = codex-rs.package;
-        }
-      );
-
-      devShells = forAllSystems (system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-          codex-rs = pkgs.callPackage ./codex-rs { };
-        in
-        {
-          codex-rs = codex-rs.devShell;
-          default = codex-rs.devShell;
+          codex-rs = codex-rs;
+          default = codex-rs;
         }
       );
     };
