@@ -286,8 +286,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
         "test",
     )));
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::from_api_key_for_tests("test"));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
@@ -321,8 +320,7 @@ fn make_chatwidget_manual() -> (
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
     });
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::from_api_key_for_tests("test"));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
