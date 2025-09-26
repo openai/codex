@@ -154,8 +154,15 @@ pub(crate) enum JsonSchema {
             rename = "additionalProperties",
             skip_serializing_if = "Option::is_none"
         )]
-        additional_properties: Option<bool>,
+        additional_properties: Option<AdditionalProperties>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub(crate) enum AdditionalProperties {
+    Bool(bool),
+    Schema(Box<JsonSchema>),
 }
 
 fn create_unified_exec_tool() -> OpenAiTool {
@@ -200,7 +207,7 @@ fn create_unified_exec_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["input".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(AdditionalProperties::Bool(false)),
         },
     })
 }
@@ -247,7 +254,7 @@ fn create_shell_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["command".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(AdditionalProperties::Bool(false)),
         },
     })
 }
@@ -271,7 +278,7 @@ fn create_view_image_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(AdditionalProperties::Bool(false)),
         },
     })
 }
@@ -676,7 +683,6 @@ mod tests {
                 "test_server/do_something_cool",
             ],
         );
-
         assert_eq!(
             tools[3],
             OpenAiTool::Function(ResponsesApiTool {
@@ -708,7 +714,7 @@ mod tests {
                                     "string_property".to_string(),
                                     "number_property".to_string(),
                                 ]),
-                                additional_properties: Some(false),
+                                additional_properties: Some(AdditionalProperties::Bool(false)),
                             },
                         ),
                     ]),
@@ -719,6 +725,106 @@ mod tests {
                 strict: false,
             })
         );
+    }
+
+    #[test]
+    fn test_mcp_tool_nested_additional_properties_schema() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
+        });
+
+        let tools = get_openai_tools(
+            &config,
+            Some(HashMap::from([(
+                "firecrawl/firecrawl_extract".to_string(),
+                mcp_types::Tool {
+                    name: "firecrawl_extract".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({
+                            "options": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "object",
+                                    "properties": {
+                                        "selector": { "type": "string" },
+                                        "action": { "type": "string" }
+                                    },
+                                    "required": ["selector", "action"],
+                                    "additionalProperties": false
+                                }
+                            }
+                        })),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some("Firecrawl extract".to_string()),
+                },
+            )])),
+        );
+
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "unified_exec",
+                "web_search",
+                "view_image",
+                "firecrawl/firecrawl_extract",
+            ],
+        );
+
+        let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &tools[3] else {
+            panic!("expected function tool");
+        };
+
+        let JsonSchema::Object {
+            properties,
+            additional_properties,
+            ..
+        } = parameters
+        else {
+            panic!("expected object schema");
+        };
+
+        assert!(additional_properties.is_none());
+
+        let options_schema = properties
+            .get("options")
+            .expect("options property should be present");
+
+        let JsonSchema::Object {
+            additional_properties: Some(AdditionalProperties::Schema(nested_schema)),
+            ..
+        } = options_schema
+        else {
+            panic!("expected nested schema-valued additionalProperties");
+        };
+
+        let JsonSchema::Object {
+            properties: nested_props,
+            required,
+            additional_properties: Some(AdditionalProperties::Bool(false)),
+        } = nested_schema.as_ref()
+        else {
+            panic!("expected nested object schema");
+        };
+
+        assert_eq!(
+            nested_props.keys().collect::<Vec<_>>(),
+            vec!["action", "selector"]
+        );
+        let mut required = required.clone().expect("required should be present");
+        required.sort();
+        assert_eq!(required, vec!["action".to_string(), "selector".to_string()]);
     }
 
     #[test]
