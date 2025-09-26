@@ -28,6 +28,7 @@ codex-core = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
 owo-colors = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
 tokio = { workspace = true, features = [
@@ -39,12 +40,18 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+ts-rs = { workspace = true, features = [
+    "uuid-impl",
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
 core_test_support = { workspace = true }
 libc = { workspace = true }
 predicates = { workspace = true }
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }

@@ -7,7 +7,9 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 
 use crate::exec::SandboxType;
-use crate::is_safe_command::is_known_safe_command;
+
+use crate::command_safety::is_dangerous_command::command_might_be_dangerous;
+use crate::command_safety::is_safe_command::is_known_safe_command;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 
@@ -85,6 +87,13 @@ pub fn assess_command_safety(
     approved: &HashSet<Vec<String>>,
     with_escalated_permissions: bool,
 ) -> SafetyCheck {
+    // Some commands look dangerous. Even if they are run inside a sandbox,
+    // unless the user has explicitly approved them, we should ask,
+    // regardless of the approval policy and sandbox policy.
+    if command_might_be_dangerous(command) && !approved.contains(command) {
+        return SafetyCheck::AskUser;
+    }
+
     // A command is "trusted" because either:
     // - it belongs to a set of commands we consider "safe" by default, or
     // - the user has explicitly approved the command for this session
@@ -98,6 +107,7 @@ pub fn assess_command_safety(
     // would probably be fine to run the command in a sandbox, but when
     // `approved.contains(command)` is `true`, the user may have approved it for
     // the session _because_ they know it needs to run outside a sandbox.
+
     if is_known_safe_command(command) || approved.contains(command) {
         return SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
@@ -313,6 +323,50 @@ mod tests {
         let sandbox_policy = SandboxPolicy::ReadOnly;
         let approved: HashSet<Vec<String>> = HashSet::new();
         let request_escalated_privileges = true;
+
+        let safety_check = assess_command_safety(
+            &command,
+            approval_policy,
+            &sandbox_policy,
+            &approved,
+            request_escalated_privileges,
+        );
+
+        assert_eq!(safety_check, SafetyCheck::AskUser);
+    }
+
+    #[test]
+    fn dangerous_command_allowed_if_explicitly_approved() {
+        let command = vec!["git".to_string(), "reset".to_string(), "--hard".to_string()];
+        let approval_policy = AskForApproval::OnRequest;
+        let sandbox_policy = SandboxPolicy::ReadOnly;
+        let mut approved: HashSet<Vec<String>> = HashSet::new();
+        approved.insert(command.clone());
+        let request_escalated_privileges = false;
+
+        let safety_check = assess_command_safety(
+            &command,
+            approval_policy,
+            &sandbox_policy,
+            &approved,
+            request_escalated_privileges,
+        );
+
+        assert_eq!(
+            safety_check,
+            SafetyCheck::AutoApprove {
+                sandbox_type: SandboxType::None
+            }
+        );
+    }
+
+    #[test]
+    fn dangerous_command_not_allowed_if_not_explicitly_approved() {
+        let command = vec!["git".to_string(), "reset".to_string(), "--hard".to_string()];
+        let approval_policy = AskForApproval::Never;
+        let sandbox_policy = SandboxPolicy::ReadOnly;
+        let approved: HashSet<Vec<String>> = HashSet::new();
+        let request_escalated_privileges = false;
 
         let safety_check = assess_command_safety(
             &command,

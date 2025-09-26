@@ -1,7 +1,7 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::RolloutRecorder;
 use codex_core::protocol::GitInfo;
-use core_test_support::non_sandbox_test;
+use core_test_support::skip_if_no_network;
 use std::time::Duration;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -21,7 +21,7 @@ use wiremock::matchers::path;
 /// 4. Ensures the response is received exactly once and contains "hi"
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_mode_stream_cli() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = MockServer::start().await;
     let sse = concat!(
@@ -97,7 +97,7 @@ async fn chat_mode_stream_cli() {
 /// received by a mock OpenAI Responses endpoint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_cli_applies_experimental_instructions_file() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Start mock server which will capture the request and return a minimal
     // SSE stream for a single turn.
@@ -185,7 +185,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
 /// 4. Ensures the fixture content is correctly streamed through the CLI
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_api_stream_cli() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
@@ -217,7 +217,7 @@ async fn responses_api_stream_cli() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integration_creates_and_checks_session_file() {
     // Honor sandbox network restrictions for CI parity with the other tests.
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // 1. Temp home so we read/write isolated session files.
     let home = TempDir::new().unwrap();
