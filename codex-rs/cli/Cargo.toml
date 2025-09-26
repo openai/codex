@@ -27,6 +27,7 @@ codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-protocol = { workspace = true }
 codex-protocol-ts = { workspace = true }
+codex-responses-api-proxy = { workspace = true }
 codex-tui = { workspace = true }
 ctor = { workspace = true }
 owo-colors = { workspace = true }

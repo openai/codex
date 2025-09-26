@@ -70,11 +70,12 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
+use crate::exec_cell::CommandOutput;
+use crate::exec_cell::ExecCell;
+use crate::exec_cell::new_active_exec_command;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
-use crate::history_cell::CommandOutput;
-use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PatchEventType;
@@ -84,7 +85,7 @@ use crate::slash_command::SlashCommand;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
-use crate::user_approval_widget::ApprovalRequest;
+use crate::bottom_pane::ApprovalRequest;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -673,7 +674,7 @@ impl ChatWidget {
             .unwrap_or(true);
         if needs_new {
             self.flush_active_cell();
-            self.active_cell = Some(Box::new(history_cell::new_active_exec_command(
+            self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 command,
                 parsed,
@@ -777,7 +778,7 @@ impl ChatWidget {
         } else {
             self.flush_active_cell();
 
-            self.active_cell = Some(Box::new(history_cell::new_active_exec_command(
+            self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,

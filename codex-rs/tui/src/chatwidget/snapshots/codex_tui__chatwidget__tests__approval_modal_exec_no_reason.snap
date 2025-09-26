@@ -3,7 +3,14 @@ source: tui/src/chatwidget/tests.rs
 expression: terminal.backend()
 ---
 "                                                                                "
-"▌Allow command?                                                                 "
-"▌ Yes   Always   No, provide feedback                                           "
-"▌ Approve and run the command                                                   "
+"▌ Command: echo hello world                                                     "
+"▌                                                                               "
+"▌ Allow command?                                                                "
+"▌                                                                               "
+"▌ > 1. Approve and run now          (Y) Run this command one time               "
+"▌   2. Always approve this session  (A) Automatically approve this command for  "
+"▌                                   the rest of the session                     "
+"▌   3. Cancel                       (N) Do not run the command                  "
+"                                                                                "
+"Press Enter to confirm or Esc to cancel                                         "
 "                                                                                "

@@ -16,6 +16,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_mcp_client::McpClient;
+use codex_rmcp_client::RmcpClient;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::Tool;
@@ -86,9 +87,62 @@ struct ToolInfo {
 }
 
 struct ManagedClient {
-    client: Arc<McpClient>,
+    client: McpClientAdapter,
     startup_timeout: Duration,
     tool_timeout: Option<Duration>,
+}
+
+#[derive(Clone)]
+enum McpClientAdapter {
+    Legacy(Arc<McpClient>),
+    Rmcp(Arc<RmcpClient>),
+}
+
+impl McpClientAdapter {
+    async fn new_stdio_client(
+        use_rmcp_client: bool,
+        program: OsString,
+        args: Vec<OsString>,
+        env: Option<HashMap<String, String>>,
+        params: mcp_types::InitializeRequestParams,
+        startup_timeout: Duration,
+    ) -> Result<Self> {
+        tracing::error!(
+            "new_stdio_client use_rmcp_client: {use_rmcp_client} program: {program:?} args: {args:?} env: {env:?} params: {params:?} startup_timeout: {startup_timeout:?}"
+        );
+        if use_rmcp_client {
+            let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
+            client.initialize(params, Some(startup_timeout)).await?;
+            Ok(McpClientAdapter::Rmcp(client))
+        } else {
+            let client = Arc::new(McpClient::new_stdio_client(program, args, env).await?);
+            client.initialize(params, Some(startup_timeout)).await?;
+            Ok(McpClientAdapter::Legacy(client))
+        }
+    }
+
+    async fn list_tools(
+        &self,
+        params: Option<mcp_types::ListToolsRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::ListToolsResult> {
+        match self {
+            McpClientAdapter::Legacy(client) => client.list_tools(params, timeout).await,
+            McpClientAdapter::Rmcp(client) => client.list_tools(params, timeout).await,
+        }
+    }
+
+    async fn call_tool(
+        &self,
+        name: String,
+        arguments: Option<serde_json::Value>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::CallToolResult> {
+        match self {
+            McpClientAdapter::Legacy(client) => client.call_tool(name, arguments, timeout).await,
+            McpClientAdapter::Rmcp(client) => client.call_tool(name, arguments, timeout).await,
+        }
+    }
 }
 
 /// A thin wrapper around a set of running [`McpClient`] instances.
@@ -115,11 +169,14 @@ impl McpConnectionManager {
     /// user should be informed about these errors.
     pub async fn new(
         mcp_servers: HashMap<String, McpServerConfig>,
+        use_rmcp_client: bool,
     ) -> Result<(Self, ClientStartErrors)> {
         // Early exit if no servers are configured.
         if mcp_servers.is_empty() {
             return Ok((Self::default(), ClientStartErrors::default()));
         }
+
+        tracing::error!("new mcp_servers: {mcp_servers:?} use_rmcp_client: {use_rmcp_client}");
 
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
@@ -137,57 +194,48 @@ impl McpConnectionManager {
             }
 
             let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
-
             let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
 
+            let use_rmcp_client_flag = use_rmcp_client;
             join_set.spawn(async move {
                 let McpServerConfig {
                     command, args, env, ..
                 } = cfg;
-                let client_res = McpClient::new_stdio_client(
-                    command.into(),
-                    args.into_iter().map(OsString::from).collect(),
+                let command_os: OsString = command.into();
+                let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
+                let params = mcp_types::InitializeRequestParams {
+                    capabilities: ClientCapabilities {
+                        experimental: None,
+                        roots: None,
+                        sampling: None,
+                        // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                        // indicates this should be an empty object.
+                        elicitation: Some(json!({})),
+                    },
+                    client_info: Implementation {
+                        name: "codex-mcp-client".to_owned(),
+                        version: env!("CARGO_PKG_VERSION").to_owned(),
+                        title: Some("Codex".into()),
+                        // This field is used by Codex when it is an MCP
+                        // server: it should not be used when Codex is
+                        // an MCP client.
+                        user_agent: None,
+                    },
+                    protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
+                };
+
+                let client = McpClientAdapter::new_stdio_client(
+                    use_rmcp_client_flag,
+                    command_os,
+                    args_os,
                     env,
+                    params,
+                    startup_timeout,
                 )
-                .await;
-                match client_res {
-                    Ok(client) => {
-                        // Initialize the client.
-                        let params = mcp_types::InitializeRequestParams {
-                            capabilities: ClientCapabilities {
-                                experimental: None,
-                                roots: None,
-                                sampling: None,
-                                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-                                // indicates this should be an empty object.
-                                elicitation: Some(json!({})),
-                            },
-                            client_info: Implementation {
-                                name: "codex-mcp-client".to_owned(),
-                                version: env!("CARGO_PKG_VERSION").to_owned(),
-                                title: Some("Codex".into()),
-                                // This field is used by Codex when it is an MCP
-                                // server: it should not be used when Codex is
-                                // an MCP client.
-                                user_agent: None,
-                            },
-                            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
-                        };
-                        let initialize_notification_params = None;
-                        let init_result = client
-                            .initialize(
-                                params,
-                                initialize_notification_params,
-                                Some(startup_timeout),
-                            )
-                            .await;
-                        (
-                            (server_name, tool_timeout),
-                            init_result.map(|_| (client, startup_timeout)),
-                        )
-                    }
-                    Err(e) => ((server_name, tool_timeout), Err(e.into())),
-                }
+                .await
+                .map(|c| (c, startup_timeout));
+
+                ((server_name, tool_timeout), client)
             });
         }
 
@@ -207,7 +255,7 @@ impl McpConnectionManager {
                     clients.insert(
                         server_name,
                         ManagedClient {
-                            client: Arc::new(client),
+                            client,
                             startup_timeout,
                             tool_timeout: Some(tool_timeout),
                         },

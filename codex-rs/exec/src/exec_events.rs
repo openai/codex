@@ -10,27 +10,31 @@ pub enum ConversationEvent {
     SessionCreated(SessionCreatedEvent),
     #[serde(rename = "item.started")]
     ItemStarted(ItemStartedEvent),
+    #[serde(rename = "item.updated")]
+    ItemUpdated(ItemUpdatedEvent),
     #[serde(rename = "item.completed")]
     ItemCompleted(ItemCompletedEvent),
     #[serde(rename = "error")]
     Error(ConversationErrorEvent),
 }
 
-/// Payload describing a newly created conversation item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct SessionCreatedEvent {
     pub session_id: String,
 }
 
-/// Payload describing the start of an existing conversation item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct ItemStartedEvent {
     pub item: ConversationItem,
 }
 
-/// Payload describing the completion of an existing conversation item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct ItemCompletedEvent {
+    pub item: ConversationItem,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct ItemUpdatedEvent {
     pub item: ConversationItem,
 }
 
@@ -58,6 +62,7 @@ pub enum ConversationItemDetails {
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
     WebSearch(WebSearchItem),
+    TodoList(TodoListItem),
     Error(ErrorItem),
 }
 
@@ -152,4 +157,15 @@ pub struct WebSearchItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct ErrorItem {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct TodoItem {
+    pub text: String,
+    pub completed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct TodoListItem {
+    pub items: Vec<TodoItem>,
 }
