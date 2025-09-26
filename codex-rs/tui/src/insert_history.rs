@@ -24,7 +24,9 @@ use ratatui::text::Span;
 /// (avoids direct stdout references).
 pub(crate) fn insert_history_lines(terminal: &mut tui::Terminal, lines: Vec<Line>) {
     let mut out = std::io::stdout();
-    insert_history_lines_to_writer(terminal, &mut out, lines);
+    if let Err(e) = insert_history_lines_to_writer(terminal, &mut out, lines) {
+        tracing::warn!("Failed to insert history lines: {}", e);
+    }
 }
 
 /// Like `insert_history_lines`, but writes ANSI to the provided writer. This
@@ -33,7 +35,8 @@ pub fn insert_history_lines_to_writer<B, W>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     writer: &mut W,
     lines: Vec<Line>,
-) where
+) -> io::Result<()>
+where
     B: ratatui::backend::Backend,
     W: Write,
 {
@@ -57,13 +60,13 @@ pub fn insert_history_lines_to_writer<B, W>(
         //   3) Emitting Reverse Index (RI, ESC M) `scroll_amount` times
         //   4) Resetting the scroll region back to full screen
         let top_1based = area.top() + 1; // Convert 0-based row to 1-based for DECSTBM
-        queue!(writer, SetScrollRegion(top_1based..screen_size.height)).ok();
-        queue!(writer, MoveTo(0, area.top())).ok();
+        queue!(writer, SetScrollRegion(top_1based..screen_size.height))?;
+        queue!(writer, MoveTo(0, area.top()))?;
         for _ in 0..scroll_amount {
             // Reverse Index (RI): ESC M
-            queue!(writer, Print("\x1bM")).ok();
+            queue!(writer, Print("\x1bM"))?;
         }
-        queue!(writer, ResetScrollRegion).ok();
+        queue!(writer, ResetScrollRegion)?;
 
         let cursor_top = area.top().saturating_sub(1);
         area.y += scroll_amount;
@@ -88,15 +91,15 @@ pub fn insert_history_lines_to_writer<B, W>(
     // ││                            ││
     // │╰────────────────────────────╯│
     // └──────────────────────────────┘
-    queue!(writer, SetScrollRegion(1..area.top())).ok();
+    queue!(writer, SetScrollRegion(1..area.top()))?;
 
     // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
     // terminal's last_known_cursor_position, which hopefully will still be accurate after we
     // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
-    queue!(writer, MoveTo(0, cursor_top)).ok();
+    queue!(writer, MoveTo(0, cursor_top))?;
 
     for line in wrapped {
-        queue!(writer, Print("\r\n")).ok();
+        queue!(writer, Print("\r\n"))?;
         // Merge line-level style into each span so that ANSI colors reflect
         // line styles (e.g., blockquotes with green fg).
         let merged_spans: Vec<Span> = line
@@ -107,10 +110,10 @@ pub fn insert_history_lines_to_writer<B, W>(
                 content: s.content.clone(),
             })
             .collect();
-        write_spans(writer, merged_spans.iter()).ok();
+        write_spans(writer, merged_spans.iter())?;
     }
 
-    queue!(writer, ResetScrollRegion).ok();
+    queue!(writer, ResetScrollRegion)?;
 
     // Restore the cursor position to where it was before we started.
     queue!(
@@ -119,8 +122,9 @@ pub fn insert_history_lines_to_writer<B, W>(
             terminal.last_known_cursor_pos.x,
             terminal.last_known_cursor_pos.y
         )
-    )
-    .ok();
+    )?;
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,7 +326,8 @@ mod tests {
         let mut line: Line<'static> = Line::from(vec!["> ".into(), "Hello world".into()]);
         line = line.style(Color::Green);
         let mut ansi: Vec<u8> = Vec::new();
-        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line])
+            .expect("Failed to insert history lines in test");
 
         // Parse ANSI using vt100 and assert at least one non-default fg color appears
         let mut parser = Parser::new(height, width, 0);
@@ -365,7 +370,8 @@ mod tests {
         line = line.style(Color::Green);
 
         let mut ansi: Vec<u8> = Vec::new();
-        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line])
+            .expect("Failed to insert history lines in test");
 
         // Parse and inspect the final screen buffer.
         let mut parser = Parser::new(height, width, 0);
@@ -430,7 +436,8 @@ mod tests {
         ]);
 
         let mut ansi: Vec<u8> = Vec::new();
-        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line])
+            .expect("Failed to insert history lines in test");
 
         let mut parser = Parser::new(height, width, 0);
         parser.process(&ansi);
@@ -489,7 +496,8 @@ mod tests {
         term.set_viewport_area(viewport);
 
         let mut ansi: Vec<u8> = Vec::new();
-        insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+        insert_history_lines_to_writer(&mut term, &mut ansi, lines)
+            .expect("Failed to insert history lines in test");
 
         let mut parser = Parser::new(height, width, 0);
         parser.process(&ansi);

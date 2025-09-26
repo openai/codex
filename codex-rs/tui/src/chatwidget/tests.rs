@@ -1060,7 +1060,8 @@ async fn binary_size_transcript_snapshot() {
                                 &mut terminal,
                                 &mut ansi,
                                 lines,
-                            );
+                            )
+                            .expect("Failed to insert history lines in test");
                         }
                     }
                 }
@@ -1085,7 +1086,8 @@ async fn binary_size_transcript_snapshot() {
                                 &mut terminal,
                                 &mut ansi,
                                 lines,
-                            );
+                            )
+                            .expect("Failed to insert history lines in test");
                         }
                     }
                 }
@@ -2070,7 +2072,8 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     // 1) Apply any pending history insertions by emitting ANSI to a buffer via insert_history_lines_to_writer
     let mut ansi: Vec<u8> = Vec::new();
     for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines)
+            .expect("Failed to insert history lines in test");
     }
 
     // 2) Render the ChatWidget UI into an off-screen buffer using WidgetRef directly
@@ -2187,7 +2190,8 @@ printf 'fenced within fenced\n'
                     let lines = cell.display_lines(width);
                     crate::insert_history::insert_history_lines_to_writer(
                         &mut term, &mut ansi, lines,
-                    );
+                    )
+                    .expect("Failed to insert history lines in test");
                     inserted_any = true;
                 }
             }
@@ -2205,7 +2209,8 @@ printf 'fenced within fenced\n'
         }),
     });
     for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines)
+            .expect("Failed to insert history lines in test");
     }
 
     let mut parser = vt100::Parser::new(height, width, 0);

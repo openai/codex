@@ -27,7 +27,8 @@ fn live_001_commit_on_overflow() {
     let lines: Vec<Line<'static>> = commit_rows.into_iter().map(|r| r.text.into()).collect();
 
     let mut buf: Vec<u8> = Vec::new();
-    codex_tui::insert_history::insert_history_lines_to_writer(&mut term, &mut buf, lines);
+    codex_tui::insert_history::insert_history_lines_to_writer(&mut term, &mut buf, lines)
+        .expect("Failed to insert history lines in test");
 
     let mut parser = vt100::Parser::new(6, 20, 0);
     parser.process(&buf);
@@ -80,7 +81,8 @@ fn live_002_pre_scroll_and_commit() {
     let lines: Vec<Line<'static>> = commit_rows.into_iter().map(|r| r.text.into()).collect();
 
     let mut buf: Vec<u8> = Vec::new();
-    codex_tui::insert_history::insert_history_lines_to_writer(&mut term, &mut buf, lines);
+    codex_tui::insert_history::insert_history_lines_to_writer(&mut term, &mut buf, lines)
+        .expect("Failed to insert history lines in test");
     let s = String::from_utf8_lossy(&buf);
 
     // Expect a SetScrollRegion to [area.top()+1 .. screen_height] and a cursor move to top of that region.

@@ -23,7 +23,8 @@ fn stream_commit_trickle_no_duplication() {
         &mut t,
         &mut out1,
         vec!["one".into()],
-    );
+    )
+    .expect("Failed to insert history lines in test");
 
     // Step 2: later commit next row
     let mut out2 = Vec::new();
@@ -31,7 +32,8 @@ fn stream_commit_trickle_no_duplication() {
         &mut t,
         &mut out2,
         vec!["two".into()],
-    );
+    )
+    .expect("Failed to insert history lines in test");
 
     let combined = [out1, out2].concat();
     let s = String::from_utf8_lossy(&combined);
@@ -62,7 +64,8 @@ fn live_ring_rows_not_inserted_into_history() {
         &mut t,
         &mut buf,
         vec!["one".into(), "two".into()],
-    );
+    )
+    .expect("Failed to insert history lines in test");
 
     // The live ring might display tail+head rows like ["two", "three"],
     // but only committed rows should be present in the history ANSI stream.

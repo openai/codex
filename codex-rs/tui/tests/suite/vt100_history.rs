@@ -43,7 +43,8 @@ impl TestScenario {
 
     fn run_insert(&mut self, lines: Vec<Line<'static>>) -> Vec<u8> {
         let mut buf: Vec<u8> = Vec::new();
-        codex_tui::insert_history::insert_history_lines_to_writer(&mut self.term, &mut buf, lines);
+        codex_tui::insert_history::insert_history_lines_to_writer(&mut self.term, &mut buf, lines)
+            .expect("Failed to insert history lines in test");
         buf
     }
 
