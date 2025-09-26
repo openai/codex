@@ -44,6 +44,13 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
 
     let codex = test_codex().build(&server).await.unwrap().codex;
 
+    let wait_timeout = if cfg!(target_os = "windows") {
+        // Windows CI can take longer to spin up PowerShell, so allow a longer wait.
+        Duration::from_secs(30)
+    } else {
+        Duration::from_secs(5)
+    };
+
     // Kick off a turn that triggers the function call.
     codex
         .submit(Op::UserInput {
@@ -58,7 +65,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     wait_for_event_with_timeout(
         &codex,
         |ev| matches!(ev, EventMsg::ExecCommandBegin(_)),
-        Duration::from_secs(5),
+        wait_timeout,
     )
     .await;
 
@@ -68,7 +75,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     wait_for_event_with_timeout(
         &codex,
         |ev| matches!(ev, EventMsg::TurnAborted(_)),
-        Duration::from_secs(5),
+        wait_timeout,
     )
     .await;
 }
