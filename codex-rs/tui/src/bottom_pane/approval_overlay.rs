@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
@@ -10,7 +12,6 @@ use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::text_formatting::truncate_text;
-use crate::user_approval_widget::ApprovalRequest;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use crossterm::event::KeyCode;
@@ -23,8 +24,22 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+/// Request coming from the agent that needs user approval.
+pub(crate) enum ApprovalRequest {
+    Exec {
+        id: String,
+        command: Vec<String>,
+        reason: Option<String>,
+    },
+    ApplyPatch {
+        id: String,
+        reason: Option<String>,
+        grant_root: Option<PathBuf>,
+    },
+}
+
 /// Modal overlay asking the user to approve or deny one or more requests.
-pub(crate) struct ApprovalModalView {
+pub(crate) struct ApprovalOverlay {
     current: Option<ApprovalRequestState>,
     queue: Vec<ApprovalRequest>,
     app_event_tx: AppEventSender,
@@ -34,7 +49,7 @@ pub(crate) struct ApprovalModalView {
     done: bool,
 }
 
-impl ApprovalModalView {
+impl ApprovalOverlay {
     pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let mut view = Self {
             current: Some(ApprovalRequestState::from(request)),
@@ -185,7 +200,7 @@ impl ApprovalModalView {
     }
 }
 
-impl BottomPaneView for ApprovalModalView {
+impl BottomPaneView for ApprovalOverlay {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.try_handle_shortcut(&key_event) {
             return;
@@ -465,7 +480,7 @@ mod tests {
     fn ctrl_c_aborts_and_clears_queue() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = ApprovalModalView::new(make_exec_request(), tx);
+        let mut view = ApprovalOverlay::new(make_exec_request(), tx);
         view.enqueue_request(make_exec_request());
         assert_eq!(CancellationEvent::Handled, view.on_ctrl_c());
         assert!(view.queue.is_empty());
@@ -476,7 +491,7 @@ mod tests {
     fn shortcut_triggers_selection() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = ApprovalModalView::new(make_exec_request(), tx);
+        let mut view = ApprovalOverlay::new(make_exec_request(), tx);
         assert!(!view.is_complete());
         view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         // We expect at least one CodexOp message in the queue.
@@ -501,7 +516,7 @@ mod tests {
             reason: None,
         };
 
-        let view = ApprovalModalView::new(exec_request, tx);
+        let view = ApprovalOverlay::new(exec_request, tx);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 6));
         view.render(Rect::new(0, 0, 80, 6), &mut buf);
 
@@ -524,7 +539,7 @@ mod tests {
     fn enter_sets_last_selected_index_without_dismissing() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut view = ApprovalModalView::new(make_exec_request(), tx);
+        let mut view = ApprovalOverlay::new(make_exec_request(), tx);
         view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
