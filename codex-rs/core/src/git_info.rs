@@ -589,6 +589,7 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    use core_test_support::skip_if_sandbox;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -660,6 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_recent_commits_orders_and_limits() {
+        skip_if_sandbox!();
         use tokio::time::Duration;
         use tokio::time::sleep;
 

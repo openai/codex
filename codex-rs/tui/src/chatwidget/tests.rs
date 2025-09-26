@@ -384,12 +384,12 @@ fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
 
-    warnings.extend(state.take_warnings(Some(10.0), Some(55.0)));
-    warnings.extend(state.take_warnings(Some(55.0), Some(10.0)));
-    warnings.extend(state.take_warnings(Some(10.0), Some(80.0)));
-    warnings.extend(state.take_warnings(Some(80.0), Some(10.0)));
-    warnings.extend(state.take_warnings(Some(10.0), Some(95.0)));
-    warnings.extend(state.take_warnings(Some(95.0), Some(10.0)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(10079), Some(55.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(55.0), Some(10081), Some(10.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(10081), Some(80.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(80.0), Some(10081), Some(10.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(10081), Some(95.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(95.0), Some(10079), Some(10.0), Some(299)));
 
     assert_eq!(
         warnings,
@@ -407,6 +407,21 @@ fn rate_limit_warnings_emit_thresholds() {
                 "Heads up, you've used over 95% of your weekly limit. Run /status for a breakdown.",
             ),
         ],
+        "expected one warning per limit for the highest crossed threshold"
+    );
+}
+
+#[test]
+fn test_rate_limit_warnings_monthly() {
+    let mut state = RateLimitWarningState::default();
+    let mut warnings: Vec<String> = Vec::new();
+
+    warnings.extend(state.take_warnings(Some(75.0), Some(43199), None, None));
+    assert_eq!(
+        warnings,
+        vec![String::from(
+            "Heads up, you've used over 75% of your monthly limit. Run /status for a breakdown.",
+        ),],
         "expected one warning per limit for the highest crossed threshold"
     );
 }

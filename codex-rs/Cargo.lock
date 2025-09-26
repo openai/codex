@@ -746,12 +746,15 @@ dependencies = [
  "libc",
  "owo-colors",
  "predicates",
+ "pretty_assertions",
+ "serde",
  "serde_json",
  "shlex",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ts-rs",
  "uuid",
  "walkdir",
  "wiremock",
@@ -1125,6 +1128,7 @@ name = "core_test_support"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "codex-core",
  "serde_json",
  "tempfile",
