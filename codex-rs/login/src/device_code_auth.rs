@@ -1,10 +1,11 @@
-use std::time::Duration;
-
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::de::Deserializer;
 use serde::de::{self};
+use std::time::Duration;
+use std::time::Instant;
 
+use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
 
 #[derive(Deserialize)]
@@ -31,152 +32,122 @@ struct CodeSuccessResp {
     code: String,
 }
 
-#[derive(Deserialize)]
-struct TokenSuccessResp {
-    id_token: String,
-    #[serde(default)]
-    access_token: String,
-    #[serde(default)]
-    refresh_token: String,
-}
-
-/// Run a device code login flow using the configured issuer and client id.
-///
-/// Flow:
-/// - Request a user code and polling interval from `{issuer}/devicecode/usercode`.
-/// - Display the user code to the terminal.
-/// - Poll `{issuer}/deviceauth/token` at the provided interval until a token is issued.
-///   - If the response indicates `token_pending`, continue polling.
-///   - Any other error aborts the flow.
-/// - On success, persist tokens and attempt an API key exchange for convenience.
-pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
-    let client = reqwest::Client::new();
-    let auth_base_url = opts.issuer.trim_end_matches('/').to_owned();
-
-    // Step 1: request a user code and polling interval
-    let usercode_url = format!("{auth_base_url}/deviceauth/usercode");
-    let payload: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    let body = serde_json::Value::Object(payload).to_string();
-
-    let uc_resp = client
-        .post(usercode_url)
+/// Request the user code and polling interval.
+async fn request_user_code(
+    client: &reqwest::Client,
+    auth_base_url: &str,
+) -> std::io::Result<UserCodeResp> {
+    let url = format!("{auth_base_url}/deviceauth/usercode");
+    let resp = client
+        .post(url)
         .header("Content-Type", "application/json")
-        .body(body)
+        .body("{}")
         .send()
         .await
         .map_err(std::io::Error::other)?;
 
-    let status = uc_resp.status();
-    let body_text = uc_resp.text().await.map_err(std::io::Error::other)?;
-
-    if !status.is_success() {
+    if !resp.status().is_success() {
         return Err(std::io::Error::other(format!(
-            "device code request failed with status {status}"
+            "device code request failed with status {}",
+            resp.status()
         )));
     }
-    let uc: UserCodeResp = serde_json::from_str(&body_text).map_err(std::io::Error::other)?;
-    let interval: u64 = uc.interval;
 
-    eprintln!(
-        "To authenticate, enter this code when prompted: {} with interval {}",
-        uc.user_code, uc.interval
-    );
+    let body = resp.text().await.map_err(std::io::Error::other)?;
+    serde_json::from_str(&body).map_err(std::io::Error::other)
+}
 
-    // Step 2: poll the token endpoint until success or failure
-    // Cap the polling duration to 15 minutes.
+/// Poll token endpoint until a code is issued or timeout occurs.
+async fn poll_for_token(
+    client: &reqwest::Client,
+    auth_base_url: &str,
+    client_id: &str,
+    user_code: &str,
+    interval: u64,
+) -> std::io::Result<CodeSuccessResp> {
+    let url = format!("{auth_base_url}/deviceauth/token");
     let max_wait = Duration::from_secs(15 * 60);
-    let start = std::time::Instant::now();
+    let start = Instant::now();
 
-    let token_url = format!("{auth_base_url}/deviceauth/token");
     loop {
         let resp = client
-            .post(&token_url)
+            .post(&url)
             .header("Content-Type", "application/json")
-            .body({
-                let client_id = &opts.client_id;
-                let user_code: &String = &uc.user_code;
-                format!("{{\"client_id\":\"{client_id}\",\"user_code\":\"{user_code}\"}}")
-            })
+            .body(format!(
+                "{{\"client_id\":\"{client_id}\",\"user_code\":\"{user_code}\"}}"
+            ))
             .send()
             .await
             .map_err(std::io::Error::other)?;
 
         if resp.status().is_success() {
-            let code_resp: CodeSuccessResp = resp.json().await.map_err(std::io::Error::other)?;
-            let tokens = exchange_device_code_for_tokens(
-                &client,
-                &opts.issuer,
-                &opts.client_id,
-                &code_resp.code,
-            )
-            .await?;
-
-            // Try to exchange for an API key (optional best-effort)
-            let api_key =
-                crate::server::obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
-                    .await
-                    .ok();
-
-            crate::server::persist_tokens_async(
-                &opts.codex_home,
-                api_key,
-                tokens.id_token,
-                tokens.access_token,
-                tokens.refresh_token,
-            )
-            .await?;
-
-            return Ok(());
-        } else {
-            // Try to parse an error payload; if it's token_pending, sleep and retry
-            let status = resp.status();
-            if status == StatusCode::NOT_FOUND {
-                let elapsed = start.elapsed();
-                if elapsed >= max_wait {
-                    return Err(std::io::Error::other(
-                        "device auth timed out after 15 minutes",
-                    ));
-                }
-                let remaining = max_wait - elapsed;
-                let sleep_for = Duration::from_secs(interval).min(remaining);
-                tokio::time::sleep(sleep_for).await;
-                continue;
-            } else {
-                return Err(std::io::Error::other(format!(
-                    "device auth failed with status {status}"
-                )));
-            }
+            return resp.json().await.map_err(std::io::Error::other);
         }
+
+        if resp.status() == StatusCode::NOT_FOUND {
+            if start.elapsed() >= max_wait {
+                return Err(std::io::Error::other(
+                    "device auth timed out after 15 minutes",
+                ));
+            }
+            let sleep_for = Duration::from_secs(interval).min(max_wait - start.elapsed());
+            tokio::time::sleep(sleep_for).await;
+            continue;
+        }
+
+        return Err(std::io::Error::other(format!(
+            "device auth failed with status {}",
+            resp.status()
+        )));
     }
 }
 
-async fn exchange_device_code_for_tokens(
-    client: &reqwest::Client,
-    issuer: &str,
-    client_id: &str,
-    code: &str,
-) -> std::io::Result<TokenSuccessResp> {
-    let issuer_trimmed = issuer.trim_end_matches('/');
-    let resp = client
-        .post(format!("{issuer_trimmed}/oauth/token"))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
-            "grant_type={}&device_code={}&client_id={}",
-            urlencoding::encode("urn:ietf:params:oauth:grant-type:device_code"),
-            urlencoding::encode(code),
-            urlencoding::encode(client_id)
-        ))
-        .send()
+/// Full device code login flow.
+pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
+    let client = reqwest::Client::new();
+    let auth_base_url = opts.issuer.trim_end_matches('/').to_owned();
+
+    let uc = request_user_code(&client, &auth_base_url).await?;
+    eprintln!(
+        "To authenticate, enter this code when prompted: {} (interval {}s)",
+        uc.user_code, uc.interval
+    );
+
+    let code_resp = poll_for_token(
+        &client,
+        &auth_base_url,
+        &opts.client_id,
+        &uc.user_code,
+        uc.interval,
+    )
+    .await?;
+
+    let empty_pkce = PkceCodes {
+        code_verifier: String::new(),
+        code_challenge: String::new(),
+    };
+
+    let tokens = crate::server::exchange_code_for_tokens(
+        &opts.issuer,
+        &opts.client_id,
+        "",
+        &empty_pkce,
+        &code_resp.code,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(format!("device code exchange failed: {err}")))?;
+
+    // Try to exchange for an API key (optional)
+    let api_key = crate::server::obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
         .await
-        .map_err(std::io::Error::other)?;
+        .ok();
 
-    let status = resp.status();
-    if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
-        return Err(std::io::Error::other(format!(
-            "device code exchange failed with status {status}: {body_text}"
-        )));
-    }
-
-    resp.json().await.map_err(std::io::Error::other)
+    crate::server::persist_tokens_async(
+        &opts.codex_home,
+        api_key,
+        tokens.id_token,
+        tokens.access_token,
+        tokens.refresh_token,
+    )
+    .await
 }
