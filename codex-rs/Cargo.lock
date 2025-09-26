@@ -701,6 +701,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "shlex",
  "similar",
  "strum_macros 0.27.2",

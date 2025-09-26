@@ -65,8 +65,11 @@ use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::process_exec_tool_call;
 use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
+use crate::exec_command::EXEC_CONTROL_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
+use crate::exec_command::ExecControlParams;
 use crate::exec_command::ExecSessionManager;
+use crate::exec_command::LIST_EXEC_SESSIONS_TOOL_NAME;
 use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
@@ -2601,6 +2604,60 @@ async fn handle_function_call(
                 .map_err(FunctionCallError::RespondToModel)?;
 
             Ok(result.to_text_output())
+        }
+        EXEC_CONTROL_TOOL_NAME => {
+            let control_params: ExecControlParams =
+                serde_json::from_str(&arguments).map_err(|e| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse function arguments: {e:?}"
+                    ))
+                })?;
+            let response = sess
+                .services
+                .session_manager
+                .handle_exec_control_request(control_params)
+                .await;
+            let mut lines = vec![format!(
+                "session {}: {}",
+                response.session_id.0, response.status
+            )];
+            if let Some(note) = response.note
+                && !note.is_empty()
+            {
+                lines.push(format!("note: {note}"));
+            }
+            Ok(lines.join("\n"))
+        }
+        LIST_EXEC_SESSIONS_TOOL_NAME => {
+            let summaries = sess.services.session_manager.list_sessions().await;
+            if summaries.is_empty() {
+                Ok("no exec sessions tracked".to_string())
+            } else {
+                let mut lines = Vec::with_capacity(summaries.len());
+                for summary in summaries {
+                    let uptime_secs = summary.uptime_ms as f64 / 1000.0;
+                    let idle_str = summary
+                        .idle_remaining_ms
+                        .map(|ms| format!("{:.1}s", ms as f64 / 1000.0))
+                        .unwrap_or_else(|| "-".to_string());
+                    let log_str = summary
+                        .log_path
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    lines.push(format!(
+                        "#{:02} {state} uptime={uptime:.1}s idle_left={idle} bytes={} log={} cmd={}",
+                        summary.session_id.0,
+                        summary.total_output_bytes,
+                        log_str,
+                        summary.command_preview,
+                        state = summary.state,
+                        uptime = uptime_secs,
+                        idle = idle_str
+                    ));
+                }
+                Ok(lines.join("\n"))
+            }
         }
         _ => Err(FunctionCallError::RespondToModel(format!(
             "unsupported call: {name}"

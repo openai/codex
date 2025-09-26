@@ -65,6 +65,15 @@ impl ExecCommandSession {
     pub(crate) fn has_exited(&self) -> bool {
         self.exit_status.load(std::sync::atomic::Ordering::SeqCst)
     }
+
+    pub(crate) fn force_kill(&self) -> Result<(), String> {
+        if let Ok(mut killer_opt) = self.killer.lock()
+            && let Some(killer) = killer_opt.as_mut()
+        {
+            killer.kill().map_err(|err| err.to_string())?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for ExecCommandSession {

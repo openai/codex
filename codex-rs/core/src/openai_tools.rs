@@ -499,6 +499,12 @@ pub(crate) fn get_openai_tools(
                 tools.push(OpenAiTool::Function(
                     crate::exec_command::create_write_stdin_tool_for_responses_api(),
                 ));
+                tools.push(OpenAiTool::Function(
+                    crate::exec_command::create_exec_control_tool_for_responses_api(),
+                ));
+                tools.push(OpenAiTool::Function(
+                    crate::exec_command::create_list_exec_sessions_tool_for_responses_api(),
+                ));
             }
         }
     }
