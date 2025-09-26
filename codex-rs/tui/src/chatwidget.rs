@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_core::config_types::Notifications;
+use codex_core::git_info::all_git_refs;
 use codex_core::git_info::current_branch_name;
-use codex_core::git_info::local_git_branches;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -1831,25 +1831,25 @@ impl ChatWidget {
     }
 
     pub(crate) async fn show_review_branch_picker(&mut self, cwd: &Path) {
-        let branches = local_git_branches(cwd).await;
+        let refs = all_git_refs(cwd).await;
         let current_branch = current_branch_name(cwd)
             .await
             .unwrap_or_else(|| "(detached HEAD)".to_string());
-        let mut items: Vec<SelectionItem> = Vec::with_capacity(branches.len());
+        let mut items: Vec<SelectionItem> = Vec::with_capacity(refs.len());
 
-        for option in branches {
-            let branch = option.clone();
+        for option in refs {
+            let ref_name = option.clone();
             items.push(SelectionItem {
-                name: format!("{current_branch} -> {branch}"),
+                name: format!("{current_branch} -> {ref_name}"),
                 description: None,
                 is_current: false,
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
                             prompt: format!(
-                                "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{{upstream}}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings."
+                                "Review the code changes against the base ref '{ref_name}'. Start by finding the merge diff between the current branch and {ref_name} (e.g., `git merge-base HEAD \"{ref_name}\"`), then run `git diff` against that SHA to see what changes we would merge. Provide prioritized, actionable findings."
                             ),
-                            user_facing_hint: format!("changes against '{branch}'"),
+                            user_facing_hint: format!("changes against '{ref_name}'"),
                         },
                     }));
                 })],
@@ -1859,11 +1859,11 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: "Select a base branch".to_string(),
+            title: "Select a base branch/ref".to_string(),
             footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
             is_searchable: true,
-            search_placeholder: Some("Type to search branches".to_string()),
+            search_placeholder: Some("Type to search branches, remotes, or tags".to_string()),
             ..Default::default()
         });
     }

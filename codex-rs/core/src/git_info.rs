@@ -585,6 +585,60 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
+/// Returns a list of all git references (branches, remotes, tags).
+/// Includes local branches, remote branches, and tags.
+/// Prioritizes the default branch and current branch at the beginning.
+pub async fn all_git_refs(cwd: &Path) -> Vec<String> {
+    let mut refs: Vec<String> = if let Some(out) = run_git_command_with_timeout(
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/",
+            "refs/remotes/",
+            "refs/tags/",
+        ],
+        cwd,
+    )
+    .await
+        && out.status.success()
+    {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Sort refs for consistent ordering
+    refs.sort_unstable();
+
+    // Get current branch and default branch for prioritization
+    let current_branch = current_branch_name(cwd).await;
+    let default_branch = get_default_branch_local(cwd).await;
+
+    // Move current branch to the front if it exists in the list
+    if let Some(current) = &current_branch {
+        if let Some(pos) = refs.iter().position(|name| name == current) {
+            let current_ref = refs.remove(pos);
+            refs.insert(0, current_ref);
+        }
+    }
+
+    // Move default branch to the front (after current branch) if it exists
+    if let Some(default) = &default_branch {
+        if let Some(pos) = refs.iter().position(|name| name == default) {
+            let default_ref = refs.remove(pos);
+            // Insert after current branch if it exists, otherwise at the beginning
+            let insert_pos = if current_branch.is_some() { 1 } else { 0 };
+            refs.insert(insert_pos, default_ref);
+        }
+    }
+
+    refs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1110,5 +1164,85 @@ mod tests {
         assert!(!parsed.as_object().unwrap().contains_key("commit_hash"));
         assert!(!parsed.as_object().unwrap().contains_key("branch"));
         assert!(!parsed.as_object().unwrap().contains_key("repository_url"));
+    }
+
+    #[tokio::test]
+    async fn test_all_git_refs_includes_branches_remotes_tags() {
+        skip_if_sandbox!();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        // Create a tag
+        Command::new("git")
+            .args(["tag", "v1.0.0"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to create tag");
+
+        // Create a remote (simulate)
+        Command::new("git")
+            .args(["remote", "add", "origin", "https://github.com/test/repo.git"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to add remote");
+
+        // Create a remote branch reference
+        Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/main", "HEAD"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to create remote ref");
+
+        let refs = all_git_refs(&repo_path).await;
+
+        // Should include local branch, remote branch, and tag
+        assert!(!refs.is_empty());
+        assert!(refs.iter().any(|r| r == "main")); // local branch
+        assert!(refs.iter().any(|r| r == "origin/main")); // remote branch
+        assert!(refs.iter().any(|r| r == "v1.0.0")); // tag
+    }
+
+    #[tokio::test]
+    async fn test_all_git_refs_prioritizes_current_and_default_branch() {
+        skip_if_sandbox!();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        // Create additional branches
+        Command::new("git")
+            .args(["checkout", "-b", "feature"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to create feature branch");
+
+        Command::new("git")
+            .args(["checkout", "-b", "another"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to create another branch");
+
+        let refs = all_git_refs(&repo_path).await;
+
+        // Current branch (another) should be first
+        assert_eq!(refs[0], "another");
+        
+        // Should contain all branches
+        assert!(refs.contains(&"main".to_string()));
+        assert!(refs.contains(&"feature".to_string()));
+        assert!(refs.contains(&"another".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_all_git_refs_non_git_directory_returns_empty() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let non_git_path = temp_dir.path();
+
+        let refs = all_git_refs(non_git_path).await;
+        assert!(refs.is_empty());
     }
 }
