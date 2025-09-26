@@ -163,23 +163,28 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
     let out_complete = ep.collect_conversation_events(&complete);
     assert_eq!(
         out_complete,
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item: ConversationItem {
-                id: "item_0".to_string(),
-                details: ConversationItemDetails::TodoList(ExecTodoListItem {
-                    items: vec![
-                        ExecTodoItem {
-                            text: "step one".to_string(),
-                            completed: true
-                        },
-                        ExecTodoItem {
-                            text: "step two".to_string(),
-                            completed: false
-                        },
-                    ],
-                }),
-            },
-        })]
+        vec![
+            ConversationEvent::ItemCompleted(ItemCompletedEvent {
+                item: ConversationItem {
+                    id: "item_0".to_string(),
+                    details: ConversationItemDetails::TodoList(ExecTodoListItem {
+                        items: vec![
+                            ExecTodoItem {
+                                text: "step one".to_string(),
+                                completed: true
+                            },
+                            ExecTodoItem {
+                                text: "step two".to_string(),
+                                completed: false
+                            },
+                        ],
+                    }),
+                },
+            }),
+            ConversationEvent::SessionCompleted(SessionCompletedEvent {
+                usage: Usage::default(),
+            }),
+        ]
     );
 }
 
