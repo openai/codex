@@ -9,11 +9,13 @@ use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::non_sandbox_test;
 use core_test_support::responses;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use wiremock::Mock;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::any;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -27,7 +29,7 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
     let server_name = "rmcp";
     let tool_name = format!("{server_name}__echo");
 
-    let sse_body = responses::sse(vec![
+    let sse_body_1 = responses::sse(vec![
         serde_json::json!({
             "type": "response.created",
             "response": {"id": "resp-1"}
@@ -36,12 +38,13 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
         responses::ev_completed("resp-1"),
     ]);
 
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(sse_body, "text/event-stream"))
-        .expect(1)
-        .mount(&server)
-        .await;
+    let sse_body_2 = responses::sse(vec![
+        responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
+        responses::ev_completed("resp-2"),
+    ]);
+
+    mount_sse_once(&server, any(), sse_body_1).await;
+    mount_sse_once(&server, any(), sse_body_2).await;
 
     let test_server_bin = cargo_bin("rmcp_test_server");
     let expected_env_value = "propagated-env";
@@ -130,6 +133,7 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
         .expect("env snapshot inserted");
     assert_eq!(env_value, expected_env_value);
 
+    eprintln!("waiting for task complete");
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     server.verify().await;
