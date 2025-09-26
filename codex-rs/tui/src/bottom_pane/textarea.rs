@@ -214,6 +214,14 @@ impl TextArea {
             KeyEvent { code: KeyCode::Char('\u{0006}'), modifiers: KeyModifiers::NONE, .. } /* ^F */ => {
                 self.move_cursor_right();
             }
+            // Special handling for slash character to fix Windows input issues (#4260)
+            // Allow slash to be inserted with any modifier combination on Windows
+            KeyEvent {
+                code: KeyCode::Char('/'),
+                // Accept any modifiers for slash character to fix Windows keyboard layout issues
+                modifiers: _,
+                ..
+            } => self.insert_str("/"),
             KeyEvent {
                 code: KeyCode::Char(c),
                 // Insert plain characters (and Shift-modified). Do NOT insert when ALT is held,
