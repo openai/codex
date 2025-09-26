@@ -1,4 +1,5 @@
 use std::num::NonZero;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -9,7 +10,7 @@ use tokio::task::JoinSet;
 use tracing::warn;
 
 const LIMIT_PER_ROOT: usize = 50;
-const DEFAULT_THREAD_COUNT: usize = 4;
+const MAX_THREADS: usize = 12;
 const COMPUTE_INDICES: bool = true;
 
 pub(crate) async fn run_fuzzy_file_search(
@@ -17,14 +18,18 @@ pub(crate) async fn run_fuzzy_file_search(
     roots: Vec<String>,
     cancellation_flag: Arc<AtomicBool>,
 ) -> Vec<FuzzyFileSearchResult> {
-    let mut files: Vec<FuzzyFileSearchResult> = Vec::new();
     #[expect(clippy::expect_used)]
     let limit_per_root =
         NonZero::new(LIMIT_PER_ROOT).expect("LIMIT_PER_ROOT should be a valid non-zero usize");
-    #[expect(clippy::expect_used)]
-    let threads = NonZero::new(DEFAULT_THREAD_COUNT)
-        .expect("DEFAULT_THREAD_COUNT should be a valid non-zero usize");
 
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let threads = cores.min(MAX_THREADS);
+    let threads_per_root = (threads / roots.len()).max(1);
+    let threads = NonZero::new(threads_per_root).unwrap_or(NonZeroUsize::MIN);
+
+    let mut files: Vec<FuzzyFileSearchResult> = Vec::new();
     let mut join_set = JoinSet::new();
 
     for root in roots {

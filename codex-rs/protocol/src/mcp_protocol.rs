@@ -673,6 +673,7 @@ pub struct ApplyPatchApprovalResponse {
 pub struct FuzzyFileSearchParams {
     pub query: String,
     pub roots: Vec<String>,
+    // should be request_id of the search to be cancelled
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cancellation_token: Option<String>,
 }

@@ -127,7 +127,7 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
-    fuzzy_search_tokens: HashMap<String, Arc<AtomicBool>>,
+    pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
 impl CodexMessageProcessor {
@@ -147,7 +147,7 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
-            fuzzy_search_tokens: HashMap::new(),
+            pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1185,24 +1185,46 @@ impl CodexMessageProcessor {
             cancellation_token,
         } = params;
 
-        let (cancel_flag, active_token) = if let Some(token) = cancellation_token {
-            if let Some(existing) = self.fuzzy_search_tokens.get(&token) {
-                existing.store(true, Ordering::Relaxed);
-            }
-            let flag = Arc::new(AtomicBool::new(false));
-            self.fuzzy_search_tokens.insert(token.clone(), flag.clone());
-            (flag, Some(token))
-        } else {
-            (Arc::new(AtomicBool::new(false)), None)
+        // if there is a cancellation_token, cancel the request
+        if let Some(cancellation_token) = cancellation_token
+            && let Some(existing) = self
+                .pending_fuzzy_searches
+                .lock()
+                .await
+                .get(&cancellation_token)
+        {
+            existing.store(true, Ordering::Relaxed);
+        }
+
+        // if query is empty, return without searching
+        if query.is_empty() {
+            self.outgoing
+                .send_response(request_id, FuzzyFileSearchResponse { files: vec![] })
+                .await;
+            return;
+        }
+
+        // run fuzzy search
+        let request_key = match request_id.clone() {
+            RequestId::String(s) => s,
+            RequestId::Integer(i) => i.to_string(),
         };
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.pending_fuzzy_searches
+            .lock()
+            .await
+            .insert(request_key.clone(), cancel_flag.clone());
 
         let results = run_fuzzy_file_search(query, roots, cancel_flag.clone()).await;
 
-        if let Some(token) = active_token
-            && let Some(current_flag) = self.fuzzy_search_tokens.get(&token)
+        // close out the request
+        if let Some(current_flag) = self.pending_fuzzy_searches.lock().await.get(&request_key)
             && Arc::ptr_eq(current_flag, &cancel_flag)
         {
-            self.fuzzy_search_tokens.remove(&token);
+            self.pending_fuzzy_searches
+                .lock()
+                .await
+                .remove(&request_key);
         }
 
         let response = FuzzyFileSearchResponse { files: results };
