@@ -29,7 +29,11 @@ fn has_no_actual_changes(action: &ApplyPatchAction) -> bool {
                     return false;
                 }
             }
-            ApplyPatchFileChange::Update { unified_diff, .. } => {
+            ApplyPatchFileChange::Update { unified_diff, move_path, .. } => {
+                // If this is a rename operation, it's a real change even with no content changes
+                if move_path.is_some() {
+                    return false;
+                }
                 let (added, removed) = calculate_changes_from_diff(unified_diff);
                 if added > 0 || removed > 0 {
                     return false;
@@ -257,5 +261,24 @@ mod tests {
 +--new_counter;
  }"#;
         assert_eq!(calculate_changes_from_diff(diff), (1, 1));
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_with_rename_only() {
+        use std::path::Path;
+        use codex_apply_patch::ApplyPatchFileChange;
+
+        let mut action = codex_apply_patch::ApplyPatchAction::new();
+        action.add_change(
+            Path::new("/tmp/old_file.txt").to_path_buf(),
+            ApplyPatchFileChange::Update {
+                unified_diff: "".to_string(), // No content changes
+                move_path: Some(Path::new("/tmp/new_file.txt").to_path_buf()), // But it's a rename
+                new_content: "same content".to_string(),
+            }
+        );
+
+        // Should NOT be considered as "no changes" because it's a rename
+        assert!(!has_no_actual_changes(&action));
     }
 }
