@@ -41,9 +41,6 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
-use ratatui::widgets::StatefulWidget;
-use ratatui::widgets::StatefulWidgetRef;
-use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 #[derive(Debug, Hash)]

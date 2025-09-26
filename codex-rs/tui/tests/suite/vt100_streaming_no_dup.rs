@@ -19,7 +19,7 @@ fn stream_commit_trickle_no_duplication() {
 
     // Step 1: commit first row
     let mut out1 = Vec::new();
-    codex_tui::insert_history::insert_history_lines_to_writer(
+    codex_tui::insert_history::insert_history_lines(
         &mut t,
         &mut out1,
         vec!["one".into()],
@@ -27,7 +27,7 @@ fn stream_commit_trickle_no_duplication() {
 
     // Step 2: later commit next row
     let mut out2 = Vec::new();
-    codex_tui::insert_history::insert_history_lines_to_writer(
+    codex_tui::insert_history::insert_history_lines(
         &mut t,
         &mut out2,
         vec!["two".into()],
@@ -58,7 +58,7 @@ fn live_ring_rows_not_inserted_into_history() {
 
     // Commit two rows to history.
     let mut buf = Vec::new();
-    codex_tui::insert_history::insert_history_lines_to_writer(
+    codex_tui::insert_history::insert_history_lines(
         &mut t,
         &mut buf,
         vec!["one".into(), "two".into()],

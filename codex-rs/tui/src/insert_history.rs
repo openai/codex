@@ -30,17 +30,6 @@ pub(crate) fn insert_history_lines<B>(
 ) where
     B: Backend + Write,
 {
-    insert_history_lines_to_writer(terminal, lines);
-}
-
-/// Like `insert_history_lines`, but writes ANSI to the provided writer. This
-/// is intended for testing where a capture buffer is used instead of stdout.
-pub fn insert_history_lines_to_writer<B>(
-    terminal: &mut crate::custom_terminal::Terminal<B>,
-    lines: Vec<Line>,
-) where
-    B: Backend + Write,
-{
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
     let mut area = terminal.viewport_area;
@@ -341,7 +330,7 @@ mod tests {
         // Build a blockquote-like line: apply line-level green style and prefix "> "
         let mut line: Line<'static> = Line::from(vec!["> ".into(), "Hello world".into()]);
         line = line.style(Color::Green);
-        insert_history_lines_to_writer(&mut term, vec![line]);
+        insert_history_lines(&mut term, vec![line]);
 
         let mut saw_colored = false;
         'outer: for row in 0..height {
@@ -379,7 +368,7 @@ mod tests {
         ]);
         line = line.style(Color::Green);
 
-        insert_history_lines_to_writer(&mut term, vec![line]);
+        insert_history_lines(&mut term, vec![line]);
 
         // Parse and inspect the final screen buffer.
         let screen = term.backend().vt100().screen();
@@ -441,7 +430,7 @@ mod tests {
             Span::raw("Hello world"),
         ]);
 
-        insert_history_lines_to_writer(&mut term, vec![line]);
+        insert_history_lines(&mut term, vec![line]);
 
         let screen = term.backend().vt100().screen();
 
@@ -497,7 +486,7 @@ mod tests {
         let viewport = ratatui::layout::Rect::new(0, height - 1, width, 1);
         term.set_viewport_area(viewport);
 
-        insert_history_lines_to_writer(&mut term, lines);
+        insert_history_lines(&mut term, lines);
 
         let screen = term.backend().vt100().screen();
 

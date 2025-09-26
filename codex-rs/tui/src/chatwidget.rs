@@ -85,7 +85,6 @@ use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
-use crate::user_approval_widget::ApprovalRequest;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
