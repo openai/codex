@@ -2,6 +2,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::list_selection_view::HeaderLine;
 use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
@@ -21,9 +22,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
-use textwrap::wrap;
 
 /// Modal overlay asking the user to approve or deny one or more requests.
 pub(crate) struct ApprovalModalView {
@@ -102,6 +100,7 @@ impl ApprovalModalView {
             title,
             footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
+            header: state.header.clone(),
             ..Default::default()
         };
 
@@ -184,27 +183,6 @@ impl ApprovalModalView {
             false
         }
     }
-
-    fn render_header(&self, area: Rect, buf: &mut Buffer) -> u16 {
-        let Some(state) = self.current.as_ref() else {
-            return 0;
-        };
-        let lines = state.header_lines(area.width);
-        let mut rendered_rows = 0u16;
-        for spans in lines.into_iter().take(area.height as usize) {
-            let row = Rect {
-                x: area.x,
-                y: area.y + rendered_rows,
-                width: area.width,
-                height: 1,
-            };
-            let mut prefixed = Vec::with_capacity(spans.len() + 1);
-            prefixed.extend(spans);
-            Paragraph::new(Line::from(prefixed)).render(row, buf);
-            rendered_rows = rendered_rows.saturating_add(1);
-        }
-        rendered_rows
-    }
 }
 
 impl BottomPaneView for ApprovalModalView {
@@ -244,41 +222,11 @@ impl BottomPaneView for ApprovalModalView {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        let header_height = self
-            .current
-            .as_ref()
-            .map(|state| state.header_lines(width).len() as u16)
-            .unwrap_or(0);
-        header_height + self.list.desired_height(width)
+        self.list.desired_height(width)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        let header_lines = self
-            .current
-            .as_ref()
-            .map(|state| state.header_lines(area.width))
-            .unwrap_or_default();
-        let header_height = header_lines.len() as u16;
-        let header_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: header_height.min(area.height),
-        };
-        let mut used_height = 0u16;
-        if header_height > 0 {
-            used_height = self.render_header(header_area, buf);
-        }
-        let list_area = Rect {
-            x: area.x,
-            y: area.y + used_height,
-            width: area.width,
-            height: area.height.saturating_sub(used_height),
-        };
-        self.list.render(list_area, buf);
+        self.list.render(area, buf);
     }
 
     fn try_consume_approval_request(
@@ -290,50 +238,13 @@ impl BottomPaneView for ApprovalModalView {
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let header_height = self
-            .current
-            .as_ref()
-            .map(|state| state.header_lines(area.width).len() as u16)
-            .unwrap_or(0);
-        let list_area = Rect {
-            x: area.x,
-            y: area.y + header_height,
-            width: area.width,
-            height: area.height.saturating_sub(header_height),
-        };
-        self.list.cursor_pos(list_area)
+        self.list.cursor_pos(area)
     }
 }
 
 struct ApprovalRequestState {
     variant: ApprovalVariant,
-    header_entries: Vec<HeaderEntry>,
-}
-
-impl ApprovalRequestState {
-    fn header_lines(&self, width: u16) -> Vec<Vec<Span<'static>>> {
-        if width == 0 {
-            return Vec::new();
-        }
-        let available = width.max(1) as usize;
-        let mut lines = Vec::new();
-        for entry in &self.header_entries {
-            match entry {
-                HeaderEntry::Spacer => lines.push(Vec::new()),
-                HeaderEntry::Reason(text) => {
-                    for part in wrap(text, available) {
-                        lines.push(vec![part.into_owned().italic()]);
-                    }
-                }
-                HeaderEntry::Info(text) => {
-                    for part in wrap(text, available) {
-                        lines.push(vec![Span::from(part.into_owned())]);
-                    }
-                }
-            }
-        }
-        lines
-    }
+    header: Vec<HeaderLine>,
 }
 
 impl From<ApprovalRequest> for ApprovalRequestState {
@@ -344,21 +255,27 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 command,
                 reason,
             } => {
-                let mut header_entries = Vec::new();
-                if let Some(reason) = reason
-                    && !reason.is_empty()
-                {
-                    header_entries.push(HeaderEntry::Reason(reason));
-                    header_entries.push(HeaderEntry::Spacer);
+                let mut header = Vec::new();
+                if let Some(reason) = reason {
+                    if !reason.is_empty() {
+                        header.push(HeaderLine::Text {
+                            text: reason,
+                            italic: true,
+                        });
+                        header.push(HeaderLine::Spacer);
+                    }
                 }
                 let command_snippet = exec_snippet(&command);
                 if !command_snippet.is_empty() {
-                    header_entries.push(HeaderEntry::Info(format!("Command: {command_snippet}")));
-                    header_entries.push(HeaderEntry::Spacer);
+                    header.push(HeaderLine::Text {
+                        text: format!("Command: {command_snippet}"),
+                        italic: false,
+                    });
+                    header.push(HeaderLine::Spacer);
                 }
                 Self {
                     variant: ApprovalVariant::Exec { id, command },
-                    header_entries,
+                    header,
                 }
             }
             ApprovalRequest::ApplyPatch {
@@ -366,23 +283,29 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 reason,
                 grant_root,
             } => {
-                let mut header_entries = Vec::new();
-                if let Some(reason) = reason
-                    && !reason.is_empty()
-                {
-                    header_entries.push(HeaderEntry::Reason(reason));
-                    header_entries.push(HeaderEntry::Spacer);
+                let mut header = Vec::new();
+                if let Some(reason) = reason {
+                    if !reason.is_empty() {
+                        header.push(HeaderLine::Text {
+                            text: reason,
+                            italic: true,
+                        });
+                        header.push(HeaderLine::Spacer);
+                    }
                 }
                 if let Some(root) = grant_root {
-                    header_entries.push(HeaderEntry::Info(format!(
-                        "Grant write access to {} for the remainder of this session.",
-                        root.display()
-                    )));
-                    header_entries.push(HeaderEntry::Spacer);
+                    header.push(HeaderLine::Text {
+                        text: format!(
+                            "Grant write access to {} for the remainder of this session.",
+                            root.display()
+                        ),
+                        italic: false,
+                    });
+                    header.push(HeaderLine::Spacer);
                 }
                 Self {
                     variant: ApprovalVariant::ApplyPatch { id },
-                    header_entries,
+                    header,
                 }
             }
         }
@@ -430,13 +353,13 @@ fn patch_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
             label: "Approve".to_string(),
-            description: "Apply the proposed changes (shortcut: Y)".to_string(),
+            description: "(Y) Apply the proposed changes".to_string(),
             decision: ReviewDecision::Approved,
             shortcut: Some('y'),
         },
         ApprovalOption {
             label: "Cancel".to_string(),
-            description: "Do not apply the changes (shortcut: N)".to_string(),
+            description: "(N) Do not apply the changes".to_string(),
             decision: ReviewDecision::Abort,
             shortcut: Some('n'),
         },
@@ -449,47 +372,57 @@ fn build_exec_history_lines(
 ) -> Option<Vec<Line<'static>>> {
     use ReviewDecision::*;
 
-    let snippet_span = Span::from(exec_snippet(&command)).dim();
-
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
-        Approved => (
-            "✔ ".green(),
-            vec![
-                "You ".into(),
-                "approved".bold(),
-                " codex to run ".into(),
-                snippet_span.clone(),
-                " this time".bold(),
-            ],
-        ),
-        ApprovedForSession => (
-            "✔ ".green(),
-            vec![
-                "You ".into(),
-                "approved".bold(),
-                " codex to run ".into(),
-                snippet_span.clone(),
-                " every time this session".bold(),
-            ],
-        ),
-        Denied => (
-            "✗ ".red(),
-            vec![
-                "You ".into(),
-                "did not approve".bold(),
-                " codex to run ".into(),
-                snippet_span.clone(),
-            ],
-        ),
-        Abort => (
-            "✗ ".red(),
-            vec![
-                "You ".into(),
-                "canceled".bold(),
-                " the request to run ".into(),
-                snippet_span.clone(),
-            ],
-        ),
+        Approved => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " this time".bold(),
+                ],
+            )
+        }
+        ApprovedForSession => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " every time this session".bold(),
+                ],
+            )
+        }
+        Denied => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✗ ".red(),
+                vec![
+                    "You ".into(),
+                    "did not approve".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                ],
+            )
+        }
+        Abort => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✗ ".red(),
+                vec![
+                    "You ".into(),
+                    "canceled".bold(),
+                    " the request to run ".into(),
+                    snippet,
+                ],
+            )
+        }
     };
 
     let mut lines = Vec::new();
@@ -512,12 +445,6 @@ fn truncate_exec_snippet(full_cmd: &str) -> String {
 fn exec_snippet(command: &[String]) -> String {
     let full_cmd = strip_bash_lc_and_escape(command);
     truncate_exec_snippet(&full_cmd)
-}
-
-enum HeaderEntry {
-    Reason(String),
-    Info(String),
-    Spacer,
 }
 
 #[cfg(test)]
