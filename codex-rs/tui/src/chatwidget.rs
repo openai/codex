@@ -1572,11 +1572,18 @@ impl ChatWidget {
         let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
         let mut items: Vec<SelectionItem> = Vec::new();
-        // Built-in presets first — only when using OpenAI-style providers.
-        let show_builtin_presets = {
+        // Policy:
+        // - Without a profile:
+        //     • OpenAI-like providers → show built-in presets only.
+        //     • Third-party providers → show config-derived presets only.
+        // - With a profile: always show config-derived presets only.
+        let using_profile = self.config.active_profile.is_some();
+        let is_openai_like = {
             let pid = self.config.model_provider_id.as_str();
-            pid == "openai" || pid == "openrouter" || self.config.model_provider.requires_openai_auth
+            // Only OpenAI is considered built-in for presets; all others (including openrouter) are treated as third-party.
+            pid == "openai"
         };
+        let show_builtin_presets = is_openai_like && !using_profile;
         if show_builtin_presets {
             for preset in presets.iter() {
                 let name = preset.label.to_string();
@@ -1626,84 +1633,87 @@ impl ChatWidget {
         // Append presets derived from user config profiles that match the current provider.
         // This lets users select their own models defined under the active provider.
         // Note: provider is not changed here; only model + reasoning effort are applied.
-        use codex_core::config::ConfigToml as CoreConfigToml;
-        use codex_core::config::load_config_as_toml;
-        use std::collections::HashSet;
+        let show_config_derived = using_profile || !is_openai_like;
+        if show_config_derived {
+            use codex_core::config::ConfigToml as CoreConfigToml;
+            use codex_core::config::load_config_as_toml;
+            use std::collections::HashSet;
 
-        let current_provider_id = self.config.model_provider_id.clone();
-        if let Ok(root_value) = load_config_as_toml(&self.config.codex_home) {
-            if let Ok(cfg) = root_value.try_into::<CoreConfigToml>() {
-                // Track unique pairs to avoid duplicates with built-ins.
-                let mut seen: HashSet<String> = HashSet::new();
+            let current_provider_id = self.config.model_provider_id.clone();
+            if let Ok(root_value) = load_config_as_toml(&self.config.codex_home) {
+                if let Ok(cfg) = root_value.try_into::<CoreConfigToml>() {
+                    // Track unique pairs to avoid duplicates with built-ins.
+                    let mut seen: HashSet<String> = HashSet::new();
 
-                // Helper to insert one dynamic preset as a selection item.
-                let mut add_dynamic_item =
-                    |label: String,
-                     description: Option<String>,
-                     model_slug: String,
-                     effort: Option<ReasoningEffortConfig>| {
-                        let key = format!(
-                            "{}|{}",
-                            model_slug,
-                            effort
-                                .map(|e| e.to_string())
-                                .unwrap_or_else(|| "none".to_string())
-                        );
-                        if !seen.insert(key) {
-                            return;
-                        }
+                    // Helper to insert one dynamic preset as a selection item.
+                    let mut add_dynamic_item =
+                        |label: String,
+                         description: Option<String>,
+                         model_slug: String,
+                         effort: Option<ReasoningEffortConfig>| {
+                            let key = format!(
+                                "{}|{}",
+                                model_slug,
+                                effort
+                                    .map(|e| e.to_string())
+                                    .unwrap_or_else(|| "none".to_string())
+                            );
+                            if !seen.insert(key) {
+                                return;
+                            }
 
-                        let is_current = model_slug == current_model && effort == current_effort;
-                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                        tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                            cwd: None,
-                            approval_policy: None,
-                            sandbox_policy: None,
-                            model: Some(model_slug.clone()),
-                            effort: Some(effort),
-                            summary: None,
-                        }));
-                        tx.send(AppEvent::UpdateModel(model_slug.clone()));
-                        tx.send(AppEvent::UpdateReasoningEffort(effort));
-                        tx.send(AppEvent::PersistModelSelection {
-                                model: model_slug.clone(),
-                                effort,
+                            let is_current = model_slug == current_model && effort == current_effort;
+                            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                                    cwd: None,
+                                    approval_policy: None,
+                                    sandbox_policy: None,
+                                    model: Some(model_slug.clone()),
+                                    effort: Some(effort),
+                                    summary: None,
+                                }));
+                                tx.send(AppEvent::UpdateModel(model_slug.clone()));
+                                tx.send(AppEvent::UpdateReasoningEffort(effort));
+                                tx.send(AppEvent::PersistModelSelection {
+                                    model: model_slug.clone(),
+                                    effort,
+                                });
+                            })];
+
+                            items.push(SelectionItem {
+                                name: label,
+                                description,
+                                is_current,
+                                actions,
+                                dismiss_on_select: true,
+                                search_value: None,
                             });
-                        })];
+                        };
 
-                        items.push(SelectionItem {
-                            name: label,
-                            description,
-                            is_current,
-                            actions,
-                            dismiss_on_select: true,
-                            search_value: None,
-                        });
-                    };
-
-                // Top-level model from config.toml if bound to current provider.
-                if let Some(model_slug) = cfg.model.clone() {
-                    let top_effort = cfg.model_reasoning_effort;
-                    let top_provider = cfg.model_provider.clone();
-                    if top_provider.as_deref() == Some(current_provider_id.as_str()) {
-                        add_dynamic_item(
-                            model_slug.clone(),
-                            Some("from default config".to_string()),
-                            model_slug,
-                            top_effort,
-                        );
+                    // Top-level model from config.toml if bound to current provider.
+                    if let Some(model_slug) = cfg.model.clone() {
+                        let top_effort = cfg.model_reasoning_effort;
+                        let top_provider = cfg.model_provider.clone();
+                        if top_provider.as_deref() == Some(current_provider_id.as_str()) {
+                            add_dynamic_item(
+                                model_slug.clone(),
+                                Some("from default config".to_string()),
+                                model_slug,
+                                top_effort,
+                            );
+                        }
                     }
-                }
 
-                // Profile-defined models that match current provider.
-                for (profile_name, profile) in cfg.profiles.into_iter() {
-                    if let Some(model_slug) = profile.model.clone() {
-                        let effort = profile.model_reasoning_effort;
-                        let provider = profile.model_provider;
-                        if provider.as_deref() == Some(current_provider_id.as_str()) {
-                            let label = model_slug.clone();
-                            let description = Some(format!("from profile {profile_name}"));
-                            add_dynamic_item(label, description, model_slug, effort);
+                    // Profile-defined models that match current provider.
+                    for (profile_name, profile) in cfg.profiles.into_iter() {
+                        if let Some(model_slug) = profile.model.clone() {
+                            let effort = profile.model_reasoning_effort;
+                            let provider = profile.model_provider;
+                            if provider.as_deref() == Some(current_provider_id.as_str()) {
+                                let label = model_slug.clone();
+                                let description = Some(format!("from profile {profile_name}"));
+                                add_dynamic_item(label, description, model_slug, effort);
+                            }
                         }
                     }
                 }
