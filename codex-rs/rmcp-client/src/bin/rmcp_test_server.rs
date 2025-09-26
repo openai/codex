@@ -33,6 +33,7 @@ impl TestToolServer {
     }
 
     fn echo_tool() -> Tool {
+        #[expect(clippy::expect_used)]
         let schema: JsonObject = serde_json::from_value(json!({
             "type": "object",
             "properties": {
@@ -86,45 +87,43 @@ impl ServerHandler for TestToolServer {
         }
     }
 
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: CallToolRequestParam,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
-    ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        async move {
-            match request.name.as_ref() {
-                "echo" => {
-                    let args: EchoArgs = match request.arguments {
-                        Some(arguments) => serde_json::from_value(serde_json::Value::Object(
-                            arguments.into_iter().collect(),
-                        ))
-                        .map_err(|err| McpError::invalid_params(err.to_string(), None))?,
-                        None => {
-                            return Err(McpError::invalid_params(
-                                "missing arguments for echo tool",
-                                None,
-                            ));
-                        }
-                    };
+    ) -> Result<CallToolResult, McpError> {
+        match request.name.as_ref() {
+            "echo" => {
+                let args: EchoArgs = match request.arguments {
+                    Some(arguments) => serde_json::from_value(serde_json::Value::Object(
+                        arguments.into_iter().collect(),
+                    ))
+                    .map_err(|err| McpError::invalid_params(err.to_string(), None))?,
+                    None => {
+                        return Err(McpError::invalid_params(
+                            "missing arguments for echo tool",
+                            None,
+                        ));
+                    }
+                };
 
-                    let env_snapshot: HashMap<String, String> = std::env::vars().collect();
-                    let structured_content = json!({
-                        "echo": args.message,
-                        "env": env_snapshot.get("MCP_TEST_VALUE"),
-                    });
+                let env_snapshot: HashMap<String, String> = std::env::vars().collect();
+                let structured_content = json!({
+                    "echo": args.message,
+                    "env": env_snapshot.get("MCP_TEST_VALUE"),
+                });
 
-                    Ok(CallToolResult {
-                        content: Vec::new(),
-                        structured_content: Some(structured_content),
-                        is_error: Some(false),
-                        meta: None,
-                    })
-                }
-                other => Err(McpError::invalid_params(
-                    format!("unknown tool: {other}"),
-                    None,
-                )),
+                Ok(CallToolResult {
+                    content: Vec::new(),
+                    structured_content: Some(structured_content),
+                    is_error: Some(false),
+                    meta: None,
+                })
             }
+            other => Err(McpError::invalid_params(
+                format!("unknown tool: {other}"),
+                None,
+            )),
         }
     }
 }

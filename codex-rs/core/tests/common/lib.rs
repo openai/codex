@@ -122,7 +122,6 @@ where
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
-        eprintln!("found event: {ev:?}");
         if predicate(&ev.msg) {
             return ev.msg;
         }

@@ -13,42 +13,41 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use serde_json::Value;
-use wiremock::Mock;
-use wiremock::ResponseTemplate;
 use wiremock::matchers::any;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
     non_sandbox_test!(result);
 
-    eprintln!("waiting for task complete");
     let server = responses::start_mock_server().await;
 
     let call_id = "call-123";
     let server_name = "rmcp";
     let tool_name = format!("{server_name}__echo");
 
-    let sse_body_1 = responses::sse(vec![
-        serde_json::json!({
-            "type": "response.created",
-            "response": {"id": "resp-1"}
-        }),
-        responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
-        responses::ev_completed("resp-1"),
-    ]);
+    mount_sse_once(
+        &server,
+        any(),
+        responses::sse(vec![
+            serde_json::json!({
+                "type": "response.created",
+                "response": {"id": "resp-1"}
+            }),
+            responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        any(),
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
 
-    let sse_body_2 = responses::sse(vec![
-        responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
-        responses::ev_completed("resp-2"),
-    ]);
-
-    mount_sse_once(&server, any(), sse_body_1).await;
-    mount_sse_once(&server, any(), sse_body_2).await;
-
-    eprintln!("waiting for task complete");
-    let test_server_bin = cargo_bin("rmcp_test_server");
     let expected_env_value = "propagated-env";
 
     let fixture = test_codex()
@@ -58,7 +57,7 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
             config.mcp_servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
-                    command: test_server_bin.to_string_lossy().into_owned(),
+                    command: cargo_bin("rmcp_test_server").to_string_lossy().into_owned(),
                     args: Vec::new(),
                     env: Some(HashMap::from([(
                         "MCP_TEST_VALUE".to_string(),
@@ -135,7 +134,6 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
         .expect("env snapshot inserted");
     assert_eq!(env_value, expected_env_value);
 
-    eprintln!("waiting for task complete");
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     server.verify().await;
