@@ -11,7 +11,6 @@ use std::convert::TryFrom;
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
 const STATUS_LIMIT_BAR_EMPTY: &str = "░";
-pub(crate) const RESET_BULLET: &str = "·";
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusRateLimitRow {
@@ -85,7 +84,7 @@ pub(crate) fn compose_rate_limit_data(
                     .unwrap_or_else(|| "5h".to_string());
                 let label = capitalize_first(&label);
                 rows.push(StatusRateLimitRow {
-                    label: format!("{label} Limit"),
+                    label: format!("{label} limit"),
                     percent_used: primary.used_percent,
                     resets_at: primary.resets_at.clone(),
                 });
