@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"▌ Ask Codex to do anything                                                                          "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"                                                                                                    "
+"  / for commands            @ for file paths                shift + enter for newline               "
+"  ctrl + v to paste images  ctrl + c to exit                ctrl + t to view transcript             "
+"  ? to hide shortcuts       esc again to edit previous message                                      "

@@ -393,7 +393,6 @@ impl ChatWidget {
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         if info.is_some() {
-            self.bottom_pane.set_token_usage(info.clone());
             self.token_info = info;
         }
     }
@@ -1960,7 +1959,6 @@ impl ChatWidget {
 
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
-        self.bottom_pane.set_token_usage(None);
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
