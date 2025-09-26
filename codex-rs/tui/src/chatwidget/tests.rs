@@ -2191,30 +2191,5 @@ printf 'fenced within fenced\n'
         crate::insert_history::insert_history_lines_to_writer(&mut term, lines);
     }
 
-    let screen = term.backend().vt100().screen();
-
-    let mut vt_lines: Vec<String> = (0..height)
-        .map(|row| {
-            let mut s = String::with_capacity(width as usize);
-            for col in 0..width {
-                if let Some(cell) = screen.cell(row, col) {
-                    if let Some(ch) = cell.contents().chars().next() {
-                        s.push(ch);
-                    } else {
-                        s.push(' ');
-                    }
-                } else {
-                    s.push(' ');
-                }
-            }
-            s.trim_end().to_string()
-        })
-        .collect();
-
-    // Compact trailing blank rows for a stable snapshot
-    while matches!(vt_lines.last(), Some(l) if l.trim().is_empty()) {
-        vt_lines.pop();
-    }
-    let visual = vt_lines.join("\n");
-    assert_snapshot!(visual);
+    assert_snapshot!(term.backend().vt100().screen().contents());
 }
