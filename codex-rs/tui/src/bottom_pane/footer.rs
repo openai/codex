@@ -295,3 +295,92 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         footer_prefix: "   ",
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::protocol::TokenUsage;
+    use insta::assert_snapshot;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn snapshot_footer(name: &str, props: FooterProps<'_>) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, f.area().width, 1);
+                render_footer(area, f.buffer_mut(), props);
+            })
+            .unwrap();
+        assert_snapshot!(name, terminal.backend());
+    }
+
+    fn token_usage(total_tokens: u64, last_tokens: u64, context_window: u64) -> TokenUsageInfo {
+        let usage = TokenUsage {
+            input_tokens: total_tokens,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens,
+        };
+        let last = TokenUsage {
+            input_tokens: last_tokens,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: last_tokens,
+        };
+        TokenUsageInfo {
+            total_token_usage: usage,
+            last_token_usage: last,
+            model_context_window: Some(context_window),
+        }
+    }
+
+    #[test]
+    fn footer_snapshots() {
+        snapshot_footer(
+            "footer_shortcuts_default",
+            FooterProps {
+                ctrl_c_quit_hint: false,
+                is_task_running: false,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                token_usage_info: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_shortcuts_shift_and_esc",
+            FooterProps {
+                ctrl_c_quit_hint: false,
+                is_task_running: false,
+                esc_backtrack_hint: true,
+                use_shift_enter_hint: true,
+                token_usage_info: Some(&token_usage(4_200, 900, 8_000)),
+            },
+        );
+
+        snapshot_footer(
+            "footer_ctrl_c_quit_idle",
+            FooterProps {
+                ctrl_c_quit_hint: true,
+                is_task_running: false,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                token_usage_info: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_ctrl_c_quit_running",
+            FooterProps {
+                ctrl_c_quit_hint: true,
+                is_task_running: true,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                token_usage_info: None,
+            },
+        );
+    }
+}
