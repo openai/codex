@@ -53,6 +53,7 @@ pub(crate) struct ListSelectionView {
     search_query: String,
     search_placeholder: Option<String>,
     filtered_indices: Vec<usize>,
+    last_selected_actual_idx: Option<usize>,
 }
 
 impl ListSelectionView {
@@ -82,6 +83,7 @@ impl ListSelectionView {
                 None
             },
             filtered_indices: Vec::new(),
+            last_selected_actual_idx: None,
         };
         s.apply_filter();
         s
@@ -198,6 +200,7 @@ impl ListSelectionView {
             && let Some(actual_idx) = self.filtered_indices.get(idx)
             && let Some(item) = self.items.get(*actual_idx)
         {
+            self.last_selected_actual_idx = Some(*actual_idx);
             for act in &item.actions {
                 act(&self.app_event_tx);
             }
@@ -213,6 +216,10 @@ impl ListSelectionView {
     pub(crate) fn set_search_query(&mut self, query: String) {
         self.search_query = query;
         self.apply_filter();
+    }
+
+    pub(crate) fn take_last_selected_index(&mut self) -> Option<usize> {
+        self.last_selected_actual_idx.take()
     }
 }
 
