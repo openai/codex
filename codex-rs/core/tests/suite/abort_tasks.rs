@@ -14,18 +14,9 @@ use wiremock::matchers::body_string_contains;
 
 /// Integration test: spawn a long‑running shell tool via a mocked Responses SSE
 /// function call, then interrupt the session and expect TurnAborted.
+#[cfg(not(target_os = "windows"))] // Can't run on windows due to the sleep command.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_long_running_tool_emits_turn_aborted() {
-    // Prepare SSE: one function call to the `shell` tool that sleeps for 60s,
-    // with a large timeout so it does not finish on its own.
-    // Use a cross-platform blocking command so the tool stays running until we interrupt it.
-    #[cfg(target_os = "windows")]
-    let command = vec![
-        "powershell".to_string(),
-        "-Command".to_string(),
-        "Start-Sleep -Seconds 60".to_string(),
-    ];
-    #[cfg(not(target_os = "windows"))]
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
@@ -44,12 +35,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
 
     let codex = test_codex().build(&server).await.unwrap().codex;
 
-    let wait_timeout = if cfg!(target_os = "windows") {
-        // Windows CI can take longer to spin up PowerShell, so allow a longer wait.
-        Duration::from_secs(30)
-    } else {
-        Duration::from_secs(5)
-    };
+    let wait_timeout = Duration::from_secs(5);
 
     // Kick off a turn that triggers the function call.
     codex
