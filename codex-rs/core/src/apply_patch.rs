@@ -19,18 +19,9 @@ fn has_no_actual_changes(action: &ApplyPatchAction) -> bool {
 
     for (_, change) in action.changes() {
         match change {
-            ApplyPatchFileChange::Add { content } => {
-                if !content.trim().is_empty() {
-                    return false;
-                }
-            }
-            ApplyPatchFileChange::Delete { content } => {
-                if !content.trim().is_empty() {
-                    return false;
-                }
-            }
+            ApplyPatchFileChange::Add { .. } => return false,
+            ApplyPatchFileChange::Delete { .. } => return false,
             ApplyPatchFileChange::Update { unified_diff, move_path, .. } => {
-                // If this is a rename operation, it's a real change even with no content changes
                 if move_path.is_some() {
                     return false;
                 }
@@ -182,21 +173,27 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn test_has_no_actual_changes_empty_action() {
-        let action = codex_apply_patch::ApplyPatchAction::new_add_for_test(
+    fn test_has_no_actual_changes_add_operations_always_real() {
+        let empty_add = codex_apply_patch::ApplyPatchAction::new_add_for_test(
             Path::new("/tmp/test.txt"),
             "".to_string(),
         );
-        assert!(has_no_actual_changes(&action));
-    }
+        assert!(!has_no_actual_changes(&empty_add));
 
-    #[test]
-    fn test_has_no_actual_changes_with_content() {
-        let action = codex_apply_patch::ApplyPatchAction::new_add_for_test(
+        let content_add = codex_apply_patch::ApplyPatchAction::new_add_for_test(
             Path::new("/tmp/test.txt"),
             "hello world".to_string(),
         );
-        assert!(!has_no_actual_changes(&action));
+        assert!(!has_no_actual_changes(&content_add));
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_delete_operations_always_real() {
+        let delete_action = codex_apply_patch::ApplyPatchAction::new_delete_for_test(
+            Path::new("/tmp/test.txt"),
+            "".to_string(),
+        );
+        assert!(!has_no_actual_changes(&delete_action));
     }
 
     #[test]
@@ -272,13 +269,30 @@ mod tests {
         action.add_change(
             Path::new("/tmp/old_file.txt").to_path_buf(),
             ApplyPatchFileChange::Update {
-                unified_diff: "".to_string(), // No content changes
-                move_path: Some(Path::new("/tmp/new_file.txt").to_path_buf()), // But it's a rename
+                unified_diff: "".to_string(),
+                move_path: Some(Path::new("/tmp/new_file.txt").to_path_buf()),
                 new_content: "same content".to_string(),
             }
         );
 
-        // Should NOT be considered as "no changes" because it's a rename
         assert!(!has_no_actual_changes(&action));
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_update_with_no_diff_no_rename() {
+        use std::path::Path;
+        use codex_apply_patch::ApplyPatchFileChange;
+
+        let mut action = codex_apply_patch::ApplyPatchAction::new();
+        action.add_change(
+            Path::new("/tmp/file.txt").to_path_buf(),
+            ApplyPatchFileChange::Update {
+                unified_diff: "".to_string(),
+                move_path: None,
+                new_content: "same content".to_string(),
+            }
+        );
+
+        assert!(has_no_actual_changes(&action));
     }
 }
