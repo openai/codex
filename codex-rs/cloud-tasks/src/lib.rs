@@ -9,11 +9,139 @@ pub use cli::Cli;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use util::append_error_log;
 use util::set_user_agent_suffix;
+
+struct ApplyJob {
+    task_id: codex_cloud_tasks_client::TaskId,
+    diff_override: Option<String>,
+}
+
+fn level_from_status(status: codex_cloud_tasks_client::ApplyStatus) -> app::ApplyResultLevel {
+    match status {
+        codex_cloud_tasks_client::ApplyStatus::Success => app::ApplyResultLevel::Success,
+        codex_cloud_tasks_client::ApplyStatus::Partial => app::ApplyResultLevel::Partial,
+        codex_cloud_tasks_client::ApplyStatus::Error => app::ApplyResultLevel::Error,
+    }
+}
+
+fn spawn_preflight(
+    app: &mut app::App,
+    backend: &Arc<dyn codex_cloud_tasks_client::CloudBackend>,
+    tx: &UnboundedSender<app::AppEvent>,
+    frame_tx: &UnboundedSender<Instant>,
+    title: String,
+    job: ApplyJob,
+) -> bool {
+    if app.apply_inflight {
+        app.status = "An apply is already running; wait for it to finish first.".to_string();
+        return false;
+    }
+    if app.apply_preflight_inflight {
+        app.status = "A preflight is already running; wait for it to finish first.".to_string();
+        return false;
+    }
+
+    app.apply_preflight_inflight = true;
+    let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
+
+    let backend = backend.clone();
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let ApplyJob {
+            task_id,
+            diff_override,
+        } = job;
+        let result = codex_cloud_tasks_client::CloudBackend::apply_task_preflight(
+            &*backend,
+            task_id.clone(),
+            diff_override,
+        )
+        .await;
+
+        let event = match result {
+            Ok(outcome) => {
+                let level = level_from_status(outcome.status);
+                app::AppEvent::ApplyPreflightFinished {
+                    id: task_id,
+                    title,
+                    message: outcome.message,
+                    level,
+                    skipped: outcome.skipped_paths,
+                    conflicts: outcome.conflict_paths,
+                }
+            }
+            Err(e) => app::AppEvent::ApplyPreflightFinished {
+                id: task_id,
+                title,
+                message: format!("Preflight failed: {e}"),
+                level: app::ApplyResultLevel::Error,
+                skipped: Vec::new(),
+                conflicts: Vec::new(),
+            },
+        };
+
+        let _ = tx.send(event);
+    });
+
+    true
+}
+
+fn spawn_apply(
+    app: &mut app::App,
+    backend: &Arc<dyn codex_cloud_tasks_client::CloudBackend>,
+    tx: &UnboundedSender<app::AppEvent>,
+    frame_tx: &UnboundedSender<Instant>,
+    job: ApplyJob,
+) -> bool {
+    if app.apply_inflight {
+        app.status = "An apply is already running; wait for it to finish first.".to_string();
+        return false;
+    }
+    if app.apply_preflight_inflight {
+        app.status = "Finish the current preflight before starting another apply.".to_string();
+        return false;
+    }
+
+    app.apply_inflight = true;
+    let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
+
+    let backend = backend.clone();
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let ApplyJob {
+            task_id,
+            diff_override,
+        } = job;
+        let result = codex_cloud_tasks_client::CloudBackend::apply_task(
+            &*backend,
+            task_id.clone(),
+            diff_override,
+        )
+        .await;
+
+        let event = match result {
+            Ok(outcome) => app::AppEvent::ApplyFinished {
+                id: task_id,
+                result: Ok(outcome),
+            },
+            Err(e) => app::AppEvent::ApplyFinished {
+                id: task_id,
+                result: Err(format!("{e}")),
+            },
+        };
+
+        let _ = tx.send(event);
+    });
+
+    true
+}
 
 // logging helper lives in util module
 
@@ -42,7 +170,6 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
         Some("mock") | Some("MOCK")
     );
 
-    use std::sync::Arc;
     let backend: Arc<dyn codex_cloud_tasks_client::CloudBackend> = if use_mock {
         Arc::new(codex_cloud_tasks_client::MockClient)
     } else {
@@ -790,69 +917,39 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                             match key.code {
                                 KeyCode::Char('y') => {
                                     if let Some(m) = app.apply_modal.as_ref() {
-                                        // Keep modal open and animate a spinner while applying
-                                        app.apply_inflight = true;
-                                        app.status = format!("Applying '{}'...", m.title);
+                                        let title = m.title.clone();
+                                        let job = ApplyJob {
+                                            task_id: m.task_id.clone(),
+                                            diff_override: m.diff_override.clone(),
+                                        };
+                                        if spawn_apply(&mut app, &backend, &tx, &frame_tx, job) {
+                                            app.status = format!("Applying '{title}'...");
+                                        }
                                         needs_redraw = true;
-                                        let backend2 = backend.clone();
-                                        let tx2 = tx.clone();
-                                        let id2 = m.task_id.clone();
-                                        let diff_override = m.diff_override.clone();
-                                        tokio::spawn(async move {
-                                            let res = codex_cloud_tasks_client::CloudBackend::apply_task(
-                                                &*backend2,
-                                                id2.clone(),
-                                                diff_override,
-                                            )
-                                            .await;
-                                            let evt = match res {
-                                                Ok(outcome) => app::AppEvent::ApplyFinished { id: id2, result: Ok(outcome) },
-                                                Err(e) => app::AppEvent::ApplyFinished { id: id2, result: Err(format!("{e}")) },
-                                            };
-                                            let _ = tx2.send(evt);
-                                        });
                                     }
                                 }
                                 KeyCode::Char('p') => {
                                     if let Some(m) = app.apply_modal.take() {
-                                        // Kick off async preflight; show spinner in modal body
-                                        app.apply_preflight_inflight = true;
-                                        app.apply_modal = Some(app::ApplyModalState {
+                                        let title = m.title.clone();
+                                        let job = ApplyJob {
                                             task_id: m.task_id.clone(),
-                                            title: m.title.clone(),
-                                            result_message: None,
-                                            result_level: None,
-                                            skipped_paths: Vec::new(),
-                        conflict_paths: Vec::new(),
                                             diff_override: m.diff_override.clone(),
-                                        });
+                                        };
+                                        if spawn_preflight(&mut app, &backend, &tx, &frame_tx, title.clone(), job) {
+                                            app.apply_modal = Some(app::ApplyModalState {
+                                                task_id: m.task_id,
+                                                title: title.clone(),
+                                                result_message: None,
+                                                result_level: None,
+                                                skipped_paths: Vec::new(),
+                                                conflict_paths: Vec::new(),
+                                                diff_override: m.diff_override,
+                                            });
+                                            app.status = format!("Preflighting '{title}'...");
+                                        } else {
+                                            app.apply_modal = Some(m);
+                                        }
                                         needs_redraw = true;
-                                        let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
-                                        let backend2 = backend.clone();
-                                        let tx2 = tx.clone();
-                                        let id2 = m.task_id.clone();
-                                        let title2 = m.title.clone();
-                                        let diff_override = m.diff_override.clone();
-                                        tokio::spawn(async move {
-                                            let out = codex_cloud_tasks_client::CloudBackend::apply_task_preflight(
-                                                &*backend2,
-                                                id2.clone(),
-                                                diff_override,
-                                            )
-                                            .await;
-                                            let evt = match out {
-                                                Ok(outcome) => {
-                                                    let level = match outcome.status {
-                                                        codex_cloud_tasks_client::ApplyStatus::Success => app::ApplyResultLevel::Success,
-                                                        codex_cloud_tasks_client::ApplyStatus::Partial => app::ApplyResultLevel::Partial,
-                                                        codex_cloud_tasks_client::ApplyStatus::Error => app::ApplyResultLevel::Error,
-                                                    };
-                                                    app::AppEvent::ApplyPreflightFinished { id: id2, title: title2, message: outcome.message, level, skipped: outcome.skipped_paths, conflicts: outcome.conflict_paths }
-                                                }
-                                                Err(e) => app::AppEvent::ApplyPreflightFinished { id: id2, title: title2, message: format!("Preflight failed: {e}"), level: app::ApplyResultLevel::Error, skipped: Vec::new(), conflicts: Vec::new() },
-                                            };
-                                            let _ = tx2.send(evt);
-                                        });
                                     }
                                 }
                                 KeyCode::Esc
@@ -876,6 +973,11 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
 
                             match key.code {
                                 KeyCode::Char('a') => {
+                                    if app.apply_inflight || app.apply_preflight_inflight {
+                                        app.status = "Finish the current apply/preflight before starting another.".to_string();
+                                        needs_redraw = true;
+                                        continue;
+                                    }
                                     let snapshot = app.diff_overlay.as_ref().map(|ov| {
                                         (
                                             ov.task_id.clone(),
@@ -886,53 +988,22 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                     });
                                     if let Some((task_id, title, can_apply, diff_override)) = snapshot {
                                         if can_apply {
-                                            app.apply_modal = Some(app::ApplyModalState {
+                                            let job = ApplyJob {
                                                 task_id: task_id.clone(),
-                                                title: title.clone(),
-                                                result_message: None,
-                                                result_level: None,
-                                                skipped_paths: Vec::new(),
-                                                conflict_paths: Vec::new(),
                                                 diff_override: diff_override.clone(),
-                                            });
-                                            app.apply_preflight_inflight = true;
-                                            let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
-                                            let backend2 = backend.clone();
-                                            let tx2 = tx.clone();
-                                            tokio::spawn(async move {
-                                                let out = codex_cloud_tasks_client::CloudBackend::apply_task_preflight(
-                                                    &*backend2,
-                                                    task_id.clone(),
-                                                    diff_override.clone(),
-                                                )
-                                                .await;
-                                                let evt = match out {
-                                                    Ok(outcome) => {
-                                                        let level = match outcome.status {
-                                                            codex_cloud_tasks_client::ApplyStatus::Success => app::ApplyResultLevel::Success,
-                                                            codex_cloud_tasks_client::ApplyStatus::Partial => app::ApplyResultLevel::Partial,
-                                                            codex_cloud_tasks_client::ApplyStatus::Error => app::ApplyResultLevel::Error,
-                                                        };
-                                                        app::AppEvent::ApplyPreflightFinished {
-                                                            id: task_id,
-                                                            title,
-                                                            message: outcome.message,
-                                                            level,
-                                                            skipped: outcome.skipped_paths,
-                                                            conflicts: outcome.conflict_paths,
-                                                        }
-                                                    }
-                                                    Err(e) => app::AppEvent::ApplyPreflightFinished {
-                                                        id: task_id,
-                                                        title,
-                                                        message: format!("Preflight failed: {e}"),
-                                                        level: app::ApplyResultLevel::Error,
-                                                        skipped: Vec::new(),
-                                                        conflicts: Vec::new(),
-                                                    },
-                                                };
-                                                let _ = tx2.send(evt);
-                                            });
+                                            };
+                                            if spawn_preflight(&mut app, &backend, &tx, &frame_tx, title.clone(), job) {
+                                                app.apply_modal = Some(app::ApplyModalState {
+                                                    task_id,
+                                                    title: title.clone(),
+                                                    result_message: None,
+                                                    result_level: None,
+                                                    skipped_paths: Vec::new(),
+                                                    conflict_paths: Vec::new(),
+                                                    diff_override,
+                                                });
+                                                app.status = format!("Preflighting '{title}'...");
+                                            }
                                         } else {
                                             app.status = "No diff available to apply.".to_string();
                                         }
@@ -1253,59 +1324,41 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                     }
                                 }
                                 KeyCode::Char('a') => {
+                                    if app.apply_inflight || app.apply_preflight_inflight {
+                                        app.status = "Finish the current apply/preflight before starting another.".to_string();
+                                        needs_redraw = true;
+                                        continue;
+                                    }
+
                                     if let Some(task) = app.tasks.get(app.selected).cloned() {
                                         match codex_cloud_tasks_client::CloudBackend::get_task_diff(&*backend, task.id.clone()).await {
                                             Ok(Some(diff)) => {
                                                 let diff_override = Some(diff.clone());
-                                                app.apply_modal = Some(app::ApplyModalState {
-                                                    task_id: task.id.clone(),
-                                                    title: task.title.clone(),
-                                                    result_message: None,
-                                                    result_level: None,
-                                                    skipped_paths: Vec::new(),
-                                                    conflict_paths: Vec::new(),
+                                                let task_id = task.id.clone();
+                                                let title = task.title.clone();
+                                                let job = ApplyJob {
+                                                    task_id: task_id.clone(),
                                                     diff_override: diff_override.clone(),
-                                                });
-                                                app.apply_preflight_inflight = true;
-                                                let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
-                                                let backend2 = backend.clone();
-                                                let tx2 = tx.clone();
-                                                let id2 = task.id.clone();
-                                                let title2 = task.title.clone();
-                                                tokio::spawn(async move {
-                                                    let out = codex_cloud_tasks_client::CloudBackend::apply_task_preflight(
-                                                        &*backend2,
-                                                        id2.clone(),
+                                                };
+                                                if spawn_preflight(
+                                                    &mut app,
+                                                    &backend,
+                                                    &tx,
+                                                    &frame_tx,
+                                                    title.clone(),
+                                                    job,
+                                                ) {
+                                                    app.apply_modal = Some(app::ApplyModalState {
+                                                        task_id,
+                                                        title: title.clone(),
+                                                        result_message: None,
+                                                        result_level: None,
+                                                        skipped_paths: Vec::new(),
+                                                        conflict_paths: Vec::new(),
                                                         diff_override,
-                                                    )
-                                                    .await;
-                                                    let evt = match out {
-                                                        Ok(outcome) => {
-                                                            let level = match outcome.status {
-                                                                codex_cloud_tasks_client::ApplyStatus::Success => app::ApplyResultLevel::Success,
-                                                                codex_cloud_tasks_client::ApplyStatus::Partial => app::ApplyResultLevel::Partial,
-                                                                codex_cloud_tasks_client::ApplyStatus::Error => app::ApplyResultLevel::Error,
-                                                            };
-                                                            app::AppEvent::ApplyPreflightFinished {
-                                                                id: id2,
-                                                                title: title2,
-                                                                message: outcome.message,
-                                                                level,
-                                                                skipped: outcome.skipped_paths,
-                                                                conflicts: outcome.conflict_paths,
-                                                            }
-                                                        }
-                                                        Err(e) => app::AppEvent::ApplyPreflightFinished {
-                                                            id: id2,
-                                                            title: title2,
-                                                            message: format!("Preflight failed: {e}"),
-                                                            level: app::ApplyResultLevel::Error,
-                                                            skipped: Vec::new(),
-                                                            conflicts: Vec::new(),
-                                                        },
-                                                    };
-                                                    let _ = tx2.send(evt);
-                                                });
+                                                    });
+                                                    app.status = format!("Preflighting '{title}'...");
+                                                }
                                             }
                                             Ok(None) | Err(_) => {
                                                 app.status = "No diff available to apply".to_string();
