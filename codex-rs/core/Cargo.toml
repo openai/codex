@@ -24,7 +24,7 @@ codex-file-search = { workspace = true }
 codex-mcp-client = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-protocol = { workspace = true }
-codex-telemetry = { workspace = true, features = ["otel"] }
+codex-otel = { workspace = true, features = ["otel"] }
 dirs = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
@@ -67,7 +67,6 @@ tree-sitter-bash = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
-opentelemetry_sdk = { workspace = true, features = ["trace"] }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -93,6 +92,7 @@ tempfile = { workspace = true }
 tokio-test = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
+tracing-test = {  workspace = true, features = ["no-env-filter"] }
 
 [package.metadata.cargo-shear]
 ignored = ["openssl-sys"]
