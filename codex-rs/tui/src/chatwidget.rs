@@ -1572,48 +1572,142 @@ impl ChatWidget {
         let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
         let mut items: Vec<SelectionItem> = Vec::new();
-        for preset in presets.iter() {
-            let name = preset.label.to_string();
-            let description = Some(preset.description.to_string());
-            let is_current = preset.model == current_model && preset.effort == current_effort;
-            let model_slug = preset.model.to_string();
-            let effort = preset.effort;
-            let current_model = current_model.clone();
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    model: Some(model_slug.clone()),
-                    effort: Some(effort),
-                    summary: None,
-                }));
-                tx.send(AppEvent::UpdateModel(model_slug.clone()));
-                tx.send(AppEvent::UpdateReasoningEffort(effort));
-                tx.send(AppEvent::PersistModelSelection {
-                    model: model_slug.clone(),
-                    effort,
+        // Built-in presets first — only when using OpenAI-style providers.
+        let show_builtin_presets = {
+            let pid = self.config.model_provider_id.as_str();
+            pid == "openai" || pid == "openrouter" || self.config.model_provider.requires_openai_auth
+        };
+        if show_builtin_presets {
+            for preset in presets.iter() {
+                let name = preset.label.to_string();
+                let description = Some(preset.description.to_string());
+                let is_current = preset.model == current_model && preset.effort == current_effort;
+                let model_slug = preset.model.to_string();
+                let effort = preset.effort;
+                let current_model = current_model.clone();
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        model: Some(model_slug.clone()),
+                        effort: Some(effort),
+                        summary: None,
+                    }));
+                    tx.send(AppEvent::UpdateModel(model_slug.clone()));
+                    tx.send(AppEvent::UpdateReasoningEffort(effort));
+                    tx.send(AppEvent::PersistModelSelection {
+                        model: model_slug.clone(),
+                        effort,
+                    });
+                    tracing::info!(
+                        "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
+                        model_slug.clone(),
+                        effort
+                            .map(|effort| effort.to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                        current_model,
+                        current_effort
+                            .map(|effort| effort.to_string())
+                            .unwrap_or_else(|| "none".to_string())
+                    );
+                })];
+                items.push(SelectionItem {
+                    name,
+                    description,
+                    is_current,
+                    actions,
+                    dismiss_on_select: true,
+                    search_value: None,
                 });
-                tracing::info!(
-                    "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
-                    model_slug.clone(),
-                    effort
-                        .map(|effort| effort.to_string())
-                        .unwrap_or_else(|| "none".to_string()),
-                    current_model,
-                    current_effort
-                        .map(|effort| effort.to_string())
-                        .unwrap_or_else(|| "none".to_string())
-                );
-            })];
-            items.push(SelectionItem {
-                name,
-                description,
-                is_current,
-                actions,
-                dismiss_on_select: true,
-                search_value: None,
-            });
+            }
+        }
+
+        // Append presets derived from user config profiles that match the current provider.
+        // This lets users select their own models defined under the active provider.
+        // Note: provider is not changed here; only model + reasoning effort are applied.
+        use codex_core::config::ConfigToml as CoreConfigToml;
+        use codex_core::config::load_config_as_toml;
+        use std::collections::HashSet;
+
+        let current_provider_id = self.config.model_provider_id.clone();
+        if let Ok(root_value) = load_config_as_toml(&self.config.codex_home) {
+            if let Ok(cfg) = root_value.try_into::<CoreConfigToml>() {
+                // Track unique pairs to avoid duplicates with built-ins.
+                let mut seen: HashSet<String> = HashSet::new();
+
+                // Helper to insert one dynamic preset as a selection item.
+                let mut add_dynamic_item =
+                    |label: String,
+                     description: Option<String>,
+                     model_slug: String,
+                     effort: Option<ReasoningEffortConfig>| {
+                        let key = format!(
+                            "{}|{}",
+                            model_slug,
+                            effort
+                                .map(|e| e.to_string())
+                                .unwrap_or_else(|| "none".to_string())
+                        );
+                        if !seen.insert(key) {
+                            return;
+                        }
+
+                        let is_current = model_slug == current_model && effort == current_effort;
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                            cwd: None,
+                            approval_policy: None,
+                            sandbox_policy: None,
+                            model: Some(model_slug.clone()),
+                            effort: Some(effort),
+                            summary: None,
+                        }));
+                        tx.send(AppEvent::UpdateModel(model_slug.clone()));
+                        tx.send(AppEvent::UpdateReasoningEffort(effort));
+                        tx.send(AppEvent::PersistModelSelection {
+                                model: model_slug.clone(),
+                                effort,
+                            });
+                        })];
+
+                        items.push(SelectionItem {
+                            name: label,
+                            description,
+                            is_current,
+                            actions,
+                            dismiss_on_select: true,
+                            search_value: None,
+                        });
+                    };
+
+                // Top-level model from config.toml if bound to current provider.
+                if let Some(model_slug) = cfg.model.clone() {
+                    let top_effort = cfg.model_reasoning_effort;
+                    let top_provider = cfg.model_provider.clone();
+                    if top_provider.as_deref() == Some(current_provider_id.as_str()) {
+                        add_dynamic_item(
+                            model_slug.clone(),
+                            Some("from default config".to_string()),
+                            model_slug,
+                            top_effort,
+                        );
+                    }
+                }
+
+                // Profile-defined models that match current provider.
+                for (profile_name, profile) in cfg.profiles.into_iter() {
+                    if let Some(model_slug) = profile.model.clone() {
+                        let effort = profile.model_reasoning_effort;
+                        let provider = profile.model_provider;
+                        if provider.as_deref() == Some(current_provider_id.as_str()) {
+                            let label = model_slug.clone();
+                            let description = Some(format!("from profile {profile_name}"));
+                            add_dynamic_item(label, description, model_slug, effort);
+                        }
+                    }
+                }
+            }
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
