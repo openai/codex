@@ -5,10 +5,6 @@ pub mod event_processor_with_json_output;
 pub mod exec_events;
 pub mod experimental_event_processor_with_json_output;
 
-use std::io::IsTerminal;
-use std::io::Read;
-use std::path::PathBuf;
-
 pub use cli::Cli;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
@@ -25,10 +21,14 @@ use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
-use codex_telemetry as telemetry;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
+use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use serde_json::Value;
+use std::io::IsTerminal;
+use std::io::Read;
+use std::path::PathBuf;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -38,7 +38,6 @@ use tracing_subscriber::prelude::*;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use crate::event_processor_with_json_output::EventProcessorWithJsonOutput;
 use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
@@ -118,9 +117,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Build fmt layer (existing logging) to compose with OTEL layer.
     let default_level = "error";
+
+    // Build env_filter separately and attach via with_filter.
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(default_level))
+        .unwrap_or_else(|_| EnvFilter::new(default_level));
+
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr);
+        .with_writer(std::io::stderr)
+        .with_filter(env_filter);
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -176,6 +182,31 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
+
+    #[allow(clippy::print_stderr)]
+    let otel = match otel {
+        Ok(otel) => otel,
+        Err(e) => {
+            eprintln!("Could not create otel exporter: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(provider) = otel.as_ref() {
+        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
+        );
+
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(otel_layer)
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::registry().with(fmt_layer).try_init();
+    }
+
     let mut event_processor: Box<dyn EventProcessor> = match (json_mode, experimental_json) {
         (_, true) => Box::new(ExperimentalEventProcessorWithJsonOutput::new(
             last_message_file.clone(),
@@ -323,30 +354,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         })
         .await?;
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
-
-    // If stdin is an interactive TTY, watch for EOF (Ctrl+D) and request a graceful shutdown.
-    if std::io::stdin().is_terminal() {
-        let codex_for_eof = codex.clone();
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            use tokio::io::stdin;
-            let mut stdin = stdin();
-            let mut buf = [0u8; 1];
-            loop {
-                match stdin.read(&mut buf).await {
-                    Ok(0) => {
-                        let _ = codex_for_eof.submit(Op::Shutdown).await;
-                        break;
-                    }
-                    Ok(_) => {
-                        // discard any input; exec does not read interactive input
-                        continue;
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-    }
 
     // Run the loop until the task is complete.
     // Track whether a fatal error was reported by the server so we can

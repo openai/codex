@@ -81,7 +81,7 @@ impl GitSha {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
     ApiKey,

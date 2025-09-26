@@ -29,7 +29,6 @@ codex-protocol = { workspace = true }
 codex-protocol-ts = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
 codex-tui = { workspace = true }
-codex-telemetry = { workspace = true, features = ["otel"] }
 ctor = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }
