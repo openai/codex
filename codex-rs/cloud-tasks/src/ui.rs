@@ -639,11 +639,11 @@ fn conversation_header_line(
         ConversationSpeaker::Assistant => {
             spans.push("Assistant".magenta().bold());
             spans.push(" response".dim());
-            if let Some(attempt) = attempt {
-                if let Some(status_span) = attempt_status_span(attempt.status) {
-                    spans.push("  • ".dim());
-                    spans.push(status_span);
-                }
+            if let Some(attempt) = attempt
+                && let Some(status_span) = attempt_status_span(attempt.status)
+            {
+                spans.push("  • ".dim());
+                spans.push(status_span);
             }
         }
     }
@@ -710,8 +710,8 @@ fn attempt_status_span(status: AttemptStatus) -> Option<ratatui::text::Span<'sta
         AttemptStatus::Completed => Some("Completed".green()),
         AttemptStatus::Failed => Some("Failed".red().bold()),
         AttemptStatus::InProgress => Some("In progress".magenta()),
-        AttemptStatus::Pending => Some("Pending".yellow()),
-        AttemptStatus::Cancelled => Some("Cancelled".yellow().dim()),
+        AttemptStatus::Pending => Some("Pending".cyan()),
+        AttemptStatus::Cancelled => Some("Cancelled".dim()),
         AttemptStatus::Unknown => None,
     }
 }

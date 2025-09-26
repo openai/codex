@@ -663,13 +663,13 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                 }
                             }
                             needs_redraw = true;
-                        } else if let Some(page) = app.new_task.as_mut() {
-                            if !page.submitting {
-                                if page.composer.handle_paste(pasted) {
-                                    needs_redraw = true;
-                                }
-                                let _ = frame_tx.send(Instant::now());
+                        } else if let Some(page) = app.new_task.as_mut()
+                            && !page.submitting
+                        {
+                            if page.composer.handle_paste(pasted) {
+                                needs_redraw = true;
                             }
+                            let _ = frame_tx.send(Instant::now());
                         }
                     }
                     Some(Ok(Event::Key(key))) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
