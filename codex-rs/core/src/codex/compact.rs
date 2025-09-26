@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use super::AgentTask;
 use super::Session;
 use super::TurnContext;
 use super::get_last_assistant_message_from_turn;
@@ -15,7 +14,6 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::InputItem;
 use crate::protocol::InputMessageKind;
-use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
 use crate::truncate::truncate_middle;
@@ -37,17 +35,7 @@ struct HistoryBridgeTemplate<'a> {
     summary_text: &'a str,
 }
 
-pub(super) async fn spawn_compact_task(
-    sess: Arc<Session>,
-    turn_context: Arc<TurnContext>,
-    sub_id: String,
-    input: Vec<InputItem>,
-) {
-    let task = AgentTask::compact(sess.clone(), turn_context, sub_id, input);
-    sess.set_task(task).await;
-}
-
-pub(super) async fn run_inline_auto_compact_task(
+pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
@@ -55,15 +43,15 @@ pub(super) async fn run_inline_auto_compact_task(
     let input = vec![InputItem::Text {
         text: SUMMARIZATION_PROMPT.to_string(),
     }];
-    run_compact_task_inner(sess, turn_context, sub_id, input, false).await;
+    run_compact_task_inner(sess, turn_context, sub_id, input).await;
 }
 
-pub(super) async fn run_compact_task(
+pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
-) {
+) -> Option<String> {
     let start_event = Event {
         id: sub_id.clone(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
@@ -71,14 +59,8 @@ pub(super) async fn run_compact_task(
         }),
     };
     sess.send_event(start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, sub_id.clone(), input, true).await;
-    let event = Event {
-        id: sub_id,
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
-            last_agent_message: None,
-        }),
-    };
-    sess.send_event(event).await;
+    run_compact_task_inner(sess.clone(), turn_context, sub_id.clone(), input).await;
+    None
 }
 
 async fn run_compact_task_inner(
@@ -86,7 +68,6 @@ async fn run_compact_task_inner(
     turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
-    remove_task_on_completion: bool,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let turn_input = sess
@@ -148,9 +129,6 @@ async fn run_compact_task_inner(
         }
     }
 
-    if remove_task_on_completion {
-        sess.remove_task(&sub_id).await;
-    }
     let history_snapshot = sess.history_snapshot().await;
     let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
     let user_messages = collect_user_messages(&history_snapshot);
