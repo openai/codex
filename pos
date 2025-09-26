@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>The Roll — POS</title>
+<style>
+  :root{
+    --bg:#f7f8fb; --card:#fff; --bd:#e2e5ea; --text:#111315; --muted:#6b7280;
+    --accent:#d32f2f; --accent-dark:#b71c1c; --accent-light:#ff6659;
+    --warn:#ed6c02; --danger:#c62828; --success:#27ae60;
+    --shadow:0 4px 12px rgba(0,0,0,.08); --shadow-heavy:0 10px 30px rgba(0,0,0,.14);
+    --radius:12px; --radius-sm:8px; --primary:#2c3e50; --light-bg:#f1f3f7;
+    --occupied-bg: #e8f5e9; --occupied-bd: #4caf50;
+  }
+  [data-theme="dark"]{
+    --bg:#0f1115; --card:#161a21; --bd:#2a2f39; --text:#e9eef7; --muted:#aab3c5;
+    --light-bg:#0b0d11; --shadow:0 4px 12px rgba(0,0,0,.6); --shadow-heavy:0 10px 30px rgba(0,0,0,.7);
+    --occupied-bg: #1b5e20; --occupied-bd: #4caf50;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,-apple-system,Roboto,sans-serif;height:100vh;overflow:hidden;line-height:1.5}
+  .container{height:100vh;display:grid;grid-template-columns:1fr 420px;gap:16px;padding:16px;background:var(--light-bg)}
+  @media (max-width:1100px){.container{grid-template-columns:1fr}}
+  .view{display:none} .view.active{display:block}
+
+  /* Header */
+  .appbar{position:sticky;top:0;z-index:6;display:flex;align-items:center;gap:12px;justify-content:space-between;padding:12px 16px;margin-bottom:8px;background:var(--card);border:1px solid var(--bd);border-radius:14px;box-shadow:var(--shadow)}
+  .brand{display:flex;flex-direction:column}
+  .brand .t1{font-weight:900;font-size:18px;color:var(--primary);letter-spacing:.2px}
+  .brand .t2{font-size:12px;color:var(--muted);margin-top:2px}
+  .head-actions{display:flex;gap:10px;align-items:center}
+  .searchbar{display:flex;gap:8px}
+  .btn{padding:10px 14px;border:1px solid var(--bd);background:#fff0;border-radius:10px;cursor:pointer;font-weight:700;font-size:14px;transition:.2s;display:inline-flex;align-items:center;gap:6px;color:var(--text)}
+  .btn:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+  .btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent-dark));color:#fff;border-color:transparent}
+  .btn.warn{background:var(--warn);color:#fff;border-color:transparent}
+  .btn.danger{background:var(--danger);color:#fff;border-color:transparent}
+  .btn.success{background:var(--success);color:#fff;border-color:transparent}
+  .input,select{border:1px solid var(--bd);border-radius:10px;padding:10px 12px;background:#fff0;color:var(--text);font-size:14px;transition:border-color .2s}
+  .input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(211,47,47,.15)}
+  .left{overflow:auto;padding-right:8px;display:flex;flex-direction:column;gap:16px}
+
+  /* Mode panel */
+  .modebar{display:flex;gap:10px}
+  .modebtn{flex:1;text-align:center;padding:10px;border:1px solid var(--bd);border-radius:10px;background:var(--card);cursor:pointer;font-weight:800}
+  .modebtn.active{border-color:var(--accent);box-shadow:var(--shadow)}
+  .grid{display:grid;gap:16px}
+  .grid.cats{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+  .grid.items{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+  .grid.slots{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+  .slot{background:var(--card);border:2px dashed var(--bd);border-radius:12px;min-height:90px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:.2s;padding:10px;text-align:center}
+  .slot:hover{border-color:var(--accent);box-shadow:var(--shadow)}
+  .slot.busy{border-style:solid;background-color:var(--occupied-bg);border-color:var(--occupied-bd);box-shadow:0 0 0 2px rgba(76, 175, 80, 0.2)}
+  .slot .ttl{font-weight:800}
+  .slot .sub{font-size:12px;color:var(--muted);margin-top:4px}
+
+  /* Cards */
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px;cursor:pointer;transition:.2s;box-shadow:var(--shadow)}
+  .card:hover{box-shadow:var(--shadow-heavy);transform:translateY(-2px);border-color:var(--accent)}
+  .card.noclick{cursor:default}
+  .card.noclick:hover{transform:none;border-color:var(--bd);box-shadow:var(--shadow)}
+  .title{font-weight:800;font-size:20px;color:var(--primary)}
+  .head{font-weight:800;font-size:16px;color:var(--primary)}
+  .muted{color:var(--muted);font-size:13px}
+  .price{color:var(--accent);font-weight:900;margin-top:auto;font-size:18px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .qty{width:100px}
+  .memo-line{width:100%;padding:10px 12px;border:1px solid var(--bd);border-radius:10px;font-size:14px}
+  .expander{display:none;margin-top:8px;padding:12px 0;border-top:1px dashed var(--bd)}
+  .card.open .expander{display:block}
+  .pill{border:1px solid var(--bd);padding:6px 10px;border-radius:999px;font-size:12px;color:var(--muted)}
+
+  /* Tabs */
+  .tabs{display:flex;gap:8px;overflow:auto;padding:4px 0}
+  .tab{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--bd);padding:8px 10px;border-radius:10px;cursor:pointer}
+  .tab.active{border-color:var(--accent);box-shadow:var(--shadow)}
+  .tab .x{opacity:.6;cursor:pointer}
+  .tab .x:hover{opacity:1}
+
+  /* Cart */
+  .cart{position:sticky;top:16px;height:calc(100vh - 32px);background:var(--card);border:1px solid var(--bd);border-radius:12px;display:flex;flex-direction:column;box-shadow:var(--shadow-heavy);overflow:hidden}
+  .cart-head{padding:10px 12px;background:linear-gradient(135deg,var(--accent),var(--accent-dark));color:#fff;display:flex;justify-content:space-between;align-items:center}
+  .cart-body{flex:1 1 auto;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+  .line{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--bd);padding:10px 0;align-items:flex-start}
+  .line .d{flex:1}
+  .line .m{color:var(--muted);font-size:12px;margin-top:4px}
+  .sum{padding:10px 12px;background:#fafafa10;border-top:1px solid var(--bd);display:grid;gap:10px}
+  .sum-row{display:flex;align-items:center;gap:10px;justify-content:space-between}
+  .sum .total{font-weight:900;font-size:20px}
+  .actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+
+  /* Drawer */
+  .drawer{position:fixed;right:-420px;top:0;height:100vh;width:400px;background:var(--card);border-left:1px solid var(--bd);box-shadow:var(--shadow-heavy);transition:right .28s ease;z-index:20;display:flex;flex-direction:column}
+  .drawer.open{right:0}
+  .drawer-head{padding:12px 14px;background:#0f172a;color:#fff;display:flex;justify-content:space-between;align-items:center}
+  .drawer-body{padding:14px;overflow:auto;display:flex;flex-direction:column;gap:14px}
+  .section{border:1px solid var(--bd);border-radius:12px;padding:12px;background:var(--card)}
+
+  /* Modals */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:30}
+  .modal.open{display:flex}
+  .modal-card{width:min(900px,95vw);max-height:86vh;overflow:auto;background:var(--card);border:1px solid var(--bd);border-radius:14px;box-shadow:var(--shadow-heavy);padding:16px;display:flex;flex-direction:column;gap:12px}
+  .modal-head{display:flex;align-items:center;justify-content:space-between}
+  .history-list{display:flex;flex-direction:column;gap:10px}
+  .history-item{border:1px solid var(--bd);border-radius:12px;padding:10px;background:var(--card)}
+  .history-item pre{white-space:pre-wrap;font-family:ui-monospace,Consolas,Menlo,monospace;font-size:12px}
+
+  /* Popup Menu */
+  .popup-menu{position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);background:var(--card);border:1px solid var(--bd);border-radius:12px;box-shadow:var(--shadow-heavy);padding:16px;z-index:40;width:320px;display:none}
+  .popup-menu.open{display:block}
+  .popup-menu .head{font-weight:800;font-size:18px;margin-bottom:12px;color:var(--primary)}
+  .popup-menu .btn{width:100%;margin-bottom:8px;justify-content:center}
+  .popup-menu .btn:last-child{margin-bottom:0}
+  .popup-overlay{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:35;display:none}
+  .popup-overlay.open{display:block}
+</style>
+</head>
+<body>
+<div class="container">
+  <!-- LEFT -->
+  <div class="left">
+    <div class="appbar">
+      <div class="brand">
+        <div class="t1">The Roll — POS</div>
+        <div class="t2">Fast, reliable point of sale</div>
+      </div>
+      <div class="head-actions">
+        <div class="searchbar">
+          <input id="search" class="input" placeholder="Search items…" style="width:260px">
+          <button id="searchBtn" class="btn">Search</button>
+          <button id="clearSearch" class="btn">Clear</button>
+        </div>
+        <button class="btn" id="openDrawer">Options</button>
+        <button class="btn" id="openHistory">History</button>
+      </div>
+    </div>
+
+    <!-- ORDER MODES -->
+    <div class="card noclick">
+      <div class="title" style="margin-bottom:6px">Order Modes</div>
+      <div class="modebar">
+        <div class="modebtn active" data-mode="dinein">Dine-In</div>
+        <div class="modebtn" data-mode="takeaway">Takeaway</div>
+        <div class="modebtn" data-mode="phone">Phone</div>
+      </div>
+      <div class="muted" style="margin:8px 0 6px">Click an empty box to start an order. Boxes link to open tabs.</div>
+      <div id="modeGrid" class="grid slots"></div>
+    </div>
+
+    <!-- TABS -->
+    <div class="tabs" id="tabs"></div>
+
+    <!-- CATEGORY GRID -->
+    <div id="viewCats" class="view active">
+      <div class="card noclick">
+        <div class="title">Menu Categories</div>
+        <div class="muted">Select a category to view items</div>
+      </div>
+      <div id="catGrid" class="grid cats"></div>
+    </div>
+
+    <!-- ITEMS GRID -->
+    <div id="viewItems" class="view">
+      <div class="card noclick">
+        <div class="row">
+          <button class="btn" id="backToCats">← Categories</button>
+          <div class="title" id="itemsTitle" style="margin-left:6px">Category</div>
+          <div class="muted" id="itemCount"></div>
+        </div>
+      </div>
+      <div class="grid items" id="itemsGrid"></div>
+    </div>
+
+    <!-- SEARCH RESULTS -->
+    <div id="viewSearch" class="view">
+      <div class="card noclick">
+        <div class="row">
+          <div class="title">Search Results</div>
+          <div class="muted" id="searchMeta"></div>
+          <div style="margin-left:auto"></div>
+          <button class="btn" id="closeSearch">Close</button>
+        </div>
+      </div>
+      <div class="grid items" id="searchGrid"></div>
+    </div>
+
+    <!-- CUSTOMIZER -->
+    <div id="viewCustomize" class="view">
+      <div class="card noclick">
+        <div class="row">
+          <button class="btn" id="czBack">← Back</button>
+          <div class="title" id="czTitle" style="margin-left:6px">Customize Item</div>
+          <div class="btn primary" id="czPrice" style="margin-left:auto">Price: $0.00</div>
+        </div>
+      </div>
+      <div id="czBlocks" class="grid" style="gap:12px"></div>
+      <div class="card noclick" style="margin-top:10px">
+        <div class="row">
+          <label><strong>Quantity</strong></label>
+          <input id="czQty" class="input qty" type="number" min="1" step="1" value="1">
+          <div class="muted">Final price updates automatically.</div>
+        </div>
+        <input id="czMemo" class="memo-line" placeholder="Special instructions (optional)"/>
+        <div class="row" style="gap:10px;margin-top:12px">
+          <button class="btn primary" id="czAdd" style="flex:1">ADD TO ORDER</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: CART -->
+  <div class="cart" id="cartPanel">
+    <div class="cart-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <strong>Order Summary</strong>
+        <select id="service" class="input" style="height:30px;padding:2px 8px;font-size:12px">
+          <option>Dine In</option><option>Take Away</option><option>Phone</option>
+        </select>
+        <div class="pill">Tab: <span id="tabNameBadge">—</span></div>
+        <div class="pill">#<span id="orderNo">1001</span></div>
+      </div>
+      <button class="btn" id="toggleCart">Collapse</button>
+    </div>
+
+    <div class="cart-body"><div id="cartList"></div></div>
+
+    <div class="sum">
+      <div class="sum-row"><span class="muted">Subtotal</span><span id="subtotal">$0.00</span></div>
+      <div class="sum-row"><span class="muted">Total</span><span class="total" id="totalMini">$0.00</span></div>
+      <div class="sum-row">
+        <label for="cash" class="muted">Cash Tendered</label>
+        <input class="input" type="number" id="cash" style="width:160px" min="0" step="0.01"/>
+      </div>
+      <div id="changeRow" class="muted" style="text-align:right;"></div>
+      <div class="actions">
+        <button class="btn warn" id="printMini">Print</button>
+        <button class="btn success" id="saveMini">Save</button>
+        <button class="btn danger" id="clearMini">Clear</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- OPTIONS DRAWER -->
+<div class="drawer" id="drawer">
+  <div class="drawer-head"><strong>Options</strong><button class="btn" id="closeDrawer">✕</button></div>
+  <div class="drawer-body">
+    <div class="section">
+      <div class="row">
+        <span>Discount ($)</span>
+        <input class="input" type="number" id="discount" style="width:140px" min="0" step="0.01"/>
+        <label class="row" style="margin-left:auto"><input type="checkbox" id="gst"/><span>GST 10%</span></label>
+      </div>
+      <div class="row" style="justify-content:space-between;margin-top:8px">
+        <span>GST Amount</span><span id="gstAmt">$0.00</span>
+      </div>
+      <div class="row" style="justify-content:space-between;margin-top:8px">
+        <span><strong>Total</strong></span><span id="total">$0.00</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="row" style="justify-content:space-between">
+        <strong>Payments</strong>
+        <button class="btn" id="addPayment">+ Add Payment</button>
+      </div>
+      <div id="payments"></div>
+      <div class="row" style="justify-content:space-between;margin-top:8px">
+        <span>Tips</span>
+        <input class="input" type="number" id="tips" style="width:140px" min="0" step="0.01" value="0"/>
+      </div>
+    </div>
+
+    <div class="section">
+      <label for="orderNote" class="muted" style="margin-bottom:6px;display:block">Order Notes (optional)</label>
+      <input id="orderNote" class="memo-line" placeholder="e.g., extra wasabi, pack sauces separately"/>
+      <div class="row" style="margin-top:10px">
+        <select id="paperWidth" class="input" style="width:140px">
+          <option value="58">58mm</option>
+          <option value="80">80mm</option>
+        </select>
+        <button class="btn" id="copy">Copy</button>
+        <button class="btn warn" id="print">Print</button>
+        <button class="btn success" id="save">Save</button>
+        <button class="btn danger" id="clear">Clear</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- HISTORY MODAL -->
+<div class="modal" id="historyModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="title">Order History</div>
+      <div class="row">
+        <button class="btn" id="closeHistory">Close</button>
+        <button class="btn danger" id="clearHistory">Clear History</button>
+      </div>
+    </div>
+    <div class="muted">Receipts are stored locally in this browser. Click "Load" to restore to the current tab.</div>
+    <div class="history-list" id="historyList"></div>
+  </div>
+</div>
+
+<!-- POPUP MENU -->
+<div class="popup-overlay" id="popupOverlay"></div>
+<div class="popup-menu" id="popupMenu">
+  <div class="head" id="popupTitle">New Order</div>
+  <button class="btn primary" id="popupNewOrder">Create New Order</button>
+  <button class="btn" id="popupExistingOrder">Open Existing Order</button>
+  <button class="btn danger" id="popupCancel">Cancel</button>
+</div>
+
+<script>
+(function(){
+  // ===== Utils
+  const money = n => new Intl.NumberFormat("en-AU",{style:"currency",currency:"AUD"}).format(Number(n)||0);
+  const qs = (s,el=document)=>el.querySelector(s);
+  const S = { get(k,def){ try{const v=localStorage.getItem(k); return v?JSON.parse(v):def }catch{return def} }, set(k,v){ localStorage.setItem(k, JSON.stringify(v)); } };
+  const round5c = a => Math.round(a*20)/20;
+
+  // ===== Menu
+  const HR_STYLES=[{name:"Hand Roll",price:4.5},{name:"Cut Roll (5 pcs)",price:4.8},{name:"Inside Out Roll (8 pcs)",price:5.0},{name:"Baby Roll",price:5.0}];
+  const HR_FLAVOURS=["Salmon","Tempura Prawn","Cooked Tuna","Spicy Cooked Tuna","Chicken Katsu","Crab Meat","Vegetable"];
+  const SR_TYPES=[{name:"Spider Roll (6 pcs)",price:19},{name:"Special Prawn Roll (6 pcs)",price:19},{name:"Rainbow Roll (6 pcs)",price:19},{name:"Hawaiian Roll (6 pcs)",price:19},{name:"Grilled Salmon Roll (6 pcs)",price:19},{name:"California Roll (10 pcs)",price:14}];
+  const DISPLAY_ITEMS=[{n:"California",p:7.5,addons:true},{n:"Soft Shell Crab",p:8,addons:true},{n:"Chicken",p:10,addons:true},{n:"Spicy Chicken",p:10,addons:true},{n:"Salmon Lover",p:14,addons:true},{n:"Mixed Roll",p:10,addons:true},{n:"Tuna",p:9,addons:true},{n:"Spicy Tuna",p:9,addons:true},{n:"+ Extra Charge $2.50",p:2.5,addons:false},{n:"+ Extra Charge $2.00",p:2.0,addons:false},{n:"+ Extra Charge $0.50",p:0.5,addons:false}];
+  const MENU={
+    "Entrée":[{n:"Edamame",p:6},{n:"Agedashi Tofu",p:7},{n:"Vegetable Spring Roll (3 pcs)",p:6},{n:"Takoyaki (6 pcs)",p:6},{n:"Steamed Gyoza (6 pcs)",p:7},{n:"Deep-Fried Gyoza (6 pcs)",p:7},{n:"Deep Fried Soft Shell Crab",p:15},{n:"Assorted Tempura",p:14},{n:"Extra Tempura Prawn",p:3}],
+    "Salad":[{n:"Salmon Salad",p:13},{n:"Soft Shell Crab Salad",p:15},{n:"Green Seaweed Salad",p:8},{n:"Seaweed Only (S)",p:4},{n:"Seaweed Only (L)",p:6}],
+    "Sushi & Sashimi":[{n:"Small Mixed Sushi (8 pcs)",p:15},{n:"Medium Mixed Sushi (12 pcs)",p:20},{n:"Large Mixed Sushi (15 pcs)",p:26},{n:"Grilled Salmon Sushi (8 pcs)",p:20}],
+    "Salmon Sashimi":[{n:"Small Sashimi (5 pcs)",p:10},{n:"Medium Sashimi (9 pcs)",p:16},{n:"Large Sashimi (15 pcs)",p:25}],
+    "Combo":[{n:"Small Combo",p:15},{n:"Medium Combo",p:28}],
+    "Main Dishes":[{n:"Chicken Teriyaki",p:16},{n:"Tofu Teriyaki",p:16},{n:"Salmon Teriyaki",p:18},{n:"Yakiniku Beef",p:16},{n:"Chicken Karaage (set)",p:16}],
+    "Katsu":[{n:"Chicken Katsu",p:16}],
+    "Donburi":[{n:"Chicken Katsu Donburi",p:16},{n:"Yakiniku Beef Donburi",p:16},{n:"Chicken Karaage Donburi",p:16},{n:"Tempura Prawn Donburi",p:16}],
+    "Noodles & Ramen":[{n:"Udon Plain",p:12},{n:"Udon Beef",p:14},{n:"Udon Chicken",p:14},{n:"Udon Tempura",p:17},{n:"Yaki-Udon Vege",p:12},{n:"Yaki-Udon Chicken",p:14},{n:"Chicken Katsu Miso Ramen",p:18},{n:"Karaage Shoyu Ramen",p:18}],
+    "Special Rolls": SR_TYPES.map(r=>({n:r.name,p:r.price,type:'special'})),
+    "Party Trays":[{n:"Sushi Party Tray (30 pcs)",p:50},{n:"Sushi (Nigiri & Sashimi) Party Tray",p:48},{n:"Mixed Big Roll Tray (30 pcs)",p:45},{n:"Mixed Baby Roll Tray (100 pcs)",p:50},{n:"Mixed Baby Roll Tray (70 pcs)",p:40}],
+    "Nigiri (per piece)":[{n:"Fresh Salmon Nigiri",p:2.00},{n:"Boiled Prawn Nigiri",p:1.80},{n:"Chicken Katsu Nigiri",p:2.00},{n:"Inari (Fried Tofu) Nigiri",p:1.20},{n:"Panko Prawn Nigiri",p:2.00},{n:"Grilled Salmon Nigiri",p:2.50}],
+    "Hand Rolls": HR_FLAVOURS.map(f=>({n:f,type:'handroll'})),
+    "Display": DISPLAY_ITEMS.map(x=>({n:x.n,p:x.p,type: x.addons?'display':'simple'})),
+    "Drinks":[{n:"Coke",p:3.5,type:'drink'},{n:"Spring Water",p:3.5,type:'drink'},{n:"Sparkling Water",p:4.0,type:'drink'},{n:"Mango Ice Tea",p:5.0,type:'drink'},{n:"Peach Ice Tea",p:5.0,type:'drink'},{n:"Green Tea",p:4.5,type:'drink'},{n:"Ramune",p:4.0,type:'drink'}]
+  };
+  const CATEGORY_ORDER=["Hand Rolls","Display","Entrée"];
+  const orderedCategories=()=>{const all=Object.keys(MENU);const rest=all.filter(c=>!CATEGORY_ORDER.includes(c)).sort();return [...CATEGORY_ORDER,...rest]}
+
+  // ===== State (tabs + mode slots)
+  const app={order:S.get('order',1001),tabs:S.get('tabs',[]),activeTabId:S.get('activeTabId',null),paperWidth:S.get('paperWidth','58')};
+  if(!app.tabs.length){ const id=Date.now(); app.tabs=[newTab(id,'Tab 1','Dine In')]; app.activeTabId=id; }
+
+  // Mode slots map: {mode:{index:tabId}}
+  const modeSlots = S.get('modeSlots', {dinein:{}, takeaway:{}, phone:{}});
+
+  // ===== DOM refs
+  const modeBtns = document.querySelectorAll('.modebtn');
+  const modeGrid = qs('#modeGrid');
+  const tabsEl=qs('#tabs');
+  const catGrid=qs('#catGrid'), itemsTitle=qs('#itemsTitle'), itemCount=qs('#itemCount'), itemsGrid=qs('#itemsGrid');
+  const viewCats=qs('#viewCats'), viewItems=qs('#viewItems'), viewSearch=qs('#viewSearch');
+  const searchEl=qs('#search'), searchBtn=qs('#searchBtn'), clearSearchBtn=qs('#clearSearch'), searchGrid=qs('#searchGrid'), searchMeta=qs('#searchMeta'), closeSearchBtn=qs('#closeSearch');
+  const czTitle=qs('#czTitle'), czBlocks=qs('#czBlocks'), czPrice=qs('#czPrice'), czQty=qs('#czQty'), czMemo=qs('#czMemo');
+  const cartList=qs('#cartList'); const orderNoEl=qs('#orderNo'); const tabNameBadge=qs('#tabNameBadge');
+  const subtotalEl=qs('#subtotal'), gstAmtEl=qs('#gstAmt'), totalEl=qs('#total'), totalMiniEl=qs('#totalMini'), changeRow=qs('#changeRow');
+  const discountEl=qs('#discount'), gstEl=qs('#gst'), serviceEl=qs('#service'), cashEl=qs('#cash'), orderNoteEl=qs('#orderNote'), tipsEl=qs('#tips');
+  const paymentsEl=qs('#payments'), addPaymentBtn=qs('#addPayment');
+  const drawer=qs('#drawer'), openDrawerBtn=qs('#openDrawer'), closeDrawerBtn=qs('#closeDrawer'), paperWidthEl=qs('#paperWidth');
+  const openHistoryBtn=qs('#openHistory'), historyModal=qs('#historyModal'), closeHistoryBtn=qs('#closeHistory'), clearHistoryBtn=qs('#clearHistory'), historyList=qs('#historyList');
+  const popupMenu=qs('#popupMenu'), popupOverlay=qs('#popupOverlay'), popupTitle=qs('#popupTitle');
+  const popupNewOrder=qs('#popupNewOrder'), popupExistingOrder=qs('#popupExistingOrder'), popupCancel=qs('#popupCancel');
+
+  // ===== Popup Menu
+  let currentPopupMode = null;
+  let currentPopupIndex = null;
+  
+  function openPopupMenu(mode, index) {
+    currentPopupMode = mode;
+    currentPopupIndex = index;
+    popupTitle.textContent = `New ${labelForMode(mode)} Order - ${index}`;
+    popupMenu.classList.add('open');
+    popupOverlay.classList.add('open');
+  }
+  
+  function closePopupMenu() {
+    popupMenu.classList.remove('open');
+    popupOverlay.classList.remove('open');
+    currentPopupMode = null;
+    currentPopupIndex = null;
+  }
+  
+  popupNewOrder.onclick = () => {
+    if (currentPopupMode && currentPopupIndex) {
+      const tab = newOrderFromMode(currentPopupMode, currentPopupIndex);
+      modeSlots[currentPopupMode][currentPopupIndex] = tab.id;
+      persist();
+      renderModeGrid();
+      closePopupMenu();
+    }
+  };
+  
+  popupExistingOrder.onclick = () => {
+    if (currentPopupMode && currentPopupIndex) {
+      // Find existing tab for this slot
+      const existingTabId = modeSlots[currentPopupMode][currentPopupIndex];
+      if (existingTabId) {
+        setActive(existingTabId);
+      }
+      closePopupMenu();
+    }
+  };
+  
+  popupCancel.onclick = closePopupMenu;
+  popupOverlay.onclick = closePopupMenu;
+
+  // ===== Render Mode Grid
+  let currentMode='dinein';
+  modeBtns.forEach(b=>b.onclick=()=>{ modeBtns.forEach(x=>x.classList.remove('active')); b.classList.add('active'); currentMode=b.dataset.mode; renderModeGrid(); });
+  function renderModeGrid(){
+    modeGrid.innerHTML='';
+    const slots=Array.from({length:12}).map((_,i)=>i+1);
+    slots.forEach(i=>{
+      const tabId=modeSlots[currentMode][i];
+      const div=document.createElement('div'); div.className='slot'+(tabId?' busy':'');
+      if(tabId){
+        const t=app.tabs.find(x=>x.id===tabId);
+        div.innerHTML=`<div><div class="ttl">${labelForMode(currentMode)} ${i}</div><div class="sub">${t?('Open: '+t.name):'Open'}</div></div>`;
+        div.onclick=()=>{ if(t){ setActive(t.id); } else { delete modeSlots[currentMode][i]; persist(); renderModeGrid(); } };
+      }else{
+        div.innerHTML=`<div><div class="ttl">${labelForMode(currentMode)} ${i}</div><div class="sub">Empty — click to start</div></div>`;
+        div.onclick=()=>openPopupMenu(currentMode, i);
+      }
+      modeGrid.appendChild(div);
+    });
+  }
+  function labelForMode(m){ return m==='dinein'?'Table':(m==='takeaway'?'Takeaway':'Phone'); }
+  function newOrderFromMode(mode, index){
+    const name = `${labelForMode(mode)} ${index}`;
+    const svc = mode==='dinein'?'Dine In':(mode==='takeaway'?'Take Away':'Phone');
+    const id=Date.now()+index;
+    const t=newTab(id,name,svc); app.tabs.push(t); app.activeTabId=id; persist(); renderTabs(); renderAll(); return t;
+  }
+
+  // ===== Tabs
+  function newTab(id,name,service){ return {id,name,service,cart:[],discount:0,gst:false,cash:0,orderNote:'',payments:[],tips:0}; }
+  function setActive(id){ app.activeTabId=id; persist(); renderTabs(); renderAll(); }
+  function current(){ return app.tabs.find(t=>t.id===app.activeTabId); }
+  function closeTab(id){
+    // also release mode slot if mapped
+    Object.keys(modeSlots).forEach(m=>{
+      for(const k in modeSlots[m]) if(modeSlots[m][k]===id) delete modeSlots[m][k];
+    });
+    const i=app.tabs.findIndex(t=>t.id===id); if(i<0) return;
+    app.tabs.splice(i,1); if(!app.tabs.length){ const nid=Date.now(); app.tabs=[newTab(nid,'Tab 1','Dine In')]; app.activeTabId=nid; }
+    if(app.activeTabId===id) app.activeTabId=app.tabs[0].id;
+    persist(); renderTabs(); renderAll(); renderModeGrid();
+  }
+  function renderTabs(){
+    tabsEl.innerHTML='';
+    app.tabs.forEach(t=>{
+      const el=document.createElement('div'); el.className='tab'+(t.id===app.activeTabId?' active':'');
+      el.innerHTML=`<span>${t.name}</span><span class="pill">${t.service}</span><span class="x" title="Close">✕</span>`;
+      el.onclick=(e)=>{ if(e.target.classList.contains('x')) return; setActive(t.id); };
+      el.querySelector('.x').onclick=()=>closeTab(t.id);
+      tabsEl.appendChild(el);
+    });
+  }
+
+  // ===== Categories & Items
+  function renderCategories(){
+    catGrid.innerHTML='';
+    orderedCategories().forEach(cat=>{
+      const card=document.createElement('div'); card.className='card';
+      card.innerHTML=`<div class="head">${cat}</div><div class="muted">${(MENU[cat]||[]).length} items</div>`;
+      card.onclick=()=>openCategory(cat);
+      catGrid.appendChild(card);
+    });
+  }
+  function openCategory(cat){
+    show('viewItems');
+    itemsTitle.textContent=cat;
+    const list=MENU[cat]||[];
+    itemCount.textContent = `${list.length} items`;
+    renderItemCards(list);
+  }
+  function renderItemCards(list, target=itemsGrid){
+    target.innerHTML='';
+    list.forEach(it=>{
+      const name=it.n||it.name, p=it.p;
+      const card=document.createElement('div'); card.className='card';
+      const price = (typeof p==='number')? `<div class="price">${money(p)}</div>` : '';
+      card.innerHTML=`<div class="head">${name}</div>${price}`;
+      if(it.type==='drink'){ card.onclick=()=>addLine({name,price:p,qty:1}); }
+      else if(it.type==='handroll' || it.type==='display' || it.type==='special'){ card.onclick=()=>openItemCustomizer(it); }
+      else{
+        const exp=document.createElement('div'); exp.className='expander';
+        exp.innerHTML=`<div class="row" style="width:100%">
+          <label><strong>Qty</strong></label><input class="input qty" type="number" min="1" step="1" value="1">
+          <input class="memo-line" placeholder="Special instructions (optional)"/>
+          <button class="btn primary" style="margin-left:auto">ADD</button></div>`;
+        card.appendChild(exp);
+        card.onclick=(e)=>{ if(e.target.closest('.expander')) return; card.classList.toggle('open'); };
+        exp.querySelector('.btn').onclick=(e)=>{ e.stopPropagation();
+          const qty=Math.max(1,parseInt(exp.querySelector('.qty').value||'1',10));
+          const memo=exp.querySelector('.memo-line').value.trim();
+          addLine({name,price:p,qty,memo}); exp.querySelector('.memo-line').value=''; exp.querySelector('.qty').value='1'; card.classList.remove('open');
+        };
+      }
+      target.appendChild(card);
+    });
+  }
+
+  // ===== Search (fixed)
+  function allItemsFlat(){
+    const out=[];
+    Object.keys(MENU).forEach(cat=> (MENU[cat]||[]).forEach(it=> out.push({...it, _cat:cat, _label:it.n||it.name}) ));
+    return out;
+  }
+  function doSearch(){
+    const q=searchEl.value.trim().toLowerCase();
+    if(!q){ show('viewCats'); return; }
+    const results = allItemsFlat().filter(x=> (x._label||'').toLowerCase().includes(q) || (x._cat||'').toLowerCase().includes(q) );
+    searchMeta.textContent = `${results.length} result${results.length!==1?'s':''}`;
+    renderItemCards(results, searchGrid);
+    show('viewSearch');
+  }
+  searchBtn.onclick = doSearch;
+  clearSearchBtn.onclick = ()=>{ searchEl.value=''; show('viewCats'); };
+  searchEl.addEventListener('keydown', e=>{ if(e.key==='Enter') doSearch(); });
+  closeSearchBtn.onclick = ()=> show('viewCats');
+
+  // ===== Customizer
+  let cz=null;
+  function openItemCustomizer(it){
+    if(it.type==='handroll'){
+      cz={ name:(it.n||it.name)+' Roll', type:'handroll', basePrice:HR_STYLES[0].price, style:HR_STYLES[0].name, addons:{avo:false,cuc:false,mayo:false,veg:false} };
+    } else if(it.type==='special'){
+      cz={ name:(it.n||it.name), type:'special', basePrice:it.p, addons:{avo:false,cuc:false} };
+    } else if(it.type==='display'){
+      cz={ name:(it.n||it.name), type:'display', basePrice:it.p, addons:{avo:false,cuc:false} };
+    } else {
+      // simple item shortcut
+      addLine({name:(it.n||it.name), price:it.p, qty:1}); return;
+    }
+    czTitle.textContent='Customize — '+cz.name; czQty.value=1; czMemo.value=''; czBlocks.innerHTML='';
+    if(cz.type==='handroll'){
+      const sWrap=document.createElement('div'); sWrap.className='card noclick'; sWrap.innerHTML=`<div class="head">Choose Roll Style</div>`;
+      const sRow=document.createElement('div'); sRow.className='row';
+      HR_STYLES.forEach(st=>{
+        const b=document.createElement('button'); b.className='btn'; b.textContent=`${st.name} (${money(st.price)})`;
+        b.onclick=()=>{ cz.style=st.name; cz.basePrice=st.price; updateCzPrice(); };
+        sRow.appendChild(b);
+      });
+      sWrap.appendChild(sRow); czBlocks.appendChild(sWrap);
+
+      const aWrap=document.createElement('div'); aWrap.className='card noclick'; aWrap.innerHTML=`<div class="head">Add-ons</div>`;
+      const aRow=document.createElement('div'); aRow.className='row';
+      [['Avocado','avo'],['Cucumber','cuc'],['Mayo +$0.50','mayo'],['Veggie +$0.50','veg']].forEach(([lbl,key])=>{
+        const t=document.createElement('button'); t.className='btn'; t.textContent=lbl;
+        t.onclick=()=>{ cz.addons[key]=!cz.addons[key]; t.classList.toggle('primary'); updateCzPrice(); };
+        aRow.appendChild(t);
+      });
+      aWrap.appendChild(aRow); czBlocks.appendChild(aWrap);
+    }else{
+      const aWrap=document.createElement('div'); aWrap.className='card noclick'; aWrap.innerHTML=`<div class="head">Add-ons</div>`;
+      const aRow=document.createElement('div'); aRow.className='row';
+      [['Avocado','avo'],['Cucumber','cuc']].forEach(([lbl,key])=>{
+        const t=document.createElement('button'); t.className='btn'; t.textContent=lbl;
+        t.onclick=()=>{ cz.addons[key]=!cz.addons[key]; t.classList.toggle('primary'); };
+        aRow.appendChild(t);
+      });
+      aWrap.appendChild(aRow); czBlocks.appendChild(aWrap);
+    }
+    updateCzPrice(); show('viewCustomize');
+  }
+  function updateCzPrice(){ let base=Number(cz.basePrice||0); if(cz.type==='handroll'){ if(cz.addons?.mayo) base+=.5; if(cz.addons?.veg) base+=.5; } czPrice.textContent='Price: '+money(base); }
+  qs('#czAdd').onclick=()=>{
+    if(!cz) return;
+    const qty=Math.max(1,parseInt(qs('#czQty').value||'1',10)); const memo=qs('#czMemo').value.trim();
+    let name=cz.name; let price=Number(cz.basePrice||0);
+    if(cz.type==='handroll'){
+      const adds=[cz.addons?.avo?'Avocado':null,cz.addons?.cuc?'Cucumber':null].filter(Boolean).join(' + ')||'Plain';
+      name=`${cz.name} — ${adds}, ${cz.style}${cz.addons?.mayo?' +Mayo':''}${cz.addons?.veg?' +Veggie':''}`;
+      if(cz.addons?.mayo) price+=.5; if(cz.addons?.veg) price+=.5;
+    }else if(cz.type==='special'||cz.type==='display'){
+      const adds=[cz.addons?.avo?'Avocado':null,cz.addons?.cuc?'Cucumber':null].filter(Boolean).join(' + ');
+      if(adds) name=`${cz.name} — ${adds}`;
+    }
+    addLine({name,price,qty,memo}); show('viewItems');
+  };
+  qs('#czBack').onclick=()=>show('viewItems');
+
+  // ===== Cart / totals / payments
+  function subtotal(t){return t.cart.reduce((s,i)=>s+i.price*i.qty,0)}
+  function gstAmt(t){const sub=subtotal(t)-Number(t.discount||0);return t.gst?Math.max(0,sub*0.1):0}
+  function total(t){return Math.max(0, subtotal(t)-Number(t.discount||0)+gstAmt(t)+Number(t.tips||0))}
+  function change(t){const paid=(t.payments||[]).reduce((s,p)=>s+Number(p.amount||0),0)+Number(t.cash||0);return paid-total(t)}
+
+  function renderCart(){
+    const t=current(); if(!t) return;
+    orderNoEl.textContent=app.order; tabNameBadge.textContent=t.name; serviceEl.value=t.service;
+    cartList.innerHTML='';
+    if(!t.cart.length){ cartList.innerHTML=`<div class="muted" style="text-align:center;padding:16px">Cart empty — add items from menu.</div>`; }
+    else t.cart.forEach((line,idx)=>{
+      const row=document.createElement('div'); row.className='line';
+      row.innerHTML=`<div class="d">
+        <div><strong>x${line.qty}</strong> ${line.name}</div>
+        ${line.memo?`<div class="m">Note: ${line.memo}</div>`:''}
+        <div class="row" style="gap:8px;margin-top:6px">
+          <button class="btn" onclick="changeQty(${idx},-1)">−</button>
+          <span style="min-width:30px;text-align:center">${line.qty}</span>
+          <button class="btn" onclick="changeQty(${idx},1)">+</button>
+          <span class="muted" style="margin-left:8px">@ ${money(line.price)}</span>
+          <button class="btn" onclick="removeLine(${idx})" style="margin-left:auto">Remove</button>
+        </div></div>
+        <div><strong>${money(line.price*line.qty)}</strong></div>`;
+      cartList.appendChild(row);
+    });
+    subtotalEl.textContent=money(subtotal(t));
+    gstAmtEl.textContent=money(gstAmt(t));
+    const tot=total(t); totalEl.textContent=money(tot); totalMiniEl.textContent=money(tot);
+    const ch=change(t);
+    const hasCash = Number(t.cash||0) > 0 || (t.payments||[]).some(p=>p.type==='Cash' && Number(p.amount)>0);
+    let extra=''; if(hasCash){ const rounded=round5c(ch); const diff=rounded-ch; extra=` | Rounded change: ${money(rounded)} (adj ${diff>=0?'+':''}${money(diff)})`; }
+    changeRow.textContent = ch>0 ? ('Change: '+money(ch)+extra) : (ch<0 ? ('Remaining: '+money(-ch)) : 'Exact paid');
+    cashEl.value=t.cash||0;
+  }
+  function addLine(newLine){ const t=current(); const i=t.cart.findIndex(x=>x.name===newLine.name&&x.price===newLine.price&&(x.memo||'')===(newLine.memo||'')); if(i>=0) t.cart[i].qty+=(newLine.qty||1); else t.cart.push({...newLine,qty:newLine.qty||1}); persist(); renderCart(); }
+  window.changeQty=(i,d)=>{ const t=current(); t.cart[i].qty=Math.max(0,t.cart[i].qty+d); if(t.cart[i].qty===0) t.cart.splice(i,1); persist(); renderCart(); };
+  window.removeLine=(i)=>{ const t=current(); t.cart.splice(i,1); persist(); renderCart(); };
+
+  // payments
+  function renderPayments(){
+    const t=current(); paymentsEl.innerHTML='';
+    (t.payments||[]).forEach((p,idx)=>{
+      const row=document.createElement('div'); row.className='row'; row.style.marginBottom='8px';
+      row.innerHTML=`<select class="input pt" style="width:140px">
+          <option${p.type==='Cash'?' selected':''}>Cash</option>
+          <option${p.type==='EFTPOS'?' selected':''}>EFTPOS</option>
+          <option${p.type==='Credit'?' selected':''}>Credit</option>
+          <option${p.type==='Online'?' selected':''}>Online</option>
+        </select>
+        <input class="input pv" type="number" min="0" step="0.01" style="width:140px" value="${p.amount||0}">
+        <button class="btn" data-i="${idx}">Remove</button>`;
+      paymentsEl.appendChild(row);
+      const [pt,pv,del]=row.children;
+      pt.onchange=()=>{ p.type=pt.value; persist(); renderAll(); };
+      pv.oninput =()=>{ p.amount=Number(pv.value||0); persist(); renderAll(); };
+      del.onclick  =()=>{ t.payments.splice(idx,1); persist(); renderAll(); };
+    });
+  }
+  addPaymentBtn.onclick=()=>{ const t=current(); (t.payments||(t.payments=[])).push({type:'EFTPOS',amount:0}); persist(); renderPayments(); renderCart(); };
+
+  // controls
+  discountEl.oninput=e=>{ current().discount=Number(e.target.value||0); persist(); renderAll(); };
+  gstEl.onchange=e=>{ current().gst=e.target.checked; persist(); renderAll(); };
+  cashEl.oninput=e=>{ current().cash=Number(e.target.value||0); persist(); renderAll(); };
+  serviceEl.onchange=e=>{ current().service=e.target.value; persist(); renderAll(); };
+  orderNoteEl.oninput=e=>{ current().orderNote=e.target.value; persist(); };
+  tipsEl.oninput=e=>{ current().tips=Number(e.target.value||0); persist(); renderAll(); };
+
+  // drawer
+  const openDrawer=()=>drawer.classList.add('open'); const closeDrawer=()=>drawer.classList.remove('open');
+  openDrawerBtn.onclick=openDrawer; closeDrawerBtn.onclick=closeDrawer;
+  paperWidthEl.value=app.paperWidth; paperWidthEl.onchange=()=>{ app.paperWidth=paperWidthEl.value; persist(); };
+
+  // history
+  function makeReceipt(t){
+    const now=new Date();
+    let txt=`The Roll Japanese Restaurant\nOrder #${app.order} — ${t.service}\n${now.toLocaleString()}\n---------------------\n`;
+    t.cart.forEach(i=>{ const lt=i.price*i.qty; txt+=`x${i.qty} ${i.name}\n@ ${money(i.price)} = ${money(lt)}\n`; if(i.memo) txt+=`Note: ${i.memo}\n`; txt+=`\n`; });
+    const disc=Number(t.discount||0);
+    if(subtotal(t)>0) txt+=`Subtotal: ${money(subtotal(t))}\n`;
+    if(disc>0) txt+=`Discount: -${money(disc)}\n`;
+    if(t.gst) txt+=`GST: ${money(gstAmt(t))}\n`;
+    if(t.tips) txt+=`Tips: ${money(t.tips)}\n`;
+    txt+=`Total: ${money(total(t))}\n`;
+    const paid=(t.payments||[]).reduce((s,p)=>s+Number(p.amount||0),0)+Number(t.cash||0);
+    if(t.cash) txt+=`Cash: ${money(t.cash)}\n`;
+    if((t.payments||[]).length) t.payments.forEach(p=> txt+=`${p.type}: ${money(p.amount||0)}\n`);
+    if((t.orderNote||'').trim()) txt+=`Order Note: ${t.orderNote.trim()}\n`;
+    const ch=change(t); if(ch>0) txt+=`Change: ${money(ch)}\n`; else if(ch<0) txt+=`Remaining: ${money(-ch)}\n`;
+    return txt;
+  }
+  function saveToHistory(){
+    const t=current(); const hist=S.get('hist',[]);
+    const entry={id:Date.now(),order:app.order,service:t.service,when:new Date().toISOString(),cart:JSON.parse(JSON.stringify(t.cart)),discount:t.discount,gst:t.gst,cash:t.cash,payments:t.payments,tips:t.tips,orderNote:t.orderNote,total:total(t),receipt:makeReceipt(t)};
+    hist.unshift(entry); S.set('hist',hist); return entry;
+  }
+  function renderHistory(){
+    const hist=S.get('hist',[]);
+    historyList.innerHTML='';
+    if(!hist.length){ historyList.innerHTML=`<div class="muted">No saved orders yet.</div>`; return; }
+    hist.forEach(h=>{
+      const when=new Date(h.when).toLocaleString();
+      const div=document.createElement('div'); div.className='history-item';
+      div.innerHTML=`<div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div><strong>#${h.order}</strong> — ${h.service} <span class="muted">(${when})</span></div>
+          <div class="row" style="gap:8px">
+            <button class="btn" data-act="load" data-id="${h.id}">Load</button>
+            <button class="btn warn" data-act="print" data-id="${h.id}">Print</button>
+            <button class="btn danger" data-act="delete" data-id="${h.id}">Delete</button>
+          </div>
+        </div>
+        <pre>${h.receipt.replace(/</g,'&lt;')}</pre>`;
+      historyList.appendChild(div);
+    });
+    historyList.querySelectorAll('button').forEach(b=>{
+      b.onclick=()=>{
+        const id=Number(b.dataset.id), act=b.dataset.act;
+        const hist=S.get('hist',[]); const idx=hist.findIndex(x=>x.id===id); if(idx<0) return;
+        const rec=hist[idx];
+        if(act==='print'){ printText(rec.receipt); }
+        else if(act==='delete'){ if(confirm('Delete this entry?')){ hist.splice(idx,1); S.set('hist',hist); renderHistory(); } }
+        else if(act==='load'){ const t=current(); t.cart=rec.cart; t.discount=rec.discount; t.gst=rec.gst; t.cash=rec.cash; t.payments=rec.payments||[]; t.tips=rec.tips||0; t.orderNote=rec.orderNote||''; persist(); renderAll(); closeHistory(); }
+      };
+    });
+  }
+  function openHistory(){ historyModal.classList.add('open'); renderHistory(); }
+  function closeHistory(){ historyModal.classList.remove('open'); }
+  function clearAllHistory(){ if(confirm('Clear all saved orders?')){ S.set('hist',[]); renderHistory(); } }
+  openHistoryBtn.onclick=openHistory; closeHistoryBtn.onclick=closeHistory; clearHistoryBtn.onclick=clearAllHistory;
+
+  // print/copy/save/clear
+  function printText(text){
+    const w=window.open('','','width=360,height=600'); const klass=app.paperWidth==='58'?'print-58':'print-80';
+    w.document.write(`<pre class="${klass}" style="font-family:monospace;padding:12px">${text.replace(/</g,'&lt;')}</pre>`); w.print(); w.close();
+  }
+  qs('#print').onclick=()=>printText(makeReceipt(current()));
+  qs('#copy').onclick =()=>navigator.clipboard.writeText(makeReceipt(current())).then(()=>alert('Receipt copied'));
+  qs('#save').onclick =()=>{
+    const t=current(); if(total(t)<=0) return alert('Nothing to save.');
+    const ch=change(t); if(ch<0) return alert('Payment not complete.');
+    saveToHistory(); app.order=Number(app.order||1)+1; clearTab(t); persist(); alert('Order saved');
+  };
+  qs('#clear').onclick=()=>{ if(confirm('Clear this tab cart?')) clearTab(current()); };
+  qs('#printMini').onclick=()=>qs('#print').click();
+  qs('#saveMini').onclick =()=>qs('#save').click();
+  qs('#clearMini').onclick=()=>qs('#clear').click();
+
+  function clearTab(t){ t.cart=[]; t.cash=0; t.discount=0; t.gst=false; t.payments=[]; t.tips=0; persist(); renderAll(); }
+
+  // helpers
+  function show(id){ [viewCats,viewItems,viewSearch].forEach(v=>v.classList.remove('active')); qs('#'+id).classList.add('active'); }
+  function persist(){ S.set('order',app.order); S.set('tabs',app.tabs); S.set('activeTabId',app.activeTabId); S.set('paperWidth',app.paperWidth); S.set('modeSlots',modeSlots); }
+  function renderAll(){ renderCart(); renderPayments(); const t=current(); discountEl.value=t.discount||0; gstEl.checked=!!t.gst; orderNoteEl.value=t.orderNote||''; tipsEl.value=t.tips||0; serviceEl.value=t.service; cashEl.value=t.cash||0; }
+
+  // init
+  function init(){ renderModeGrid(); renderTabs(); renderCategories(); show('viewCats'); renderAll(); }
+  init();
+
+  // events
+  qs('#backToCats').onclick=()=>show('viewCats');
+  serviceEl.onchange=e=>{ current().service=e.target.value; persist(); renderAll(); };
+  qs('#toggleCart').onclick=()=>qs('#cartPanel').classList.toggle('collapsed');
+})();
+</script>
+</body>
+</html>  /// i dont want the menu below the table and takeaway box i want menu to pop off on each table and takeaway. all the empty sell menu pop off on the front not below down to scroll and get inside the emty sells of table and takaway , phone and also add necesasary features . ask me what we can add
