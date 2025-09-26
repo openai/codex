@@ -25,8 +25,8 @@ fn has_no_actual_changes(action: &ApplyPatchAction) -> bool {
                 if move_path.is_some() {
                     return false;
                 }
-                let (added, removed) = calculate_changes_from_diff(unified_diff);
-                if added > 0 || removed > 0 {
+                let analysis = analyze_diff_changes(unified_diff);
+                if analysis.added_lines > 0 || analysis.removed_lines > 0 || analysis.has_metadata_changes {
                     return false;
                 }
             }
@@ -35,13 +35,25 @@ fn has_no_actual_changes(action: &ApplyPatchAction) -> bool {
     true
 }
 
-fn calculate_changes_from_diff(diff: &str) -> (usize, usize) {
+#[derive(Debug, PartialEq)]
+struct DiffAnalysis {
+    added_lines: usize,
+    removed_lines: usize,
+    has_metadata_changes: bool,
+}
+
+fn analyze_diff_changes(diff: &str) -> DiffAnalysis {
     if diff.trim().is_empty() {
-        return (0, 0);
+        return DiffAnalysis {
+            added_lines: 0,
+            removed_lines: 0,
+            has_metadata_changes: false,
+        };
     }
 
     let mut added = 0;
     let mut removed = 0;
+    let mut has_metadata = false;
 
     for line in diff.lines() {
         if let Some(first_char) = line.chars().next() {
@@ -59,9 +71,31 @@ fn calculate_changes_from_diff(diff: &str) -> (usize, usize) {
                 _ => {}
             }
         }
+
+        // Check for metadata changes
+        if line.starts_with("old mode ")
+            || line.starts_with("new mode ")
+            || line.starts_with("old file mode ")
+            || line.starts_with("new file mode ")
+            || line.starts_with("Binary files ")
+            || line.contains(" differ")
+            || line.starts_with("similarity index ")
+            || line.starts_with("rename from ")
+            || line.starts_with("rename to ") {
+            has_metadata = true;
+        }
     }
 
-    (added, removed)
+    DiffAnalysis {
+        added_lines: added,
+        removed_lines: removed,
+        has_metadata_changes: has_metadata,
+    }
+}
+
+fn calculate_changes_from_diff(diff: &str) -> (usize, usize) {
+    let analysis = analyze_diff_changes(diff);
+    (analysis.added_lines, analysis.removed_lines)
 }
 
 pub(crate) enum InternalApplyPatchInvocation {
@@ -189,10 +223,26 @@ mod tests {
 
     #[test]
     fn test_has_no_actual_changes_delete_operations_always_real() {
-        let delete_action = codex_apply_patch::ApplyPatchAction::new_delete_for_test(
+        use codex_apply_patch::ApplyPatchFileChange;
+
+        let mut action = codex_apply_patch::ApplyPatchAction::new_add_for_test(
             Path::new("/tmp/test.txt"),
-            "".to_string(),
+            "dummy".to_string(),
         );
+
+        // Manually insert a delete operation by modifying the internal state
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(
+            Path::new("/tmp/test.txt").to_path_buf(),
+            ApplyPatchFileChange::Delete { content: "".to_string() }
+        );
+
+        let delete_action = codex_apply_patch::ApplyPatchAction {
+            changes,
+            patch: "dummy patch".to_string(),
+            cwd: Path::new("/tmp").to_path_buf(),
+        };
+
         assert!(!has_no_actual_changes(&delete_action));
     }
 
@@ -261,12 +311,57 @@ mod tests {
     }
 
     #[test]
-    fn test_has_no_actual_changes_with_rename_only() {
-        use std::path::Path;
+    fn test_analyze_diff_changes_with_permission_changes() {
+        let diff = r#"diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755"#;
+
+        let analysis = analyze_diff_changes(diff);
+        assert_eq!(analysis.added_lines, 0);
+        assert_eq!(analysis.removed_lines, 0);
+        assert!(analysis.has_metadata_changes);
+    }
+
+    #[test]
+    fn test_analyze_diff_changes_with_binary_files() {
+        let diff = r#"diff --git a/image.png b/image.png
+Binary files a/image.png and b/image.png differ"#;
+
+        let analysis = analyze_diff_changes(diff);
+        assert_eq!(analysis.added_lines, 0);
+        assert_eq!(analysis.removed_lines, 0);
+        assert!(analysis.has_metadata_changes);
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_with_permission_only() {
         use codex_apply_patch::ApplyPatchFileChange;
 
-        let mut action = codex_apply_patch::ApplyPatchAction::new();
-        action.add_change(
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(
+            Path::new("/tmp/script.sh").to_path_buf(),
+            ApplyPatchFileChange::Update {
+                unified_diff: "old mode 100644\nnew mode 100755".to_string(),
+                move_path: None,
+                new_content: "same content".to_string(),
+            }
+        );
+
+        let action = codex_apply_patch::ApplyPatchAction {
+            changes,
+            patch: "dummy patch".to_string(),
+            cwd: Path::new("/tmp").to_path_buf(),
+        };
+
+        assert!(!has_no_actual_changes(&action));
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_with_rename_only() {
+        use codex_apply_patch::ApplyPatchFileChange;
+
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(
             Path::new("/tmp/old_file.txt").to_path_buf(),
             ApplyPatchFileChange::Update {
                 unified_diff: "".to_string(),
@@ -275,16 +370,21 @@ mod tests {
             }
         );
 
+        let action = codex_apply_patch::ApplyPatchAction {
+            changes,
+            patch: "dummy patch".to_string(),
+            cwd: Path::new("/tmp").to_path_buf(),
+        };
+
         assert!(!has_no_actual_changes(&action));
     }
 
     #[test]
     fn test_has_no_actual_changes_update_with_no_diff_no_rename() {
-        use std::path::Path;
         use codex_apply_patch::ApplyPatchFileChange;
 
-        let mut action = codex_apply_patch::ApplyPatchAction::new();
-        action.add_change(
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(
             Path::new("/tmp/file.txt").to_path_buf(),
             ApplyPatchFileChange::Update {
                 unified_diff: "".to_string(),
@@ -293,6 +393,25 @@ mod tests {
             }
         );
 
+        let action = codex_apply_patch::ApplyPatchAction {
+            changes,
+            patch: "dummy patch".to_string(),
+            cwd: Path::new("/tmp").to_path_buf(),
+        };
+
         assert!(has_no_actual_changes(&action));
+    }
+
+    #[test]
+    fn test_analyze_diff_changes_truly_empty() {
+        let analysis = analyze_diff_changes("");
+        assert_eq!(analysis.added_lines, 0);
+        assert_eq!(analysis.removed_lines, 0);
+        assert!(!analysis.has_metadata_changes);
+
+        let analysis2 = analyze_diff_changes("   \n  \t  ");
+        assert_eq!(analysis2.added_lines, 0);
+        assert_eq!(analysis2.removed_lines, 0);
+        assert!(!analysis2.has_metadata_changes);
     }
 }
