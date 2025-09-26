@@ -23,11 +23,10 @@ async fn exits_non_zero_when_server_reports_error() -> anyhow::Result<()> {
     })]);
     responses::mount_sse_once(&server, any(), body).await;
 
-    // Run codex-exec against the mock server and ensure it fails with
-    // a non-zero exit code.
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
         .arg("tell me something")
+        .arg("--experimental-json")
         .assert()
         .code(1);
 
