@@ -257,7 +257,6 @@ impl McpConnectionManager {
                             startup_timeout,
                         )
                         .await
-                        .map(|c| (c, startup_timeout))
                     }
                     McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
                         McpClientAdapter::new_streamable_http_client(
@@ -267,9 +266,9 @@ impl McpConnectionManager {
                             startup_timeout,
                         )
                         .await
-                        .map(|c| (c, startup_timeout))
                     }
-                };
+                }
+                .map(|c| (c, startup_timeout));
 
                 ((server_name, tool_timeout), client)
             });
