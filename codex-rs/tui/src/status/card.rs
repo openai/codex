@@ -236,7 +236,7 @@ impl HistoryCell for StatusHistoryCell {
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
         }
-        push_label(&mut labels, &mut seen, "Token usage");
+        push_label(&mut labels, &mut seen, "Token Usage");
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
