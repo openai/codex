@@ -12,6 +12,92 @@ use std::path::PathBuf;
 
 pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
+fn has_no_actual_changes(action: &ApplyPatchAction) -> bool {
+    if action.is_empty() {
+        return true;
+    }
+
+    for (_, change) in action.changes() {
+        match change {
+            ApplyPatchFileChange::Add { .. } => return false,
+            ApplyPatchFileChange::Delete { .. } => return false,
+            ApplyPatchFileChange::Update { unified_diff, move_path, .. } => {
+                if move_path.is_some() {
+                    return false;
+                }
+                let analysis = analyze_diff_changes(unified_diff);
+                if analysis.added_lines > 0 || analysis.removed_lines > 0 || analysis.has_metadata_changes {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+#[derive(Debug, PartialEq)]
+struct DiffAnalysis {
+    added_lines: usize,
+    removed_lines: usize,
+    has_metadata_changes: bool,
+}
+
+fn analyze_diff_changes(diff: &str) -> DiffAnalysis {
+    if diff.trim().is_empty() {
+        return DiffAnalysis {
+            added_lines: 0,
+            removed_lines: 0,
+            has_metadata_changes: false,
+        };
+    }
+
+    let mut added = 0;
+    let mut removed = 0;
+    let mut has_metadata = false;
+
+    for line in diff.lines() {
+        if let Some(first_char) = line.chars().next() {
+            match first_char {
+                '+' => {
+                    if !line.starts_with("+++ ") {
+                        added += 1;
+                    }
+                }
+                '-' => {
+                    if !line.starts_with("--- ") {
+                        removed += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check for metadata changes
+        if line.starts_with("old mode ")
+            || line.starts_with("new mode ")
+            || line.starts_with("old file mode ")
+            || line.starts_with("new file mode ")
+            || line.starts_with("Binary files ")
+            || line.contains(" differ")
+            || line.starts_with("similarity index ")
+            || line.starts_with("rename from ")
+            || line.starts_with("rename to ") {
+            has_metadata = true;
+        }
+    }
+
+    DiffAnalysis {
+        added_lines: added,
+        removed_lines: removed,
+        has_metadata_changes: has_metadata,
+    }
+}
+
+fn calculate_changes_from_diff(diff: &str) -> (usize, usize) {
+    let analysis = analyze_diff_changes(diff);
+    (analysis.added_lines, analysis.removed_lines)
+}
+
 pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was handled programmatically, without any sort
     /// of sandbox, because the user explicitly approved it. This is the
@@ -39,6 +125,12 @@ pub(crate) async fn apply_patch(
     call_id: &str,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
+    if has_no_actual_changes(&action) {
+        return InternalApplyPatchInvocation::Output(Ok(
+            "No changes to apply (0 additions, 0 deletions)".to_string(),
+        ));
+    }
+
     match assess_patch_safety(
         &action,
         turn_context.approval_policy,
@@ -107,4 +199,219 @@ pub(crate) fn convert_apply_patch_to_protocol(
         result.insert(path.clone(), protocol_change);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_has_no_actual_changes_add_operations_always_real() {
+        let empty_add = codex_apply_patch::ApplyPatchAction::new_add_for_test(
+            Path::new("/tmp/test.txt"),
+            "".to_string(),
+        );
+        assert!(!has_no_actual_changes(&empty_add));
+
+        let content_add = codex_apply_patch::ApplyPatchAction::new_add_for_test(
+            Path::new("/tmp/test.txt"),
+            "hello world".to_string(),
+        );
+        assert!(!has_no_actual_changes(&content_add));
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_delete_operations_always_real() {
+        use codex_apply_patch::ApplyPatchFileChange;
+
+        let mut action = codex_apply_patch::ApplyPatchAction::new_add_for_test(
+            Path::new("/tmp/test.txt"),
+            "dummy".to_string(),
+        );
+
+        // Manually insert a delete operation by modifying the internal state
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(
+            Path::new("/tmp/test.txt").to_path_buf(),
+            ApplyPatchFileChange::Delete { content: "".to_string() }
+        );
+
+        let delete_action = codex_apply_patch::ApplyPatchAction {
+            changes,
+            patch: "dummy patch".to_string(),
+            cwd: Path::new("/tmp").to_path_buf(),
+        };
+
+        assert!(!has_no_actual_changes(&delete_action));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_empty() {
+        assert_eq!(calculate_changes_from_diff(""), (0, 0));
+        assert_eq!(calculate_changes_from_diff("   \n  "), (0, 0));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_with_changes() {
+        let diff = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,3 +1,3 @@
+ line1
+-old line
++new line
+ line3"#;
+        assert_eq!(calculate_changes_from_diff(diff), (1, 1));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_only_additions() {
+        let diff = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,2 +1,3 @@
+ line1
++new line
+ line2"#;
+        assert_eq!(calculate_changes_from_diff(diff), (1, 0));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_only_deletions() {
+        let diff = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,3 +1,2 @@
+ line1
+-deleted line
+ line3"#;
+        assert_eq!(calculate_changes_from_diff(diff), (0, 1));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_with_increment_operators() {
+        let diff = r#"--- a/file.rs
++++ b/file.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+-++old_counter;
++++new_counter;
+ }"#;
+        assert_eq!(calculate_changes_from_diff(diff), (1, 1));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_with_decrement_operators() {
+        let diff = r#"--- a/file.rs
++++ b/file.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+---old_counter;
++--new_counter;
+ }"#;
+        assert_eq!(calculate_changes_from_diff(diff), (1, 1));
+    }
+
+    #[test]
+    fn test_analyze_diff_changes_with_permission_changes() {
+        let diff = r#"diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755"#;
+
+        let analysis = analyze_diff_changes(diff);
+        assert_eq!(analysis.added_lines, 0);
+        assert_eq!(analysis.removed_lines, 0);
+        assert!(analysis.has_metadata_changes);
+    }
+
+    #[test]
+    fn test_analyze_diff_changes_with_binary_files() {
+        let diff = r#"diff --git a/image.png b/image.png
+Binary files a/image.png and b/image.png differ"#;
+
+        let analysis = analyze_diff_changes(diff);
+        assert_eq!(analysis.added_lines, 0);
+        assert_eq!(analysis.removed_lines, 0);
+        assert!(analysis.has_metadata_changes);
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_with_permission_only() {
+        use codex_apply_patch::ApplyPatchFileChange;
+
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(
+            Path::new("/tmp/script.sh").to_path_buf(),
+            ApplyPatchFileChange::Update {
+                unified_diff: "old mode 100644\nnew mode 100755".to_string(),
+                move_path: None,
+                new_content: "same content".to_string(),
+            }
+        );
+
+        let action = codex_apply_patch::ApplyPatchAction {
+            changes,
+            patch: "dummy patch".to_string(),
+            cwd: Path::new("/tmp").to_path_buf(),
+        };
+
+        assert!(!has_no_actual_changes(&action));
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_with_rename_only() {
+        use codex_apply_patch::ApplyPatchFileChange;
+
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(
+            Path::new("/tmp/old_file.txt").to_path_buf(),
+            ApplyPatchFileChange::Update {
+                unified_diff: "".to_string(),
+                move_path: Some(Path::new("/tmp/new_file.txt").to_path_buf()),
+                new_content: "same content".to_string(),
+            }
+        );
+
+        let action = codex_apply_patch::ApplyPatchAction {
+            changes,
+            patch: "dummy patch".to_string(),
+            cwd: Path::new("/tmp").to_path_buf(),
+        };
+
+        assert!(!has_no_actual_changes(&action));
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_update_with_no_diff_no_rename() {
+        use codex_apply_patch::ApplyPatchFileChange;
+
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(
+            Path::new("/tmp/file.txt").to_path_buf(),
+            ApplyPatchFileChange::Update {
+                unified_diff: "".to_string(),
+                move_path: None,
+                new_content: "same content".to_string(),
+            }
+        );
+
+        let action = codex_apply_patch::ApplyPatchAction {
+            changes,
+            patch: "dummy patch".to_string(),
+            cwd: Path::new("/tmp").to_path_buf(),
+        };
+
+        assert!(has_no_actual_changes(&action));
+    }
+
+    #[test]
+    fn test_analyze_diff_changes_truly_empty() {
+        let analysis = analyze_diff_changes("");
+        assert_eq!(analysis.added_lines, 0);
+        assert_eq!(analysis.removed_lines, 0);
+        assert!(!analysis.has_metadata_changes);
+
+        let analysis2 = analyze_diff_changes("   \n  \t  ");
+        assert_eq!(analysis2.added_lines, 0);
+        assert_eq!(analysis2.removed_lines, 0);
+        assert!(!analysis2.has_metadata_changes);
+    }
 }
