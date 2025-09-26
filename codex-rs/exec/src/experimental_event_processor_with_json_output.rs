@@ -23,6 +23,9 @@ use crate::exec_events::ReasoningItem;
 use crate::exec_events::SessionCreatedEvent;
 use crate::exec_events::TodoItem;
 use crate::exec_events::TodoListItem;
+use crate::exec_events::TurnCompletedEvent;
+use crate::exec_events::TurnStartedEvent;
+use crate::exec_events::Usage;
 use codex_core::config::Config;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -37,6 +40,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TaskStartedEvent;
 use tracing::error;
 use tracing::warn;
 
@@ -48,6 +52,7 @@ pub struct ExperimentalEventProcessorWithJsonOutput {
     running_patch_applies: HashMap<String, PatchApplyBeginEvent>,
     // Tracks the todo list for the current turn (at most one per turn).
     running_todo_list: Option<RunningTodoList>,
+    last_total_token_usage: Option<codex_core::protocol::TokenUsage>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +75,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
             running_commands: HashMap::new(),
             running_patch_applies: HashMap::new(),
             running_todo_list: None,
+            last_total_token_usage: None,
         }
     }
 
@@ -82,6 +88,14 @@ impl ExperimentalEventProcessorWithJsonOutput {
             EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
             EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.handle_patch_apply_end(ev),
+            EventMsg::TokenCount(ev) => {
+                if let Some(info) = &ev.info {
+                    self.last_total_token_usage = Some(info.total_token_usage.clone());
+                }
+                Vec::new()
+            }
+            EventMsg::TaskStarted(ev) => self.handle_task_started(ev),
+            EventMsg::TaskComplete(_) => self.handle_task_complete(),
             EventMsg::Error(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
                 message: ev.message.clone(),
             })],
@@ -89,7 +103,6 @@ impl ExperimentalEventProcessorWithJsonOutput {
                 message: ev.message.clone(),
             })],
             EventMsg::PlanUpdate(ev) => self.handle_plan_update(ev),
-            EventMsg::TaskComplete(_) => self.handle_task_complete(),
             _ => Vec::new(),
         }
     }
@@ -283,7 +296,23 @@ impl ExperimentalEventProcessorWithJsonOutput {
         vec![ConversationEvent::ItemStarted(ItemStartedEvent { item })]
     }
 
+    fn handle_task_started(&self, _: &TaskStartedEvent) -> Vec<ConversationEvent> {
+        vec![ConversationEvent::TurnStarted(TurnStartedEvent {})]
+    }
+
     fn handle_task_complete(&mut self) -> Vec<ConversationEvent> {
+        let usage = if let Some(u) = &self.last_total_token_usage {
+            Usage {
+                input_tokens: u.input_tokens,
+                cached_input_tokens: u.cached_input_tokens,
+                output_tokens: u.output_tokens,
+            }
+        } else {
+            Usage::default()
+        };
+
+        let mut items = Vec::new();
+
         if let Some(running) = self.running_todo_list.take() {
             let item = ConversationItem {
                 id: running.item_id,
@@ -291,11 +320,16 @@ impl ExperimentalEventProcessorWithJsonOutput {
                     items: running.items,
                 }),
             };
-            return vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
+            items.push(ConversationEvent::ItemCompleted(ItemCompletedEvent {
                 item,
-            })];
+            }));
         }
-        Vec::new()
+
+        items.push(ConversationEvent::TurnCompleted(TurnCompletedEvent {
+            usage,
+        }));
+
+        items
     }
 }
 
