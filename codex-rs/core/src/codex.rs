@@ -1358,6 +1358,7 @@ async fn submission_loop(
                 }
             }
             Op::Shutdown => {
+                sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
                 info!("Shutting down Codex instance");
 
                 // Gracefully flush and shutdown rollout recorder on session end so tests
