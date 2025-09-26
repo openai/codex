@@ -12,6 +12,63 @@ use std::path::PathBuf;
 
 pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
+fn has_no_actual_changes(action: &ApplyPatchAction) -> bool {
+    if action.is_empty() {
+        return true;
+    }
+
+    for (_, change) in action.changes() {
+        match change {
+            ApplyPatchFileChange::Add { content } => {
+                if !content.trim().is_empty() {
+                    return false;
+                }
+            }
+            ApplyPatchFileChange::Delete { content } => {
+                if !content.trim().is_empty() {
+                    return false;
+                }
+            }
+            ApplyPatchFileChange::Update { unified_diff, .. } => {
+                let (added, removed) = calculate_changes_from_diff(unified_diff);
+                if added > 0 || removed > 0 {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn calculate_changes_from_diff(diff: &str) -> (usize, usize) {
+    if diff.trim().is_empty() {
+        return (0, 0);
+    }
+
+    let mut added = 0;
+    let mut removed = 0;
+
+    for line in diff.lines() {
+        if let Some(first_char) = line.chars().next() {
+            match first_char {
+                '+' => {
+                    if !line.starts_with("+++") {
+                        added += 1;
+                    }
+                }
+                '-' => {
+                    if !line.starts_with("---") {
+                        removed += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    (added, removed)
+}
+
 pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was handled programmatically, without any sort
     /// of sandbox, because the user explicitly approved it. This is the
@@ -39,6 +96,12 @@ pub(crate) async fn apply_patch(
     call_id: &str,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
+    if has_no_actual_changes(&action) {
+        return InternalApplyPatchInvocation::Output(Ok(
+            "No changes to apply (0 additions, 0 deletions)".to_string(),
+        ));
+    }
+
     match assess_patch_safety(
         &action,
         turn_context.approval_policy,
@@ -107,4 +170,68 @@ pub(crate) fn convert_apply_patch_to_protocol(
         result.insert(path.clone(), protocol_change);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_has_no_actual_changes_empty_action() {
+        let action = codex_apply_patch::ApplyPatchAction::new_add_for_test(
+            Path::new("/tmp/test.txt"),
+            "".to_string(),
+        );
+        assert!(has_no_actual_changes(&action));
+    }
+
+    #[test]
+    fn test_has_no_actual_changes_with_content() {
+        let action = codex_apply_patch::ApplyPatchAction::new_add_for_test(
+            Path::new("/tmp/test.txt"),
+            "hello world".to_string(),
+        );
+        assert!(!has_no_actual_changes(&action));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_empty() {
+        assert_eq!(calculate_changes_from_diff(""), (0, 0));
+        assert_eq!(calculate_changes_from_diff("   \n  "), (0, 0));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_with_changes() {
+        let diff = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,3 +1,3 @@
+ line1
+-old line
++new line
+ line3"#;
+        assert_eq!(calculate_changes_from_diff(diff), (1, 1));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_only_additions() {
+        let diff = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,2 +1,3 @@
+ line1
++new line
+ line2"#;
+        assert_eq!(calculate_changes_from_diff(diff), (1, 0));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_only_deletions() {
+        let diff = r#"--- a/file.txt
++++ b/file.txt
+@@ -1,3 +1,2 @@
+ line1
+-deleted line
+ line3"#;
+        assert_eq!(calculate_changes_from_diff(diff), (0, 1));
+    }
 }
