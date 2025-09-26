@@ -144,8 +144,8 @@ impl WidgetRef for &FileSearchPopup {
             &rows_all,
             &self.state,
             MAX_POPUP_ROWS,
-            false,
             empty_message,
+            false,
         );
     }
 }

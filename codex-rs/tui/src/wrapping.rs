@@ -186,7 +186,7 @@ where
     };
 
     // Build first wrapped line with initial indent.
-    let mut first_line = rt_opts.initial_indent.clone();
+    let mut first_line = rt_opts.initial_indent.clone().style(line.style);
     {
         let sliced = slice_line_spans(line, &span_bounds, first_line_range);
         let mut spans = first_line.spans;
@@ -214,7 +214,7 @@ where
         if r.is_empty() {
             continue;
         }
-        let mut subsequent_line = rt_opts.subsequent_indent.clone();
+        let mut subsequent_line = rt_opts.subsequent_indent.clone().style(line.style);
         let offset_range = (r.start + base)..(r.end + base);
         let sliced = slice_line_spans(line, &span_bounds, &offset_range);
         let mut spans = subsequent_line.spans;

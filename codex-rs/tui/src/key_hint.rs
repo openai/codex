@@ -1,5 +1,5 @@
-use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Span;
 use std::fmt::Display;
 
@@ -25,7 +25,7 @@ const SHIFT_PREFIX: &str = "⇧";
 const SHIFT_PREFIX: &str = "Shift+";
 
 fn key_hint_style() -> Style {
-    Style::default().fg(Color::Cyan)
+    Style::default().bold()
 }
 
 fn modifier_span(prefix: &str, key: impl Display) -> Span<'static> {
