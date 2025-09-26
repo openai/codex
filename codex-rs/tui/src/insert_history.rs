@@ -502,22 +502,7 @@ mod tests {
         let screen = term.backend().vt100().screen();
 
         // Reconstruct screen rows as strings to locate the 3rd level line.
-        let mut rows: Vec<String> = Vec::with_capacity(height as usize);
-        for row in 0..height {
-            let mut s = String::with_capacity(width as usize);
-            for col in 0..width {
-                if let Some(cell) = screen.cell(row, col) {
-                    if let Some(ch) = cell.contents().chars().next() {
-                        s.push(ch);
-                    } else {
-                        s.push(' ');
-                    }
-                } else {
-                    s.push(' ');
-                }
-            }
-            rows.push(s.trim_end().to_string());
-        }
+        let rows: Vec<String> = screen.rows(0, width).collect();
 
         let needle = "1. Third level (ordered)";
         let row_idx = rows
