@@ -27,14 +27,13 @@ pub struct SessionCreatedEvent {
     pub session_id: String,
 }
 
-/// Payload describing a completed session, including usage summary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct TurnStartedEvent {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct TurnCompletedEvent {
     pub usage: Usage,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
-pub struct TurnStartedEvent {}
 
 /// Minimal usage summary for a turn.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
