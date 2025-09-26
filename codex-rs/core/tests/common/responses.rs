@@ -2,6 +2,7 @@ use serde_json::Value;
 use wiremock::BodyPrintLimit;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -121,6 +122,7 @@ where
         .and(path("/v1/responses"))
         .and(matcher)
         .respond_with(sse_response(body))
+        .up_to_n_times(1)
         .mount(server)
         .await;
 }
@@ -130,4 +132,42 @@ pub async fn start_mock_server() -> MockServer {
         .body_print_limit(BodyPrintLimit::Limited(80_000))
         .start()
         .await
+}
+
+/// Mounts a sequence of SSE response bodies and serves them in order for each
+/// POST to `/v1/responses`. Panics if more requests are received than bodies
+/// provided. Also asserts the exact number of expected calls.
+pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    struct SeqResponder {
+        num_calls: AtomicUsize,
+        responses: Vec<String>,
+    }
+
+    impl Respond for SeqResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            match self.responses.get(call_num) {
+                Some(body) => ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body.clone()),
+                None => panic!("no response for {call_num}"),
+            }
+        }
+    }
+
+    let num_calls = bodies.len();
+    let responder = SeqResponder {
+        num_calls: AtomicUsize::new(0),
+        responses: bodies,
+    };
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(responder)
+        .expect(num_calls as u64)
+        .mount(server)
+        .await;
 }
