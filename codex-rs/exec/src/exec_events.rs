@@ -8,8 +8,10 @@ use ts_rs::TS;
 pub enum ConversationEvent {
     #[serde(rename = "session.created")]
     SessionCreated(SessionCreatedEvent),
-    #[serde(rename = "session.completed")]
-    SessionCompleted(SessionCompletedEvent),
+    #[serde(rename = "turn.started")]
+    TurnStarted(TurnStartedEvent),
+    #[serde(rename = "turn.completed")]
+    TurnCompleted(TurnCompletedEvent),
     #[serde(rename = "item.started")]
     ItemStarted(ItemStartedEvent),
     #[serde(rename = "item.updated")]
@@ -27,11 +29,14 @@ pub struct SessionCreatedEvent {
 
 /// Payload describing a completed session, including usage summary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct SessionCompletedEvent {
+pub struct TurnCompletedEvent {
     pub usage: Usage,
 }
 
-/// Minimal usage summary for a session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
+pub struct TurnStartedEvent {}
+
+/// Minimal usage summary for a turn.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
 pub struct Usage {
     pub input_tokens: u64,

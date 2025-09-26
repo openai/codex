@@ -21,10 +21,11 @@ use codex_exec::exec_events::ItemUpdatedEvent;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
 use codex_exec::exec_events::ReasoningItem;
-use codex_exec::exec_events::SessionCompletedEvent;
 use codex_exec::exec_events::SessionCreatedEvent;
 use codex_exec::exec_events::TodoItem as ExecTodoItem;
 use codex_exec::exec_events::TodoListItem as ExecTodoListItem;
+use codex_exec::exec_events::TurnCompletedEvent;
+use codex_exec::exec_events::TurnStartedEvent;
 use codex_exec::exec_events::Usage;
 use codex_exec::experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
 use pretty_assertions::assert_eq;
@@ -64,6 +65,22 @@ fn session_configured_produces_session_created_event() {
         vec![ConversationEvent::SessionCreated(SessionCreatedEvent {
             session_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
         })]
+    );
+}
+
+#[test]
+fn task_started_produces_turn_started_event() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_conversation_events(&event(
+        "t1",
+        EventMsg::TaskStarted(codex_core::protocol::TaskStartedEvent {
+            model_context_window: Some(32_000),
+        }),
+    ));
+
+    assert_eq!(
+        out,
+        vec![ConversationEvent::TurnStarted(TurnStartedEvent {})]
     );
 }
 
@@ -181,7 +198,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
                     }),
                 },
             }),
-            ConversationEvent::SessionCompleted(SessionCompletedEvent {
+            ConversationEvent::TurnCompleted(TurnCompletedEvent {
                 usage: Usage::default(),
             }),
         ]
@@ -594,7 +611,7 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
 }
 
 #[test]
-fn task_complete_produces_session_completed_with_usage() {
+fn task_complete_produces_turn_completed_with_usage() {
     let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
 
     // First, feed a TokenCount event with known totals.
@@ -622,7 +639,7 @@ fn task_complete_produces_session_completed_with_usage() {
             .is_empty()
     );
 
-    // Then TaskComplete should produce session.completed with the captured usage.
+    // Then TaskComplete should produce turn.completed with the captured usage.
     let complete_event = event(
         "e2",
         EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
@@ -632,7 +649,7 @@ fn task_complete_produces_session_completed_with_usage() {
     let out = ep.collect_conversation_events(&complete_event);
     assert_eq!(
         out,
-        vec![ConversationEvent::SessionCompleted(SessionCompletedEvent {
+        vec![ConversationEvent::TurnCompleted(TurnCompletedEvent {
             usage: Usage {
                 input_tokens: 1200,
                 cached_input_tokens: 200,

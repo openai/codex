@@ -20,10 +20,11 @@ use crate::exec_events::ItemUpdatedEvent;
 use crate::exec_events::PatchApplyStatus;
 use crate::exec_events::PatchChangeKind;
 use crate::exec_events::ReasoningItem;
-use crate::exec_events::SessionCompletedEvent;
 use crate::exec_events::SessionCreatedEvent;
 use crate::exec_events::TodoItem;
 use crate::exec_events::TodoListItem;
+use crate::exec_events::TurnCompletedEvent;
+use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use codex_core::config::Config;
 use codex_core::plan_tool::StepStatus;
@@ -39,6 +40,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TaskStartedEvent;
 use tracing::error;
 use tracing::warn;
 
@@ -92,6 +94,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
                 }
                 Vec::new()
             }
+            EventMsg::TaskStarted(ev) => self.handle_task_started(ev),
             EventMsg::TaskComplete(_) => self.handle_task_complete(),
             EventMsg::Error(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
                 message: ev.message.clone(),
@@ -293,6 +296,10 @@ impl ExperimentalEventProcessorWithJsonOutput {
         vec![ConversationEvent::ItemStarted(ItemStartedEvent { item })]
     }
 
+    fn handle_task_started(&self, _: &TaskStartedEvent) -> Vec<ConversationEvent> {
+        vec![ConversationEvent::TurnStarted(TurnStartedEvent {})]
+    }
+
     fn handle_task_complete(&mut self) -> Vec<ConversationEvent> {
         let usage = if let Some(u) = &self.last_total_token_usage {
             Usage {
@@ -318,7 +325,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
             }));
         }
 
-        items.push(ConversationEvent::SessionCompleted(SessionCompletedEvent {
+        items.push(ConversationEvent::TurnCompleted(TurnCompletedEvent {
             usage,
         }));
 
