@@ -188,8 +188,6 @@ impl McpConnectionManager {
             return Ok((Self::default(), ClientStartErrors::default()));
         }
 
-        tracing::error!("new mcp_servers: {mcp_servers:?} use_rmcp_client: {use_rmcp_client}");
-
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
         let mut errors = ClientStartErrors::new();
