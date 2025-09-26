@@ -52,12 +52,12 @@ fn calculate_changes_from_diff(diff: &str) -> (usize, usize) {
         if let Some(first_char) = line.chars().next() {
             match first_char {
                 '+' => {
-                    if !line.starts_with("+++") {
+                    if !line.starts_with("+++ ") {
                         added += 1;
                     }
                 }
                 '-' => {
-                    if !line.starts_with("---") {
+                    if !line.starts_with("--- ") {
                         removed += 1;
                     }
                 }
@@ -233,5 +233,29 @@ mod tests {
 -deleted line
  line3"#;
         assert_eq!(calculate_changes_from_diff(diff), (0, 1));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_with_increment_operators() {
+        let diff = r#"--- a/file.rs
++++ b/file.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+-++old_counter;
++++new_counter;
+ }"#;
+        assert_eq!(calculate_changes_from_diff(diff), (1, 1));
+    }
+
+    #[test]
+    fn test_calculate_changes_from_diff_with_decrement_operators() {
+        let diff = r#"--- a/file.rs
++++ b/file.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+---old_counter;
++--new_counter;
+ }"#;
+        assert_eq!(calculate_changes_from_diff(diff), (1, 1));
     }
 }
