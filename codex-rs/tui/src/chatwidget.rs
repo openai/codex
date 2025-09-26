@@ -84,7 +84,7 @@ use crate::slash_command::SlashCommand;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
-use crate::user_approval_widget::ApprovalRequest;
+use crate::bottom_pane::ApprovalRequest;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
