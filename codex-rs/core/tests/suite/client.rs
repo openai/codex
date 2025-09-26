@@ -21,8 +21,8 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
-use core_test_support::non_sandbox_test;
 use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
@@ -127,7 +127,7 @@ fn write_auth_json(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_includes_initial_messages_and_sends_prior_items() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Create a fake rollout session file with prior user + system + assistant messages.
     let tmpdir = TempDir::new().unwrap();
@@ -293,7 +293,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_conversation_id_and_model_headers_in_request() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Mock server
     let server = MockServer::start().await;
@@ -418,7 +418,7 @@ async fn includes_base_instructions_override_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chatgpt_auth_sends_correct_request() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Mock server
     let server = MockServer::start().await;
@@ -492,7 +492,7 @@ async fn chatgpt_auth_sends_correct_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Mock server
     let server = MockServer::start().await;
@@ -619,7 +619,7 @@ async fn includes_user_instructions_message_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_responses_request_includes_store_and_reasoning_ids() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = MockServer::start().await;
 
@@ -763,9 +763,10 @@ async fn token_count_includes_rate_limits_snapshot() {
         .insert_header("content-type", "text/event-stream")
         .insert_header("x-codex-primary-used-percent", "12.5")
         .insert_header("x-codex-secondary-used-percent", "40.0")
-        .insert_header("x-codex-primary-over-secondary-limit-percent", "75.0")
         .insert_header("x-codex-primary-window-minutes", "10")
         .insert_header("x-codex-secondary-window-minutes", "60")
+        .insert_header("x-codex-primary-reset-after-seconds", "1800")
+        .insert_header("x-codex-secondary-reset-after-seconds", "7200")
         .set_body_raw(sse_body, "text/event-stream");
 
     Mock::given(method("POST"))
@@ -811,11 +812,16 @@ async fn token_count_includes_rate_limits_snapshot() {
         json!({
             "info": null,
             "rate_limits": {
-                "primary_used_percent": 12.5,
-                "secondary_used_percent": 40.0,
-                "primary_to_secondary_ratio_percent": 75.0,
-                "primary_window_minutes": 10,
-                "secondary_window_minutes": 60
+                "primary": {
+                    "used_percent": 12.5,
+                    "window_minutes": 10,
+                    "resets_in_seconds": 1800
+                },
+                "secondary": {
+                    "used_percent": 40.0,
+                    "window_minutes": 60,
+                    "resets_in_seconds": 7200
+                }
             }
         })
     );
@@ -853,11 +859,16 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "model_context_window": 272000
             },
             "rate_limits": {
-                "primary_used_percent": 12.5,
-                "secondary_used_percent": 40.0,
-                "primary_to_secondary_ratio_percent": 75.0,
-                "primary_window_minutes": 10,
-                "secondary_window_minutes": 60
+                "primary": {
+                    "used_percent": 12.5,
+                    "window_minutes": 10,
+                    "resets_in_seconds": 1800
+                },
+                "secondary": {
+                    "used_percent": 40.0,
+                    "window_minutes": 60,
+                    "resets_in_seconds": 7200
+                }
             }
         })
     );
@@ -868,7 +879,20 @@ async fn token_count_includes_rate_limits_snapshot() {
     let final_snapshot = final_payload
         .rate_limits
         .expect("latest rate limit snapshot should be retained");
-    assert_eq!(final_snapshot.primary_used_percent, 12.5);
+    assert_eq!(
+        final_snapshot
+            .primary
+            .as_ref()
+            .map(|window| window.used_percent),
+        Some(12.5)
+    );
+    assert_eq!(
+        final_snapshot
+            .primary
+            .as_ref()
+            .and_then(|window| window.resets_in_seconds),
+        Some(1800)
+    );
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
 }
@@ -904,11 +928,16 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
     let codex = codex_fixture.codex.clone();
 
     let expected_limits = json!({
-        "primary_used_percent": 100.0,
-        "secondary_used_percent": 87.5,
-        "primary_to_secondary_ratio_percent": 95.0,
-        "primary_window_minutes": 15,
-        "secondary_window_minutes": 60
+        "primary": {
+            "used_percent": 100.0,
+            "window_minutes": 15,
+            "resets_in_seconds": null
+        },
+        "secondary": {
+            "used_percent": 87.5,
+            "window_minutes": 60,
+            "resets_in_seconds": null
+        }
     });
 
     let submission_id = codex
@@ -1112,7 +1141,7 @@ fn create_dummy_codex_auth() -> CodexAuth {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Skip under Codex sandbox network restrictions (mirrors other tests).
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Mock server that will receive three sequential requests and return the same SSE stream
     // each time: a few deltas, then a final assistant message, then completed.

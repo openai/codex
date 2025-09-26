@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
@@ -14,6 +15,7 @@ use codex_cli::login::run_logout;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use owo_colors::OwoColorize;
@@ -21,6 +23,7 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+mod pre_main_hardening;
 
 use crate::mcp_cmd::McpCli;
 use crate::proto::ProtoCli;
@@ -85,6 +88,10 @@ enum Subcommand {
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
+
+    /// Internal: run the responses API proxy.
+    #[clap(hide = true)]
+    ResponsesApiProxy(ResponsesApiProxyArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -191,6 +198,34 @@ fn print_exit_messages(exit_info: AppExitInfo) {
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
+    }
+}
+
+pub(crate) const CODEX_SECURE_MODE_ENV_VAR: &str = "CODEX_SECURE_MODE";
+
+/// As early as possible in the process lifecycle, apply hardening measures
+/// if the CODEX_SECURE_MODE environment variable is set to "1".
+#[ctor::ctor]
+fn pre_main_hardening() {
+    let secure_mode = match std::env::var(CODEX_SECURE_MODE_ENV_VAR) {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+
+    if secure_mode == "1" {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        crate::pre_main_hardening::pre_main_hardening_linux();
+
+        #[cfg(target_os = "macos")]
+        crate::pre_main_hardening::pre_main_hardening_macos();
+
+        #[cfg(windows)]
+        crate::pre_main_hardening::pre_main_hardening_windows();
+    }
+
+    // Always clear this env var so child processes don't inherit it.
+    unsafe {
+        std::env::remove_var(CODEX_SECURE_MODE_ENV_VAR);
     }
 }
 
@@ -311,6 +346,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+        }
+        Some(Subcommand::ResponsesApiProxy(args)) => {
+            tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
+                .await
+                .context("responses-api-proxy blocking task panicked")??;
         }
     }
 

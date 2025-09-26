@@ -156,7 +156,7 @@ impl std::fmt::Display for UsageLimitReachedError {
                 )
             }
             Some(PlanType::Known(KnownPlan::Free)) => {
-                "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
+                "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
                     .to_string()
             }
             Some(PlanType::Known(KnownPlan::Pro))
@@ -267,14 +267,20 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::RateLimitWindow;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
         RateLimitSnapshot {
-            primary_used_percent: 0.5,
-            secondary_used_percent: 0.3,
-            primary_to_secondary_ratio_percent: 0.7,
-            primary_window_minutes: 60,
-            secondary_window_minutes: 120,
+            primary: Some(RateLimitWindow {
+                used_percent: 50.0,
+                window_minutes: Some(60),
+                resets_in_seconds: Some(3600),
+            }),
+            secondary: Some(RateLimitWindow {
+                used_percent: 30.0,
+                window_minutes: Some(120),
+                resets_in_seconds: Some(7200),
+            }),
         }
     }
 
@@ -300,7 +306,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
+            "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
         );
     }
 
