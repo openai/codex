@@ -85,6 +85,7 @@ unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
 pathdiff = { workspace = true }
+toml = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

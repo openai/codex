@@ -18,7 +18,6 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::persist_model_selection;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::mcp_protocol::AuthMode;
@@ -152,20 +151,10 @@ pub async fn run_main(
         }
     };
 
-    let mut config = {
-        // Load configuration and support CLI overrides.
+    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone());
 
-        #[allow(clippy::print_stderr)]
-        match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides) {
-            Ok(config) => config,
-            Err(err) => {
-                eprintln!("Error loading configuration: {err}");
-                std::process::exit(1);
-            }
-        }
-    };
-
-    // we load config.toml here to determine project state.
+    // TODO(dylan): expose project in Config, migrate active_profile below to use Config,
+    // and remove use of config_toml in tui
     #[allow(clippy::print_stderr)]
     let config_toml = {
         let codex_home = match find_codex_home() {
@@ -176,7 +165,7 @@ pub async fn run_main(
             }
         };
 
-        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides) {
+        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides.clone()) {
             Ok(config_toml) => config_toml,
             Err(err) => {
                 eprintln!("Error loading config.toml: {err}");
@@ -190,13 +179,7 @@ pub async fn run_main(
         .clone()
         .or_else(|| config_toml.profile.clone());
 
-    let should_show_trust_screen = determine_repo_trust_state(
-        &mut config,
-        &config_toml,
-        approval_policy,
-        sandbox_mode,
-        cli_profile_override,
-    )?;
+    let should_show_trust_screen = determine_repo_trust_state(&config, &config_toml);
 
     let internal_storage = InternalStorage::load(&config.codex_home);
 
@@ -245,6 +228,8 @@ pub async fn run_main(
     run_ratatui_app(
         cli,
         config,
+        overrides,
+        cli_kv_overrides,
         internal_storage,
         active_profile,
         should_show_trust_screen,
@@ -255,12 +240,13 @@ pub async fn run_main(
 
 async fn run_ratatui_app(
     cli: Cli,
-    config: Config,
+    mut config: Config,
+    overrides: ConfigOverrides,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
     mut internal_storage: InternalStorage,
     active_profile: Option<String>,
     should_show_trust_screen: bool,
 ) -> color_eyre::Result<AppExitInfo> {
-    let mut config = config;
     color_eyre::install()?;
 
     // Forward panic reports through tracing so they appear in the UI status
@@ -343,8 +329,8 @@ async fn run_ratatui_app(
         )
         .await?;
         if let Some(TrustDirectorySelection::Trust) = directory_trust_decision {
-            config.approval_policy = AskForApproval::OnRequest;
-            config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+            // if the user made an explicit decision to trust the directory, reload the config
+            config = load_config_or_exit(cli_kv_overrides, overrides);
         }
     }
 
@@ -468,39 +454,35 @@ fn get_login_status(config: &Config) -> LoginStatus {
     }
 }
 
-/// Determine if user has configured a sandbox / approval policy,
-/// or if the current cwd project is trusted, and updates the config
-/// accordingly.
-fn determine_repo_trust_state(
-    config: &mut Config,
-    config_toml: &ConfigToml,
-    approval_policy_overide: Option<AskForApproval>,
-    sandbox_mode_override: Option<SandboxMode>,
-    config_profile_override: Option<String>,
-) -> std::io::Result<bool> {
-    let config_profile = config_toml.get_config_profile(config_profile_override)?;
+fn load_config_or_exit(
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    overrides: ConfigOverrides,
+) -> Config {
+    #[allow(clippy::print_stderr)]
+    match Config::load_with_cli_overrides(cli_kv_overrides, overrides) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Error loading configuration: {err}");
+            std::process::exit(1);
+        }
+    }
+}
 
-    if approval_policy_overide.is_some() || sandbox_mode_override.is_some() {
+/// Determine if user has configured a sandbox / approval policy,
+/// or if the current cwd project is already trusted. If not, we need to
+/// show the trust screen.
+fn determine_repo_trust_state(config: &Config, config_toml: &ConfigToml) -> bool {
+    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
         // if the user has overridden either approval policy or sandbox mode,
         // skip the trust flow
-        Ok(false)
-    } else if config_profile.approval_policy.is_some() {
-        // if the user has specified settings in a config profile, skip the trust flow
-        // todo: profile sandbox mode?
-        Ok(false)
-    } else if config_toml.approval_policy.is_some() || config_toml.sandbox_mode.is_some() {
-        // if the user has specified either approval policy or sandbox mode in config.toml
-        // skip the trust flow
-        Ok(false)
+        false
     } else if config_toml.is_cwd_trusted(&config.cwd) {
-        // if the current cwd project is trusted and no config has been set
-        // skip the trust flow and set the approval policy and sandbox mode
-        config.approval_policy = AskForApproval::OnRequest;
-        config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
-        Ok(false)
+        // if the current cwd project is already trusted, Config derives the policy.
+        // skip the trust flow
+        false
     } else {
         // if none of the above conditions are met, show the trust screen
-        Ok(true)
+        true
     }
 }
 
@@ -552,6 +534,8 @@ mod tests {
     use codex_core::auth::write_auth_json;
     use codex_core::token_data::IdTokenInfo;
     use codex_core::token_data::TokenData;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
@@ -660,5 +644,50 @@ mod tests {
             Some("gpt5"),
             false,
         ));
+    }
+
+    #[test]
+    fn test_determine_repo_trust_state() -> anyhow::Result<()> {
+        let default_cfg = make_config();
+        let default_config_toml = ConfigToml {
+            ..Default::default()
+        };
+
+        let show_trust = determine_repo_trust_state(&default_cfg, &default_config_toml);
+        assert!(show_trust);
+
+        let trusted_project_path = get_next_codex_home();
+        let config_toml_with_trust = ConfigToml {
+            projects: Some(HashMap::from([(
+                trusted_project_path.to_string_lossy().to_string(),
+                codex_core::config::ProjectConfig {
+                    trust_level: Some("trusted".to_string()),
+                },
+            )])),
+            ..Default::default()
+        };
+        let cfg_with_trust = Config::load_from_base_config_with_overrides(
+            config_toml_with_trust.clone(),
+            ConfigOverrides {
+                cwd: Some(trusted_project_path.clone()),
+                ..Default::default()
+            },
+            trusted_project_path,
+        )?;
+        let show_trust = determine_repo_trust_state(&cfg_with_trust, &config_toml_with_trust);
+        assert!(!show_trust);
+
+        let cfg_override = Config::load_from_base_config_with_overrides(
+            default_config_toml.clone(),
+            ConfigOverrides {
+                approval_policy: Some(AskForApproval::Never),
+                ..Default::default()
+            },
+            get_next_codex_home(),
+        )?;
+        let show_trust = determine_repo_trust_state(&cfg_override, &default_config_toml);
+        assert!(!show_trust);
+
+        Ok(())
     }
 }
