@@ -159,7 +159,7 @@ async fn device_code_login_integration_handles_error_payload() {
     let issuer = format!("http://127.0.0.1:{port}");
 
     let server_handle = std::thread::spawn(move || {
-        for mut request in server.incoming_requests() {
+        for request in server.incoming_requests() {
             match request.url() {
                 "/devicecode/usercode" => {
                     let resp = json_response(json!({
@@ -270,7 +270,7 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
     let jwt_thread = jwt.clone();
 
     let server_handle = std::thread::spawn(move || {
-        for request in server.incoming_requests() {
+        for mut request in server.incoming_requests() {
             match request.url() {
                 "/devicecode/usercode" => {
                     let resp = json_response(json!({

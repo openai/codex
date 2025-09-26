@@ -413,7 +413,10 @@ async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0) // disable keep-alive
+        .build()
+        .unwrap();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -572,7 +575,10 @@ pub(crate) async fn obtain_api_key(
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0) // disable keep-alive
+        .build()
+        .unwrap();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -637,6 +643,9 @@ mod tests {
         let body = value.to_string();
         let mut response = Response::from_string(body);
         if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]) {
+            response.add_header(header);
+        }
+        if let Ok(header) = Header::from_bytes(&b"Connection"[..], &b"close"[..]) {
             response.add_header(header);
         }
         response
