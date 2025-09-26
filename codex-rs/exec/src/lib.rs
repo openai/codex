@@ -15,6 +15,7 @@ use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::git_info::git_repo_has_commits;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -183,9 +184,19 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // is using.
     event_processor.print_config_summary(&config, &prompt);
 
-    if !skip_git_repo_check && get_git_repo_root(&config.cwd.to_path_buf()).is_none() {
-        eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
-        std::process::exit(1);
+    if !skip_git_repo_check {
+        if get_git_repo_root(&config.cwd.to_path_buf()).is_none() {
+            eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
+            std::process::exit(1);
+        }
+        
+        // If inside a git repo but with no commits, provide a clear message
+        if !git_repo_has_commits(&config.cwd).await {
+            eprintln!(
+                "This Git repository has no commits. Initialize it first:\n  git add -A && git commit -m 'Initial commit'\nOr pass --skip-git-repo-check to bypass."
+            );
+            std::process::exit(1);
+        }
     }
 
     let conversation_manager =
