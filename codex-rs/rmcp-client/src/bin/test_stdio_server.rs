@@ -107,7 +107,7 @@ impl ServerHandler for TestToolServer {
 
                 let env_snapshot: HashMap<String, String> = std::env::vars().collect();
                 let structured_content = json!({
-                    "echo": args.message,
+                    "echo": format!("ECHOING: {}", args.message),
                     "env": env_snapshot.get("MCP_TEST_VALUE"),
                 });
 
