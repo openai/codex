@@ -1185,28 +1185,36 @@ impl CodexMessageProcessor {
             cancellation_token,
         } = params;
 
-        let (cancel_flag, active_token) = if let Some(token) = cancellation_token {
-            if let Some(existing) = self.fuzzy_search_tokens.get(&token) {
-                existing.store(true, Ordering::Relaxed);
+        // Create a new cancel flag; if a token is provided, cancel any previous
+        // search with the same token and store this flag under that token.
+        let (active_token, cancel_flag) = match cancellation_token {
+            Some(token) => {
+                if let Some(existing) = self.fuzzy_search_tokens.get(&token) {
+                    existing.store(true, Ordering::Relaxed);
+                }
+                let flag = Arc::new(AtomicBool::new(false));
+                self.fuzzy_search_tokens.insert(token.clone(), flag.clone());
+                (Some(token), flag)
             }
-            let flag = Arc::new(AtomicBool::new(false));
-            self.fuzzy_search_tokens.insert(token.clone(), flag.clone());
-            (flag, Some(token))
-        } else {
-            (Arc::new(AtomicBool::new(false)), None)
+            None => (None, Arc::new(AtomicBool::new(false))),
         };
 
         let files = run_fuzzy_file_search(query, roots, cancel_flag.clone()).await;
 
-        if let Some(token) = active_token
-            && let Some(current_flag) = self.fuzzy_search_tokens.get(&token)
-            && Arc::ptr_eq(current_flag, &cancel_flag)
-        {
-            self.fuzzy_search_tokens.remove(&token);
+        // If we used a token and the map still points at the same flag, clean it up.
+        if let Some(token) = active_token {
+            if self
+                .fuzzy_search_tokens
+                .get(&token)
+                .map_or(false, |current| Arc::ptr_eq(current, &cancel_flag))
+            {
+                self.fuzzy_search_tokens.remove(&token);
+            }
         }
 
-        let response = FuzzyFileSearchResponse { files };
-        self.outgoing.send_response(request_id, response).await;
+        self.outgoing
+            .send_response(request_id, FuzzyFileSearchResponse { files })
+            .await;
     }
 }
 

@@ -9,7 +9,7 @@ use tokio::task::JoinSet;
 use tracing::warn;
 
 const LIMIT_PER_ROOT: usize = 50;
-const DEFAULT_THREAD_COUNT: usize = 2;
+const DEFAULT_THREAD_COUNT: usize = 4;
 const COMPUTE_INDICES: bool = true;
 
 pub(crate) async fn run_fuzzy_file_search(
