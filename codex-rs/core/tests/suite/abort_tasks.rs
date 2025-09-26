@@ -18,8 +18,22 @@ use wiremock::matchers::body_string_contains;
 async fn interrupt_long_running_tool_emits_turn_aborted() {
     // Prepare SSE: one function call to the `shell` tool that sleeps for 60s,
     // with a large timeout so it does not finish on its own.
+    // Use a cross-platform blocking command so the tool stays running until we interrupt it.
+    #[cfg(target_os = "windows")]
+    let command = vec![
+        "powershell".to_string(),
+        "-Command".to_string(),
+        "Start-Sleep -Seconds 60".to_string(),
+    ];
+    #[cfg(not(target_os = "windows"))]
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "sleep 60".to_string(),
+    ];
+
     let args = json!({
-        "command": ["bash", "-lc", "sleep 60"],
+        "command": command,
         "timeout_ms": 60_000
     })
     .to_string();
