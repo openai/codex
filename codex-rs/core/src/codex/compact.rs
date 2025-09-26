@@ -93,7 +93,8 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
+        let attempt_result =
+            drain_to_completed(&sess, turn_context.as_ref(), &sub_id, &prompt).await;
 
         match attempt_result {
             Ok(()) => {
@@ -229,6 +230,7 @@ pub(crate) fn build_compacted_history(
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
+    sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
     let mut stream = turn_context.client.clone().stream(prompt).await?;
@@ -244,7 +246,12 @@ async fn drain_to_completed(
             Ok(ResponseEvent::OutputItemDone(item)) => {
                 sess.record_into_history(std::slice::from_ref(&item)).await;
             }
-            Ok(ResponseEvent::Completed { .. }) => {
+            Ok(ResponseEvent::RateLimits(snapshot)) => {
+                sess.update_rate_limits(sub_id, snapshot).await;
+            }
+            Ok(ResponseEvent::Completed { token_usage, .. }) => {
+                sess.update_token_usage_info(sub_id, turn_context, token_usage.as_ref())
+                    .await;
                 return Ok(());
             }
             Ok(_) => continue,
