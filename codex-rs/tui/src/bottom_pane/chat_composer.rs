@@ -24,10 +24,7 @@ use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
-use super::footer::CtrlCReminderState;
-use super::footer::FooterContent;
-use super::footer::FooterRenderParams;
-use super::footer::ShortcutsState;
+use super::footer::FooterProps;
 use super::footer::render_footer;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
@@ -1266,22 +1263,14 @@ impl WidgetRef for ChatComposer {
                 } else {
                     popup_rect
                 };
-                let content = if self.ctrl_c_quit_hint {
-                    FooterContent::CtrlCReminder(CtrlCReminderState {
-                        is_task_running: self.is_task_running,
-                    })
-                } else {
-                    FooterContent::Shortcuts(ShortcutsState {
-                        use_shift_enter_hint: self.use_shift_enter_hint,
-                        esc_backtrack_hint: self.esc_backtrack_hint,
-                    })
-                };
-
                 render_footer(
                     hint_rect,
                     buf,
-                    FooterRenderParams {
-                        content,
+                    FooterProps {
+                        ctrl_c_quit_hint: self.ctrl_c_quit_hint,
+                        is_task_running: self.is_task_running,
+                        esc_backtrack_hint: self.esc_backtrack_hint,
+                        use_shift_enter_hint: self.use_shift_enter_hint,
                         token_usage_info: self.token_usage_info.as_ref(),
                     },
                 );

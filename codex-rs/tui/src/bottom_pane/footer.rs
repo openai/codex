@@ -15,31 +15,45 @@ use ratatui::widgets::WidgetRef;
 use crate::key_hint;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct FooterRenderParams<'a> {
-    pub(crate) content: FooterContent,
+pub(crate) struct FooterProps<'a> {
+    pub(crate) ctrl_c_quit_hint: bool,
+    pub(crate) is_task_running: bool,
+    pub(crate) esc_backtrack_hint: bool,
+    pub(crate) use_shift_enter_hint: bool,
     pub(crate) token_usage_info: Option<&'a TokenUsageInfo>,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CtrlCReminderState {
+struct CtrlCReminderState {
     pub(crate) is_task_running: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ShortcutsState {
+struct ShortcutsState {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) esc_backtrack_hint: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum FooterContent {
+enum FooterContent {
     Shortcuts(ShortcutsState),
     CtrlCReminder(CtrlCReminderState),
 }
 
-pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, params: FooterRenderParams<'_>) {
-    let mut spans = footer_spans(params.content);
-    if let Some(token_usage_info) = params.token_usage_info {
+pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps<'_>) {
+    let content = if props.ctrl_c_quit_hint {
+        FooterContent::CtrlCReminder(CtrlCReminderState {
+            is_task_running: props.is_task_running,
+        })
+    } else {
+        FooterContent::Shortcuts(ShortcutsState {
+            use_shift_enter_hint: props.use_shift_enter_hint,
+            esc_backtrack_hint: props.esc_backtrack_hint,
+        })
+    };
+
+    let mut spans = footer_spans(content);
+    if let Some(token_usage_info) = props.token_usage_info {
         append_token_usage_spans(&mut spans, token_usage_info);
     }
 
@@ -50,7 +64,7 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, params: FooterRenderPa
     Line::from(spans).render_ref(area, buf);
 }
 
-pub(crate) fn footer_spans(content: FooterContent) -> Vec<Span<'static>> {
+fn footer_spans(content: FooterContent) -> Vec<Span<'static>> {
     match content {
         FooterContent::Shortcuts(state) => shortcuts_spans(state),
         FooterContent::CtrlCReminder(state) => ctrl_c_reminder_spans(state),
