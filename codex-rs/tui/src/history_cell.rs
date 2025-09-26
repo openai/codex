@@ -1098,10 +1098,10 @@ impl HistoryCell for FinalMessageSeparator {
             let worked_for = format!(" Worked for {elapsed_seconds} ");
             let worked_for_width = worked_for.width();
             vec![Line::from_iter([
-                "──".dim(),
+                "─".dim(),
                 worked_for.dim(),
                 "─"
-                    .repeat(width as usize - worked_for_width - "──".width())
+                    .repeat(width as usize - worked_for_width - "─".width())
                     .dim(),
             ])]
         } else {
