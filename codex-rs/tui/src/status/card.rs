@@ -23,7 +23,6 @@ use super::helpers::compose_agents_summary;
 use super::helpers::compose_model_display;
 use super::helpers::format_directory_display;
 use super::helpers::format_tokens_compact;
-use super::rate_limits::RESET_BULLET;
 use super::rate_limits::RateLimitSnapshotDisplay;
 use super::rate_limits::StatusRateLimitData;
 use super::rate_limits::compose_rate_limit_data;
@@ -149,8 +148,7 @@ impl StatusHistoryCell {
                     let base_line = Line::from(base_spans.clone());
 
                     if let Some(resets_at) = row.resets_at.as_ref() {
-                        let resets_span =
-                            Span::from(format!("{RESET_BULLET} resets {resets_at}")).dim();
+                        let resets_span = Span::from(format!("(resets {resets_at})")).dim();
                         let mut inline_spans = base_spans.clone();
                         inline_spans.push(Span::from(" ").dim());
                         inline_spans.push(resets_span.clone());
@@ -171,7 +169,10 @@ impl StatusHistoryCell {
                 lines
             }
             StatusRateLimitData::Missing => {
-                vec![formatter.line("Limits", vec![Span::from("data not available yet").dim()])]
+                vec![formatter.line(
+                    "Limits",
+                    vec![Span::from("send a message to load usage data").dim()],
+                )]
             }
         }
     }
@@ -233,7 +234,7 @@ impl HistoryCell for StatusHistoryCell {
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
         }
-        push_label(&mut labels, &mut seen, "Token Usage");
+        push_label(&mut labels, &mut seen, "Token usage");
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
@@ -263,7 +264,7 @@ impl HistoryCell for StatusHistoryCell {
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
-        lines.push(formatter.line("Token Usage", self.token_usage_spans()));
+        lines.push(formatter.line("Token usage", self.token_usage_spans()));
 
         lines.extend(self.rate_limit_lines(available_inner_width, &formatter));
 
