@@ -108,10 +108,15 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let auth_base_url = opts.issuer.trim_end_matches('/').to_owned();
 
     let uc = request_user_code(&client, &auth_base_url).await?;
-    eprintln!(
-        "To authenticate, enter this code when prompted: {} (interval {}s)",
-        uc.user_code, uc.interval
+    println!(
+        "To authenticate, visit: {}/deviceauth/authorize and enter code: {}",
+        opts.issuer.trim_end_matches('/'),
+        uc.user_code
     );
+    // eprintln!(
+    //     "To authenticate, enter this code when prompted: {} (interval {}s)",
+    //     uc.user_code, uc.interval
+    // );
 
     let code_resp = poll_for_token(
         &client,
