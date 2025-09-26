@@ -54,9 +54,10 @@ async fn main() -> anyhow::Result<()> {
 
         let account_header = HeaderName::from_static("chatgpt-account-id");
         if let Some(acc) = headers.get(&account_header).and_then(|v| v.to_str().ok())
-            && !acc.is_empty() {
-                client = client.with_chatgpt_account_id(acc.to_string());
-            }
+            && !acc.is_empty()
+        {
+            client = client.with_chatgpt_account_id(acc.to_string());
+        }
 
         if authed {
             println!("auth: bearer token configured");
