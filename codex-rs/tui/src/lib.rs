@@ -74,7 +74,7 @@ mod version;
 mod wrapping;
 
 #[cfg(test)]
-mod test_backend;
+pub mod test_backend;
 
 #[cfg(not(debug_assertions))]
 mod updates;

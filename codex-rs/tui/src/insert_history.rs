@@ -24,10 +24,8 @@ use ratatui::text::Span;
 
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
-pub(crate) fn insert_history_lines<B>(
-    terminal: &mut crate::custom_terminal::Terminal<B>,
-    lines: Vec<Line>,
-) where
+pub fn insert_history_lines<B>(terminal: &mut crate::custom_terminal::Terminal<B>, lines: Vec<Line>)
+where
     B: Backend + Write,
 {
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
