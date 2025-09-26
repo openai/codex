@@ -16,11 +16,16 @@ use crate::exec_events::FileChangeItem;
 use crate::exec_events::FileUpdateChange;
 use crate::exec_events::ItemCompletedEvent;
 use crate::exec_events::ItemStartedEvent;
+use crate::exec_events::ItemUpdatedEvent;
 use crate::exec_events::PatchApplyStatus;
 use crate::exec_events::PatchChangeKind;
 use crate::exec_events::ReasoningItem;
 use crate::exec_events::SessionCreatedEvent;
+use crate::exec_events::TodoItem;
+use crate::exec_events::TodoListItem;
 use codex_core::config::Config;
+use codex_core::plan_tool::StepStatus;
+use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::Event;
@@ -41,12 +46,20 @@ pub struct ExperimentalEventProcessorWithJsonOutput {
     // Tracks running commands by call_id, including the associated item id.
     running_commands: HashMap<String, RunningCommand>,
     running_patch_applies: HashMap<String, PatchApplyBeginEvent>,
+    // Tracks the todo list for the current turn (at most one per turn).
+    running_todo_list: Option<RunningTodoList>,
 }
 
 #[derive(Debug, Clone)]
 struct RunningCommand {
     command: String,
     item_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct RunningTodoList {
+    item_id: String,
+    items: Vec<TodoItem>,
 }
 
 impl ExperimentalEventProcessorWithJsonOutput {
@@ -56,6 +69,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
             next_event_id: AtomicU64::new(0),
             running_commands: HashMap::new(),
             running_patch_applies: HashMap::new(),
+            running_todo_list: None,
         }
     }
 
@@ -74,6 +88,8 @@ impl ExperimentalEventProcessorWithJsonOutput {
             EventMsg::StreamError(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
                 message: ev.message.clone(),
             })],
+            EventMsg::PlanUpdate(ev) => self.handle_plan_update(ev),
+            EventMsg::TaskComplete(_) => self.handle_task_complete(),
             _ => Vec::new(),
         }
     }
@@ -231,6 +247,55 @@ impl ExperimentalEventProcessorWithJsonOutput {
         vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
             item,
         })]
+    }
+
+    fn todo_items_from_plan(&self, args: &UpdatePlanArgs) -> Vec<TodoItem> {
+        args.plan
+            .iter()
+            .map(|p| TodoItem {
+                text: p.step.clone(),
+                completed: matches!(p.status, StepStatus::Completed),
+            })
+            .collect()
+    }
+
+    fn handle_plan_update(&mut self, args: &UpdatePlanArgs) -> Vec<ConversationEvent> {
+        let items = self.todo_items_from_plan(args);
+
+        if let Some(running) = &mut self.running_todo_list {
+            running.items = items.clone();
+            let item = ConversationItem {
+                id: running.item_id.clone(),
+                details: ConversationItemDetails::TodoList(TodoListItem { items }),
+            };
+            return vec![ConversationEvent::ItemUpdated(ItemUpdatedEvent { item })];
+        }
+
+        let item_id = self.get_next_item_id();
+        self.running_todo_list = Some(RunningTodoList {
+            item_id: item_id.clone(),
+            items: items.clone(),
+        });
+        let item = ConversationItem {
+            id: item_id,
+            details: ConversationItemDetails::TodoList(TodoListItem { items }),
+        };
+        vec![ConversationEvent::ItemStarted(ItemStartedEvent { item })]
+    }
+
+    fn handle_task_complete(&mut self) -> Vec<ConversationEvent> {
+        if let Some(running) = self.running_todo_list.take() {
+            let item = ConversationItem {
+                id: running.item_id,
+                details: ConversationItemDetails::TodoList(TodoListItem {
+                    items: running.items,
+                }),
+            };
+            return vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
+                item,
+            })];
+        }
+        Vec::new()
     }
 }
 

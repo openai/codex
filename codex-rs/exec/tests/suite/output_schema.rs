@@ -1,17 +1,14 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use assert_cmd::prelude::*;
 use core_test_support::responses;
+use core_test_support::test_codex_exec::test_codex_exec;
 use serde_json::Value;
-use std::process::Command;
-use tempfile::TempDir;
 use wiremock::matchers::any;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
-    let home = TempDir::new()?;
-    let workspace = TempDir::new()?;
+    let test = test_codex_exec();
 
     let schema_contents = serde_json::json!({
         "type": "object",
@@ -21,7 +18,7 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
         "required": ["answer"],
         "additionalProperties": false
     });
-    let schema_path = workspace.path().join("schema.json");
+    let schema_path = test.cwd_path().join("schema.json");
     std::fs::write(&schema_path, serde_json::to_vec_pretty(&schema_contents)?)?;
     let expected_schema: Value = schema_contents;
 
@@ -36,14 +33,11 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
     ]);
     responses::mount_sse_once(&server, any(), body).await;
 
-    Command::cargo_bin("codex-exec")?
-        .current_dir(workspace.path())
-        .env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()))
+    test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
+        // keep using -C in the test to exercise the flag as well
         .arg("-C")
-        .arg(workspace.path())
+        .arg(test.cwd_path())
         .arg("--output-schema")
         .arg(&schema_path)
         .arg("-m")
