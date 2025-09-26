@@ -1,5 +1,6 @@
 // Aggregates all former standalone integration tests as modules.
 
+#[cfg(not(target_os = "windows"))]
 mod abort_tasks;
 mod cli_stream;
 mod client;

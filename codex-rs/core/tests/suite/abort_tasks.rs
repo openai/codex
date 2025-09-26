@@ -14,7 +14,6 @@ use wiremock::matchers::body_string_contains;
 
 /// Integration test: spawn a long‑running shell tool via a mocked Responses SSE
 /// function call, then interrupt the session and expect TurnAborted.
-#[cfg(not(target_os = "windows"))] // Can't run on windows due to the sleep command.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_long_running_tool_emits_turn_aborted() {
     let command = vec![
