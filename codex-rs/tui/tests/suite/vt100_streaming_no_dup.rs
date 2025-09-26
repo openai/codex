@@ -19,19 +19,11 @@ fn stream_commit_trickle_no_duplication() {
 
     // Step 1: commit first row
     let mut out1 = Vec::new();
-    codex_tui::insert_history::insert_history_lines(
-        &mut t,
-        &mut out1,
-        vec!["one".into()],
-    );
+    codex_tui::insert_history::insert_history_lines(&mut t, &mut out1, vec!["one".into()]);
 
     // Step 2: later commit next row
     let mut out2 = Vec::new();
-    codex_tui::insert_history::insert_history_lines(
-        &mut t,
-        &mut out2,
-        vec!["two".into()],
-    );
+    codex_tui::insert_history::insert_history_lines(&mut t, &mut out2, vec!["two".into()]);
 
     let combined = [out1, out2].concat();
     let s = String::from_utf8_lossy(&combined);
