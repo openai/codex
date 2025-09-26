@@ -85,6 +85,7 @@ icu_decimal = "2.0.0"
 icu_locale_core = "2.0.0"
 ignore = "0.4.23"
 image = { version = "^0.25.8", default-features = false }
+indexmap = "2.6.0"
 insta = "1.43.2"
 itertools = "0.14.0"
 landlock = "0.4.1"

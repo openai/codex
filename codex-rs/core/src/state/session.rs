@@ -4,7 +4,6 @@ use std::collections::HashSet;
 
 use codex_protocol::models::ResponseItem;
 
-use crate::codex::AgentTask;
 use crate::conversation_history::ConversationHistory;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
@@ -14,7 +13,6 @@ use crate::protocol::TokenUsageInfo;
 #[derive(Default)]
 pub(crate) struct SessionState {
     pub(crate) approved_commands: HashSet<Vec<String>>,
-    pub(crate) current_task: Option<AgentTask>,
     pub(crate) history: ConversationHistory,
     pub(crate) token_info: Option<TokenUsageInfo>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,

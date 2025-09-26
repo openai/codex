@@ -15,6 +15,7 @@ workspace = true
 anyhow = { workspace = true }
 askama = { workspace = true }
 async-channel = { workspace = true }
+async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
@@ -26,6 +27,7 @@ dirs = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
+indexmap = { workspace = true }
 libc = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
