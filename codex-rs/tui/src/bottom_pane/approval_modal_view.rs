@@ -25,8 +25,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use textwrap::wrap;
 
-const HEADER_PREFIX: &str = "▌ ";
-
 /// Modal overlay asking the user to approve or deny one or more requests.
 pub(crate) struct ApprovalModalView {
     current: Option<ApprovalRequestState>,
@@ -49,7 +47,7 @@ impl ApprovalModalView {
                     title: String::new(),
                     ..Default::default()
                 },
-                app_event_tx.clone(),
+                app_event_tx,
             ),
             options: Vec::new(),
             current_complete: false,
@@ -74,10 +72,15 @@ impl ApprovalModalView {
     }
 
     fn build_options(&self) -> (Vec<ApprovalOption>, SelectionViewParams) {
-        let state = self
-            .current
-            .as_ref()
-            .expect("approval view missing current request");
+        let Some(state) = self.current.as_ref() else {
+            return (
+                Vec::new(),
+                SelectionViewParams {
+                    title: String::new(),
+                    ..Default::default()
+                },
+            );
+        };
         let (options, title) = match &state.variant {
             ApprovalVariant::Exec { .. } => (exec_options(), "Allow command?".to_string()),
             ApprovalVariant::ApplyPatch { .. } => (patch_options(), "Apply changes?".to_string()),
@@ -196,7 +199,6 @@ impl ApprovalModalView {
                 height: 1,
             };
             let mut prefixed = Vec::with_capacity(spans.len() + 1);
-            prefixed.push(Span::from(HEADER_PREFIX));
             prefixed.extend(spans);
             Paragraph::new(Line::from(prefixed)).render(row, buf);
             rendered_rows = rendered_rows.saturating_add(1);
@@ -220,15 +222,15 @@ impl BottomPaneView for ApprovalModalView {
         if self.done {
             return CancellationEvent::Handled;
         }
-        if !self.current_complete {
-            if let Some(state) = self.current.as_ref() {
-                match &state.variant {
-                    ApprovalVariant::Exec { id, command } => {
-                        self.handle_exec_decision(id, command, ReviewDecision::Abort);
-                    }
-                    ApprovalVariant::ApplyPatch { id, .. } => {
-                        self.handle_patch_decision(id, ReviewDecision::Abort);
-                    }
+        if !self.current_complete
+            && let Some(state) = self.current.as_ref()
+        {
+            match &state.variant {
+                ApprovalVariant::Exec { id, command } => {
+                    self.handle_exec_decision(id, command, ReviewDecision::Abort);
+                }
+                ApprovalVariant::ApplyPatch { id, .. } => {
+                    self.handle_patch_decision(id, ReviewDecision::Abort);
                 }
             }
         }
@@ -313,7 +315,7 @@ impl ApprovalRequestState {
         if width == 0 {
             return Vec::new();
         }
-        let available = width.saturating_sub(HEADER_PREFIX.len() as u16).max(1) as usize;
+        let available = width.max(1) as usize;
         let mut lines = Vec::new();
         for entry in &self.header_entries {
             match entry {
@@ -343,15 +345,15 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 reason,
             } => {
                 let mut header_entries = Vec::new();
-                if let Some(reason) = reason.clone() {
-                    if !reason.is_empty() {
-                        header_entries.push(HeaderEntry::Reason(reason));
-                        header_entries.push(HeaderEntry::Spacer);
-                    }
+                if let Some(reason) = reason
+                    && !reason.is_empty()
+                {
+                    header_entries.push(HeaderEntry::Reason(reason));
+                    header_entries.push(HeaderEntry::Spacer);
                 }
-                let snippet = exec_snippet(&command);
-                if !snippet.is_empty() {
-                    header_entries.push(HeaderEntry::Info(format!("Command: {snippet}")));
+                let command_snippet = exec_snippet(&command);
+                if !command_snippet.is_empty() {
+                    header_entries.push(HeaderEntry::Info(format!("Command: {command_snippet}")));
                     header_entries.push(HeaderEntry::Spacer);
                 }
                 Self {
@@ -365,13 +367,13 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 grant_root,
             } => {
                 let mut header_entries = Vec::new();
-                if let Some(reason) = reason.clone() {
-                    if !reason.is_empty() {
-                        header_entries.push(HeaderEntry::Reason(reason));
-                        header_entries.push(HeaderEntry::Spacer);
-                    }
+                if let Some(reason) = reason
+                    && !reason.is_empty()
+                {
+                    header_entries.push(HeaderEntry::Reason(reason));
+                    header_entries.push(HeaderEntry::Spacer);
                 }
-                if let Some(root) = grant_root.clone() {
+                if let Some(root) = grant_root {
                     header_entries.push(HeaderEntry::Info(format!(
                         "Grant write access to {} for the remainder of this session.",
                         root.display()
@@ -447,7 +449,7 @@ fn build_exec_history_lines(
 ) -> Option<Vec<Line<'static>>> {
     use ReviewDecision::*;
 
-    let snippet = exec_snippet(&command);
+    let snippet_span = Span::from(exec_snippet(&command)).dim();
 
     let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
         Approved => (
@@ -456,7 +458,7 @@ fn build_exec_history_lines(
                 "You ".into(),
                 "approved".bold(),
                 " codex to run ".into(),
-                snippet.clone().dim(),
+                snippet_span.clone(),
                 " this time".bold(),
             ],
         ),
@@ -466,7 +468,7 @@ fn build_exec_history_lines(
                 "You ".into(),
                 "approved".bold(),
                 " codex to run ".into(),
-                snippet.clone().dim(),
+                snippet_span.clone(),
                 " every time this session".bold(),
             ],
         ),
@@ -476,7 +478,7 @@ fn build_exec_history_lines(
                 "You ".into(),
                 "did not approve".bold(),
                 " codex to run ".into(),
-                snippet.clone().dim(),
+                snippet_span.clone(),
             ],
         ),
         Abort => (
@@ -485,7 +487,7 @@ fn build_exec_history_lines(
                 "You ".into(),
                 "canceled".bold(),
                 " the request to run ".into(),
-                snippet.clone().dim(),
+                snippet_span.clone(),
             ],
         ),
     };
@@ -568,7 +570,7 @@ mod tests {
         let command = vec!["echo".into(), "hello".into(), "world".into()];
         let exec_request = ApprovalRequest::Exec {
             id: "test".into(),
-            command: command.clone(),
+            command,
             reason: None,
         };
 
@@ -599,7 +601,10 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert!(view.is_complete(), "exec approval should complete without queued requests");
+        assert!(
+            view.is_complete(),
+            "exec approval should complete without queued requests"
+        );
 
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
