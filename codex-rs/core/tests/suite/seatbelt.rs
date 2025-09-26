@@ -231,7 +231,7 @@ async fn java_home_finds_runtime_under_seatbelt() {
     env.remove("JAVA_HOME");
     env.remove(CODEX_SANDBOX_ENV_VAR);
 
-    let mut child = spawn_command_under_seatbelt(
+    let child = spawn_command_under_seatbelt(
         vec![java_home_path.to_string_lossy().to_string()],
         command_cwd,
         &policy,
