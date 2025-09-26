@@ -625,7 +625,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -634,7 +633,6 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -725,11 +723,9 @@ dependencies = [
  "codex-backend-client",
  "codex-git-apply",
  "diffy",
- "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.16",
- "tokio",
 ]
 
 [[package]]
