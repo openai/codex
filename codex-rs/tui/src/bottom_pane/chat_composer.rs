@@ -31,12 +31,14 @@ use crate::bottom_pane::paste_burst::FlushResult;
 use crate::slash_command::SlashCommand;
 use codex_protocol::custom_prompts::CustomPrompt;
 
+use super::prompt_args;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
+use crate::history_cell;
 use crate::key_hint;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
@@ -382,6 +384,7 @@ impl ChatComposer {
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
                 if let Some(sel) = popup.selected_item() {
+                    let mut cursor_target: Option<usize> = None;
                     match sel {
                         CommandItem::Builtin(cmd) => {
                             let starts_with_cmd = first_line
@@ -390,21 +393,24 @@ impl ChatComposer {
                             if !starts_with_cmd {
                                 self.textarea.set_text(&format!("/{} ", cmd.command()));
                             }
+                            if !self.textarea.text().is_empty() {
+                                cursor_target = Some(self.textarea.text().len());
+                            }
                         }
                         CommandItem::UserPrompt(idx) => {
-                            if let Some(name) = popup.prompt_name(idx) {
-                                let starts_with_cmd =
-                                    first_line.trim_start().starts_with(&format!("/{name}"));
-                                if !starts_with_cmd {
-                                    self.textarea.set_text(&format!("/{name} "));
+                            if let Some(prompt) = popup.prompt(idx) {
+                                let args = prompt_args::prompt_argument_names(&prompt.content);
+                                let (text, cursor) = Self::prompt_command_text(&prompt.name, &args);
+                                self.textarea.set_text(&text);
+                                cursor_target = cursor;
+                                if cursor_target.is_none() && !self.textarea.text().is_empty() {
+                                    cursor_target = Some(self.textarea.text().len());
                                 }
                             }
                         }
                     }
-                    // After completing the command, move cursor to the end.
-                    if !self.textarea.text().is_empty() {
-                        let end = self.textarea.text().len();
-                        self.textarea.set_cursor(end);
+                    if let Some(pos) = cursor_target {
+                        self.textarea.set_cursor(pos);
                     }
                 }
                 (InputResult::None, true)
@@ -415,25 +421,33 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
-                    // Clear textarea so no residual text remains.
-                    self.textarea.set_text("");
-                    // Capture any needed data from popup before clearing it.
-                    let prompt_content = match sel {
-                        CommandItem::UserPrompt(idx) => {
-                            popup.prompt_content(idx).map(str::to_string)
-                        }
-                        _ => None,
-                    };
-                    // Hide popup since an action has been dispatched.
-                    self.active_popup = ActivePopup::None;
-
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            self.textarea.set_text("");
                             return (InputResult::Command(cmd), true);
                         }
-                        CommandItem::UserPrompt(_) => {
-                            if let Some(contents) = prompt_content {
-                                return (InputResult::Submitted(contents), true);
+                        CommandItem::UserPrompt(idx) => {
+                            if let Some(prompt) = popup.prompt(idx) {
+                                // If the prompt has no $ARGS, auto-submit its content (legacy behavior).
+                                let args = prompt_args::prompt_argument_names(&prompt.content);
+                                if args.is_empty() {
+                                    self.textarea.set_text("");
+                                    return (InputResult::Submitted(prompt.content.clone()), true);
+                                }
+                                // Otherwise, insert the template and place the cursor.
+                                let (text, cursor) = Self::prompt_command_text(&prompt.name, &args);
+                                self.textarea.set_text(&text);
+                                let target = cursor.or_else(|| {
+                                    let text = self.textarea.text();
+                                    if text.is_empty() {
+                                        None
+                                    } else {
+                                        Some(text.len())
+                                    }
+                                });
+                                if let Some(pos) = target {
+                                    self.textarea.set_cursor(pos);
+                                }
                             }
                             return (InputResult::None, true);
                         }
@@ -722,6 +736,21 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
+    fn prompt_command_text(name: &str, args: &[String]) -> (String, Option<usize>) {
+        let mut text = format!("/{name}");
+        let mut first_cursor: Option<usize> = None;
+        for arg in args {
+            text.push_str(format!(" {arg}=\"\"").as_str());
+            if first_cursor.is_none() {
+                first_cursor = Some(text.len() - 1);
+            }
+        }
+        if first_cursor.is_none() && !text.is_empty() {
+            first_cursor = Some(text.len());
+        }
+        (text, first_cursor)
+    }
+
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         match key_event {
@@ -810,6 +839,7 @@ impl ChatComposer {
                     return (InputResult::None, true);
                 }
                 let mut text = self.textarea.text().to_string();
+                let original_input = text.clone();
                 self.textarea.set_text("");
 
                 // Replace all pending pastes in the text
@@ -823,6 +853,21 @@ impl ChatComposer {
                 // If there is neither text nor attachments, suppress submission entirely.
                 let has_attachments = !self.attached_images.is_empty();
                 text = text.trim().to_string();
+                let expanded_prompt =
+                    match prompt_args::expand_custom_prompt(&text, &self.custom_prompts) {
+                        Ok(expanded) => expanded,
+                        Err(err) => {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(err.user_message()),
+                            )));
+                            self.textarea.set_text(&original_input);
+                            self.textarea.set_cursor(original_input.len());
+                            return (InputResult::None, true);
+                        }
+                    };
+                if let Some(expanded) = expanded_prompt {
+                    text = expanded;
+                }
                 if text.is_empty() && !has_attachments {
                     return (InputResult::None, true);
                 }
@@ -1144,18 +1189,34 @@ impl ChatComposer {
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
     fn sync_command_popup(&mut self) {
-        let first_line = self.textarea.text().lines().next().unwrap_or("");
-        let input_starts_with_slash = first_line.starts_with('/');
+        // Determine whether the caret is inside the initial '/name' token on the first line.
+        let text = self.textarea.text();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let first_line = &text[..first_line_end];
+        let cursor = self.textarea.cursor();
+        let caret_on_first_line = cursor <= first_line_end;
+
+        let is_editing_slash_command_name = if first_line.starts_with('/') && caret_on_first_line {
+            let token_end = first_line
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(i, _)| i)
+                .unwrap_or(first_line.len());
+            cursor <= token_end
+        } else {
+            false
+        };
+
         match &mut self.active_popup {
             ActivePopup::Command(popup) => {
-                if input_starts_with_slash {
+                if is_editing_slash_command_name {
                     popup.on_composer_text_change(first_line.to_string());
                 } else {
                     self.active_popup = ActivePopup::None;
                 }
             }
             _ => {
-                if input_starts_with_slash {
+                if is_editing_slash_command_name {
                     let mut command_popup = CommandPopup::new(self.custom_prompts.clone());
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
@@ -2315,7 +2376,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_custom_prompt_submits_file_contents() {
+    fn selecting_custom_prompt_without_args_submits_content() {
         let prompt_text = "Hello from saved prompt";
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -2344,6 +2405,162 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(InputResult::Submitted(prompt_text.to_string()), result);
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_submission_expands_arguments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes on $BRANCH".to_string(),
+        }]);
+
+        composer
+            .textarea
+            .set_text("/my-prompt USER=Alice BRANCH=main");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            InputResult::Submitted("Review Alice changes on main".to_string()),
+            result
+        );
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_submission_accepts_quoted_values() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Pair $USER with $BRANCH".to_string(),
+        }]);
+
+        composer
+            .textarea
+            .set_text("/my-prompt USER=\"Alice Smith\" BRANCH=dev-main");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            InputResult::Submitted("Pair Alice Smith with dev-main".to_string()),
+            result
+        );
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_invalid_args_reports_error() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes".to_string(),
+        }]);
+
+        composer.textarea.set_text("/my-prompt USER=Alice stray");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("/my-prompt USER=Alice stray", composer.textarea.text());
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.contains("expected key=value"));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "expected error history cell to be sent");
+    }
+
+    #[test]
+    fn custom_prompt_missing_required_args_reports_error() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes on $BRANCH".to_string(),
+        }]);
+
+        // Provide only one of the required args
+        composer.textarea.set_text("/my-prompt USER=Alice");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("/my-prompt USER=Alice", composer.textarea.text());
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.to_lowercase().contains("missing required args"));
+                assert!(message.contains("BRANCH"));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(
+            found_error,
+            "expected missing args error history cell to be sent"
+        );
     }
 
     #[test]

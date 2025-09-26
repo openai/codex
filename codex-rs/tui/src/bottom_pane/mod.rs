@@ -24,6 +24,7 @@ mod command_popup;
 pub mod custom_prompt_view;
 mod file_search_popup;
 mod list_selection_view;
+mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod paste_burst;
 pub mod popup_consts;
