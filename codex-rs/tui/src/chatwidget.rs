@@ -59,6 +59,7 @@ use tracing::debug;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
@@ -70,21 +71,20 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
+use crate::exec_cell::CommandOutput;
+use crate::exec_cell::ExecCell;
+use crate::exec_cell::new_active_exec_command;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
-use crate::history_cell::CommandOutput;
-use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PatchEventType;
-use crate::history_cell::RateLimitSnapshotDisplay;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
+use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
-// streaming internals are provided by crate::streaming and crate::markdown_stream
-use crate::user_approval_widget::ApprovalRequest;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -416,7 +416,7 @@ impl ChatWidget {
                     .and_then(|window| window.window_minutes),
             );
 
-            let display = history_cell::rate_limit_snapshot_display(&snapshot, Local::now());
+            let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
 
             if !warnings.is_empty() {
@@ -673,7 +673,7 @@ impl ChatWidget {
             .unwrap_or(true);
         if needs_new {
             self.flush_active_cell();
-            self.active_cell = Some(Box::new(history_cell::new_active_exec_command(
+            self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 command,
                 parsed,
@@ -777,7 +777,7 @@ impl ChatWidget {
         } else {
             self.flush_active_cell();
 
-            self.active_cell = Some(Box::new(history_cell::new_active_exec_command(
+            self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,
@@ -1541,7 +1541,7 @@ impl ChatWidget {
             default_usage = TokenUsage::default();
             &default_usage
         };
-        self.add_to_history(history_cell::new_status_output(
+        self.add_to_history(crate::status::new_status_output(
             &self.config,
             usage_ref,
             &self.conversation_id,

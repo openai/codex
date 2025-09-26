@@ -1,10 +1,8 @@
 ---
 source: tui/src/history_cell.rs
-assertion_line: 1942
 expression: rendered
 ---
-• Ran
-  └ first_token_is_long_enou
-        gh_to_wrap
-    second_token_is_also_lon
-        g_enough_to_wrap
+• Ran first_token_is_long_en
+  │ ough_to_wrap
+  │ second_token_is_also_lon
+  │ … +1 lines

@@ -39,8 +39,10 @@ mod chatwidget;
 mod citation_regex;
 mod cli;
 mod clipboard_paste;
+mod color;
 pub mod custom_terminal;
 mod diff_render;
+mod exec_cell;
 mod exec_command;
 mod file_search;
 mod frames;
@@ -63,12 +65,16 @@ mod slash_command;
 mod status;
 mod status_indicator_widget;
 mod streaming;
+mod style;
+mod terminal_palette;
 mod text_formatting;
 mod tui;
 mod ui_consts;
-mod user_approval_widget;
 mod version;
 mod wrapping;
+
+#[cfg(test)]
+pub mod test_backend;
 
 #[cfg(not(debug_assertions))]
 mod updates;
@@ -223,8 +229,9 @@ pub async fn run_main(
 
     // use RUST_LOG env var, default to info for codex crates.
     let env_filter = || {
-        EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("codex_core=info,codex_tui=info"))
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
+        })
     };
 
     // Build layered subscriber:
