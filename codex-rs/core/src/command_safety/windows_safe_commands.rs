@@ -94,7 +94,7 @@ fn split_into_commands(tokens: Vec<String>) -> Option<Vec<Vec<String>>> {
                 current = Vec::new();
             }
             // Reject if any token embeds separators, redirection, or call operator characters.
-            _ if token.contains(['|', ';', '>', '<', '&']) => {
+            _ if token.contains(['|', ';', '>', '<', '&']) || token.contains("$(") => {
                 return None;
             }
             _ => current.push(token),
@@ -142,7 +142,7 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
         "resolve-path" | "rvpa" => true,
 
         "git" => match words.get(1).map(|w| w.to_ascii_lowercase()) {
-            Some(sub) => matches!(sub.as_str(), "status" | "log" | "show" | "diff" | "branch"),
+            Some(sub) => matches!(sub.as_str(), "status" | "log" | "show" | "diff"),
             None => false,
         },
 
