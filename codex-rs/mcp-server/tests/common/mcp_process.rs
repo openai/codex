@@ -11,18 +11,20 @@ use tokio::process::ChildStdout;
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
-use codex_core::protocol::InputItem;
 use codex_mcp_server::CodexToolCallParam;
-use codex_mcp_server::CodexToolCallReplyParam;
-use codex_mcp_server::mcp_protocol::ConversationCreateArgs;
-use codex_mcp_server::mcp_protocol::ConversationId;
-use codex_mcp_server::mcp_protocol::ConversationSendMessageArgs;
-use codex_mcp_server::mcp_protocol::ToolCallRequestParams;
-use codex_mcp_server::wire_format::AddConversationListenerParams;
-use codex_mcp_server::wire_format::NewConversationParams;
-use codex_mcp_server::wire_format::RemoveConversationListenerParams;
-use codex_mcp_server::wire_format::SendUserMessageParams;
-use codex_mcp_server::wire_format::SendUserTurnParams;
+use codex_protocol::mcp_protocol::AddConversationListenerParams;
+use codex_protocol::mcp_protocol::ArchiveConversationParams;
+use codex_protocol::mcp_protocol::CancelLoginChatGptParams;
+use codex_protocol::mcp_protocol::GetAuthStatusParams;
+use codex_protocol::mcp_protocol::InterruptConversationParams;
+use codex_protocol::mcp_protocol::ListConversationsParams;
+use codex_protocol::mcp_protocol::LoginApiKeyParams;
+use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
+use codex_protocol::mcp_protocol::ResumeConversationParams;
+use codex_protocol::mcp_protocol::SendUserMessageParams;
+use codex_protocol::mcp_protocol::SendUserTurnParams;
+use codex_protocol::mcp_protocol::SetDefaultModelParams;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
@@ -40,7 +42,6 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
-use uuid::Uuid;
 
 pub struct McpProcess {
     next_request_id: AtomicI64,
@@ -55,6 +56,18 @@ pub struct McpProcess {
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
+        Self::new_with_env(codex_home, &[]).await
+    }
+
+    /// Creates a new MCP process, allowing tests to override or remove
+    /// specific environment variables for the child process only.
+    ///
+    /// Pass a tuple of (key, Some(value)) to set/override, or (key, None) to
+    /// remove a variable from the child's environment.
+    pub async fn new_with_env(
+        codex_home: &Path,
+        env_overrides: &[(&str, Option<&str>)],
+    ) -> anyhow::Result<Self> {
         // Use assert_cmd to locate the binary path and then switch to tokio::process::Command
         let std_cmd = StdCommand::cargo_bin("codex-mcp-server")
             .context("should find binary for codex-mcp-server")?;
@@ -65,8 +78,20 @@ impl McpProcess {
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
+
+        for (k, v) in env_overrides {
+            match v {
+                Some(val) => {
+                    cmd.env(k, val);
+                }
+                None => {
+                    cmd.env_remove(k);
+                }
+            }
+        }
 
         let mut process = cmd
             .kill_on_drop(true)
@@ -81,6 +106,17 @@ impl McpProcess {
             .take()
             .ok_or_else(|| anyhow::format_err!("mcp should have stdout fd"))?;
         let stdout = BufReader::new(stdout);
+
+        // Forward child's stderr to our stderr so failures are visible even
+        // when stdout/stderr are captured by the test harness.
+        if let Some(stderr) = process.stderr.take() {
+            let mut stderr_reader = BufReader::new(stderr).lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    eprintln!("[mcp stderr] {line}");
+                }
+            });
+        }
         Ok(Self {
             next_request_id: AtomicI64::new(0),
             process,
@@ -104,6 +140,7 @@ impl McpProcess {
                 name: "elicitation test".into(),
                 title: Some("Elicitation Test".into()),
                 version: "0.0.0".into(),
+                user_agent: None,
             },
             protocol_version: mcp_types::MCP_SCHEMA_VERSION.into(),
         };
@@ -118,6 +155,14 @@ impl McpProcess {
         .await?;
 
         let initialized = self.read_jsonrpc_message().await?;
+        let os_info = os_info::get();
+        let user_agent = format!(
+            "codex_cli_rs/0.0.0 ({} {}; {}) {} (elicitation test; 0.0.0)",
+            os_info.os_type(),
+            os_info.version(),
+            os_info.architecture().unwrap_or("unknown"),
+            codex_core::terminal::user_agent()
+        );
         assert_eq!(
             JSONRPCMessage::Response(JSONRPCResponse {
                 jsonrpc: JSONRPC_VERSION.into(),
@@ -131,7 +176,8 @@ impl McpProcess {
                     "serverInfo": {
                         "name": "codex-mcp-server",
                         "title": "Codex",
-                        "version": "0.0.0"
+                        "version": "0.0.0",
+                        "user_agent": user_agent
                     },
                     "protocolVersion": mcp_types::MCP_SCHEMA_VERSION
                 })
@@ -167,83 +213,6 @@ impl McpProcess {
         .await
     }
 
-    pub async fn send_codex_reply_tool_call(
-        &mut self,
-        session_id: &str,
-        prompt: &str,
-    ) -> anyhow::Result<i64> {
-        let codex_tool_call_params = CallToolRequestParams {
-            name: "codex-reply".to_string(),
-            arguments: Some(serde_json::to_value(CodexToolCallReplyParam {
-                prompt: prompt.to_string(),
-                session_id: session_id.to_string(),
-            })?),
-        };
-        self.send_request(
-            mcp_types::CallToolRequest::METHOD,
-            Some(serde_json::to_value(codex_tool_call_params)?),
-        )
-        .await
-    }
-
-    pub async fn send_user_message_tool_call(
-        &mut self,
-        message: &str,
-        session_id: &str,
-    ) -> anyhow::Result<i64> {
-        let params = ToolCallRequestParams::ConversationSendMessage(ConversationSendMessageArgs {
-            conversation_id: ConversationId(Uuid::parse_str(session_id)?),
-            content: vec![InputItem::Text {
-                text: message.to_string(),
-            }],
-            parent_message_id: None,
-            conversation_overrides: None,
-        });
-        self.send_request(
-            mcp_types::CallToolRequest::METHOD,
-            Some(serde_json::to_value(params)?),
-        )
-        .await
-    }
-
-    pub async fn send_conversation_create_tool_call(
-        &mut self,
-        prompt: &str,
-        model: &str,
-        cwd: &str,
-    ) -> anyhow::Result<i64> {
-        let params = ToolCallRequestParams::ConversationCreate(ConversationCreateArgs {
-            prompt: prompt.to_string(),
-            model: model.to_string(),
-            cwd: cwd.to_string(),
-            approval_policy: None,
-            sandbox: None,
-            config: None,
-            profile: None,
-            base_instructions: None,
-        });
-        self.send_request(
-            mcp_types::CallToolRequest::METHOD,
-            Some(serde_json::to_value(params)?),
-        )
-        .await
-    }
-
-    pub async fn send_conversation_create_with_args(
-        &mut self,
-        args: ConversationCreateArgs,
-    ) -> anyhow::Result<i64> {
-        let params = ToolCallRequestParams::ConversationCreate(args);
-        self.send_request(
-            mcp_types::CallToolRequest::METHOD,
-            Some(serde_json::to_value(params)?),
-        )
-        .await
-    }
-
-    // ---------------------------------------------------------------------
-    // Codex JSON-RPC (non-tool) helpers
-    // ---------------------------------------------------------------------
     /// Send a `newConversation` JSON-RPC request.
     pub async fn send_new_conversation_request(
         &mut self,
@@ -251,6 +220,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("newConversation", params).await
+    }
+
+    /// Send an `archiveConversation` JSON-RPC request.
+    pub async fn send_archive_conversation_request(
+        &mut self,
+        params: ArchiveConversationParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("archiveConversation", params).await
     }
 
     /// Send an `addConversationListener` JSON-RPC request.
@@ -291,6 +269,94 @@ impl McpProcess {
         self.send_request("sendUserTurn", params).await
     }
 
+    /// Send a `interruptConversation` JSON-RPC request.
+    pub async fn send_interrupt_conversation_request(
+        &mut self,
+        params: InterruptConversationParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("interruptConversation", params).await
+    }
+
+    /// Send a `getAuthStatus` JSON-RPC request.
+    pub async fn send_get_auth_status_request(
+        &mut self,
+        params: GetAuthStatusParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("getAuthStatus", params).await
+    }
+
+    /// Send a `getUserSavedConfig` JSON-RPC request.
+    pub async fn send_get_user_saved_config_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("getUserSavedConfig", None).await
+    }
+
+    /// Send a `getUserAgent` JSON-RPC request.
+    pub async fn send_get_user_agent_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("getUserAgent", None).await
+    }
+
+    /// Send a `userInfo` JSON-RPC request.
+    pub async fn send_user_info_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("userInfo", None).await
+    }
+
+    /// Send a `setDefaultModel` JSON-RPC request.
+    pub async fn send_set_default_model_request(
+        &mut self,
+        params: SetDefaultModelParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("setDefaultModel", params).await
+    }
+
+    /// Send a `listConversations` JSON-RPC request.
+    pub async fn send_list_conversations_request(
+        &mut self,
+        params: ListConversationsParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("listConversations", params).await
+    }
+
+    /// Send a `resumeConversation` JSON-RPC request.
+    pub async fn send_resume_conversation_request(
+        &mut self,
+        params: ResumeConversationParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("resumeConversation", params).await
+    }
+
+    /// Send a `loginApiKey` JSON-RPC request.
+    pub async fn send_login_api_key_request(
+        &mut self,
+        params: LoginApiKeyParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("loginApiKey", params).await
+    }
+
+    /// Send a `loginChatGpt` JSON-RPC request.
+    pub async fn send_login_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("loginChatGpt", None).await
+    }
+
+    /// Send a `cancelLoginChatGpt` JSON-RPC request.
+    pub async fn send_cancel_login_chat_gpt_request(
+        &mut self,
+        params: CancelLoginChatGptParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("cancelLoginChatGpt", params).await
+    }
+
+    /// Send a `logoutChatGpt` JSON-RPC request.
+    pub async fn send_logout_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("logoutChatGpt", None).await
+    }
+
     async fn send_request(
         &mut self,
         method: &str,
@@ -322,6 +388,7 @@ impl McpProcess {
     }
 
     async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {
+        eprintln!("writing message to stdin: {message:?}");
         let payload = serde_json::to_string(&message)?;
         self.stdin.write_all(payload.as_bytes()).await?;
         self.stdin.write_all(b"\n").await?;
@@ -333,12 +400,15 @@ impl McpProcess {
         let mut line = String::new();
         self.stdout.read_line(&mut line).await?;
         let message = serde_json::from_str::<JSONRPCMessage>(&line)?;
+        eprintln!("read message from stdout: {message:?}");
         Ok(message)
     }
+
     pub async fn read_stream_until_request_message(&mut self) -> anyhow::Result<JSONRPCRequest> {
+        eprintln!("in read_stream_until_request_message()");
+
         loop {
             let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
 
             match message {
                 JSONRPCMessage::Notification(_) => {
@@ -361,10 +431,10 @@ impl McpProcess {
         &mut self,
         request_id: RequestId,
     ) -> anyhow::Result<JSONRPCResponse> {
+        eprintln!("in read_stream_until_response_message({request_id:?})");
+
         loop {
             let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
-
             match message {
                 JSONRPCMessage::Notification(_) => {
                     eprintln!("notification: {message:?}");
@@ -384,14 +454,39 @@ impl McpProcess {
         }
     }
 
+    pub async fn read_stream_until_error_message(
+        &mut self,
+        request_id: RequestId,
+    ) -> anyhow::Result<mcp_types::JSONRPCError> {
+        loop {
+            let message = self.read_jsonrpc_message().await?;
+            match message {
+                JSONRPCMessage::Notification(_) => {
+                    eprintln!("notification: {message:?}");
+                }
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
+                }
+                JSONRPCMessage::Response(_) => {
+                    // Keep scanning; we're waiting for an error with matching id.
+                }
+                JSONRPCMessage::Error(err) => {
+                    if err.id == request_id {
+                        return Ok(err);
+                    }
+                }
+            }
+        }
+    }
+
     pub async fn read_stream_until_notification_message(
         &mut self,
         method: &str,
     ) -> anyhow::Result<JSONRPCNotification> {
+        eprintln!("in read_stream_until_notification_message({method})");
+
         loop {
             let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
-
             match message {
                 JSONRPCMessage::Notification(notification) => {
                     if notification.method == method {
@@ -411,89 +506,15 @@ impl McpProcess {
         }
     }
 
-    pub async fn read_stream_until_configured_response_message(
-        &mut self,
-    ) -> anyhow::Result<String> {
-        let mut sid_old: Option<String> = None;
-        let mut sid_new: Option<String> = None;
-        loop {
-            let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
-
-            match message {
-                JSONRPCMessage::Notification(notification) => {
-                    if let Some(params) = notification.params {
-                        // Back-compat schema: method == "codex/event" and msg.type == "session_configured"
-                        if notification.method == "codex/event" {
-                            if let Some(msg) = params.get("msg") {
-                                if msg.get("type").and_then(|v| v.as_str())
-                                    == Some("session_configured")
-                                {
-                                    if let Some(session_id) =
-                                        msg.get("session_id").and_then(|v| v.as_str())
-                                    {
-                                        sid_old = Some(session_id.to_string());
-                                    }
-                                }
-                            }
-                        }
-                        // New schema: method is the Display of EventMsg::SessionConfigured => "SessionConfigured"
-                        if notification.method == "session_configured" {
-                            if let Some(msg) = params.get("msg") {
-                                if let Some(session_id) =
-                                    msg.get("session_id").and_then(|v| v.as_str())
-                                {
-                                    sid_new = Some(session_id.to_string());
-                                }
-                            }
-                        }
-                    }
-
-                    if sid_old.is_some() && sid_new.is_some() {
-                        // Both seen, they must match
-                        assert_eq!(
-                            sid_old.as_ref().unwrap(),
-                            sid_new.as_ref().unwrap(),
-                            "session_id mismatch between old and new schema"
-                        );
-                        return Ok(sid_old.unwrap());
-                    }
-                }
-                JSONRPCMessage::Request(_) => {
-                    anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
-                }
-                JSONRPCMessage::Error(_) => {
-                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
-                }
-                JSONRPCMessage::Response(_) => {
-                    anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
-                }
-            }
-        }
-    }
-
-    pub async fn send_notification(
-        &mut self,
-        method: &str,
-        params: Option<serde_json::Value>,
-    ) -> anyhow::Result<()> {
-        self.send_jsonrpc_message(JSONRPCMessage::Notification(JSONRPCNotification {
-            jsonrpc: JSONRPC_VERSION.into(),
-            method: method.to_string(),
-            params,
-        }))
-        .await
-    }
-
     /// Reads notifications until a legacy TaskComplete event is observed:
     /// Method "codex/event" with params.msg.type == "task_complete".
     pub async fn read_stream_until_legacy_task_complete_notification(
         &mut self,
     ) -> anyhow::Result<JSONRPCNotification> {
+        eprintln!("in read_stream_until_legacy_task_complete_notification()");
+
         loop {
             let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
-
             match message {
                 JSONRPCMessage::Notification(notification) => {
                     let is_match = if notification.method == "codex/event" {
@@ -512,6 +533,8 @@ impl McpProcess {
 
                     if is_match {
                         return Ok(notification);
+                    } else {
+                        eprintln!("ignoring notification: {notification:?}");
                     }
                 }
                 JSONRPCMessage::Request(_) => {

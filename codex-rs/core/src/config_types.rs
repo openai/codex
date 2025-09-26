@@ -5,13 +5,15 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use strum_macros::Display;
+use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::de::Error as SerdeError;
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     pub command: String,
 
@@ -20,6 +22,85 @@ pub struct McpServerConfig {
 
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+
+    /// Startup timeout in seconds for initializing MCP server & initially listing tools.
+    #[serde(
+        default,
+        with = "option_duration_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub startup_timeout_sec: Option<Duration>,
+
+    /// Default timeout for MCP tool calls initiated via this server.
+    #[serde(default, with = "option_duration_secs")]
+    pub tool_timeout_sec: Option<Duration>,
+}
+
+impl<'de> Deserialize<'de> for McpServerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawMcpServerConfig {
+            command: String,
+            #[serde(default)]
+            args: Vec<String>,
+            #[serde(default)]
+            env: Option<HashMap<String, String>>,
+            #[serde(default)]
+            startup_timeout_sec: Option<f64>,
+            #[serde(default)]
+            startup_timeout_ms: Option<u64>,
+            #[serde(default, with = "option_duration_secs")]
+            tool_timeout_sec: Option<Duration>,
+        }
+
+        let raw = RawMcpServerConfig::deserialize(deserializer)?;
+
+        let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {
+            (Some(sec), _) => {
+                let duration = Duration::try_from_secs_f64(sec).map_err(SerdeError::custom)?;
+                Some(duration)
+            }
+            (None, Some(ms)) => Some(Duration::from_millis(ms)),
+            (None, None) => None,
+        };
+
+        Ok(Self {
+            command: raw.command,
+            args: raw.args,
+            env: raw.env,
+            startup_timeout_sec,
+            tool_timeout_sec: raw.tool_timeout_sec,
+        })
+    }
+}
+
+mod option_duration_secs {
+    use serde::Deserialize;
+    use serde::Deserializer;
+    use serde::Serializer;
+    use std::time::Duration;
+
+    pub fn serialize<S>(value: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(duration) => serializer.serialize_some(&duration.as_secs_f64()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let secs = Option::<f64>::deserialize(deserializer)?;
+        secs.map(|secs| Duration::try_from_secs_f64(secs).map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
@@ -74,23 +155,26 @@ pub enum HistoryPersistence {
     None,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum Notifications {
+    Enabled(bool),
+    Custom(Vec<String>),
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self::Enabled(false)
+    }
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {}
-
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display)]
-#[serde(rename_all = "kebab-case")]
-#[strum(serialize_all = "kebab-case")]
-pub enum SandboxMode {
-    #[serde(rename = "read-only")]
-    #[default]
-    ReadOnly,
-
-    #[serde(rename = "workspace-write")]
-    WorkspaceWrite,
-
-    #[serde(rename = "danger-full-access")]
-    DangerFullAccess,
+pub struct Tui {
+    /// Enable desktop notifications from the TUI when the terminal is unfocused.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub notifications: Notifications,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
@@ -103,6 +187,17 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
+}
+
+impl From<SandboxWorkspaceWrite> for codex_protocol::mcp_protocol::SandboxSettings {
+    fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
+        Self {
+            writable_roots: sandbox_workspace_write.writable_roots,
+            network_access: Some(sandbox_workspace_write.network_access),
+            exclude_tmpdir_env_var: Some(sandbox_workspace_write.exclude_tmpdir_env_var),
+            exclude_slash_tmp: Some(sandbox_workspace_write.exclude_slash_tmp),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
@@ -201,55 +296,10 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
     }
 }
 
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningEffort {
-    Minimal,
-    Low,
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReasoningSummaryFormat {
     #[default]
-    Medium,
-    High,
-    /// Option to disable reasoning.
     None,
-}
-
-/// A summary of the reasoning performed by the model. This can be useful for
-/// debugging and understanding the model's reasoning process.
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningSummary {
-    #[default]
-    Auto,
-    Concise,
-    Detailed,
-    /// Option to disable reasoning summaries.
-    None,
-}
-
-// Conversions from protocol enums to core config enums used where protocol
-// values are supplied by clients and core needs its internal representations.
-impl From<codex_protocol::config_types::ReasoningEffort> for ReasoningEffort {
-    fn from(v: codex_protocol::config_types::ReasoningEffort) -> Self {
-        match v {
-            codex_protocol::config_types::ReasoningEffort::Low => ReasoningEffort::Low,
-            codex_protocol::config_types::ReasoningEffort::Medium => ReasoningEffort::Medium,
-            codex_protocol::config_types::ReasoningEffort::High => ReasoningEffort::High,
-            codex_protocol::config_types::ReasoningEffort::None => ReasoningEffort::None,
-        }
-    }
-}
-
-impl From<codex_protocol::config_types::ReasoningSummary> for ReasoningSummary {
-    fn from(v: codex_protocol::config_types::ReasoningSummary) -> Self {
-        match v {
-            codex_protocol::config_types::ReasoningSummary::Auto => ReasoningSummary::Auto,
-            codex_protocol::config_types::ReasoningSummary::Concise => ReasoningSummary::Concise,
-            codex_protocol::config_types::ReasoningSummary::Detailed => ReasoningSummary::Detailed,
-            codex_protocol::config_types::ReasoningSummary::None => ReasoningSummary::None,
-        }
-    }
+    Experimental,
 }

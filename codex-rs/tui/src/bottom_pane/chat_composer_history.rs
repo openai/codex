@@ -192,7 +192,7 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;
-    use std::sync::mpsc::channel;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn duplicate_submissions_are_not_recorded() {
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn navigation_with_async_fetch() {
-        let (tx, rx) = channel::<AppEvent>();
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
 
         let mut history = ChatComposerHistory::new();

@@ -2,6 +2,7 @@ use std::io::IsTerminal;
 
 use clap::Parser;
 use codex_common::CliConfigOverrides;
+use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
@@ -36,7 +37,8 @@ pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
 
     let config = Config::load_with_cli_overrides(overrides_vec, ConfigOverrides::default())?;
     // Use conversation_manager API to start a conversation
-    let conversation_manager = ConversationManager::default();
+    let conversation_manager =
+        ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
     let NewConversation {
         conversation_id: _,
         conversation,

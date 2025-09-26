@@ -22,7 +22,7 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     // Use time-based sweep synchronized to process start.
     let padding = 10usize;
     let period = chars.len() + padding * 2;
-    let sweep_seconds = 2.5f32;
+    let sweep_seconds = 2.0f32;
     let pos_f =
         (elapsed_since_start().as_secs_f32() % sweep_seconds) / sweep_seconds * (period as f32);
     let pos = pos_f as usize;
@@ -46,9 +46,14 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
         let brightness = 0.4 + 0.6 * t;
         let level = (brightness * 255.0).clamp(0.0, 255.0) as u8;
         let style = if has_true_color {
-            Style::default()
-                .fg(Color::Rgb(level, level, level))
-                .add_modifier(Modifier::BOLD)
+            // Allow custom RGB colors, as the implementation is thoughtfully
+            // adjusting the level of the default foreground color.
+            #[allow(clippy::disallowed_methods)]
+            {
+                Style::default()
+                    .fg(Color::Rgb(level, level, level))
+                    .add_modifier(Modifier::BOLD)
+            }
         } else {
             color_for_level(level)
         };
@@ -58,9 +63,11 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
 }
 
 fn color_for_level(level: u8) -> Style {
-    if level < 144 {
+    // Tune thresholds so the edges of the shimmer band appear dim
+    // in fallback mode (no true color support).
+    if level < 160 {
         Style::default().add_modifier(Modifier::DIM)
-    } else if level < 208 {
+    } else if level < 224 {
         Style::default()
     } else {
         Style::default().add_modifier(Modifier::BOLD)

@@ -56,16 +56,16 @@ impl Policy {
         }
 
         for arg in args {
-            if let Some(regex) = &self.forbidden_substrings_pattern {
-                if regex.is_match(arg) {
-                    return Ok(MatchedExec::Forbidden {
-                        cause: Forbidden::Arg {
-                            arg: arg.clone(),
-                            exec_call: exec_call.clone(),
-                        },
-                        reason: format!("arg `{arg}` contains forbidden substring"),
-                    });
-                }
+            if let Some(regex) = &self.forbidden_substrings_pattern
+                && regex.is_match(arg)
+            {
+                return Ok(MatchedExec::Forbidden {
+                    cause: Forbidden::Arg {
+                        arg: arg.clone(),
+                        exec_call: exec_call.clone(),
+                    },
+                    reason: format!("arg `{arg}` contains forbidden substring"),
+                });
             }
         }
 

@@ -117,7 +117,7 @@ impl OllamaClient {
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
-                    .map(|s| s.to_string())
+                    .map(str::to_string)
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -166,9 +166,8 @@ impl OllamaClient {
                                         yield PullEvent::Error(err_msg.to_string());
                                         return;
                                     }
-                                    if let Some(status) = value.get("status").and_then(|s| s.as_str()) {
-                                        if status == "success" { yield PullEvent::Success; return; }
-                                    }
+                                    if let Some(status) = value.get("status").and_then(|s| s.as_str())
+                                        && status == "success" { yield PullEvent::Success; return; }
                                 }
                             }
                         }

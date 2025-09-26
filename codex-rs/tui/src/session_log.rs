@@ -2,27 +2,27 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use codex_core::config::Config;
 use codex_core::protocol::Op;
-use once_cell::sync::Lazy;
-use once_cell::sync::OnceCell;
 use serde::Serialize;
 use serde_json::json;
 
 use crate::app_event::AppEvent;
 
-static LOGGER: Lazy<SessionLogger> = Lazy::new(SessionLogger::new);
+static LOGGER: LazyLock<SessionLogger> = LazyLock::new(SessionLogger::new);
 
 struct SessionLogger {
-    file: OnceCell<Mutex<File>>,
+    file: OnceLock<Mutex<File>>,
 }
 
 impl SessionLogger {
     fn new() -> Self {
         Self {
-            file: OnceCell::new(),
+            file: OnceLock::new(),
         }
     }
 
@@ -37,11 +37,7 @@ impl SessionLogger {
         }
 
         let file = opts.open(path)?;
-        // If already initialized, ignore and succeed.
-        if self.file.get().is_some() {
-            return Ok(());
-        }
-        let _ = self.file.set(Mutex::new(file));
+        self.file.get_or_init(|| Mutex::new(file));
         Ok(())
     }
 
@@ -132,40 +128,20 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
         AppEvent::CodexEvent(ev) => {
             write_record("to_tui", "codex_event", ev);
         }
-        AppEvent::KeyEvent(k) => {
+        AppEvent::NewSession => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",
-                "kind": "key_event",
-                "event": format!("{:?}", k),
+                "kind": "new_session",
             });
             LOGGER.write_json_line(value);
         }
-        AppEvent::Paste(s) => {
+        AppEvent::InsertHistoryCell(cell) => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",
-                "kind": "paste",
-                "text": s,
-            });
-            LOGGER.write_json_line(value);
-        }
-        AppEvent::DispatchCommand(cmd) => {
-            let value = json!({
-                "ts": now_ts(),
-                "dir": "to_tui",
-                "kind": "slash_command",
-                "command": format!("{:?}", cmd),
-            });
-            LOGGER.write_json_line(value);
-        }
-        // Internal UI events; still log for fidelity, but avoid heavy payloads.
-        AppEvent::InsertHistory(lines) => {
-            let value = json!({
-                "ts": now_ts(),
-                "dir": "to_tui",
-                "kind": "insert_history",
-                "lines": lines.len(),
+                "kind": "insert_history_cell",
+                "lines": cell.transcript_lines().len(),
             });
             LOGGER.write_json_line(value);
         }

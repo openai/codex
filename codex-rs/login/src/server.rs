@@ -1,20 +1,28 @@
+use std::io::Cursor;
+use std::io::Read;
+use std::io::Write;
 use std::io::{self};
+use std::net::SocketAddr;
+use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::AuthDotJson;
-use crate::get_auth_file;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
+use codex_core::auth::AuthDotJson;
+use codex_core::auth::get_auth_file;
+use codex_core::default_client::ORIGINATOR;
+use codex_core::token_data::TokenData;
+use codex_core::token_data::parse_id_token;
 use rand::RngCore;
+use serde_json::Value as JsonValue;
+use tiny_http::Header;
+use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
 
@@ -29,19 +37,17 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
-    pub login_timeout: Option<Duration>,
 }
 
 impl ServerOptions {
     pub fn new(codex_home: PathBuf, client_id: String) -> Self {
         Self {
             codex_home,
-            client_id: client_id.to_string(),
+            client_id,
             issuer: DEFAULT_ISSUER.to_string(),
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
-            login_timeout: None,
         }
     }
 }
@@ -49,56 +55,42 @@ impl ServerOptions {
 pub struct LoginServer {
     pub auth_url: String,
     pub actual_port: u16,
-    pub server_handle: thread::JoinHandle<io::Result<()>>,
-    pub shutdown_flag: Arc<AtomicBool>,
-    pub server: Arc<Server>,
+    server_handle: tokio::task::JoinHandle<io::Result<()>>,
+    shutdown_handle: ShutdownHandle,
 }
 
 impl LoginServer {
-    pub fn block_until_done(self) -> io::Result<()> {
-        #[expect(clippy::expect_used)]
+    pub async fn block_until_done(self) -> io::Result<()> {
         self.server_handle
-            .join()
-            .expect("can't join on the server thread")
+            .await
+            .map_err(|err| io::Error::other(format!("login server thread panicked: {err:?}")))?
     }
 
     pub fn cancel(&self) {
-        shutdown(&self.shutdown_flag, &self.server);
+        self.shutdown_handle.shutdown();
     }
 
     pub fn cancel_handle(&self) -> ShutdownHandle {
-        ShutdownHandle {
-            shutdown_flag: self.shutdown_flag.clone(),
-            server: self.server.clone(),
-        }
+        self.shutdown_handle.clone()
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ShutdownHandle {
-    shutdown_flag: Arc<AtomicBool>,
-    server: Arc<Server>,
+    shutdown_notify: Arc<tokio::sync::Notify>,
 }
 
 impl ShutdownHandle {
-    pub fn cancel(&self) {
-        shutdown(&self.shutdown_flag, &self.server);
+    pub fn shutdown(&self) {
+        self.shutdown_notify.notify_waiters();
     }
 }
 
-pub fn shutdown(shutdown_flag: &AtomicBool, server: &Server) {
-    shutdown_flag.store(true, Ordering::SeqCst);
-    server.unblock();
-}
-
-pub fn run_login_server(
-    opts: ServerOptions,
-    shutdown_flag: Option<Arc<AtomicBool>>,
-) -> io::Result<LoginServer> {
+pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
-    let server = Server::http(format!("127.0.0.1:{}", opts.port)).map_err(io::Error::other)?;
+    let server = bind_server(opts.port)?;
     let actual_port = match server.server_addr().to_ip() {
         Some(addr) => addr.port(),
         None => {
@@ -116,192 +108,194 @@ pub fn run_login_server(
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
     }
-    let shutdown_flag = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-    let shutdown_flag_clone = shutdown_flag.clone();
-    let timeout_flag = Arc::new(AtomicBool::new(false));
 
-    // Channel used to signal completion to timeout watcher.
-    let (done_tx, done_rx) = mpsc::channel::<()>();
-
-    if let Some(timeout) = opts.login_timeout {
-        spawn_timeout_watcher(
-            done_rx,
-            timeout,
-            shutdown_flag.clone(),
-            timeout_flag.clone(),
-            server.clone(),
-        );
-    }
-
-    let server_for_thread = server.clone();
-    let server_handle = thread::spawn(move || {
-        while !shutdown_flag.load(Ordering::SeqCst) {
-            let req = match server_for_thread.recv() {
-                Ok(r) => r,
-                Err(e) => {
-                    // If we've been asked to shut down, break gracefully so that
-                    // we can report timeout or cancellation status uniformly.
-                    if shutdown_flag.load(Ordering::SeqCst) {
-                        break;
-                    } else {
-                        return Err(io::Error::other(e));
-                    }
-                }
-            };
-
-            let url_raw = req.url().to_string();
-            let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
-                Ok(u) => u,
-                Err(e) => {
-                    eprintln!("URL parse error: {e}");
-                    let _ = req.respond(Response::from_string("Bad Request").with_status_code(400));
-                    continue;
-                }
-            };
-            let path = parsed_url.path().to_string();
-
-            match path.as_str() {
-                "/auth/callback" => {
-                    let params: std::collections::HashMap<String, String> =
-                        parsed_url.query_pairs().into_owned().collect();
-                    if params.get("state").map(String::as_str) != Some(state.as_str()) {
-                        let _ = req
-                            .respond(Response::from_string("State mismatch").with_status_code(400));
-                        continue;
-                    }
-                    let code = match params.get("code") {
-                        Some(c) if !c.is_empty() => c.clone(),
-                        _ => {
-                            let _ = req.respond(
-                                Response::from_string("Missing authorization code")
-                                    .with_status_code(400),
-                            );
-                            continue;
-                        }
-                    };
-
-                    match exchange_code_for_tokens(
-                        &opts.issuer,
-                        &opts.client_id,
-                        &redirect_uri,
-                        &pkce,
-                        &code,
-                    ) {
-                        Ok(tokens) => {
-                            // Obtain API key via token-exchange and persist
-                            let api_key =
-                                obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
-                                    .ok();
-                            if let Err(err) = persist_tokens(
-                                &opts.codex_home,
-                                api_key.clone(),
-                                tokens.id_token.clone(),
-                                Some(tokens.access_token.clone()),
-                                Some(tokens.refresh_token.clone()),
-                            ) {
-                                eprintln!("Persist error: {err}");
-                                let _ = req.respond(
-                                    Response::from_string(format!(
-                                        "Unable to persist auth file: {err}"
-                                    ))
-                                    .with_status_code(500),
-                                );
-                                continue;
-                            }
-
-                            let success_url = compose_success_url(
-                                actual_port,
-                                &opts.issuer,
-                                &tokens.id_token,
-                                &tokens.access_token,
-                            );
-                            match tiny_http::Header::from_bytes(
-                                &b"Location"[..],
-                                success_url.as_bytes(),
-                            ) {
-                                Ok(h) => {
-                                    let response = tiny_http::Response::empty(302).with_header(h);
-                                    let _ = req.respond(response);
-                                }
-                                Err(_) => {
-                                    let _ = req.respond(
-                                        Response::from_string("Internal Server Error")
-                                            .with_status_code(500),
-                                    );
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            eprintln!("Token exchange error: {err}");
-                            let _ = req.respond(
-                                Response::from_string(format!("Token exchange failed: {err}"))
-                                    .with_status_code(500),
-                            );
-                        }
-                    }
-                }
-                "/success" => {
-                    let body = include_str!("assets/success.html");
-                    let mut resp = Response::from_data(body.as_bytes());
-                    if let Ok(h) = tiny_http::Header::from_bytes(
-                        &b"Content-Type"[..],
-                        &b"text/html; charset=utf-8"[..],
-                    ) {
-                        resp.add_header(h);
-                    }
-                    let _ = req.respond(resp);
-                    shutdown_flag.store(true, Ordering::SeqCst);
-
-                    // Login has succeeded, so disarm the timeout watcher.
-                    let _ = done_tx.send(());
-                    return Ok(());
-                }
-                _ => {
-                    let _ = req.respond(Response::from_string("Not Found").with_status_code(404));
-                }
+    // Map blocking reads from server.recv() to an async channel.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Request>(16);
+    let _server_handle = {
+        let server = server.clone();
+        thread::spawn(move || -> io::Result<()> {
+            while let Ok(request) = server.recv() {
+                tx.blocking_send(request).map_err(|e| {
+                    eprintln!("Failed to send request to channel: {e}");
+                    io::Error::other("Failed to send request to channel")
+                })?;
             }
-        }
+            Ok(())
+        })
+    };
 
-        // Login has failed or timed out, so disarm the timeout watcher.
-        let _ = done_tx.send(());
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let server_handle = {
+        let shutdown_notify = shutdown_notify.clone();
+        let server = server;
+        tokio::spawn(async move {
+            let result = loop {
+                tokio::select! {
+                    _ = shutdown_notify.notified() => {
+                        break Err(io::Error::other("Login was not completed"));
+                    }
+                    maybe_req = rx.recv() => {
+                        let Some(req) = maybe_req else {
+                            break Err(io::Error::other("Login was not completed"));
+                        };
 
-        if timeout_flag.load(Ordering::SeqCst) {
-            Err(io::Error::other("Login timed out"))
-        } else {
-            Err(io::Error::other("Login was not completed"))
-        }
-    });
+                        let url_raw = req.url().to_string();
+                        let response =
+                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
+
+                        let exit_result = match response {
+                            HandledRequest::Response(response) => {
+                                let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
+                                None
+                            }
+                            HandledRequest::ResponseAndExit { response, result } => {
+                                let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
+                                Some(result)
+                            }
+                            HandledRequest::RedirectWithHeader(header) => {
+                                let redirect = Response::empty(302).with_header(header);
+                                let _ = tokio::task::spawn_blocking(move || req.respond(redirect)).await;
+                                None
+                            }
+                        };
+
+                        if let Some(result) = exit_result {
+                            break result;
+                        }
+                    }
+                }
+            };
+
+            // Ensure that the server is unblocked so the thread dedicated to
+            // running `server.recv()` in a loop exits cleanly.
+            server.unblock();
+            result
+        })
+    };
 
     Ok(LoginServer {
-        auth_url: auth_url.clone(),
+        auth_url,
         actual_port,
         server_handle,
-        shutdown_flag: shutdown_flag_clone,
-        server,
+        shutdown_handle: ShutdownHandle { shutdown_notify },
     })
 }
 
-/// Spawns a detached thread that waits for either a completion signal on `done_rx`
-/// or the specified `timeout` to elapse. If the timeout elapses first it marks
-/// the `shutdown_flag`, records `timeout_flag`, and unblocks the HTTP server so
-/// that the main server loop can exit promptly.
-fn spawn_timeout_watcher(
-    done_rx: mpsc::Receiver<()>,
-    timeout: Duration,
-    shutdown_flag: Arc<AtomicBool>,
-    timeout_flag: Arc<AtomicBool>,
-    server: Arc<Server>,
-) {
-    thread::spawn(move || {
-        if done_rx.recv_timeout(timeout).is_err()
-            && shutdown_flag
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-        {
-            timeout_flag.store(true, Ordering::SeqCst);
-            server.unblock();
+enum HandledRequest {
+    Response(Response<Cursor<Vec<u8>>>),
+    RedirectWithHeader(Header),
+    ResponseAndExit {
+        response: Response<Cursor<Vec<u8>>>,
+        result: io::Result<()>,
+    },
+}
+
+async fn process_request(
+    url_raw: &str,
+    opts: &ServerOptions,
+    redirect_uri: &str,
+    pkce: &PkceCodes,
+    actual_port: u16,
+    state: &str,
+) -> HandledRequest {
+    let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("URL parse error: {e}");
+            return HandledRequest::Response(
+                Response::from_string("Bad Request").with_status_code(400),
+            );
         }
-    });
+    };
+    let path = parsed_url.path().to_string();
+
+    match path.as_str() {
+        "/auth/callback" => {
+            let params: std::collections::HashMap<String, String> =
+                parsed_url.query_pairs().into_owned().collect();
+            if params.get("state").map(String::as_str) != Some(state) {
+                return HandledRequest::Response(
+                    Response::from_string("State mismatch").with_status_code(400),
+                );
+            }
+            let code = match params.get("code") {
+                Some(c) if !c.is_empty() => c.clone(),
+                _ => {
+                    return HandledRequest::Response(
+                        Response::from_string("Missing authorization code").with_status_code(400),
+                    );
+                }
+            };
+
+            match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
+                .await
+            {
+                Ok(tokens) => {
+                    // Obtain API key via token-exchange and persist
+                    let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
+                        .await
+                        .ok();
+                    if let Err(err) = persist_tokens_async(
+                        &opts.codex_home,
+                        api_key.clone(),
+                        tokens.id_token.clone(),
+                        tokens.access_token.clone(),
+                        tokens.refresh_token.clone(),
+                    )
+                    .await
+                    {
+                        eprintln!("Persist error: {err}");
+                        return HandledRequest::Response(
+                            Response::from_string(format!("Unable to persist auth file: {err}"))
+                                .with_status_code(500),
+                        );
+                    }
+
+                    let success_url = compose_success_url(
+                        actual_port,
+                        &opts.issuer,
+                        &tokens.id_token,
+                        &tokens.access_token,
+                    );
+                    match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
+                        Ok(header) => HandledRequest::RedirectWithHeader(header),
+                        Err(_) => HandledRequest::Response(
+                            Response::from_string("Internal Server Error").with_status_code(500),
+                        ),
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Token exchange error: {err}");
+                    HandledRequest::Response(
+                        Response::from_string(format!("Token exchange failed: {err}"))
+                            .with_status_code(500),
+                    )
+                }
+            }
+        }
+        "/success" => {
+            let body = include_str!("assets/success.html");
+            let mut resp = Response::from_data(body.as_bytes());
+            if let Ok(h) = tiny_http::Header::from_bytes(
+                &b"Content-Type"[..],
+                &b"text/html; charset=utf-8"[..],
+            ) {
+                resp.add_header(h);
+            }
+            HandledRequest::ResponseAndExit {
+                response: resp,
+                result: Ok(()),
+            }
+        }
+        "/cancel" => HandledRequest::ResponseAndExit {
+            response: Response::from_string("Login cancelled"),
+            result: Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Login cancelled",
+            )),
+        },
+        _ => HandledRequest::Response(Response::from_string("Not Found").with_status_code(404)),
+    }
 }
 
 fn build_authorize_url(
@@ -321,6 +315,7 @@ fn build_authorize_url(
         ("id_token_add_organizations", "true"),
         ("codex_cli_simplified_flow", "true"),
         ("state", state),
+        ("originator", ORIGINATOR.value.as_str()),
     ];
     let qs = query
         .into_iter()
@@ -332,8 +327,70 @@ fn build_authorize_url(
 
 fn generate_state() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn send_cancel_request(port: u16) -> io::Result<()> {
+    let addr: SocketAddr = format!("127.0.0.1:{port}")
+        .parse()
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+
+    stream.write_all(b"GET /cancel HTTP/1.1\r\n")?;
+    stream.write_all(format!("Host: 127.0.0.1:{port}\r\n").as_bytes())?;
+    stream.write_all(b"Connection: close\r\n\r\n")?;
+
+    let mut buf = [0u8; 64];
+    let _ = stream.read(&mut buf);
+    Ok(())
+}
+
+fn bind_server(port: u16) -> io::Result<Server> {
+    let bind_address = format!("127.0.0.1:{port}");
+    let mut cancel_attempted = false;
+    let mut attempts = 0;
+    const MAX_ATTEMPTS: u32 = 10;
+    const RETRY_DELAY: Duration = Duration::from_millis(200);
+
+    loop {
+        match Server::http(&bind_address) {
+            Ok(server) => return Ok(server),
+            Err(err) => {
+                attempts += 1;
+                let is_addr_in_use = err
+                    .downcast_ref::<io::Error>()
+                    .map(|io_err| io_err.kind() == io::ErrorKind::AddrInUse)
+                    .unwrap_or(false);
+
+                // If the address is in use, there is probably another instance of the login server
+                // running. Attempt to cancel it and retry.
+                if is_addr_in_use {
+                    if !cancel_attempted {
+                        cancel_attempted = true;
+                        if let Err(cancel_err) = send_cancel_request(port) {
+                            eprintln!("Failed to cancel previous login server: {cancel_err}");
+                        }
+                    }
+
+                    thread::sleep(RETRY_DELAY);
+
+                    if attempts >= MAX_ATTEMPTS {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AddrInUse,
+                            format!("Port {bind_address} is already in use"),
+                        ));
+                    }
+
+                    continue;
+                }
+
+                return Err(io::Error::other(err));
+            }
+        }
+    }
 }
 
 struct ExchangedTokens {
@@ -342,7 +399,7 @@ struct ExchangedTokens {
     refresh_token: String,
 }
 
-fn exchange_code_for_tokens(
+async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -356,7 +413,7 @@ fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -368,6 +425,7 @@ fn exchange_code_for_tokens(
             urlencoding::encode(&pkce.code_verifier)
         ))
         .send()
+        .await
         .map_err(io::Error::other)?;
 
     if !resp.status().is_success() {
@@ -377,7 +435,7 @@ fn exchange_code_for_tokens(
         )));
     }
 
-    let tokens: TokenResponse = resp.json().map_err(io::Error::other)?;
+    let tokens: TokenResponse = resp.json().await.map_err(io::Error::other)?;
     Ok(ExchangedTokens {
         id_token: tokens.id_token,
         access_token: tokens.access_token,
@@ -385,54 +443,44 @@ fn exchange_code_for_tokens(
     })
 }
 
-fn persist_tokens(
+async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
+    access_token: String,
+    refresh_token: String,
 ) -> io::Result<()> {
-    let auth_file = get_auth_file(codex_home);
-    if let Some(parent) = auth_file.parent() {
-        if !parent.exists() {
+    // Reuse existing synchronous logic but run it off the async runtime.
+    let codex_home = codex_home.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let auth_file = get_auth_file(&codex_home);
+        if let Some(parent) = auth_file.parent()
+            && !parent.exists()
+        {
             std::fs::create_dir_all(parent).map_err(io::Error::other)?;
         }
-    }
 
-    let mut auth = read_or_default(&auth_file);
-    if let Some(key) = api_key {
-        auth.openai_api_key = Some(key);
-    }
-    let tokens = auth
-        .tokens
-        .get_or_insert_with(crate::token_data::TokenData::default);
-    tokens.id_token = crate::token_data::parse_id_token(&id_token).map_err(io::Error::other)?;
-    // Persist chatgpt_account_id if present in claims
-    if let Some(acc) = jwt_auth_claims(&id_token)
-        .get("chatgpt_account_id")
-        .and_then(|v| v.as_str())
-    {
-        tokens.account_id = Some(acc.to_string());
-    }
-    if let Some(at) = access_token {
-        tokens.access_token = at;
-    }
-    if let Some(rt) = refresh_token {
-        tokens.refresh_token = rt;
-    }
-    auth.last_refresh = Some(Utc::now());
-    super::write_auth_json(&auth_file, &auth)
-}
-
-fn read_or_default(path: &Path) -> AuthDotJson {
-    match super::try_read_auth_json(path) {
-        Ok(auth) => auth,
-        Err(_) => AuthDotJson {
-            openai_api_key: None,
-            tokens: None,
-            last_refresh: None,
-        },
-    }
+        let mut tokens = TokenData {
+            id_token: parse_id_token(&id_token).map_err(io::Error::other)?,
+            access_token,
+            refresh_token,
+            account_id: None,
+        };
+        if let Some(acc) = jwt_auth_claims(&id_token)
+            .get("chatgpt_account_id")
+            .and_then(|v| v.as_str())
+        {
+            tokens.account_id = Some(acc.to_string());
+        }
+        let auth = AuthDotJson {
+            openai_api_key: api_key,
+            tokens: Some(tokens),
+            last_refresh: Some(Utc::now()),
+        };
+        codex_core::auth::write_auth_json(&auth_file, &auth)
+    })
+    .await
+    .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
 }
 
 fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &str) -> String {
@@ -449,11 +497,11 @@ fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &s
         .unwrap_or("");
     let completed_onboarding = token_claims
         .get("completed_platform_onboarding")
-        .and_then(|v| v.as_bool())
+        .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let is_org_owner = token_claims
         .get("is_org_owner")
-        .and_then(|v| v.as_bool())
+        .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let needs_setup = (!completed_onboarding) && is_org_owner;
     let plan_type = access_claims
@@ -514,13 +562,13 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
 }
 
-fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<String> {
+async fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -533,6 +581,7 @@ fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<S
             urlencoding::encode("urn:ietf:params:oauth:token-type:id_token")
         ))
         .send()
+        .await
         .map_err(io::Error::other)?;
     if !resp.status().is_success() {
         return Err(io::Error::other(format!(
@@ -540,6 +589,6 @@ fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<S
             resp.status()
         )));
     }
-    let body: ExchangeResp = resp.json().map_err(io::Error::other)?;
+    let body: ExchangeResp = resp.json().await.map_err(io::Error::other)?;
     Ok(body.access_token)
 }

@@ -9,12 +9,14 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_mcp_client::McpClient;
+use codex_rmcp_client::RmcpClient;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::Tool;
@@ -36,8 +38,11 @@ use crate::config_types::McpServerConfig;
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 
-/// Timeout for the `tools/list` request.
-const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default timeout for initializing MCP server & initially listing tools.
+const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default timeout for individual tool calls.
+const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
@@ -81,6 +86,65 @@ struct ToolInfo {
     tool: Tool,
 }
 
+struct ManagedClient {
+    client: McpClientAdapter,
+    startup_timeout: Duration,
+    tool_timeout: Option<Duration>,
+}
+
+#[derive(Clone)]
+enum McpClientAdapter {
+    Legacy(Arc<McpClient>),
+    Rmcp(Arc<RmcpClient>),
+}
+
+impl McpClientAdapter {
+    async fn new_stdio_client(
+        use_rmcp_client: bool,
+        program: OsString,
+        args: Vec<OsString>,
+        env: Option<HashMap<String, String>>,
+        params: mcp_types::InitializeRequestParams,
+        startup_timeout: Duration,
+    ) -> Result<Self> {
+        tracing::error!(
+            "new_stdio_client use_rmcp_client: {use_rmcp_client} program: {program:?} args: {args:?} env: {env:?} params: {params:?} startup_timeout: {startup_timeout:?}"
+        );
+        if use_rmcp_client {
+            let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
+            client.initialize(params, Some(startup_timeout)).await?;
+            Ok(McpClientAdapter::Rmcp(client))
+        } else {
+            let client = Arc::new(McpClient::new_stdio_client(program, args, env).await?);
+            client.initialize(params, Some(startup_timeout)).await?;
+            Ok(McpClientAdapter::Legacy(client))
+        }
+    }
+
+    async fn list_tools(
+        &self,
+        params: Option<mcp_types::ListToolsRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::ListToolsResult> {
+        match self {
+            McpClientAdapter::Legacy(client) => client.list_tools(params, timeout).await,
+            McpClientAdapter::Rmcp(client) => client.list_tools(params, timeout).await,
+        }
+    }
+
+    async fn call_tool(
+        &self,
+        name: String,
+        arguments: Option<serde_json::Value>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::CallToolResult> {
+        match self {
+            McpClientAdapter::Legacy(client) => client.call_tool(name, arguments, timeout).await,
+            McpClientAdapter::Rmcp(client) => client.call_tool(name, arguments, timeout).await,
+        }
+    }
+}
+
 /// A thin wrapper around a set of running [`McpClient`] instances.
 #[derive(Default)]
 pub(crate) struct McpConnectionManager {
@@ -88,7 +152,7 @@ pub(crate) struct McpConnectionManager {
     ///
     /// The server name originates from the keys of the `mcp_servers` map in
     /// the user configuration.
-    clients: HashMap<String, std::sync::Arc<McpClient>>,
+    clients: HashMap<String, ManagedClient>,
 
     /// Fully qualified tool name -> tool instance.
     tools: HashMap<String, ToolInfo>,
@@ -105,11 +169,14 @@ impl McpConnectionManager {
     /// user should be informed about these errors.
     pub async fn new(
         mcp_servers: HashMap<String, McpServerConfig>,
+        use_rmcp_client: bool,
     ) -> Result<(Self, ClientStartErrors)> {
         // Early exit if no servers are configured.
         if mcp_servers.is_empty() {
             return Ok((Self::default(), ClientStartErrors::default()));
         }
+
+        tracing::error!("new mcp_servers: {mcp_servers:?} use_rmcp_client: {use_rmcp_client}");
 
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
@@ -126,57 +193,73 @@ impl McpConnectionManager {
                 continue;
             }
 
+            let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
+            let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
+
+            let use_rmcp_client_flag = use_rmcp_client;
             join_set.spawn(async move {
-                let McpServerConfig { command, args, env } = cfg;
-                let client_res = McpClient::new_stdio_client(
-                    command.into(),
-                    args.into_iter().map(OsString::from).collect(),
+                let McpServerConfig {
+                    command, args, env, ..
+                } = cfg;
+                let command_os: OsString = command.into();
+                let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
+                let params = mcp_types::InitializeRequestParams {
+                    capabilities: ClientCapabilities {
+                        experimental: None,
+                        roots: None,
+                        sampling: None,
+                        // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                        // indicates this should be an empty object.
+                        elicitation: Some(json!({})),
+                    },
+                    client_info: Implementation {
+                        name: "codex-mcp-client".to_owned(),
+                        version: env!("CARGO_PKG_VERSION").to_owned(),
+                        title: Some("Codex".into()),
+                        // This field is used by Codex when it is an MCP
+                        // server: it should not be used when Codex is
+                        // an MCP client.
+                        user_agent: None,
+                    },
+                    protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
+                };
+
+                let client = McpClientAdapter::new_stdio_client(
+                    use_rmcp_client_flag,
+                    command_os,
+                    args_os,
                     env,
+                    params,
+                    startup_timeout,
                 )
-                .await;
-                match client_res {
-                    Ok(client) => {
-                        // Initialize the client.
-                        let params = mcp_types::InitializeRequestParams {
-                            capabilities: ClientCapabilities {
-                                experimental: None,
-                                roots: None,
-                                sampling: None,
-                                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-                                // indicates this should be an empty object.
-                                elicitation: Some(json!({})),
-                            },
-                            client_info: Implementation {
-                                name: "codex-mcp-client".to_owned(),
-                                version: env!("CARGO_PKG_VERSION").to_owned(),
-                                title: Some("Codex".into()),
-                            },
-                            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
-                        };
-                        let initialize_notification_params = None;
-                        let timeout = Some(Duration::from_secs(10));
-                        match client
-                            .initialize(params, initialize_notification_params, timeout)
-                            .await
-                        {
-                            Ok(_response) => (server_name, Ok(client)),
-                            Err(e) => (server_name, Err(e)),
-                        }
-                    }
-                    Err(e) => (server_name, Err(e.into())),
-                }
+                .await
+                .map(|c| (c, startup_timeout));
+
+                ((server_name, tool_timeout), client)
             });
         }
 
-        let mut clients: HashMap<String, std::sync::Arc<McpClient>> =
-            HashMap::with_capacity(join_set.len());
+        let mut clients: HashMap<String, ManagedClient> = HashMap::with_capacity(join_set.len());
 
         while let Some(res) = join_set.join_next().await {
-            let (server_name, client_res) = res?; // JoinError propagation
+            let ((server_name, tool_timeout), client_res) = match res {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!("Task panic when starting MCP server: {e:#}");
+                    continue;
+                }
+            };
 
             match client_res {
-                Ok(client) => {
-                    clients.insert(server_name, std::sync::Arc::new(client));
+                Ok((client, startup_timeout)) => {
+                    clients.insert(
+                        server_name,
+                        ManagedClient {
+                            client,
+                            startup_timeout,
+                            tool_timeout: Some(tool_timeout),
+                        },
+                    );
                 }
                 Err(e) => {
                     errors.insert(server_name, e);
@@ -184,7 +267,13 @@ impl McpConnectionManager {
             }
         }
 
-        let all_tools = list_all_tools(&clients).await?;
+        let all_tools = match list_all_tools(&clients).await {
+            Ok(tools) => tools,
+            Err(e) => {
+                warn!("Failed to list tools from some MCP servers: {e:#}");
+                Vec::new()
+            }
+        };
 
         let tools = qualify_tools(all_tools);
 
@@ -206,13 +295,13 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
-        timeout: Option<Duration>,
     ) -> Result<mcp_types::CallToolResult> {
-        let client = self
+        let managed = self
             .clients
             .get(server)
-            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?
-            .clone();
+            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let client = managed.client.clone();
+        let timeout = managed.tool_timeout;
 
         client
             .call_tool(tool.to_string(), arguments, timeout)
@@ -229,21 +318,18 @@ impl McpConnectionManager {
 
 /// Query every server for its available tools and return a single map that
 /// contains **all** tools. Each key is the fully-qualified name for the tool.
-async fn list_all_tools(
-    clients: &HashMap<String, std::sync::Arc<McpClient>>,
-) -> Result<Vec<ToolInfo>> {
+async fn list_all_tools(clients: &HashMap<String, ManagedClient>) -> Result<Vec<ToolInfo>> {
     let mut join_set = JoinSet::new();
 
     // Spawn one task per server so we can query them concurrently. This
     // keeps the overall latency roughly at the slowest server instead of
     // the cumulative latency.
-    for (server_name, client) in clients {
+    for (server_name, managed_client) in clients {
         let server_name_cloned = server_name.clone();
-        let client_clone = client.clone();
+        let client_clone = managed_client.client.clone();
+        let startup_timeout = managed_client.startup_timeout;
         join_set.spawn(async move {
-            let res = client_clone
-                .list_tools(None, Some(LIST_TOOLS_TIMEOUT))
-                .await;
+            let res = client_clone.list_tools(None, Some(startup_timeout)).await;
             (server_name_cloned, res)
         });
     }
@@ -251,8 +337,19 @@ async fn list_all_tools(
     let mut aggregated: Vec<ToolInfo> = Vec::with_capacity(join_set.len());
 
     while let Some(join_res) = join_set.join_next().await {
-        let (server_name, list_result) = join_res?;
-        let list_result = list_result?;
+        let (server_name, list_result) = if let Ok(result) = join_res {
+            result
+        } else {
+            warn!("Task panic when listing tools for MCP server: {join_res:#?}");
+            continue;
+        };
+
+        let list_result = if let Ok(result) = list_result {
+            result
+        } else {
+            warn!("Failed to list tools for MCP server '{server_name}': {list_result:#?}");
+            continue;
+        };
 
         for tool in list_result.tools {
             let tool_info = ToolInfo {

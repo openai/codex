@@ -1,7 +1,6 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::models::FunctionCallOutputPayload;
-use crate::models::ResponseInputItem;
+use crate::function_tool::FunctionCallError;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::safety::SafetyCheck;
@@ -17,7 +16,7 @@ pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was handled programmatically, without any sort
     /// of sandbox, because the user explicitly approved it. This is the
     /// result to use with the `shell` function call that contained `apply_patch`.
-    Output(ResponseInputItem),
+    Output(Result<String, FunctionCallError>),
 
     /// The `apply_patch` call was approved, either automatically because it
     /// appears that it should be allowed based on the user's sandbox policy
@@ -31,12 +30,6 @@ pub(crate) enum InternalApplyPatchInvocation {
 pub(crate) struct ApplyPatchExec {
     pub(crate) action: ApplyPatchAction,
     pub(crate) user_explicitly_approved_this_action: bool,
-}
-
-impl From<ResponseInputItem> for InternalApplyPatchInvocation {
-    fn from(item: ResponseInputItem) -> Self {
-        InternalApplyPatchInvocation::Output(item)
-    }
 }
 
 pub(crate) async fn apply_patch(
@@ -77,25 +70,15 @@ pub(crate) async fn apply_patch(
                     })
                 }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id: call_id.to_owned(),
-                        output: FunctionCallOutputPayload {
-                            content: "patch rejected by user".to_string(),
-                            success: Some(false),
-                        },
-                    }
-                    .into()
+                    InternalApplyPatchInvocation::Output(Err(FunctionCallError::RespondToModel(
+                        "patch rejected by user".to_string(),
+                    )))
                 }
             }
         }
-        SafetyCheck::Reject { reason } => ResponseInputItem::FunctionCallOutput {
-            call_id: call_id.to_owned(),
-            output: FunctionCallOutputPayload {
-                content: format!("patch rejected: {reason}"),
-                success: Some(false),
-            },
-        }
-        .into(),
+        SafetyCheck::Reject { reason } => InternalApplyPatchInvocation::Output(Err(
+            FunctionCallError::RespondToModel(format!("patch rejected: {reason}")),
+        )),
     }
 }
 
@@ -109,7 +92,9 @@ pub(crate) fn convert_apply_patch_to_protocol(
             ApplyPatchFileChange::Add { content } => FileChange::Add {
                 content: content.clone(),
             },
-            ApplyPatchFileChange::Delete => FileChange::Delete,
+            ApplyPatchFileChange::Delete { content } => FileChange::Delete {
+                content: content.clone(),
+            },
             ApplyPatchFileChange::Update {
                 unified_diff,
                 move_path,

@@ -24,3 +24,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  - package-ecosystem: rust-toolchain
+    directory: codex-rs
+    schedule:
+      interval: weekly

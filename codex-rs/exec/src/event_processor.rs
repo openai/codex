@@ -2,6 +2,7 @@ use std::path::Path;
 
 use codex_core::config::Config;
 use codex_core::protocol::Event;
+use codex_core::protocol::SessionConfiguredEvent;
 
 pub(crate) enum CodexStatus {
     Running,
@@ -11,7 +12,12 @@ pub(crate) enum CodexStatus {
 
 pub(crate) trait EventProcessor {
     /// Print summary of effective configuration and user prompt.
-    fn print_config_summary(&mut self, config: &Config, prompt: &str);
+    fn print_config_summary(
+        &mut self,
+        config: &Config,
+        prompt: &str,
+        session_configured: &SessionConfiguredEvent,
+    );
 
     /// Handle a single event emitted by the agent.
     fn process_event(&mut self, event: Event) -> CodexStatus;
@@ -29,9 +35,9 @@ pub(crate) fn handle_last_message(last_agent_message: Option<&str>, output_file:
 }
 
 fn write_last_message_file(contents: &str, last_message_path: Option<&Path>) {
-    if let Some(path) = last_message_path {
-        if let Err(e) = std::fs::write(path, contents) {
-            eprintln!("Failed to write last message file {path:?}: {e}");
-        }
+    if let Some(path) = last_message_path
+        && let Err(e) = std::fs::write(path, contents)
+    {
+        eprintln!("Failed to write last message file {path:?}: {e}");
     }
 }
