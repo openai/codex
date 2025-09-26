@@ -267,6 +267,9 @@ pub fn try_read_auth_json(auth_file: &Path) -> std::io::Result<AuthDotJson> {
 }
 
 pub fn write_auth_json(auth_file: &Path, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
+    if let Some(parent) = auth_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let json_data = serde_json::to_string_pretty(auth_dot_json)?;
     let mut options = OpenOptions::new();
     options.truncate(true).write(true).create(true);

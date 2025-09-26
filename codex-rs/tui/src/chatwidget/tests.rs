@@ -314,7 +314,7 @@ fn make_chatwidget_manual() -> (
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
-        active_exec_cell: None,
+        active_cell: None,
         config: cfg.clone(),
         auth_manager,
         session_header: SessionHeader::new(cfg.model),
@@ -384,12 +384,12 @@ fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
 
-    warnings.extend(state.take_warnings(Some(10.0), Some(55.0)));
-    warnings.extend(state.take_warnings(Some(55.0), Some(10.0)));
-    warnings.extend(state.take_warnings(Some(10.0), Some(80.0)));
-    warnings.extend(state.take_warnings(Some(80.0), Some(10.0)));
-    warnings.extend(state.take_warnings(Some(10.0), Some(95.0)));
-    warnings.extend(state.take_warnings(Some(95.0), Some(10.0)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(10079), Some(55.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(55.0), Some(10081), Some(10.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(10081), Some(80.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(80.0), Some(10081), Some(10.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(10.0), Some(10081), Some(95.0), Some(299)));
+    warnings.extend(state.take_warnings(Some(95.0), Some(10079), Some(10.0), Some(299)));
 
     assert_eq!(
         warnings,
@@ -407,6 +407,21 @@ fn rate_limit_warnings_emit_thresholds() {
                 "Heads up, you've used over 95% of your weekly limit. Run /status for a breakdown.",
             ),
         ],
+        "expected one warning per limit for the highest crossed threshold"
+    );
+}
+
+#[test]
+fn test_rate_limit_warnings_monthly() {
+    let mut state = RateLimitWarningState::default();
+    let mut warnings: Vec<String> = Vec::new();
+
+    warnings.extend(state.take_warnings(Some(75.0), Some(43199), None, None));
+    assert_eq!(
+        warnings,
+        vec![String::from(
+            "Heads up, you've used over 75% of your monthly limit. Run /status for a breakdown.",
+        ),],
         "expected one warning per limit for the highest crossed threshold"
     );
 }
@@ -551,9 +566,9 @@ fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, ex
 
 fn active_blob(chat: &ChatWidget) -> String {
     let lines = chat
-        .active_exec_cell
+        .active_cell
         .as_ref()
-        .expect("active exec cell present")
+        .expect("active cell present")
         .display_lines(80);
     lines_to_single_string(&lines)
 }
@@ -1296,6 +1311,40 @@ fn interrupt_restores_queued_messages_into_composer() {
     );
 
     // Drain rx to avoid unused warnings.
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[test]
+fn interrupt_prepends_queued_messages_before_existing_composer_text() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane.set_task_running(true);
+    chat.bottom_pane
+        .set_composer_text("current draft".to_string());
+
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "first queued\nsecond queued\ncurrent draft"
+    );
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(
+        op_rx.try_recv().is_err(),
+        "unexpected outbound op after interrupt"
+    );
+
     let _ = drain_insert_history(&mut rx);
 }
 

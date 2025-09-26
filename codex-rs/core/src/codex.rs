@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,7 +24,6 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnContextItem;
 use futures::prelude::*;
 use mcp_types::CallToolResult;
@@ -35,7 +33,6 @@ use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
-use tokio::task::AbortHandle;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -108,10 +105,8 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
-use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
-use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
@@ -120,6 +115,11 @@ use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
+use crate::state::ActiveTurn;
+use crate::state::SessionServices;
+use crate::tasks::CompactTask;
+use crate::tasks::RegularTask;
+use crate::tasks::ReviewTask;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
@@ -253,17 +253,7 @@ impl Codex {
     }
 }
 
-/// Mutable state of the agent
-#[derive(Default)]
-struct State {
-    approved_commands: HashSet<Vec<String>>,
-    current_task: Option<AgentTask>,
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
-    pending_input: Vec<ResponseInputItem>,
-    history: ConversationHistory,
-    token_info: Option<TokenUsageInfo>,
-    latest_rate_limits: Option<RateLimitSnapshot>,
-}
+use crate::state::SessionState;
 
 /// Context for an initialized model agent
 ///
@@ -271,21 +261,9 @@ struct State {
 pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
-
-    /// Manager for external MCP servers/tools.
-    mcp_connection_manager: McpConnectionManager,
-    session_manager: ExecSessionManager,
-    unified_exec_manager: UnifiedExecSessionManager,
-
-    notifier: UserNotifier,
-
-    /// Optional rollout recorder for persisting the conversation transcript so
-    /// sessions can be replayed or inspected later.
-    rollout: Mutex<Option<RolloutRecorder>>,
-    state: Mutex<State>,
-    codex_linux_sandbox_exe: Option<PathBuf>,
-    user_shell: shell::Shell,
-    show_raw_agent_reasoning: bool,
+    state: Mutex<SessionState>,
+    pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    services: SessionServices,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -399,7 +377,10 @@ impl Session {
         // - load history metadata
         let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
-        let mcp_fut = McpConnectionManager::new(config.mcp_servers.clone());
+        let mcp_fut = McpConnectionManager::new(
+            config.mcp_servers.clone(),
+            config.use_experimental_use_rmcp_client,
+        );
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
 
@@ -413,10 +394,7 @@ impl Session {
         })?;
         let rollout_path = rollout_recorder.rollout_path.clone();
         // Create the mutable state for the Session.
-        let state = State {
-            history: ConversationHistory::new(),
-            ..Default::default()
-        };
+        let state = SessionState::new();
 
         // Handle MCP manager result and record any startup failures.
         let (mcp_connection_manager, failed_clients) = match mcp_res {
@@ -474,18 +452,23 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
         };
-        let sess = Arc::new(Session {
-            conversation_id,
-            tx_event: tx_event.clone(),
+        let services = SessionServices {
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: notify,
-            state: Mutex::new(state),
             rollout: Mutex::new(Some(rollout_recorder)),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+        };
+
+        let sess = Arc::new(Session {
+            conversation_id,
+            tx_event: tx_event.clone(),
+            state: Mutex::new(state),
+            active_turn: Mutex::new(None),
+            services,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -513,23 +496,6 @@ impl Session {
         }
 
         Ok((sess, turn_context))
-    }
-
-    pub async fn set_task(&self, task: AgentTask) {
-        let mut state = self.state.lock().await;
-        if let Some(current_task) = state.current_task.take() {
-            current_task.abort(TurnAbortReason::Replaced);
-        }
-        state.current_task = Some(task);
-    }
-
-    pub async fn remove_task(&self, sub_id: &str) {
-        let mut state = self.state.lock().await;
-        if let Some(task) = &state.current_task
-            && task.sub_id == sub_id
-        {
-            state.current_task.take();
-        }
     }
 
     fn next_internal_sub_id(&self) -> String {
@@ -591,8 +557,14 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut state = self.state.lock().await;
-            state.pending_approvals.insert(sub_id, tx_approve)
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval(sub_id, tx_approve)
+                }
+                None => None,
+            }
         };
         if prev_entry.is_some() {
             warn!("Overwriting existing pending approval for sub_id: {event_id}");
@@ -623,8 +595,14 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut state = self.state.lock().await;
-            state.pending_approvals.insert(sub_id, tx_approve)
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval(sub_id, tx_approve)
+                }
+                None => None,
+            }
         };
         if prev_entry.is_some() {
             warn!("Overwriting existing pending approval for sub_id: {event_id}");
@@ -645,8 +623,14 @@ impl Session {
 
     pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
         let entry = {
-            let mut state = self.state.lock().await;
-            state.pending_approvals.remove(sub_id)
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_approval(sub_id)
+                }
+                None => None,
+            }
         };
         match entry {
             Some(tx_approve) => {
@@ -660,7 +644,7 @@ impl Session {
 
     pub async fn add_approved_command(&self, cmd: Vec<String>) {
         let mut state = self.state.lock().await;
-        state.approved_commands.insert(cmd);
+        state.add_approved_command(cmd);
     }
 
     /// Records input items: always append to conversation history and
@@ -700,7 +684,12 @@ impl Session {
     /// Append ResponseItems to the in-memory conversation history only.
     async fn record_into_history(&self, items: &[ResponseItem]) {
         let mut state = self.state.lock().await;
-        state.history.record_items(items.iter());
+        state.record_items(items.iter());
+    }
+
+    async fn replace_history(&self, items: Vec<ResponseItem>) {
+        let mut state = self.state.lock().await;
+        state.replace_history(items);
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -721,14 +710,14 @@ impl Session {
             Some(turn_context.cwd.clone()),
             Some(turn_context.approval_policy),
             Some(turn_context.sandbox_policy.clone()),
-            Some(self.user_shell.clone()),
+            Some(self.user_shell().clone()),
         )));
         items
     }
 
     async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         let recorder = {
-            let guard = self.rollout.lock().await;
+            let guard = self.services.rollout.lock().await;
             guard.clone()
         };
         if let Some(rec) = recorder
@@ -736,6 +725,11 @@ impl Session {
         {
             error!("failed to record rollout items: {e:#}");
         }
+    }
+
+    pub(crate) async fn history_snapshot(&self) -> Vec<ResponseItem> {
+        let state = self.state.lock().await;
+        state.history_snapshot()
     }
 
     async fn update_token_usage_info(
@@ -747,12 +741,10 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             if let Some(token_usage) = token_usage {
-                let info = TokenUsageInfo::new_or_append(
-                    &state.token_info,
-                    &Some(token_usage.clone()),
+                state.update_token_info_from_usage(
+                    token_usage,
                     turn_context.client.get_model_context_window(),
                 );
-                state.token_info = info;
             }
         }
         self.send_token_count_event(sub_id).await;
@@ -761,7 +753,7 @@ impl Session {
     async fn update_rate_limits(&self, sub_id: &str, new_rate_limits: RateLimitSnapshot) {
         {
             let mut state = self.state.lock().await;
-            state.latest_rate_limits = Some(new_rate_limits);
+            state.set_rate_limits(new_rate_limits);
         }
         self.send_token_count_event(sub_id).await;
     }
@@ -769,7 +761,7 @@ impl Session {
     async fn send_token_count_event(&self, sub_id: &str) {
         let (info, rate_limits) = {
             let state = self.state.lock().await;
-            (state.token_info.clone(), state.latest_rate_limits.clone())
+            state.token_info_and_rate_limits()
         };
         let event = Event {
             id: sub_id.to_string(),
@@ -788,7 +780,7 @@ impl Session {
 
         // Derive user message events and persist only UserMessage to rollout
         let msgs =
-            map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning);
+            map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning());
         let user_msgs: Vec<RolloutItem> = msgs
             .into_iter()
             .filter_map(|m| match m {
@@ -987,30 +979,32 @@ impl Session {
     pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
         let history = {
             let state = self.state.lock().await;
-            state.history.contents()
+            state.history_snapshot()
         };
         [history, extra].concat()
     }
 
     /// Returns the input if there was no task running to inject into
     pub async fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
-        let mut state = self.state.lock().await;
-        if state.current_task.is_some() {
-            state.pending_input.push(input.into());
-            Ok(())
-        } else {
-            Err(input)
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.push_pending_input(input.into());
+                Ok(())
+            }
+            None => Err(input),
         }
     }
 
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut state = self.state.lock().await;
-        if state.pending_input.is_empty() {
-            Vec::with_capacity(0)
-        } else {
-            let mut ret = Vec::new();
-            std::mem::swap(&mut ret, &mut state.pending_input);
-            ret
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.take_pending_input()
+            }
+            None => Vec::with_capacity(0),
         }
     }
 
@@ -1020,33 +1014,40 @@ impl Session {
         tool: &str,
         arguments: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
-        self.mcp_connection_manager
+        self.services
+            .mcp_connection_manager
             .call_tool(server, tool, arguments)
             .await
     }
 
-    pub async fn interrupt_task(&self) {
+    pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
-        let mut state = self.state.lock().await;
-        state.pending_approvals.clear();
-        state.pending_input.clear();
-        if let Some(task) = state.current_task.take() {
-            task.abort(TurnAbortReason::Interrupted);
-        }
+        self.abort_all_tasks(TurnAbortReason::Interrupted).await;
     }
 
     fn interrupt_task_sync(&self) {
-        if let Ok(mut state) = self.state.try_lock() {
-            state.pending_approvals.clear();
-            state.pending_input.clear();
-            if let Some(task) = state.current_task.take() {
-                task.abort(TurnAbortReason::Interrupted);
+        if let Ok(mut active) = self.active_turn.try_lock()
+            && let Some(at) = active.as_mut()
+        {
+            at.try_clear_pending_sync();
+            let tasks = at.drain_tasks();
+            *active = None;
+            for (_sub_id, task) in tasks {
+                task.handle.abort();
             }
         }
     }
 
     pub(crate) fn notifier(&self) -> &UserNotifier {
-        &self.notifier
+        &self.services.notifier
+    }
+
+    fn user_shell(&self) -> &shell::Shell {
+        &self.services.user_shell
+    }
+
+    fn show_raw_agent_reasoning(&self) -> bool {
+        self.services.show_raw_agent_reasoning
     }
 }
 
@@ -1069,102 +1070,6 @@ pub(crate) struct ExecCommandContext {
 pub(crate) struct ApplyPatchCommandContext {
     pub(crate) user_explicitly_approved_this_action: bool,
     pub(crate) changes: HashMap<PathBuf, FileChange>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum AgentTaskKind {
-    Regular,
-    Review,
-    Compact,
-}
-
-/// A series of Turns in response to user input.
-pub(crate) struct AgentTask {
-    sess: Arc<Session>,
-    sub_id: String,
-    handle: AbortHandle,
-    kind: AgentTaskKind,
-}
-
-impl AgentTask {
-    fn spawn(
-        sess: Arc<Session>,
-        turn_context: Arc<TurnContext>,
-        sub_id: String,
-        input: Vec<InputItem>,
-    ) -> Self {
-        let handle = {
-            let sess = sess.clone();
-            let sub_id = sub_id.clone();
-            let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move { run_task(sess, tc, sub_id, input).await }).abort_handle()
-        };
-        Self {
-            sess,
-            sub_id,
-            handle,
-            kind: AgentTaskKind::Regular,
-        }
-    }
-
-    fn review(
-        sess: Arc<Session>,
-        turn_context: Arc<TurnContext>,
-        sub_id: String,
-        input: Vec<InputItem>,
-    ) -> Self {
-        let handle = {
-            let sess = sess.clone();
-            let sub_id = sub_id.clone();
-            let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move { run_task(sess, tc, sub_id, input).await }).abort_handle()
-        };
-        Self {
-            sess,
-            sub_id,
-            handle,
-            kind: AgentTaskKind::Review,
-        }
-    }
-
-    fn compact(
-        sess: Arc<Session>,
-        turn_context: Arc<TurnContext>,
-        sub_id: String,
-        input: Vec<InputItem>,
-    ) -> Self {
-        let handle = {
-            let sess = sess.clone();
-            let sub_id = sub_id.clone();
-            let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move { compact::run_compact_task(sess, tc, sub_id, input).await })
-                .abort_handle()
-        };
-        Self {
-            sess,
-            sub_id,
-            handle,
-            kind: AgentTaskKind::Compact,
-        }
-    }
-
-    fn abort(self, reason: TurnAbortReason) {
-        // TOCTOU?
-        if !self.handle.is_finished() {
-            self.handle.abort();
-            let event = Event {
-                id: self.sub_id.clone(),
-                msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
-            };
-            let sess = self.sess;
-            tokio::spawn(async move {
-                if self.kind == AgentTaskKind::Review {
-                    exit_review_mode(sess.clone(), self.sub_id, None).await;
-                }
-                sess.send_event(event).await;
-            });
-        }
-    }
 }
 
 async fn submission_loop(
@@ -1274,9 +1179,8 @@ async fn submission_loop(
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
                     // no current task, spawn a new one
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
-                    sess.set_task(task).await;
+                    sess.spawn_task(Arc::clone(&turn_context), sub.id, items, RegularTask)
+                        .await;
                 }
             }
             Op::UserTurn {
@@ -1352,10 +1256,9 @@ async fn submission_loop(
                     // Install the new persistent context for subsequent tasks/turns.
                     turn_context = Arc::new(fresh_turn_context);
 
-                    // no current task, spawn a new one with the per‑turn context
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
-                    sess.set_task(task).await;
+                    // no current task, spawn a new one with the per-turn context
+                    sess.spawn_task(Arc::clone(&turn_context), sub.id, items, RegularTask)
+                        .await;
                 }
             }
             Op::ExecApproval { id, decision } => match decision {
@@ -1418,7 +1321,7 @@ async fn submission_loop(
                 let sub_id = sub.id.clone();
 
                 // This is a cheap lookup from the connection manager's cache.
-                let tools = sess.mcp_connection_manager.list_all_tools();
+                let tools = sess.services.mcp_connection_manager.list_all_tools();
                 let event = Event {
                     id: sub_id,
                     msg: EventMsg::McpListToolsResponse(
@@ -1453,22 +1356,18 @@ async fn submission_loop(
                     }])
                     .await
                 {
-                    compact::spawn_compact_task(
-                        sess.clone(),
-                        Arc::clone(&turn_context),
-                        sub.id,
-                        items,
-                    )
-                    .await;
+                    sess.spawn_task(Arc::clone(&turn_context), sub.id, items, CompactTask)
+                        .await;
                 }
             }
             Op::Shutdown => {
+                sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
                 info!("Shutting down Codex instance");
 
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.
                 let recorder_opt = {
-                    let mut guard = sess.rollout.lock().await;
+                    let mut guard = sess.services.rollout.lock().await;
                     guard.take()
                 };
                 if let Some(rec) = recorder_opt
@@ -1495,7 +1394,7 @@ async fn submission_loop(
                 let sub_id = sub.id.clone();
                 // Flush rollout writes before returning the path so readers observe a consistent file.
                 let (path, rec_opt) = {
-                    let guard = sess.rollout.lock().await;
+                    let guard = sess.services.rollout.lock().await;
                     match guard.as_ref() {
                         Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
                         None => {
@@ -1604,8 +1503,7 @@ async fn spawn_review_thread(
 
     // Clone sub_id for the upcoming announcement before moving it into the task.
     let sub_id_for_event = sub_id.clone();
-    let task = AgentTask::review(sess.clone(), tc.clone(), sub_id, input);
-    sess.set_task(task).await;
+    sess.spawn_task(tc.clone(), sub_id, input, ReviewTask).await;
 
     // Announce entering review mode so UIs can switch modes.
     sess.send_event(Event {
@@ -1632,14 +1530,14 @@ async fn spawn_review_thread(
 /// Review mode: when `turn_context.is_review_mode` is true, the turn runs in an
 /// isolated in-memory thread without the parent session's prior history or
 /// user_instructions. Emits ExitedReviewMode upon final review message.
-async fn run_task(
+pub(crate) async fn run_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
-) {
+) -> Option<String> {
     if input.is_empty() {
-        return;
+        return None;
     }
     let event = Event {
         id: sub_id.clone(),
@@ -1911,12 +1809,7 @@ async fn run_task(
         .await;
     }
 
-    sess.remove_task(&sub_id).await;
-    let event = Event {
-        id: sub_id,
-        msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
-    };
-    sess.send_event(event).await;
+    last_agent_message
 }
 
 /// Parse the review output; when not valid JSON, build a structured
@@ -1953,7 +1846,7 @@ async fn run_turn(
 ) -> CodexResult<TurnRunResult> {
     let tools = get_openai_tools(
         &turn_context.tools_config,
-        Some(sess.mcp_connection_manager.list_all_tools()),
+        Some(sess.services.mcp_connection_manager.list_all_tools()),
     );
 
     let prompt = Prompt {
@@ -2203,7 +2096,7 @@ async fn try_run_turn(
                 sess.send_event(event).await;
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
-                if sess.show_raw_agent_reasoning {
+                if sess.show_raw_agent_reasoning() {
                     let event = Event {
                         id: sub_id.to_string(),
                         msg: EventMsg::AgentReasoningRawContentDelta(
@@ -2233,7 +2126,9 @@ async fn handle_response_item(
             ..
         } => {
             info!("FunctionCall: {name}({arguments})");
-            if let Some((server, tool_name)) = sess.mcp_connection_manager.parse_tool_name(&name) {
+            if let Some((server, tool_name)) =
+                sess.services.mcp_connection_manager.parse_tool_name(&name)
+            {
                 let resp = handle_mcp_tool_call(
                     sess,
                     sub_id,
@@ -2369,7 +2264,7 @@ async fn handle_response_item(
                     trace!("suppressing assistant Message in review mode");
                     Vec::new()
                 }
-                _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning),
+                _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning()),
             };
             for msg in msgs {
                 let event = Event {
@@ -2411,6 +2306,7 @@ async fn handle_unified_exec_tool_call(
     };
 
     let value = sess
+        .services
         .unified_exec_manager
         .handle_request(request)
         .await
@@ -2529,6 +2425,7 @@ async fn handle_function_call(
                 ))
             })?;
             let result = sess
+                .services
                 .session_manager
                 .handle_exec_command_request(exec_params)
                 .await;
@@ -2546,6 +2443,7 @@ async fn handle_function_call(
                 })?;
 
             let result = sess
+                .services
                 .session_manager
                 .handle_write_stdin_request(write_stdin_params)
                 .await
@@ -2636,12 +2534,12 @@ fn maybe_translate_shell_command(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ExecParams {
-    let should_translate = matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
+    let should_translate = matches!(sess.user_shell(), crate::shell::Shell::PowerShell(_))
         || turn_context.shell_environment_policy.use_profile;
 
     if should_translate
         && let Some(command) = sess
-            .user_shell
+            .user_shell()
             .format_default_shell_invocation(params.command.clone())
     {
         return ExecParams { command, ..params };
@@ -2741,7 +2639,7 @@ async fn handle_container_exec_with_params(
                     &params.command,
                     turn_context.approval_policy,
                     &turn_context.sandbox_policy,
-                    &state.approved_commands,
+                    state.approved_commands_ref(),
                     params.with_escalated_permissions.unwrap_or(false),
                 )
             };
@@ -2812,7 +2710,7 @@ async fn handle_container_exec_with_params(
                 sandbox_type,
                 sandbox_policy: &turn_context.sandbox_policy,
                 sandbox_cwd: &turn_context.cwd,
-                codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
+                codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
                 stdout_stream: if exec_command_context.apply_patch.is_some() {
                     None
                 } else {
@@ -2927,7 +2825,7 @@ async fn handle_sandbox_error(
                         sandbox_type: SandboxType::None,
                         sandbox_policy: &turn_context.sandbox_policy,
                         sandbox_cwd: &turn_context.cwd,
-                        codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
+                        codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
                         stdout_stream: if exec_command_context.apply_patch.is_some() {
                             None
                         } else {
@@ -3170,7 +3068,7 @@ fn convert_call_tool_result_to_function_call_output_payload(
 
 /// Emits an ExitedReviewMode Event with optional ReviewOutput,
 /// and records a developer message with the review output.
-async fn exit_review_mode(
+pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
     review_output: Option<ReviewOutputEvent>,
@@ -3234,6 +3132,9 @@ mod tests {
     use crate::protocol::CompactedItem;
     use crate::protocol::InitialHistory;
     use crate::protocol::ResumedHistory;
+    use crate::state::TaskKind;
+    use crate::tasks::SessionTask;
+    use crate::tasks::SessionTaskContext;
     use codex_protocol::models::ContentItem;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -3243,6 +3144,8 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+    use tokio::time::Duration;
+    use tokio::time::sleep;
 
     #[test]
     fn reconstruct_history_matches_live_compactions() {
@@ -3268,7 +3171,7 @@ mod tests {
             }),
         ));
 
-        let actual = tokio_test::block_on(async { session.state.lock().await.history.contents() });
+        let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
         assert_eq!(expected, actual);
     }
 
@@ -3281,7 +3184,7 @@ mod tests {
             session.record_initial_history(&turn_context, InitialHistory::Forked(rollout_items)),
         );
 
-        let actual = tokio_test::block_on(async { session.state.lock().await.history.contents() });
+        let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
         assert_eq!(expected, actual);
     }
 
@@ -3507,24 +3410,193 @@ mod tests {
             is_review_mode: false,
             final_output_json_schema: None,
         };
-        let session = Session {
-            conversation_id,
-            tx_event,
+        let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
             rollout: Mutex::new(None),
-            state: Mutex::new(State {
-                history: ConversationHistory::new(),
-                ..Default::default()
-            }),
             codex_linux_sandbox_exe: None,
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+        };
+        let session = Session {
+            conversation_id,
+            tx_event,
+            state: Mutex::new(SessionState::new()),
+            active_turn: Mutex::new(None),
+            services,
             next_internal_sub_id: AtomicU64::new(0),
         };
         (session, turn_context)
+    }
+
+    // Like make_session_and_context, but returns Arc<Session> and the event receiver
+    // so tests can assert on emitted events.
+    fn make_session_and_context_with_rx() -> (
+        Arc<Session>,
+        Arc<TurnContext>,
+        async_channel::Receiver<Event>,
+    ) {
+        let (tx_event, rx_event) = async_channel::unbounded();
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load default test config");
+        let config = Arc::new(config);
+        let conversation_id = ConversationId::default();
+        let client = ModelClient::new(
+            config.clone(),
+            None,
+            config.model_provider.clone(),
+            config.model_reasoning_effort,
+            config.model_reasoning_summary,
+            conversation_id,
+        );
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &config.model_family,
+            include_plan_tool: config.include_plan_tool,
+            include_apply_patch_tool: config.include_apply_patch_tool,
+            include_web_search_request: config.tools_web_search_request,
+            use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+            include_view_image_tool: config.include_view_image_tool,
+            experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+        });
+        let turn_context = Arc::new(TurnContext {
+            client,
+            cwd: config.cwd.clone(),
+            base_instructions: config.base_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy.clone(),
+            shell_environment_policy: config.shell_environment_policy.clone(),
+            tools_config,
+            is_review_mode: false,
+            final_output_json_schema: None,
+        });
+        let services = SessionServices {
+            mcp_connection_manager: McpConnectionManager::default(),
+            session_manager: ExecSessionManager::default(),
+            unified_exec_manager: UnifiedExecSessionManager::default(),
+            notifier: UserNotifier::default(),
+            rollout: Mutex::new(None),
+            codex_linux_sandbox_exe: None,
+            user_shell: shell::Shell::Unknown,
+            show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+        };
+        let session = Arc::new(Session {
+            conversation_id,
+            tx_event,
+            state: Mutex::new(SessionState::new()),
+            active_turn: Mutex::new(None),
+            services,
+            next_internal_sub_id: AtomicU64::new(0),
+        });
+        (session, turn_context, rx_event)
+    }
+
+    #[derive(Clone, Copy)]
+    struct NeverEndingTask(TaskKind);
+
+    #[async_trait::async_trait]
+    impl SessionTask for NeverEndingTask {
+        fn kind(&self) -> TaskKind {
+            self.0
+        }
+
+        async fn run(
+            self: Arc<Self>,
+            _session: Arc<SessionTaskContext>,
+            _ctx: Arc<TurnContext>,
+            _sub_id: String,
+            _input: Vec<InputItem>,
+        ) -> Option<String> {
+            loop {
+                sleep(Duration::from_secs(60)).await;
+            }
+        }
+
+        async fn abort(&self, session: Arc<SessionTaskContext>, sub_id: &str) {
+            if let TaskKind::Review = self.0 {
+                exit_review_mode(session.clone_session(), sub_id.to_string(), None).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn abort_regular_task_emits_turn_aborted_only() {
+        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let sub_id = "sub-regular".to_string();
+        let input = vec![InputItem::Text {
+            text: "hello".to_string(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            sub_id.clone(),
+            input,
+            NeverEndingTask(TaskKind::Regular),
+        )
+        .await;
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+        let evt = rx.recv().await.expect("event");
+        match evt.msg {
+            EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
+        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let sub_id = "sub-review".to_string();
+        let input = vec![InputItem::Text {
+            text: "start review".to_string(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            sub_id.clone(),
+            input,
+            NeverEndingTask(TaskKind::Review),
+        )
+        .await;
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+        let first = rx.recv().await.expect("first event");
+        match first.msg {
+            EventMsg::ExitedReviewMode(ev) => assert!(ev.review_output.is_none()),
+            other => panic!("unexpected first event: {other:?}"),
+        }
+        let second = rx.recv().await.expect("second event");
+        match second.msg {
+            EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
+            other => panic!("unexpected second event: {other:?}"),
+        }
+
+        let history = sess.history_snapshot().await;
+        let found = history.iter().any(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content.iter().any(|ci| match ci {
+                    ContentItem::InputText { text } => {
+                        text.contains("<user_action>")
+                            && text.contains("review")
+                            && text.contains("interrupted")
+                    }
+                    _ => false,
+                })
+            }
+            _ => false,
+        });
+        assert!(
+            found,
+            "synthetic review interruption not recorded in history"
+        );
     }
 
     fn sample_rollout(
