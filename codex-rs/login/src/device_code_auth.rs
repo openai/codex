@@ -7,36 +7,22 @@ use serde::de::{self};
 
 use crate::server::ServerOptions;
 
-pub(crate) const DEVICE_AUTH_BASE_URL_ENV_VAR: &str = "CODEX_DEVICE_AUTH_BASE_URL";
-
 #[derive(Deserialize)]
 struct UserCodeResp {
     #[serde(alias = "user_code", alias = "usercode")]
     user_code: String,
     #[serde(default, deserialize_with = "deserialize_interval")]
-    interval: Option<u64>,
+    interval: u64,
 }
 
-fn deserialize_interval<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+fn deserialize_interval<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    match value {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::Number(n)) => n
-            .as_u64()
-            .ok_or_else(|| de::Error::custom("invalid u64 value"))
-            .map(Some),
-        Some(serde_json::Value::String(s)) => s
-            .trim()
-            .parse::<u64>()
-            .map(Some)
-            .map_err(|e| de::Error::custom(format!("invalid u64 string: {e}"))),
-        Some(other) => Err(de::Error::custom(format!(
-            "expected number or string for u64, got {other}"
-        ))),
-    }
+    let s = String::deserialize(deserializer)?;
+    s.trim()
+        .parse::<u64>()
+        .map_err(|e| de::Error::custom(format!("invalid u64 string: {e}")))
 }
 
 #[derive(Deserialize)]
@@ -65,18 +51,11 @@ struct TokenSuccessResp {
 /// - On success, persist tokens and attempt an API key exchange for convenience.
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let client = reqwest::Client::new();
-    let issuer_base = opts.issuer.trim_end_matches('/').to_owned();
-    let auth_base_url =
-        std::env::var(DEVICE_AUTH_BASE_URL_ENV_VAR).unwrap_or_else(|_| issuer_base.clone());
-    let auth_base_url = auth_base_url.trim_end_matches('/').to_owned();
+    let auth_base_url = opts.issuer.trim_end_matches('/').to_owned();
 
     // Step 1: request a user code and polling interval
-    let usercode_url = format!("{auth_base_url}/devicecode/usercode");
-    let mut payload: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    payload.insert(
-        "client_id".to_string(),
-        serde_json::Value::String(opts.client_id.clone()),
-    );
+    let usercode_url = format!("{auth_base_url}/deviceauth/usercode");
+    let payload: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
     let body = serde_json::Value::Object(payload).to_string();
 
     let uc_resp = client
@@ -96,12 +75,11 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
         )));
     }
     let uc: UserCodeResp = serde_json::from_str(&body_text).map_err(std::io::Error::other)?;
-    let interval: u64 = uc.interval.unwrap_or(5);
+    let interval: u64 = uc.interval;
 
     eprintln!(
         "To authenticate, enter this code when prompted: {} with interval {}",
-        uc.user_code,
-        uc.interval.unwrap_or(5)
+        uc.user_code, uc.interval
     );
 
     // Step 2: poll the token endpoint until success or failure

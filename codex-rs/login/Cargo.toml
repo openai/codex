@@ -33,4 +33,5 @@ webbrowser = { workspace = true }
 anyhow = { workspace = true }
 core_test_support = { workspace = true }
 pretty_assertions = "1"
+temp-env = "0.3"
 tempfile = { workspace = true }
