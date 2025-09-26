@@ -3,6 +3,7 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
+use serde::Deserializer;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -10,8 +11,9 @@ use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::Error as SerdeError;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
@@ -27,6 +29,94 @@ pub struct McpServerConfig {
     /// Default timeout for MCP tool calls initiated via this server.
     #[serde(default, with = "option_duration_secs")]
     pub tool_timeout_sec: Option<Duration>,
+}
+
+impl<'de> Deserialize<'de> for McpServerConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawMcpServerConfig {
+            command: Option<String>,
+            #[serde(default)]
+            args: Option<Vec<String>>,
+            #[serde(default)]
+            env: Option<Option<HashMap<String, String>>>,
+
+            url: Option<String>,
+            bearer_token: Option<String>,
+
+            #[serde(default)]
+            startup_timeout_sec: Option<f64>,
+            #[serde(default)]
+            startup_timeout_ms: Option<u64>,
+            #[serde(default, with = "option_duration_secs")]
+            tool_timeout_sec: Option<Duration>,
+        }
+
+        let raw = RawMcpServerConfig::deserialize(deserializer)?;
+
+        let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {
+            (Some(sec), _) => {
+                let duration = Duration::try_from_secs_f64(sec).map_err(SerdeError::custom)?;
+                Some(duration)
+            }
+            (None, Some(ms)) => Some(Duration::from_millis(ms)),
+            (None, None) => None,
+        };
+
+        fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
+        where
+            E: SerdeError,
+        {
+            if value.is_none() {
+                return Ok(());
+            }
+            Err(E::custom(format!(
+                "{field} is not supported for {transport}",
+            )))
+        }
+
+        let transport = match raw {
+            RawMcpServerConfig {
+                command: Some(command),
+                args,
+                env,
+                url,
+                bearer_token,
+                ..
+            } => {
+                throw_if_set("stdio", "url", url.as_ref())?;
+                throw_if_set("stdio", "bearer_token", bearer_token.as_ref())?;
+                McpServerTransportConfig::Stdio {
+                    command,
+                    args: args.unwrap_or_default(),
+                    env: env.unwrap_or_default(),
+                }
+            }
+            RawMcpServerConfig {
+                url: Some(url),
+                bearer_token,
+                command,
+                args,
+                env,
+                ..
+            } => {
+                throw_if_set("streamable_http", "command", command.as_ref())?;
+                throw_if_set("streamable_http", "args", args.as_ref())?;
+                throw_if_set("streamable_http", "env", env.as_ref())?;
+                McpServerTransportConfig::StreamableHttp { url, bearer_token }
+            }
+            _ => return Err(SerdeError::custom("invalid transport")),
+        };
+
+        Ok(Self {
+            transport,
+            startup_timeout_sec,
+            tool_timeout_sec: raw.tool_timeout_sec,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
