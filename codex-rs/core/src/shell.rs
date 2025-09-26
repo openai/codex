@@ -86,9 +86,10 @@ impl Shell {
 
                 // Model generated a PowerShell command. Run it.
                 // If it's already a PowerShell command, we need to ensure UTF-8 encoding is set.
-                if command.len() >= 3 && command[1] == "-Command" {
+                // Find the -Command argument and modify the argument that follows it.
+                if let Some(command_index) = command.iter().position(|arg| arg == "-Command") {
                     let mut modified_command = command.clone();
-                    if let Some(cmd_arg) = modified_command.get_mut(2) {
+                    if let Some(cmd_arg) = modified_command.get_mut(command_index + 1) {
                         // Prepend UTF-8 encoding setup to the command
                         *cmd_arg = format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}", cmd_arg);
                     }
@@ -586,7 +587,7 @@ mod tests_windows {
             bash_exe_fallback: None,
         });
 
-        // Test that commands get UTF-8 encoding setup prepended
+        // Test 1: Simple command conversion gets UTF-8 encoding
         let input = vec!["echo".to_string(), "Turkish: çğıİöşü".to_string()];
         let actual = shell.format_default_shell_invocation(input);
         
@@ -598,5 +599,34 @@ mod tests_windows {
         assert_eq!(cmd[2], "-Command");
         assert!(cmd[3].starts_with("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"));
         assert!(cmd[3].contains("Turkish: çğıİöşü"));
+
+        // Test 2: Existing PowerShell command with -NoProfile -Command gets UTF-8 encoding
+        let input = vec![
+            "pwsh.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Get-Content response.md".to_string(),
+        ];
+        let actual = shell.format_default_shell_invocation(input);
+        
+        assert!(actual.is_some());
+        let cmd = actual.unwrap();
+        assert_eq!(cmd.len(), 4);
+        assert_eq!(cmd[0], "pwsh.exe");
+        assert_eq!(cmd[1], "-NoProfile");
+        assert_eq!(cmd[2], "-Command");
+        assert!(cmd[3].starts_with("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"));
+        assert!(cmd[3].contains("Get-Content response.md"));
+
+        // Test 3: PowerShell command without -Command flag should pass through unchanged
+        let input = vec![
+            "pwsh.exe".to_string(),
+            "-Version".to_string(),
+        ];
+        let actual = shell.format_default_shell_invocation(input);
+        
+        assert!(actual.is_some());
+        let cmd = actual.unwrap();
+        assert_eq!(cmd, input); // Should be unchanged
     }
 }
