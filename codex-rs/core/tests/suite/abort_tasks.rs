@@ -3,7 +3,6 @@ use std::time::Duration;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use core_test_support::non_sandbox_test;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -17,8 +16,6 @@ use wiremock::matchers::body_string_contains;
 /// function call, then interrupt the session and expect TurnAborted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_long_running_tool_emits_turn_aborted() {
-    non_sandbox_test!();
-
     // Prepare SSE: one function call to the `shell` tool that sleeps for 60s,
     // with a large timeout so it does not finish on its own.
     let args = json!({
