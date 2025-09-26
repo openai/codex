@@ -559,10 +559,6 @@ fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
         "x-codex-secondary-reset-after-seconds",
     );
 
-    if primary.is_none() && secondary.is_none() {
-        return None;
-    }
-
     Some(RateLimitSnapshot { primary, secondary })
 }
 

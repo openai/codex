@@ -1,9 +1,7 @@
 ---
 source: tui/src/history_cell.rs
-assertion_line: 1869
 expression: rendered
 ---
-• Ran
-  └ a_very_long_token_wi
-        thout_spaces_to_
-        force_wrapping
+• Ran a_very_long_token_
+  │ without_spaces_to_
+  │ force_wrapping

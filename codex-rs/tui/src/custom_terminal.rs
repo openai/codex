@@ -29,9 +29,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
-use ratatui::widgets::StatefulWidget;
-use ratatui::widgets::StatefulWidgetRef;
-use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 #[derive(Debug, Hash)]
@@ -47,12 +44,8 @@ pub struct Frame<'a> {
 
     /// The buffer that is used to draw the current frame
     pub(crate) buffer: &'a mut Buffer,
-
-    /// The frame count indicating the sequence number of this frame.
-    pub(crate) count: usize,
 }
 
-#[allow(dead_code)]
 impl Frame<'_> {
     /// The area of the current frame
     ///
@@ -65,16 +58,6 @@ impl Frame<'_> {
         self.viewport_area
     }
 
-    /// Render a [`Widget`] to the current buffer using [`Widget::render`].
-    ///
-    /// Usually the area argument is the size of the current frame or a sub-area of the current
-    /// frame (which can be obtained using [`Layout`] to split the total area).
-    ///
-    /// [`Layout`]: crate::layout::Layout
-    pub fn render_widget<W: Widget>(&mut self, widget: W, area: Rect) {
-        widget.render(area, self.buffer);
-    }
-
     /// Render a [`WidgetRef`] to the current buffer using [`WidgetRef::render_ref`].
     ///
     /// Usually the area argument is the size of the current frame or a sub-area of the current
@@ -82,38 +65,6 @@ impl Frame<'_> {
     #[allow(clippy::needless_pass_by_value)]
     pub fn render_widget_ref<W: WidgetRef>(&mut self, widget: W, area: Rect) {
         widget.render_ref(area, self.buffer);
-    }
-
-    /// Render a [`StatefulWidget`] to the current buffer using [`StatefulWidget::render`].
-    ///
-    /// Usually the area argument is the size of the current frame or a sub-area of the current
-    /// frame (which can be obtained using [`Layout`] to split the total area).
-    ///
-    /// The last argument should be an instance of the [`StatefulWidget::State`] associated to the
-    /// given [`StatefulWidget`].
-    ///
-    /// [`Layout`]: crate::layout::Layout
-    pub fn render_stateful_widget<W>(&mut self, widget: W, area: Rect, state: &mut W::State)
-    where
-        W: StatefulWidget,
-    {
-        widget.render(area, self.buffer, state);
-    }
-
-    /// Render a [`StatefulWidgetRef`] to the current buffer using
-    /// [`StatefulWidgetRef::render_ref`].
-    ///
-    /// Usually the area argument is the size of the current frame or a sub-area of the current
-    /// frame (which can be obtained using [`Layout`] to split the total area).
-    ///
-    /// The last argument should be an instance of the [`StatefulWidgetRef::State`] associated to
-    /// the given [`StatefulWidgetRef`].
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn render_stateful_widget_ref<W>(&mut self, widget: W, area: Rect, state: &mut W::State)
-    where
-        W: StatefulWidgetRef,
-    {
-        widget.render_ref(area, self.buffer, state);
     }
 
     /// After drawing this frame, make the cursor visible and put it at the specified (x, y)
@@ -133,23 +84,6 @@ impl Frame<'_> {
     /// Gets the buffer that this `Frame` draws into as a mutable reference.
     pub fn buffer_mut(&mut self) -> &mut Buffer {
         self.buffer
-    }
-
-    /// Returns the current frame count.
-    ///
-    /// This method provides access to the frame count, which is a sequence number indicating
-    /// how many frames have been rendered up to (but not including) this one. It can be used
-    /// for purposes such as animation, performance tracking, or debugging.
-    ///
-    /// Each time a frame has been rendered, this count is incremented,
-    /// providing a consistent way to reference the order and number of frames processed by the
-    /// terminal. When count reaches its maximum value (`usize::MAX`), it wraps around to zero.
-    ///
-    /// This count is particularly useful when dealing with dynamic content or animations where the
-    /// state of the display changes over time. By tracking the frame count, developers can
-    /// synchronize updates or changes to the content with the rendering process.
-    pub const fn count(&self) -> usize {
-        self.count
     }
 }
 
@@ -174,8 +108,6 @@ where
     /// Last known position of the cursor. Used to find the new area when the viewport is inlined
     /// and the terminal resized.
     pub last_known_cursor_pos: Position,
-    /// Number of frames rendered up until current time.
-    frame_count: usize,
 }
 
 impl<B> Drop for Terminal<B>
@@ -212,18 +144,15 @@ where
             viewport_area: Rect::new(0, cursor_pos.y, 0, 0),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
-            frame_count: 0,
         })
     }
 
     /// Get a Frame object which provides a consistent view into the terminal state for rendering.
     pub fn get_frame(&mut self) -> Frame<'_> {
-        let count = self.frame_count;
         Frame {
             cursor_position: None,
             viewport_area: self.viewport_area,
             buffer: self.current_buffer_mut(),
-            count,
         }
     }
 
@@ -380,9 +309,6 @@ where
 
         // Flush
         self.backend.flush()?;
-
-        // increment frame count before returning from draw
-        self.frame_count = self.frame_count.wrapping_add(1);
 
         Ok(())
     }
