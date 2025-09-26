@@ -298,14 +298,14 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 grant_root,
             } => {
                 let mut header = Vec::new();
-                if let Some(reason) = reason {
-                    if !reason.is_empty() {
-                        header.push(HeaderLine::Text {
-                            text: reason,
-                            italic: true,
-                        });
-                        header.push(HeaderLine::Spacer);
-                    }
+                if let Some(reason) = reason
+                    && !reason.is_empty()
+                {
+                    header.push(HeaderLine::Text {
+                        text: reason,
+                        italic: true,
+                    });
+                    header.push(HeaderLine::Spacer);
                 }
                 if let Some(root) = grant_root {
                     header.push(HeaderLine::Text {
