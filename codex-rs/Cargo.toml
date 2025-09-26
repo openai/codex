@@ -18,6 +18,7 @@ members = [
     "ollama",
     "protocol",
     "protocol-ts",
+    "responses-api-proxy",
     "tui",
     "utils/readiness",
 ]
@@ -49,6 +50,7 @@ codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
 codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
+codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-tui = { path = "tui" }
 codex-utils-readiness = { path = "utils/readiness" }
 core_test_support = { path = "core/tests/common" }
@@ -152,6 +154,7 @@ webbrowser = "1.0"
 which = "6"
 wildmatch = "2.5.0"
 wiremock = "0.6"
+zeroize = "1.8.1"
 
 [workspace.lints]
 rust = {}
