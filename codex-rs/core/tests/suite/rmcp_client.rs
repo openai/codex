@@ -88,10 +88,13 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
         })
         .await?;
 
+    eprintln!("waiting for begin event");
     let begin_event = wait_for_event(&fixture.codex, |ev| {
         matches!(ev, EventMsg::McpToolCallBegin(_))
     })
     .await;
+
+    eprintln!("begin_event: {begin_event:?}");
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
         unreachable!("event guard guarantees McpToolCallBegin");
     };
@@ -102,6 +105,7 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
         matches!(ev, EventMsg::McpToolCallEnd(_))
     })
     .await;
+    eprintln!("end_event: {end_event:?}");
     let EventMsg::McpToolCallEnd(end) = end_event else {
         unreachable!("event guard guarantees McpToolCallEnd");
     };
@@ -134,7 +138,9 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
         .expect("env snapshot inserted");
     assert_eq!(env_value, expected_env_value);
 
-    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let task_complete_event =
+        wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    eprintln!("task_complete_event: {task_complete_event:?}");
 
     server.verify().await;
 
