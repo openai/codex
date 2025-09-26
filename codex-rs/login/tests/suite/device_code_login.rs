@@ -57,6 +57,8 @@ async fn device_code_login_integration_succeeds() {
 
     let poll_calls = Arc::new(AtomicUsize::new(0));
     let poll_calls_thread = poll_calls.clone();
+    let token_calls = Arc::new(AtomicUsize::new(0));
+    let token_calls_thread = token_calls.clone();
     let jwt = make_jwt(json!({
         "https://api.openai.com/auth": {
             "chatgpt_account_id": "acct_321"
@@ -65,7 +67,7 @@ async fn device_code_login_integration_succeeds() {
     let jwt_thread = jwt.clone();
 
     let server_handle = std::thread::spawn(move || {
-        for request in server.incoming_requests() {
+        for mut request in server.incoming_requests() {
             match request.url() {
                 "/devicecode/usercode" => {
                     let resp = json_response(json!({
@@ -81,18 +83,40 @@ async fn device_code_login_integration_succeeds() {
                             .with_status_code(400);
                         request.respond(resp).unwrap();
                     } else {
-                        let resp = json_response(json!({
-                            "id_token": jwt_thread,
-                            "access_token": "access-token-321",
-                            "refresh_token": "refresh-token-321"
-                        }));
+                        let resp = json_response(json!({ "code": "poll-code-321" }));
                         request.respond(resp).unwrap();
                     }
                 }
                 "/oauth/token" => {
-                    let resp = json_response(json!({ "access_token": "api-key-321" }));
-                    request.respond(resp).unwrap();
-                    break;
+                    let attempt = token_calls_thread.fetch_add(1, Ordering::SeqCst);
+                    let mut body = String::new();
+                    request.as_reader().read_to_string(&mut body).unwrap();
+                    if attempt == 0 {
+                        assert!(
+                            body.contains(
+                                "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+                            ),
+                            "expected device code exchange body: {body}"
+                        );
+                        assert!(
+                            body.contains("device_code=poll-code-321"),
+                            "expected device code in exchange body: {body}"
+                        );
+                        let resp = json_response(json!({
+                            "id_token": jwt_thread.clone(),
+                            "access_token": "access-token-321",
+                            "refresh_token": "refresh-token-321"
+                        }));
+                        request.respond(resp).unwrap();
+                    } else {
+                        assert!(
+                            body.contains("requested_token=openai-api-key"),
+                            "expected API key exchange body: {body}"
+                        );
+                        let resp = json_response(json!({ "access_token": "api-key-321" }));
+                        request.respond(resp).unwrap();
+                        break;
+                    }
                 }
                 _ => {
                     let _ = request.respond(Response::from_string("").with_status_code(404));
@@ -120,6 +144,7 @@ async fn device_code_login_integration_succeeds() {
     assert_eq!(tokens.id_token.raw_jwt, jwt);
     assert_eq!(tokens.account_id.as_deref(), Some("acct_321"));
     assert_eq!(poll_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(token_calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -134,7 +159,7 @@ async fn device_code_login_integration_handles_error_payload() {
     let issuer = format!("http://127.0.0.1:{port}");
 
     let server_handle = std::thread::spawn(move || {
-        for request in server.incoming_requests() {
+        for mut request in server.incoming_requests() {
             match request.url() {
                 "/devicecode/usercode" => {
                     let resp = json_response(json!({
@@ -239,6 +264,8 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
 
     let poll_calls = Arc::new(AtomicUsize::new(0));
     let poll_calls_thread = poll_calls.clone();
+    let token_calls = Arc::new(AtomicUsize::new(0));
+    let token_calls_thread = token_calls.clone();
     let jwt = make_jwt(json!({}));
     let jwt_thread = jwt.clone();
 
@@ -259,18 +286,40 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
                             .with_status_code(400);
                         request.respond(resp).unwrap();
                     } else {
-                        let resp = json_response(json!({
-                            "id_token": jwt_thread,
-                            "access_token": "access-token-999",
-                            "refresh_token": "refresh-token-999"
-                        }));
+                        let resp = json_response(json!({ "code": "poll-code-999" }));
                         request.respond(resp).unwrap();
                     }
                 }
                 "/oauth/token" => {
-                    let resp = Response::from_string("").with_status_code(500);
-                    request.respond(resp).unwrap();
-                    break;
+                    let attempt = token_calls_thread.fetch_add(1, Ordering::SeqCst);
+                    let mut body = String::new();
+                    request.as_reader().read_to_string(&mut body).unwrap();
+                    if attempt == 0 {
+                        assert!(
+                            body.contains(
+                                "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+                            ),
+                            "expected device code exchange body: {body}"
+                        );
+                        assert!(
+                            body.contains("device_code=poll-code-999"),
+                            "expected device code in exchange body: {body}"
+                        );
+                        let resp = json_response(json!({
+                            "id_token": jwt_thread.clone(),
+                            "access_token": "access-token-999",
+                            "refresh_token": "refresh-token-999"
+                        }));
+                        request.respond(resp).unwrap();
+                    } else {
+                        assert!(
+                            body.contains("requested_token=openai-api-key"),
+                            "expected API key exchange body: {body}"
+                        );
+                        let resp = Response::from_string("").with_status_code(500);
+                        request.respond(resp).unwrap();
+                        break;
+                    }
                 }
                 _ => {
                     let _ = request.respond(Response::from_string("").with_status_code(404));
@@ -297,4 +346,5 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
     assert_eq!(tokens.refresh_token, "refresh-token-999");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
     assert_eq!(poll_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(token_calls.load(Ordering::SeqCst), 2);
 }

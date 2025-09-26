@@ -134,8 +134,9 @@ struct LoginCommand {
     #[arg(long = "api-key", value_name = "API_KEY")]
     api_key: Option<String>,
 
-    /// Use device code flow (not yet supported)
-    #[arg(long = "use-device-code")]
+    /// EXPERIMENTAL: Use device code flow (not yet supported)
+    /// This feature is experimental and may changed in future releases.
+    #[arg(long = "experimental_use-device-code")]
     use_device_code: bool,
 
     /// Override the OAuth issuer base URL (advanced)
