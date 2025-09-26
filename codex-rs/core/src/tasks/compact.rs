@@ -25,7 +25,7 @@ impl SessionTask for CompactTask {
         ctx: Arc<TurnContext>,
         sub_id: String,
         input: Vec<InputItem>,
-    ) {
-        compact::run_compact_task(session.clone_session(), ctx, sub_id, input).await;
+    ) -> Option<String> {
+        compact::run_compact_task(session.clone_session(), ctx, sub_id, input).await
     }
 }

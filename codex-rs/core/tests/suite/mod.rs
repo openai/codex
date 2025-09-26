@@ -1,5 +1,6 @@
 // Aggregates all former standalone integration tests as modules.
 
+mod abort_tasks;
 mod cli_stream;
 mod client;
 mod compact;

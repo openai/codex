@@ -51,7 +51,7 @@ pub(crate) async fn run_compact_task(
     turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
-) {
+) -> Option<String> {
     let start_event = Event {
         id: sub_id.clone(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
@@ -60,7 +60,7 @@ pub(crate) async fn run_compact_task(
     };
     sess.send_event(start_event).await;
     run_compact_task_inner(sess.clone(), turn_context, sub_id.clone(), input).await;
-    sess.on_task_finished(sub_id, None).await;
+    None
 }
 
 async fn run_compact_task_inner(

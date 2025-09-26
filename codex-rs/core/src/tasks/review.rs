@@ -26,9 +26,9 @@ impl SessionTask for ReviewTask {
         ctx: Arc<TurnContext>,
         sub_id: String,
         input: Vec<InputItem>,
-    ) {
+    ) -> Option<String> {
         let sess = session.clone_session();
-        run_task(sess, ctx, sub_id, input).await;
+        run_task(sess, ctx, sub_id, input).await
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, sub_id: &str) {

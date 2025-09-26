@@ -49,7 +49,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         ctx: Arc<TurnContext>,
         sub_id: String,
         input: Vec<InputItem>,
-    );
+    ) -> Option<String>;
 
     async fn abort(&self, session: Arc<SessionTaskContext>, sub_id: &str) {
         let _ = (session, sub_id);
@@ -75,7 +75,12 @@ impl Session {
             let task_for_run = Arc::clone(&task);
             let sub_clone = sub_id.clone();
             tokio::spawn(async move {
-                task_for_run.run(session_ctx, ctx, sub_clone, input).await;
+                let last_agent_message = task_for_run
+                    .run(Arc::clone(&session_ctx), ctx, sub_clone.clone(), input)
+                    .await;
+                // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                let sess = session_ctx.clone_session();
+                sess.on_task_finished(sub_clone, last_agent_message).await;
             })
             .abort_handle()
         };
@@ -100,11 +105,10 @@ impl Session {
         last_agent_message: Option<String>,
     ) {
         let mut active = self.active_turn.lock().await;
-        if let Some(at) = active.as_mut() {
-            at.remove_task(&sub_id);
-            if at.is_empty() {
-                *active = None;
-            }
+        if let Some(at) = active.as_mut()
+            && at.remove_task(&sub_id)
+        {
+            *active = None;
         }
         drop(active);
         let event = Event {
@@ -123,14 +127,10 @@ impl Session {
 
     async fn take_all_running_tasks(&self) -> Vec<(String, RunningTask)> {
         let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.clear_pending();
-                }
+        match active.take() {
+            Some(mut at) => {
+                at.clear_pending().await;
                 let tasks = at.drain_tasks();
-                *active = None;
                 tasks.into_iter().collect()
             }
             None => Vec::new(),

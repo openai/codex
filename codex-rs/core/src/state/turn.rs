@@ -51,10 +51,6 @@ impl ActiveTurn {
         self.tasks.is_empty()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.tasks.is_empty()
-    }
-
     pub(crate) fn drain_tasks(&mut self) -> IndexMap<String, RunningTask> {
         std::mem::take(&mut self.tasks)
     }
@@ -99,6 +95,21 @@ impl TurnState {
             let mut ret = Vec::new();
             std::mem::swap(&mut ret, &mut self.pending_input);
             ret
+        }
+    }
+}
+
+impl ActiveTurn {
+    /// Clear any pending approvals and input buffered for the current turn.
+    pub(crate) async fn clear_pending(&self) {
+        let mut ts = self.turn_state.lock().await;
+        ts.clear_pending();
+    }
+
+    /// Best-effort, non-blocking variant for synchronous contexts (Drop/interrupt).
+    pub(crate) fn try_clear_pending_sync(&self) {
+        if let Ok(mut ts) = self.turn_state.try_lock() {
+            ts.clear_pending();
         }
     }
 }

@@ -984,28 +984,24 @@ impl Session {
     /// Returns the input if there was no task running to inject into
     pub async fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
         let mut active = self.active_turn.lock().await;
-        if let Some(at) = active.as_mut() {
-            if at.is_empty() {
-                return Err(input);
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.push_pending_input(input.into());
+                Ok(())
             }
-            let mut ts = at.turn_state.lock().await;
-            ts.push_pending_input(input.into());
-            Ok(())
-        } else {
-            Err(input)
+            None => Err(input),
         }
     }
 
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut active = self.active_turn.lock().await;
-        if let Some(at) = active.as_mut() {
-            if at.is_empty() {
-                return Vec::with_capacity(0);
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.take_pending_input()
             }
-            let mut ts = at.turn_state.lock().await;
-            ts.take_pending_input()
-        } else {
-            Vec::with_capacity(0)
+            None => Vec::with_capacity(0),
         }
     }
 
@@ -1030,9 +1026,7 @@ impl Session {
         if let Ok(mut active) = self.active_turn.try_lock()
             && let Some(at) = active.as_mut()
         {
-            if let Ok(mut ts) = at.turn_state.try_lock() {
-                ts.clear_pending();
-            }
+            at.try_clear_pending_sync();
             let tasks = at.drain_tasks();
             *active = None;
             for (_sub_id, task) in tasks {
@@ -1537,9 +1531,9 @@ pub(crate) async fn run_task(
     turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
-) {
+) -> Option<String> {
     if input.is_empty() {
-        return;
+        return None;
     }
     let event = Event {
         id: sub_id.clone(),
@@ -1811,7 +1805,7 @@ pub(crate) async fn run_task(
         .await;
     }
 
-    sess.on_task_finished(sub_id, last_agent_message).await;
+    last_agent_message
 }
 
 /// Parse the review output; when not valid JSON, build a structured
@@ -3515,7 +3509,7 @@ mod tests {
             _ctx: Arc<TurnContext>,
             _sub_id: String,
             _input: Vec<InputItem>,
-        ) {
+        ) -> Option<String> {
             loop {
                 sleep(Duration::from_secs(60)).await;
             }
