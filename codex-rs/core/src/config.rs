@@ -1,6 +1,7 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::McpServerTransportConfig;
 use crate::config_types::Notifications;
 use crate::config_types::ReasoningSummaryFormat;
 use crate::config_types::SandboxWorkspaceWrite;
@@ -314,16 +315,16 @@ pub fn write_global_mcp_servers(
         for (name, config) in servers {
             let mut entry = TomlTable::new();
             entry.set_implicit(false);
-            match (&config.command, &config.url) {
-                (Some(command), None) => {
+            match &config.transport {
+                McpServerTransportConfig::Stdio { command, args } => {
                     entry["command"] = toml_edit::value(command.clone());
 
-                    if !config.args.is_empty() {
-                        let mut args = TomlArray::new();
-                        for arg in &config.args {
-                            args.push(arg.clone());
+                    if !args.is_empty() {
+                        let mut args_array = TomlArray::new();
+                        for arg in args {
+                            args_array.push(arg.clone());
                         }
-                        entry["args"] = TomlItem::Value(args.into());
+                        entry["args"] = TomlItem::Value(args_array.into());
                     }
 
                     if let Some(env) = &config.env
@@ -339,18 +340,11 @@ pub fn write_global_mcp_servers(
                         entry["env"] = TomlItem::Table(env_table);
                     }
                 }
-                (None, Some(url)) => {
+                McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
                     entry["url"] = toml_edit::value(url.clone());
-                    if let Some(token) = &config.bearer_token {
+                    if let Some(token) = bearer_token {
                         entry["bearer_token"] = toml_edit::value(token.clone());
                     }
-                }
-                _ => {
-                    tracing::warn!(
-                        "skipping MCP server `{}` with invalid transport configuration",
-                        name
-                    );
-                    continue;
                 }
             }
 
@@ -1311,11 +1305,11 @@ exclude_slash_tmp = true
         servers.insert(
             "docs".to_string(),
             McpServerConfig {
-                command: Some("echo".to_string()),
-                args: vec!["hello".to_string()],
+                transport: McpServerTransportConfig::Stdio {
+                    command: "echo".to_string(),
+                    args: vec!["hello".to_string()],
+                },
                 env: None,
-                url: None,
-                bearer_token: None,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
                 tool_timeout_sec: Some(Duration::from_secs(5)),
             },
@@ -1326,8 +1320,13 @@ exclude_slash_tmp = true
         let loaded = load_global_mcp_servers(codex_home.path())?;
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
-        assert_eq!(docs.command, Some("echo".to_string()));
-        assert_eq!(docs.args, vec!["hello".to_string()]);
+        match &docs.transport {
+            McpServerTransportConfig::Stdio { command, args } => {
+                assert_eq!(command, "echo");
+                assert_eq!(args, &vec!["hello".to_string()]);
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_secs(3)));
         assert_eq!(docs.tool_timeout_sec, Some(Duration::from_secs(5)));
 

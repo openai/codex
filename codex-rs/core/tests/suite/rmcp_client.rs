@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use codex_core::config_types::McpServerConfig;
+use codex_core::config_types::McpServerTransportConfig;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -66,8 +67,10 @@ async fn rmcp_stdio_tool_call_round_trip() -> anyhow::Result<()> {
             config.mcp_servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
-                    command: rmcp_test_server_bin.clone(),
-                    args: Vec::new(),
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin.clone(),
+                        args: Vec::new(),
+                    },
                     env: Some(HashMap::from([(
                         "MCP_TEST_VALUE".to_string(),
                         expected_env_value.to_string(),

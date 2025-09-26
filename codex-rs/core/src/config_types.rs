@@ -13,22 +13,28 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpServerTransportConfig {
+    Stdio {
+        #[serde(alias = "commands")]
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    StreamableHttp {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer_token: Option<String>,
+    },
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
+    pub transport: McpServerTransportConfig,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-
-    #[serde(default)]
-    pub args: Vec<String>,
-
-    #[serde(default)]
     pub env: Option<HashMap<String, String>>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bearer_token: Option<String>,
 
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
@@ -39,7 +45,11 @@ pub struct McpServerConfig {
     pub startup_timeout_sec: Option<Duration>,
 
     /// Default timeout for MCP tool calls initiated via this server.
-    #[serde(default, with = "option_duration_secs")]
+    #[serde(
+        default,
+        with = "option_duration_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub tool_timeout_sec: Option<Duration>,
 }
 
@@ -50,6 +60,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
     {
         #[derive(Deserialize)]
         struct RawMcpServerConfig {
+            #[serde(default)]
+            transport: Option<McpServerTransportConfig>,
             #[serde(default)]
             command: Option<String>,
             #[serde(default)]
@@ -69,8 +81,27 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         }
 
         let raw = RawMcpServerConfig::deserialize(deserializer)?;
+        let RawMcpServerConfig {
+            transport: raw_transport,
+            command,
+            args,
+            env,
+            url,
+            bearer_token,
+            startup_timeout_sec,
+            startup_timeout_ms,
+            tool_timeout_sec,
+        } = raw;
 
-        let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {
+        if raw_transport.is_some()
+            && (command.is_some() || !args.is_empty() || url.is_some() || bearer_token.is_some())
+        {
+            return Err(SerdeError::custom(
+                "`transport` must not be combined with legacy MCP transport fields",
+            ));
+        }
+
+        let startup_timeout_sec = match (startup_timeout_sec, startup_timeout_ms) {
             (Some(sec), _) => {
                 let duration = Duration::try_from_secs_f64(sec).map_err(SerdeError::custom)?;
                 Some(duration)
@@ -79,45 +110,73 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             (None, None) => None,
         };
 
-        let command = raw.command.and_then(normalize_string_option);
-        let url = raw.url.and_then(normalize_string_option);
-
-        let has_command = command.is_some();
-        let has_url = url.is_some();
-
-        if has_command && has_url {
-            return Err(SerdeError::custom(
-                "MCP server config must not set both `command` and `url`",
-            ));
-        }
-
-        if !has_command && !has_url {
-            return Err(SerdeError::custom(
-                "MCP server config must set either `command` or `url`",
-            ));
-        }
-
-        if has_url {
-            if !raw.args.is_empty() {
-                return Err(SerdeError::custom(
-                    "`args` is not supported when configuring MCP servers via `url`",
-                ));
+        let transport = if let Some(transport) = raw_transport {
+            match transport {
+                McpServerTransportConfig::Stdio { command, args } => {
+                    let command = normalize_string_option(command).ok_or_else(|| {
+                        SerdeError::custom(
+                            "MCP server config `transport.stdio.command` must be non-empty",
+                        )
+                    })?;
+                    McpServerTransportConfig::Stdio { command, args }
+                }
+                McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                    let url = normalize_string_option(url).ok_or_else(|| {
+                        SerdeError::custom(
+                            "MCP server config `transport.streamable_http.url` must be non-empty",
+                        )
+                    })?;
+                    let bearer_token = bearer_token.and_then(normalize_string_option);
+                    McpServerTransportConfig::StreamableHttp { url, bearer_token }
+                }
             }
-            if raw.env.as_ref().is_some_and(|env| !env.is_empty()) {
-                return Err(SerdeError::custom(
-                    "`env` is not supported when configuring MCP servers via `url`",
-                ));
+        } else {
+            let command = command.and_then(normalize_string_option);
+            let url = url.and_then(normalize_string_option);
+
+            match (command, url) {
+                (Some(command), None) => McpServerTransportConfig::Stdio { command, args },
+                (None, Some(url)) => {
+                    if !args.is_empty() {
+                        return Err(SerdeError::custom(
+                            "`args` is not supported when configuring MCP servers via `url`",
+                        ));
+                    }
+                    if env.as_ref().is_some_and(|env| !env.is_empty()) {
+                        return Err(SerdeError::custom(
+                            "`env` is not supported when configuring MCP servers via `url`",
+                        ));
+                    }
+
+                    let bearer_token = bearer_token.and_then(normalize_string_option);
+                    McpServerTransportConfig::StreamableHttp { url, bearer_token }
+                }
+                (Some(_), Some(_)) => {
+                    return Err(SerdeError::custom(
+                        "MCP server config must not set both `command` and `url`",
+                    ));
+                }
+                (None, None) => {
+                    return Err(SerdeError::custom(
+                        "MCP server config must set either `command` or `url` or use `transport`",
+                    ));
+                }
             }
+        };
+
+        if env.as_ref().is_some_and(|env| !env.is_empty())
+            && matches!(transport, McpServerTransportConfig::StreamableHttp { .. })
+        {
+            return Err(SerdeError::custom(
+                "`env` is not supported when configuring MCP servers via `url`",
+            ));
         }
 
         Ok(Self {
-            command,
-            args: raw.args,
-            env: raw.env,
-            url,
-            bearer_token: raw.bearer_token.and_then(normalize_string_option),
+            transport,
+            env,
             startup_timeout_sec,
-            tool_timeout_sec: raw.tool_timeout_sec,
+            tool_timeout_sec,
         })
     }
 }
@@ -137,7 +196,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn deserialize_command_server_config() {
+    fn deserialize_legacy_command_server_config() {
         let cfg: McpServerConfig = toml::from_str(
             r#"
             command = "echo"
@@ -146,9 +205,54 @@ mod tests {
         )
         .expect("should deserialize command config");
 
-        assert_eq!(cfg.command.as_deref(), Some("echo"));
-        assert_eq!(cfg.args, vec!["hello", "world"]);
-        assert!(cfg.url.is_none());
+        match cfg.transport {
+            McpServerTransportConfig::Stdio { command, args } => {
+                assert_eq!(command, "echo");
+                assert_eq!(args, vec!["hello", "world"]);
+            }
+            other => panic!("unexpected transport: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_transport_stdio_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            [transport]
+            type = "stdio"
+            command = "echo"
+            args = ["hi"]
+        "#,
+        )
+        .expect("should deserialize stdio transport");
+
+        match cfg.transport {
+            McpServerTransportConfig::Stdio { command, args } => {
+                assert_eq!(command, "echo");
+                assert_eq!(args, vec!["hi"]);
+            }
+            other => panic!("unexpected transport: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_stdio_accepts_commands_alias() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            [transport]
+            type = "stdio"
+            commands = "echo"
+        "#,
+        )
+        .expect("should deserialize stdio transport with commands alias");
+
+        match cfg.transport {
+            McpServerTransportConfig::Stdio { command, args } => {
+                assert_eq!(command, "echo");
+                assert!(args.is_empty());
+            }
+            other => panic!("unexpected transport: {other:?}"),
+        }
     }
 
     #[test]
@@ -161,10 +265,13 @@ mod tests {
         )
         .expect("should deserialize http config");
 
-        assert_eq!(cfg.url.as_deref(), Some("https://example.com/mcp"));
-        assert_eq!(cfg.bearer_token.as_deref(), Some("secret"));
-        assert!(cfg.command.is_none());
-        assert!(cfg.args.is_empty());
+        match cfg.transport {
+            McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                assert_eq!(url, "https://example.com/mcp");
+                assert_eq!(bearer_token.as_deref(), Some("secret"));
+            }
+            other => panic!("unexpected transport: {other:?}"),
+        }
         assert!(cfg.env.is_none());
     }
 
@@ -179,6 +286,43 @@ mod tests {
         .expect_err("should reject command+url");
 
         assert!(err.to_string().contains("must not set both"));
+    }
+
+    #[test]
+    fn deserialize_rejects_mixed_transport_fields() {
+        let err = toml::from_str::<McpServerConfig>(
+            r#"
+            [transport]
+            type = "stdio"
+            command = "echo"
+            args = []
+
+            command = "echo"
+        "#,
+        )
+        .expect_err("should reject mixing transport and legacy fields");
+
+        assert!(
+            err.to_string()
+                .contains("must not be combined with legacy MCP transport fields")
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_env_for_http_transport() {
+        let err = toml::from_str::<McpServerConfig>(
+            r#"
+            [transport]
+            type = "streamable_http"
+            url = "https://example.com"
+
+            [env]
+            FOO = "BAR"
+        "#,
+        )
+        .expect_err("should reject env for http transport");
+
+        assert!(err.to_string().contains("`env` is not supported"));
     }
 }
 

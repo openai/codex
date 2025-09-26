@@ -29,6 +29,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::config_types::McpServerConfig;
+use crate::config_types::McpServerTransportConfig;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -204,32 +205,11 @@ impl McpConnectionManager {
                 continue;
             }
 
-            let has_command = cfg.command.is_some();
-            let has_url = cfg.url.is_some();
-
-            if has_command && has_url {
-                errors.insert(
-                    server_name.clone(),
-                    anyhow!(
-                        "MCP server `{}` must not set both `command` and `url`",
-                        server_name
-                    ),
-                );
-                continue;
-            }
-
-            if !has_command && !has_url {
-                errors.insert(
-                    server_name.clone(),
-                    anyhow!(
-                        "MCP server `{}` must set either `command` or `url`",
-                        server_name
-                    ),
-                );
-                continue;
-            }
-
-            if cfg.url.is_some() && !use_rmcp_client {
+            if matches!(
+                cfg.transport,
+                McpServerTransportConfig::StreamableHttp { .. }
+            ) && !use_rmcp_client
+            {
                 info!(
                     "skipping MCP server `{}` configured with url because rmcp client is disabled",
                     server_name
@@ -242,14 +222,7 @@ impl McpConnectionManager {
 
             let use_rmcp_client_flag = use_rmcp_client;
             join_set.spawn(async move {
-                let McpServerConfig {
-                    command,
-                    args,
-                    env,
-                    url,
-                    bearer_token,
-                    ..
-                } = cfg;
+                let McpServerConfig { transport, env, .. } = cfg;
                 let params = mcp_types::InitializeRequestParams {
                     capabilities: ClientCapabilities {
                         experimental: None,
@@ -271,8 +244,8 @@ impl McpConnectionManager {
                     protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                 };
 
-                let client = match (command, url) {
-                    (Some(command), None) => {
+                let client = match transport {
+                    McpServerTransportConfig::Stdio { command, args } => {
                         let command_os: OsString = command.into();
                         let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
                         McpClientAdapter::new_stdio_client(
@@ -286,15 +259,16 @@ impl McpConnectionManager {
                         .await
                         .map(|c| (c, startup_timeout))
                     }
-                    (None, Some(url)) => McpClientAdapter::new_streamable_http_client(
-                        url,
-                        bearer_token,
-                        params,
-                        startup_timeout,
-                    )
-                    .await
-                    .map(|c| (c, startup_timeout)),
-                    _ => Err(anyhow!("invalid MCP server transport configuration")),
+                    McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                        McpClientAdapter::new_streamable_http_client(
+                            url,
+                            bearer_token,
+                            params,
+                            startup_timeout,
+                        )
+                        .await
+                        .map(|c| (c, startup_timeout))
+                    }
                 };
 
                 ((server_name, tool_timeout), client)

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use codex_core::config::load_global_mcp_servers;
+use codex_core::config_types::McpServerTransportConfig;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -26,11 +27,14 @@ fn add_and_remove_server_updates_global_config() -> Result<()> {
     let servers = load_global_mcp_servers(codex_home.path())?;
     assert_eq!(servers.len(), 1);
     let docs = servers.get("docs").expect("server should exist");
-    assert_eq!(docs.command.as_deref(), Some("echo"));
-    assert_eq!(docs.args, vec!["hello".to_string()]);
+    match &docs.transport {
+        McpServerTransportConfig::Stdio { command, args } => {
+            assert_eq!(command, "echo");
+            assert_eq!(args, &vec!["hello".to_string()]);
+        }
+        other => panic!("unexpected transport: {other:?}"),
+    }
     assert!(docs.env.is_none());
-    assert!(docs.url.is_none());
-    assert!(docs.bearer_token.is_none());
 
     let mut remove_cmd = codex_command(codex_home.path())?;
     remove_cmd

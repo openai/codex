@@ -19,6 +19,7 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_core::config::Config;
+use codex_core::config_types::McpServerTransportConfig;
 use codex_core::config_types::ReasoningSummaryFormat;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -848,20 +849,19 @@ pub(crate) fn new_mcp_tools_output(
 
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
 
-        match (&cfg.command, &cfg.url) {
-            (Some(command), None) => {
-                let args = if cfg.args.is_empty() {
+        match &cfg.transport {
+            McpServerTransportConfig::Stdio { command, args } => {
+                let args_suffix = if args.is_empty() {
                     String::new()
                 } else {
-                    format!(" {}", cfg.args.join(" "))
+                    format!(" {}", args.join(" "))
                 };
-                let cmd_display = format!("{command}{args}");
+                let cmd_display = format!("{command}{args_suffix}");
                 lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
             }
-            (None, Some(url)) => {
+            McpServerTransportConfig::StreamableHttp { url, .. } => {
                 lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
             }
-            _ => {}
         }
 
         if names.is_empty() {

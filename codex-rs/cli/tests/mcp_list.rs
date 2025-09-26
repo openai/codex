@@ -62,15 +62,22 @@ fn list_and_get_render_expected_output() -> Result<()> {
     assert_eq!(array.len(), 1);
     let entry = &array[0];
     assert_eq!(entry.get("name"), Some(&JsonValue::String("docs".into())));
+    let transport = entry
+        .get("transport")
+        .and_then(|value| value.as_object())
+        .expect("transport object");
     assert_eq!(
-        entry.get("command"),
+        transport.get("type"),
+        Some(&JsonValue::String("stdio".into()))
+    );
+    assert_eq!(
+        transport.get("command"),
         Some(&JsonValue::String("docs-server".into()))
     );
-
-    let args = entry
+    let args = transport
         .get("args")
-        .and_then(|v| v.as_array())
-        .expect("args array");
+        .and_then(|value| value.as_array())
+        .expect("transport args array");
     assert_eq!(
         args,
         &vec![
@@ -90,6 +97,7 @@ fn list_and_get_render_expected_output() -> Result<()> {
     assert!(get_output.status.success());
     let stdout = String::from_utf8(get_output.stdout)?;
     assert!(stdout.contains("docs"));
+    assert!(stdout.contains("transport: stdio"));
     assert!(stdout.contains("command: docs-server"));
     assert!(stdout.contains("args: --port 4000"));
     assert!(stdout.contains("env: TOKEN=secret"));
