@@ -17,10 +17,16 @@ use codex_exec::exec_events::ConversationItem;
 use codex_exec::exec_events::ConversationItemDetails;
 use codex_exec::exec_events::ItemCompletedEvent;
 use codex_exec::exec_events::ItemStartedEvent;
+use codex_exec::exec_events::ItemUpdatedEvent;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
 use codex_exec::exec_events::ReasoningItem;
 use codex_exec::exec_events::SessionCreatedEvent;
+use codex_exec::exec_events::TodoItem as ExecTodoItem;
+use codex_exec::exec_events::TodoListItem as ExecTodoListItem;
+use codex_exec::exec_events::TurnCompletedEvent;
+use codex_exec::exec_events::TurnStartedEvent;
+use codex_exec::exec_events::Usage;
 use codex_exec::experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -60,6 +66,192 @@ fn session_configured_produces_session_created_event() {
             session_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
         })]
     );
+}
+
+#[test]
+fn task_started_produces_turn_started_event() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_conversation_events(&event(
+        "t1",
+        EventMsg::TaskStarted(codex_core::protocol::TaskStartedEvent {
+            model_context_window: Some(32_000),
+        }),
+    ));
+
+    assert_eq!(
+        out,
+        vec![ConversationEvent::TurnStarted(TurnStartedEvent {})]
+    );
+}
+
+#[test]
+fn plan_update_emits_todo_list_started_updated_and_completed() {
+    use codex_core::plan_tool::PlanItemArg;
+    use codex_core::plan_tool::StepStatus;
+    use codex_core::plan_tool::UpdatePlanArgs;
+
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+
+    // First plan update => item.started (todo_list)
+    let first = event(
+        "p1",
+        EventMsg::PlanUpdate(UpdatePlanArgs {
+            explanation: None,
+            plan: vec![
+                PlanItemArg {
+                    step: "step one".to_string(),
+                    status: StepStatus::Pending,
+                },
+                PlanItemArg {
+                    step: "step two".to_string(),
+                    status: StepStatus::InProgress,
+                },
+            ],
+        }),
+    );
+    let out_first = ep.collect_conversation_events(&first);
+    assert_eq!(
+        out_first,
+        vec![ConversationEvent::ItemStarted(ItemStartedEvent {
+            item: ConversationItem {
+                id: "item_0".to_string(),
+                details: ConversationItemDetails::TodoList(ExecTodoListItem {
+                    items: vec![
+                        ExecTodoItem {
+                            text: "step one".to_string(),
+                            completed: false
+                        },
+                        ExecTodoItem {
+                            text: "step two".to_string(),
+                            completed: false
+                        },
+                    ],
+                }),
+            },
+        })]
+    );
+
+    // Second plan update in same turn => item.updated (same id)
+    let second = event(
+        "p2",
+        EventMsg::PlanUpdate(UpdatePlanArgs {
+            explanation: None,
+            plan: vec![
+                PlanItemArg {
+                    step: "step one".to_string(),
+                    status: StepStatus::Completed,
+                },
+                PlanItemArg {
+                    step: "step two".to_string(),
+                    status: StepStatus::InProgress,
+                },
+            ],
+        }),
+    );
+    let out_second = ep.collect_conversation_events(&second);
+    assert_eq!(
+        out_second,
+        vec![ConversationEvent::ItemUpdated(ItemUpdatedEvent {
+            item: ConversationItem {
+                id: "item_0".to_string(),
+                details: ConversationItemDetails::TodoList(ExecTodoListItem {
+                    items: vec![
+                        ExecTodoItem {
+                            text: "step one".to_string(),
+                            completed: true
+                        },
+                        ExecTodoItem {
+                            text: "step two".to_string(),
+                            completed: false
+                        },
+                    ],
+                }),
+            },
+        })]
+    );
+
+    // Task completes => item.completed (same id, latest state)
+    let complete = event(
+        "p3",
+        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    );
+    let out_complete = ep.collect_conversation_events(&complete);
+    assert_eq!(
+        out_complete,
+        vec![
+            ConversationEvent::ItemCompleted(ItemCompletedEvent {
+                item: ConversationItem {
+                    id: "item_0".to_string(),
+                    details: ConversationItemDetails::TodoList(ExecTodoListItem {
+                        items: vec![
+                            ExecTodoItem {
+                                text: "step one".to_string(),
+                                completed: true
+                            },
+                            ExecTodoItem {
+                                text: "step two".to_string(),
+                                completed: false
+                            },
+                        ],
+                    }),
+                },
+            }),
+            ConversationEvent::TurnCompleted(TurnCompletedEvent {
+                usage: Usage::default(),
+            }),
+        ]
+    );
+}
+
+#[test]
+fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
+    use codex_core::plan_tool::PlanItemArg;
+    use codex_core::plan_tool::StepStatus;
+    use codex_core::plan_tool::UpdatePlanArgs;
+
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+
+    // First turn: start + complete
+    let start = event(
+        "t1",
+        EventMsg::PlanUpdate(UpdatePlanArgs {
+            explanation: None,
+            plan: vec![PlanItemArg {
+                step: "only".to_string(),
+                status: StepStatus::Pending,
+            }],
+        }),
+    );
+    let _ = ep.collect_conversation_events(&start);
+    let complete = event(
+        "t2",
+        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    );
+    let _ = ep.collect_conversation_events(&complete);
+
+    // Second turn: a new todo list should have a new id
+    let start_again = event(
+        "t3",
+        EventMsg::PlanUpdate(UpdatePlanArgs {
+            explanation: None,
+            plan: vec![PlanItemArg {
+                step: "again".to_string(),
+                status: StepStatus::Pending,
+            }],
+        }),
+    );
+    let out = ep.collect_conversation_events(&start_again);
+
+    match &out[0] {
+        ConversationEvent::ItemStarted(ItemStartedEvent { item }) => {
+            assert_eq!(&item.id, "item_1");
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
 }
 
 #[test]
@@ -416,4 +608,53 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
         }
         other => panic!("unexpected event: {other:?}"),
     }
+}
+
+#[test]
+fn task_complete_produces_turn_completed_with_usage() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+
+    // First, feed a TokenCount event with known totals.
+    let usage = codex_core::protocol::TokenUsage {
+        input_tokens: 1200,
+        cached_input_tokens: 200,
+        output_tokens: 345,
+        reasoning_output_tokens: 0,
+        total_tokens: 0,
+    };
+    let info = codex_core::protocol::TokenUsageInfo {
+        total_token_usage: usage.clone(),
+        last_token_usage: usage,
+        model_context_window: None,
+    };
+    let token_count_event = event(
+        "e1",
+        EventMsg::TokenCount(codex_core::protocol::TokenCountEvent {
+            info: Some(info),
+            rate_limits: None,
+        }),
+    );
+    assert!(
+        ep.collect_conversation_events(&token_count_event)
+            .is_empty()
+    );
+
+    // Then TaskComplete should produce turn.completed with the captured usage.
+    let complete_event = event(
+        "e2",
+        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+            last_agent_message: Some("done".to_string()),
+        }),
+    );
+    let out = ep.collect_conversation_events(&complete_event);
+    assert_eq!(
+        out,
+        vec![ConversationEvent::TurnCompleted(TurnCompletedEvent {
+            usage: Usage {
+                input_tokens: 1200,
+                cached_input_tokens: 200,
+                output_tokens: 345,
+            },
+        })]
+    );
 }

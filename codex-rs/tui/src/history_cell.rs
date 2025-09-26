@@ -1,10 +1,14 @@
 use crate::diff_render::create_diff_summary;
+use crate::exec_cell::CommandOutput;
+use crate::exec_cell::OutputLinesParams;
+use crate::exec_cell::TOOL_CALL_MAX_LINES;
+use crate::exec_cell::output_lines;
+use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
-use crate::render::line_utils::push_owned_lines;
 pub(crate) use crate::status::RateLimitSnapshotDisplay;
 pub(crate) use crate::status::new_status_output;
 pub(crate) use crate::status::rate_limit_snapshot_display;
@@ -14,8 +18,6 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
-use codex_ansi_escape::ansi_escape_line;
-use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
 use codex_core::config_types::ReasoningSummaryFormat;
 use codex_core::plan_tool::PlanItemArg;
@@ -25,10 +27,8 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
-use itertools::Itertools;
 use mcp_types::EmbeddedResourceResource;
 use mcp_types::ResourceLink;
 use ratatui::prelude::*;
@@ -48,14 +48,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
-
-#[derive(Clone, Debug)]
-pub(crate) struct CommandOutput {
-    pub(crate) exit_code: i32,
-    pub(crate) stdout: String,
-    pub(crate) stderr: String,
-    pub(crate) formatted_output: String,
-}
 
 #[derive(Clone, Debug)]
 pub(crate) enum PatchEventType {
@@ -266,357 +258,6 @@ impl HistoryCell for PatchHistoryCell {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ExecCall {
-    pub(crate) call_id: String,
-    pub(crate) command: Vec<String>,
-    pub(crate) parsed: Vec<ParsedCommand>,
-    pub(crate) output: Option<CommandOutput>,
-    start_time: Option<Instant>,
-    duration: Option<Duration>,
-}
-
-#[derive(Debug)]
-pub(crate) struct ExecCell {
-    calls: Vec<ExecCall>,
-}
-impl HistoryCell for ExecCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if self.is_exploring_cell() {
-            self.exploring_display_lines(width)
-        } else {
-            self.command_display_lines(width)
-        }
-    }
-
-    fn transcript_lines(&self) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = vec![];
-        for call in &self.calls {
-            let cmd_display = strip_bash_lc_and_escape(&call.command);
-            for (i, part) in cmd_display.lines().enumerate() {
-                if i == 0 {
-                    lines.push(vec!["$ ".magenta(), part.to_string().into()].into());
-                } else {
-                    lines.push(vec!["    ".into(), part.to_string().into()].into());
-                }
-            }
-
-            if let Some(output) = call.output.as_ref() {
-                lines.extend(output.formatted_output.lines().map(ansi_escape_line));
-                let duration = call
-                    .duration
-                    .map(format_duration)
-                    .unwrap_or_else(|| "unknown".to_string());
-                let mut result: Line = if output.exit_code == 0 {
-                    Line::from("✓".green().bold())
-                } else {
-                    Line::from(vec![
-                        "✗".red().bold(),
-                        format!(" ({})", output.exit_code).into(),
-                    ])
-                };
-                result.push_span(format!(" • {duration}").dim());
-                lines.push(result);
-            }
-            lines.push("".into());
-        }
-        lines
-    }
-}
-
-impl ExecCell {
-    fn is_active(&self) -> bool {
-        self.calls.iter().any(|c| c.output.is_none())
-    }
-
-    fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut out: Vec<Line<'static>> = Vec::new();
-        let active_start_time = self
-            .calls
-            .iter()
-            .find(|c| c.output.is_none())
-            .and_then(|c| c.start_time);
-        out.push(Line::from(vec![
-            if self.is_active() {
-                // Show an animated spinner while exploring
-                spinner(active_start_time)
-            } else {
-                "•".bold()
-            },
-            " ".into(),
-            if self.is_active() {
-                "Exploring".bold()
-            } else {
-                "Explored".bold()
-            },
-        ]));
-        let mut calls = self.calls.clone();
-        let mut out_indented = Vec::new();
-        while !calls.is_empty() {
-            let mut call = calls.remove(0);
-            if call
-                .parsed
-                .iter()
-                .all(|c| matches!(c, ParsedCommand::Read { .. }))
-            {
-                while let Some(next) = calls.first() {
-                    if next
-                        .parsed
-                        .iter()
-                        .all(|c| matches!(c, ParsedCommand::Read { .. }))
-                    {
-                        call.parsed.extend(next.parsed.clone());
-                        calls.remove(0);
-                    } else {
-                        break;
-                    }
-                }
-            }
-            let call_lines: Vec<(&str, Vec<Span<'static>>)> = if call
-                .parsed
-                .iter()
-                .all(|c| matches!(c, ParsedCommand::Read { .. }))
-            {
-                let names = call
-                    .parsed
-                    .iter()
-                    .map(|c| match c {
-                        ParsedCommand::Read { name, .. } => name.clone(),
-                        _ => unreachable!(),
-                    })
-                    .unique();
-                vec![(
-                    "Read",
-                    itertools::Itertools::intersperse(
-                        names.into_iter().map(Into::into),
-                        ", ".dim(),
-                    )
-                    .collect(),
-                )]
-            } else {
-                let mut lines = Vec::new();
-                for p in call.parsed {
-                    match p {
-                        ParsedCommand::Read { name, .. } => {
-                            lines.push(("Read", vec![name.into()]));
-                        }
-                        ParsedCommand::ListFiles { cmd, path } => {
-                            lines.push(("List", vec![path.unwrap_or(cmd).into()]));
-                        }
-                        ParsedCommand::Search { cmd, query, path } => {
-                            lines.push((
-                                "Search",
-                                match (query, path) {
-                                    (Some(q), Some(p)) => {
-                                        vec![q.into(), " in ".dim(), p.into()]
-                                    }
-                                    (Some(q), None) => vec![q.into()],
-                                    _ => vec![cmd.into()],
-                                },
-                            ));
-                        }
-                        ParsedCommand::Unknown { cmd } => {
-                            lines.push(("Run", vec![cmd.into()]));
-                        }
-                    }
-                }
-                lines
-            };
-            for (title, line) in call_lines {
-                let line = Line::from(line);
-                let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
-                let subsequent_indent = " ".repeat(initial_indent.width()).into();
-                let wrapped = word_wrap_line(
-                    &line,
-                    RtOptions::new(width as usize)
-                        .initial_indent(initial_indent)
-                        .subsequent_indent(subsequent_indent),
-                );
-                push_owned_lines(&wrapped, &mut out_indented);
-            }
-        }
-        out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
-        out
-    }
-
-    fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        use textwrap::Options as TwOptions;
-
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        let [call] = &self.calls.as_slice() else {
-            panic!("Expected exactly one call in a command display cell");
-        };
-        let success = call.output.as_ref().map(|o| o.exit_code == 0);
-        let bullet = match success {
-            Some(true) => "•".green().bold(),
-            Some(false) => "•".red().bold(),
-            None => spinner(call.start_time),
-        };
-        let title = if self.is_active() { "Running" } else { "Ran" };
-        let cmd_display = strip_bash_lc_and_escape(&call.command);
-
-        // If the command fits on the same line as the header at the current width,
-        // show a single compact line: "• Ran <command>". Use the width of
-        // "• Running " (including trailing space) as the reserved prefix width.
-        // If the command contains newlines, always use the multi-line variant.
-        let reserved = "• Running ".width();
-
-        let mut body_lines: Vec<Line<'static>> = Vec::new();
-
-        let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd_display);
-
-        if highlighted_lines.len() == 1
-            && highlighted_lines[0].width() < (width as usize).saturating_sub(reserved)
-        {
-            let mut line = Line::from(vec![bullet, " ".into(), title.bold(), " ".into()]);
-            line.extend(highlighted_lines[0].clone());
-            lines.push(line);
-        } else {
-            lines.push(vec![bullet, " ".into(), title.bold()].into());
-
-            for hl_line in highlighted_lines.iter() {
-                let opts = crate::wrapping::RtOptions::new((width as usize).saturating_sub(4))
-                    .initial_indent("".into())
-                    .subsequent_indent("    ".into())
-                    // Hyphenation likes to break words on hyphens, which is bad for bash scripts --because-of-flags.
-                    .word_splitter(textwrap::WordSplitter::NoHyphenation);
-                let wrapped_borrowed = crate::wrapping::word_wrap_line(hl_line, opts);
-                body_lines.extend(wrapped_borrowed.iter().map(|l| line_to_static(l)));
-            }
-        }
-        if let Some(output) = call.output.as_ref()
-            && output.exit_code != 0
-        {
-            let out = output_lines(
-                Some(output),
-                OutputLinesParams {
-                    only_err: false,
-                    include_angle_pipe: false,
-                    include_prefix: false,
-                },
-            )
-            .into_iter()
-            .join("\n");
-            if !out.trim().is_empty() {
-                // Wrap the output.
-                for line in out.lines() {
-                    let wrapped = textwrap::wrap(line, TwOptions::new(width as usize - 4));
-                    body_lines.extend(wrapped.into_iter().map(|l| Line::from(l.to_string().dim())));
-                }
-            }
-        }
-        lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
-        lines
-    }
-}
-
-impl WidgetRef for &ExecCell {
-    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        if area.height == 0 {
-            return;
-        }
-        let content_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: area.height,
-        };
-        let lines = self.display_lines(area.width);
-        let max_rows = area.height as usize;
-        let rendered = if lines.len() > max_rows {
-            // Keep the last `max_rows` lines in original order
-            lines[lines.len() - max_rows..].to_vec()
-        } else {
-            lines
-        };
-
-        Paragraph::new(Text::from(rendered))
-            .wrap(Wrap { trim: false })
-            .render(content_area, buf);
-    }
-}
-
-impl ExecCell {
-    pub(crate) fn mark_failed(&mut self) {
-        for call in self.calls.iter_mut() {
-            if call.output.is_none() {
-                let elapsed = call
-                    .start_time
-                    .map(|st| st.elapsed())
-                    .unwrap_or_else(|| Duration::from_millis(0));
-                call.start_time = None;
-                call.duration = Some(elapsed);
-                call.output = Some(CommandOutput {
-                    exit_code: 1,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    formatted_output: String::new(),
-                });
-            }
-        }
-    }
-
-    pub(crate) fn new(call: ExecCall) -> Self {
-        ExecCell { calls: vec![call] }
-    }
-
-    fn is_exploring_call(call: &ExecCall) -> bool {
-        !call.parsed.is_empty()
-            && call.parsed.iter().all(|p| {
-                matches!(
-                    p,
-                    ParsedCommand::Read { .. }
-                        | ParsedCommand::ListFiles { .. }
-                        | ParsedCommand::Search { .. }
-                )
-            })
-    }
-
-    fn is_exploring_cell(&self) -> bool {
-        self.calls.iter().all(Self::is_exploring_call)
-    }
-
-    pub(crate) fn with_added_call(
-        &self,
-        call_id: String,
-        command: Vec<String>,
-        parsed: Vec<ParsedCommand>,
-    ) -> Option<Self> {
-        let call = ExecCall {
-            call_id,
-            command,
-            parsed,
-            output: None,
-            start_time: Some(Instant::now()),
-            duration: None,
-        };
-        if self.is_exploring_cell() && Self::is_exploring_call(&call) {
-            Some(Self {
-                calls: [self.calls.clone(), vec![call]].concat(),
-            })
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn complete_call(
-        &mut self,
-        call_id: &str,
-        output: CommandOutput,
-        duration: Duration,
-    ) {
-        if let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) {
-            call.output = Some(output);
-            call.duration = Some(duration);
-            call.start_time = None;
-        }
-    }
-
-    pub(crate) fn should_flush(&self) -> bool {
-        !self.is_exploring_cell() && self.calls.iter().all(|c| c.output.is_some())
-    }
-}
-
 #[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
     _image: DynamicImage,
@@ -627,7 +268,6 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     }
 }
 
-const TOOL_CALL_MAX_LINES: usize = 5;
 pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
 pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
@@ -781,21 +421,6 @@ pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
 
 pub(crate) fn new_user_approval_decision(lines: Vec<Line<'static>>) -> PlainHistoryCell {
     PlainHistoryCell { lines }
-}
-
-pub(crate) fn new_active_exec_command(
-    call_id: String,
-    command: Vec<String>,
-    parsed: Vec<ParsedCommand>,
-) -> ExecCell {
-    ExecCell::new(ExecCall {
-        call_id,
-        command,
-        parsed,
-        output: None,
-        start_time: Some(Instant::now()),
-        duration: None,
-    })
 }
 
 #[derive(Debug)]
@@ -1114,15 +739,6 @@ impl WidgetRef for &McpToolCallCell {
 
         Text::from(rendered).render(area, buf);
     }
-}
-
-fn spinner(start_time: Option<Instant>) -> Span<'static> {
-    const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let idx = start_time
-        .map(|st| ((st.elapsed().as_millis() / 100) as usize) % FRAMES.len())
-        .unwrap_or(0);
-    let ch = FRAMES[idx];
-    ch.to_string().into()
 }
 
 pub(crate) fn new_active_mcp_tool_call(
@@ -1444,79 +1060,6 @@ pub(crate) fn new_reasoning_summary_block(
     Box::new(new_reasoning_block(full_reasoning_buffer, config))
 }
 
-struct OutputLinesParams {
-    only_err: bool,
-    include_angle_pipe: bool,
-    include_prefix: bool,
-}
-
-fn output_lines(output: Option<&CommandOutput>, params: OutputLinesParams) -> Vec<Line<'static>> {
-    let OutputLinesParams {
-        only_err,
-        include_angle_pipe,
-        include_prefix,
-    } = params;
-    let CommandOutput {
-        exit_code,
-        stdout,
-        stderr,
-        ..
-    } = match output {
-        Some(output) if only_err && output.exit_code == 0 => return vec![],
-        Some(output) => output,
-        None => return vec![],
-    };
-
-    let src = if *exit_code == 0 { stdout } else { stderr };
-    let lines: Vec<&str> = src.lines().collect();
-    let total = lines.len();
-    let limit = TOOL_CALL_MAX_LINES;
-
-    let mut out = Vec::new();
-
-    let head_end = total.min(limit);
-    for (i, raw) in lines[..head_end].iter().enumerate() {
-        let mut line = ansi_escape_line(raw);
-        let prefix = if !include_prefix {
-            ""
-        } else if i == 0 && include_angle_pipe {
-            "  └ "
-        } else {
-            "    "
-        };
-        line.spans.insert(0, prefix.into());
-        line.spans.iter_mut().for_each(|span| {
-            span.style = span.style.add_modifier(Modifier::DIM);
-        });
-        out.push(line);
-    }
-
-    // If we will ellipsize less than the limit, just show it.
-    let show_ellipsis = total > 2 * limit;
-    if show_ellipsis {
-        let omitted = total - 2 * limit;
-        out.push(format!("… +{omitted} lines").into());
-    }
-
-    let tail_start = if show_ellipsis {
-        total - limit
-    } else {
-        head_end
-    };
-    for raw in lines[tail_start..].iter() {
-        let mut line = ansi_escape_line(raw);
-        if include_prefix {
-            line.spans.insert(0, "    ".into());
-        }
-        line.spans.iter_mut().for_each(|span| {
-            span.style = span.style.add_modifier(Modifier::DIM);
-        });
-        out.push(line);
-    }
-
-    out
-}
-
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     let args_str = invocation
         .arguments
@@ -1541,9 +1084,13 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec_cell::CommandOutput;
+    use crate::exec_cell::ExecCall;
+    use crate::exec_cell::ExecCell;
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
+    use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use serde_json::json;
