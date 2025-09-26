@@ -107,6 +107,9 @@ impl McpClientAdapter {
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
     ) -> Result<Self> {
+        tracing::error!(
+            "new_stdio_client use_rmcp_client: {use_rmcp_client} program: {program:?} args: {args:?} env: {env:?} params: {params:?} startup_timeout: {startup_timeout:?}"
+        );
         if use_rmcp_client {
             let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
             client.initialize(params, Some(startup_timeout)).await?;
@@ -172,6 +175,8 @@ impl McpConnectionManager {
         if mcp_servers.is_empty() {
             return Ok((Self::default(), ClientStartErrors::default()));
         }
+
+        tracing::error!("new mcp_servers: {mcp_servers:?} use_rmcp_client: {use_rmcp_client}");
 
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();

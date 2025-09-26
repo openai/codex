@@ -1,6 +1,6 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
-use assert_cmd::cargo::cargo_bin;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -12,6 +12,8 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
+use escargot::CargoBuild;
 use serde_json::Value;
 use wiremock::matchers::any;
 
@@ -49,6 +51,13 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
     .await;
 
     let expected_env_value = "propagated-env";
+    let rmcp_test_server_bin = CargoBuild::new()
+        .package("codex-rmcp-client")
+        .bin("rmcp_test_server")
+        .run()?
+        .path()
+        .to_string_lossy()
+        .into_owned();
 
     let fixture = test_codex()
         .with_config(move |config| {
@@ -57,13 +66,13 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
             config.mcp_servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
-                    command: cargo_bin("rmcp_test_server").to_string_lossy().into_owned(),
+                    command: rmcp_test_server_bin.clone(),
                     args: Vec::new(),
                     env: Some(HashMap::from([(
                         "MCP_TEST_VALUE".to_string(),
                         expected_env_value.to_string(),
                     )])),
-                    startup_timeout_sec: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
                 },
             );
@@ -88,13 +97,18 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
         })
         .await?;
 
-    eprintln!("waiting for begin event");
-    let begin_event = wait_for_event(&fixture.codex, |ev| {
-        matches!(ev, EventMsg::McpToolCallBegin(_))
-    })
+    eprintln!("waiting for mcp tool call begin event");
+    let begin_event = wait_for_event_with_timeout(
+        &fixture.codex,
+        |ev| {
+            eprintln!("ev: {ev:?}");
+            matches!(ev, EventMsg::McpToolCallBegin(_))
+        },
+        Duration::from_secs(10),
+    )
     .await;
 
-    eprintln!("begin_event: {begin_event:?}");
+    eprintln!("mcp tool call begin event: {begin_event:?}");
     let EventMsg::McpToolCallBegin(begin) = begin_event else {
         unreachable!("event guard guarantees McpToolCallBegin");
     };
