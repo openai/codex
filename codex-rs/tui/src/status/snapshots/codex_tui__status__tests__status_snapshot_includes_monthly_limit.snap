@@ -13,6 +13,6 @@ expression: sanitized
 │  Sandbox:         read-only                                              │
 │  Agents.md:       <none>                                                 │
 │                                                                          │
-│  Token usage:     1.2K total  (800 input + 400 output)                   │
-│  Monthly limit:   [██░░░░░░░░░░░░░░░░░░] 12% used · resets 7 May (07:08) │
+│  Token Usage:     1.2K total  (800 input + 400 output)                   │
+│  Monthly Limit:   [██░░░░░░░░░░░░░░░░░░] 12% used · resets 7 May (07:08) │
 ╰──────────────────────────────────────────────────────────────────────────╯

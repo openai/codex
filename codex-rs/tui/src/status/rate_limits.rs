@@ -85,7 +85,7 @@ pub(crate) fn compose_rate_limit_data(
                     .unwrap_or_else(|| "5h".to_string());
                 let label = capitalize_first(&label);
                 rows.push(StatusRateLimitRow {
-                    label: format!("{label} limit"),
+                    label: format!("{label} Limit"),
                     percent_used: primary.used_percent,
                     resets_at: primary.resets_at.clone(),
                 });
