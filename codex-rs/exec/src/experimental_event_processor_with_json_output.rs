@@ -15,6 +15,7 @@ use crate::exec_events::ConversationItemDetails;
 use crate::exec_events::FileChangeItem;
 use crate::exec_events::FileUpdateChange;
 use crate::exec_events::ItemCompletedEvent;
+use crate::exec_events::ItemStartedEvent;
 use crate::exec_events::PatchApplyStatus;
 use crate::exec_events::PatchChangeKind;
 use crate::exec_events::ReasoningItem;
@@ -32,12 +33,20 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use tracing::error;
+use tracing::warn;
 
 pub struct ExperimentalEventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_event_id: AtomicU64,
-    running_commands: HashMap<String, Vec<String>>,
+    // Tracks running commands by call_id, including the associated item id.
+    running_commands: HashMap<String, RunningCommand>,
     running_patch_applies: HashMap<String, PatchApplyBeginEvent>,
+}
+
+#[derive(Debug, Clone)]
+struct RunningCommand {
+    command: String,
+    item_id: String,
 }
 
 impl ExperimentalEventProcessorWithJsonOutput {
@@ -114,10 +123,38 @@ impl ExperimentalEventProcessorWithJsonOutput {
         })]
     }
     fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ConversationEvent> {
-        self.running_commands
-            .insert(ev.call_id.clone(), ev.command.clone());
+        let item_id = self.get_next_item_id();
 
-        Vec::new()
+        let command_string = match shlex::try_join(ev.command.iter().map(String::as_str)) {
+            Ok(command_string) => command_string,
+            Err(e) => {
+                warn!(
+                    call_id = ev.call_id,
+                    "Failed to stringify command: {e:?}; skipping item.started"
+                );
+                ev.command.join(" ")
+            }
+        };
+
+        self.running_commands.insert(
+            ev.call_id.clone(),
+            RunningCommand {
+                command: command_string.clone(),
+                item_id: item_id.clone(),
+            },
+        );
+
+        let item = ConversationItem {
+            id: item_id,
+            details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+                command: command_string,
+                aggregated_output: String::new(),
+                exit_code: None,
+                status: CommandExecutionStatus::InProgress,
+            }),
+        };
+
+        vec![ConversationEvent::ItemStarted(ItemStartedEvent { item })]
     }
 
     fn handle_patch_apply_begin(&mut self, ev: &PatchApplyBeginEvent) -> Vec<ConversationEvent> {
@@ -167,23 +204,26 @@ impl ExperimentalEventProcessorWithJsonOutput {
     }
 
     fn handle_exec_command_end(&mut self, ev: &ExecCommandEndEvent) -> Vec<ConversationEvent> {
-        let command = self
-            .running_commands
-            .remove(&ev.call_id)
-            .map(|command| command.join(" "))
-            .unwrap_or_default();
+        let Some(RunningCommand { command, item_id }) = self.running_commands.remove(&ev.call_id)
+        else {
+            warn!(
+                call_id = ev.call_id,
+                "ExecCommandEnd without matching ExecCommandBegin; skipping item.completed"
+            );
+            return Vec::new();
+        };
         let status = if ev.exit_code == 0 {
             CommandExecutionStatus::Completed
         } else {
             CommandExecutionStatus::Failed
         };
         let item = ConversationItem {
-            id: self.get_next_item_id(),
+            id: item_id,
 
             details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
                 command,
                 aggregated_output: ev.aggregated_output.clone(),
-                exit_code: ev.exit_code,
+                exit_code: Some(ev.exit_code),
                 status,
             }),
         };

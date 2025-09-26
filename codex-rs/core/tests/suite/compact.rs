@@ -10,6 +10,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use core_test_support::load_default_config_for_test;
+use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -20,7 +21,6 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use codex_core::codex::compact::SUMMARIZATION_PROMPT;
-use core_test_support::non_sandbox_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
@@ -53,7 +53,7 @@ const DUMMY_CALL_ID: &str = "call-multi-auto";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Set up a mock server that we can inspect after the run.
     let server = start_mock_server().await;
@@ -270,7 +270,7 @@ async fn summarize_context_three_requests_and_instructions() {
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn auto_compact_runs_after_token_limit_hit() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = start_mock_server().await;
 
@@ -430,7 +430,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_persists_rollout_entries() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = start_mock_server().await;
 
@@ -558,7 +558,7 @@ async fn auto_compact_persists_rollout_entries() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_stops_after_failed_attempt() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = start_mock_server().await;
 
@@ -679,7 +679,7 @@ async fn auto_compact_stops_after_failed_attempt() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_events() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = start_mock_server().await;
 
