@@ -89,8 +89,15 @@ pub fn assess_command_safety(
 ) -> SafetyCheck {
     // Some commands look dangerous. Even if they are run inside a sandbox,
     // unless the user has explicitly approved them, we should ask,
-    // regardless of the approval policy and sandbox policy.
+    // or reject if the approval_policy tells us not to ask.
     if command_might_be_dangerous(command) && !approved.contains(command) {
+        if approval_policy == AskForApproval::Never {
+            return SafetyCheck::Reject {
+                reason: "dangerous command detected; rejected by user approval settings"
+                    .to_string(),
+            };
+        }
+
         return SafetyCheck::AskUser;
     }
 
@@ -376,7 +383,13 @@ mod tests {
             request_escalated_privileges,
         );
 
-        assert_eq!(safety_check, SafetyCheck::AskUser);
+        assert_eq!(
+            safety_check,
+            SafetyCheck::Reject {
+                reason: "dangerous command detected; rejected by user approval settings"
+                    .to_string(),
+            }
+        );
     }
 
     #[test]
