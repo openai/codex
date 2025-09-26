@@ -508,6 +508,12 @@ mod tests {
         dir
     }
 
+    fn read_file_normalized(path: &Path) -> String {
+        std::fs::read_to_string(path)
+            .expect("read file")
+            .replace("\r\n", "\n")
+    }
+
     #[test]
     fn apply_add_success() {
         let _g = env_lock().lock().unwrap();
@@ -587,7 +593,7 @@ mod tests {
         };
         let res_apply = apply_git_patch(&apply_req).expect("apply ok");
         assert_eq!(res_apply.exit_code, 0, "forward apply succeeded");
-        let after_apply = std::fs::read_to_string(root.join("file.txt")).unwrap();
+        let after_apply = read_file_normalized(&root.join("file.txt"));
         assert_eq!(after_apply, "ORIG\n");
 
         // Revert patch: ORIG -> orig (stage paths first; engine handles it)
@@ -599,7 +605,7 @@ mod tests {
         };
         let res_revert = apply_git_patch(&revert_req).expect("revert ok");
         assert_eq!(res_revert.exit_code, 0, "revert apply succeeded");
-        let after_revert = std::fs::read_to_string(root.join("file.txt")).unwrap();
+        let after_revert = read_file_normalized(&root.join("file.txt"));
         assert_eq!(after_revert, "orig\n");
     }
 
