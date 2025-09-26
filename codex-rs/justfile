@@ -5,6 +5,7 @@ help:
     just -l
 
 # `codex`
+alias c := codex
 codex *args:
     cargo run --bin codex -- "$@"
 

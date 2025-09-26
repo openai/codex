@@ -149,8 +149,8 @@ fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<(
         transport: McpServerTransportConfig::Stdio {
             command: command_bin,
             args: command_args,
+            env: env_map,
         },
-        env: env_map,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
     };
@@ -204,16 +204,20 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
         let json_entries: Vec<_> = entries
             .into_iter()
             .map(|(name, cfg)| {
-                let env = cfg.env.as_ref().map(|env| {
-                    env.iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect::<BTreeMap<_, _>>()
-                });
+                let env = match &cfg.transport {
+                    McpServerTransportConfig::Stdio { env, .. } => env.as_ref().map(|env| {
+                        env.iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect::<BTreeMap<_, _>>()
+                    }),
+                    McpServerTransportConfig::StreamableHttp { .. } => None,
+                };
                 let transport = match &cfg.transport {
-                    McpServerTransportConfig::Stdio { command, args } => serde_json::json!({
+                    McpServerTransportConfig::Stdio { command, args, env } => serde_json::json!({
                         "type": "stdio",
                         "command": command,
                         "args": args,
+                        "env": env,
                     }),
                     McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
                         serde_json::json!({
@@ -247,16 +251,18 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
         return Ok(());
     }
 
-    let mut rows: Vec<[String; 4]> = Vec::new();
+    let mut stdio_rows: Vec<[String; 4]> = Vec::new();
+    let mut http_rows: Vec<[String; 3]> = Vec::new();
+
     for (name, cfg) in entries {
-        let (command_display, args_display, env_display) = match &cfg.transport {
-            McpServerTransportConfig::Stdio { command, args } => {
+        match &cfg.transport {
+            McpServerTransportConfig::Stdio { command, args, env } => {
                 let args_display = if args.is_empty() {
                     "-".to_string()
                 } else {
                     args.join(" ")
                 };
-                let env_str = match cfg.env.as_ref() {
+                let env_display = match env.as_ref() {
                     None => "-".to_string(),
                     Some(map) if map.is_empty() => "-".to_string(),
                     Some(map) => {
@@ -269,48 +275,87 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
                             .join(", ")
                     }
                 };
-                (command.clone(), args_display, env_str)
+                stdio_rows.push([name.clone(), command.clone(), args_display, env_display]);
             }
             McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
-                let bearer = bearer_token.clone().unwrap_or_else(|| "-".to_string());
-                (url.clone(), "-".to_string(), bearer)
+                let has_bearer = if bearer_token.is_some() {
+                    "True"
+                } else {
+                    "False"
+                };
+                http_rows.push([name.clone(), url.clone(), has_bearer.into()]);
             }
-        };
-
-        rows.push([name.clone(), command_display, args_display, env_display]);
-    }
-
-    let mut widths = ["Name".len(), "Command".len(), "Args".len(), "Env".len()];
-    for row in &rows {
-        for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(cell.len());
         }
     }
 
-    println!(
-        "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
-        "Name",
-        "Command",
-        "Args",
-        "Env",
-        name_w = widths[0],
-        cmd_w = widths[1],
-        args_w = widths[2],
-        env_w = widths[3],
-    );
+    if !stdio_rows.is_empty() {
+        let mut widths = ["Name".len(), "Command".len(), "Args".len(), "Env".len()];
+        for row in &stdio_rows {
+            for (i, cell) in row.iter().enumerate() {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
 
-    for row in rows {
         println!(
             "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
-            row[0],
-            row[1],
-            row[2],
-            row[3],
+            "Name",
+            "Command",
+            "Args",
+            "Env",
             name_w = widths[0],
             cmd_w = widths[1],
             args_w = widths[2],
             env_w = widths[3],
         );
+
+        for row in &stdio_rows {
+            println!(
+                "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                name_w = widths[0],
+                cmd_w = widths[1],
+                args_w = widths[2],
+                env_w = widths[3],
+            );
+        }
+    }
+
+    if !stdio_rows.is_empty() && !http_rows.is_empty() {
+        println!();
+    }
+
+    if !http_rows.is_empty() {
+        let mut widths = ["Name".len(), "Url".len(), "Has Bearer Token".len()];
+        for row in &http_rows {
+            for (i, cell) in row.iter().enumerate() {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
+
+        println!(
+            "{:<name_w$}  {:<url_w$}  {:<token_w$}",
+            "Name",
+            "Url",
+            "Has Bearer Token",
+            name_w = widths[0],
+            url_w = widths[1],
+            token_w = widths[2],
+        );
+
+        for row in &http_rows {
+            println!(
+                "{:<name_w$}  {:<url_w$}  {:<token_w$}",
+                row[0],
+                row[1],
+                row[2],
+                name_w = widths[0],
+                url_w = widths[1],
+                token_w = widths[2],
+            );
+        }
     }
 
     Ok(())
@@ -326,16 +371,20 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     };
 
     if get_args.json {
-        let env = server.env.as_ref().map(|env| {
-            env.iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect::<BTreeMap<_, _>>()
-        });
+        let env = match &server.transport {
+            McpServerTransportConfig::Stdio { env, .. } => env.as_ref().map(|env| {
+                env.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<BTreeMap<_, _>>()
+            }),
+            McpServerTransportConfig::StreamableHttp { .. } => None,
+        };
         let transport = match &server.transport {
-            McpServerTransportConfig::Stdio { command, args } => serde_json::json!({
+            McpServerTransportConfig::Stdio { command, args, env } => serde_json::json!({
                 "type": "stdio",
                 "command": command,
                 "args": args,
+                "env": env,
             }),
             McpServerTransportConfig::StreamableHttp { url, bearer_token } => serde_json::json!({
                 "type": "streamable_http",
@@ -360,7 +409,7 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
 
     println!("{}", get_args.name);
     match &server.transport {
-        McpServerTransportConfig::Stdio { command, args } => {
+        McpServerTransportConfig::Stdio { command, args, env } => {
             println!("  transport: stdio");
             println!("  command: {command}");
             let args_display = if args.is_empty() {
@@ -369,7 +418,7 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
                 args.join(" ")
             };
             println!("  args: {args_display}");
-            let env_display = match server.env.as_ref() {
+            let env_display = match env.as_ref() {
                 None => "-".to_string(),
                 Some(map) if map.is_empty() => "-".to_string(),
                 Some(map) => {

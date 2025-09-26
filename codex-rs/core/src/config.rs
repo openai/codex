@@ -316,7 +316,7 @@ pub fn write_global_mcp_servers(
             let mut entry = TomlTable::new();
             entry.set_implicit(false);
             match &config.transport {
-                McpServerTransportConfig::Stdio { command, args } => {
+                McpServerTransportConfig::Stdio { command, args, env } => {
                     entry["command"] = toml_edit::value(command.clone());
 
                     if !args.is_empty() {
@@ -327,7 +327,7 @@ pub fn write_global_mcp_servers(
                         entry["args"] = TomlItem::Value(args_array.into());
                     }
 
-                    if let Some(env) = &config.env
+                    if let Some(env) = env
                         && !env.is_empty()
                     {
                         let mut env_table = TomlTable::new();
@@ -1308,8 +1308,8 @@ exclude_slash_tmp = true
                 transport: McpServerTransportConfig::Stdio {
                     command: "echo".to_string(),
                     args: vec!["hello".to_string()],
+                    env: None,
                 },
-                env: None,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
                 tool_timeout_sec: Some(Duration::from_secs(5)),
             },
@@ -1321,9 +1321,10 @@ exclude_slash_tmp = true
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
-            McpServerTransportConfig::Stdio { command, args } => {
+            McpServerTransportConfig::Stdio { command, args, env } => {
                 assert_eq!(command, "echo");
                 assert_eq!(args, &vec!["hello".to_string()]);
+                assert!(env.is_none());
             }
             other => panic!("unexpected transport {other:?}"),
         }

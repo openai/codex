@@ -850,7 +850,7 @@ pub(crate) fn new_mcp_tools_output(
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
 
         match &cfg.transport {
-            McpServerTransportConfig::Stdio { command, args } => {
+            McpServerTransportConfig::Stdio { command, args, .. } => {
                 let args_suffix = if args.is_empty() {
                     String::new()
                 } else {

@@ -74,6 +74,14 @@ fn list_and_get_render_expected_output() -> Result<()> {
         transport.get("command"),
         Some(&JsonValue::String("docs-server".into()))
     );
+    let transport_env = transport
+        .get("env")
+        .and_then(|value| value.as_object())
+        .expect("transport env map");
+    assert_eq!(
+        transport_env.get("TOKEN"),
+        Some(&JsonValue::String("secret".into()))
+    );
     let args = transport
         .get("args")
         .and_then(|value| value.as_array())

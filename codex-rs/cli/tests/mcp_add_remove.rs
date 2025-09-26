@@ -28,13 +28,13 @@ fn add_and_remove_server_updates_global_config() -> Result<()> {
     assert_eq!(servers.len(), 1);
     let docs = servers.get("docs").expect("server should exist");
     match &docs.transport {
-        McpServerTransportConfig::Stdio { command, args } => {
+        McpServerTransportConfig::Stdio { command, args, env } => {
             assert_eq!(command, "echo");
             assert_eq!(args, &vec!["hello".to_string()]);
+            assert!(env.is_none());
         }
         other => panic!("unexpected transport: {other:?}"),
     }
-    assert!(docs.env.is_none());
 
     let mut remove_cmd = codex_command(codex_home.path())?;
     remove_cmd
@@ -82,7 +82,10 @@ fn add_with_env_preserves_key_order_and_values() -> Result<()> {
 
     let servers = load_global_mcp_servers(codex_home.path())?;
     let envy = servers.get("envy").expect("server should exist");
-    let env = envy.env.as_ref().expect("env should be present");
+    let env = match &envy.transport {
+        McpServerTransportConfig::Stdio { env: Some(env), .. } => env,
+        other => panic!("unexpected transport: {other:?}"),
+    };
 
     assert_eq!(env.len(), 2);
     assert_eq!(env.get("FOO"), Some(&"bar".to_string()));

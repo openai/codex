@@ -16,12 +16,16 @@ use serde::de::Error as SerdeError;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum McpServerTransportConfig {
+    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio
     Stdio {
         #[serde(alias = "commands")]
         command: String,
         #[serde(default)]
         args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env: Option<HashMap<String, String>>,
     },
+    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -32,9 +36,6 @@ pub enum McpServerTransportConfig {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     pub transport: McpServerTransportConfig,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<HashMap<String, String>>,
 
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
@@ -85,7 +86,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             transport: raw_transport,
             command,
             args,
-            env,
+            env: top_level_env,
             url,
             bearer_token,
             startup_timeout_sec,
@@ -110,15 +111,23 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             (None, None) => None,
         };
 
+        let mut top_level_env = top_level_env;
+
         let transport = if let Some(transport) = raw_transport {
             match transport {
-                McpServerTransportConfig::Stdio { command, args } => {
+                McpServerTransportConfig::Stdio { command, args, env } => {
                     let command = normalize_string_option(command).ok_or_else(|| {
                         SerdeError::custom(
                             "MCP server config `transport.stdio.command` must be non-empty",
                         )
                     })?;
-                    McpServerTransportConfig::Stdio { command, args }
+                    let env = normalize_env_option(env);
+                    if top_level_env.is_some() && env.is_some() {
+                        return Err(SerdeError::custom(
+                            "MCP server config must not set both `env` and `transport.stdio.env`",
+                        ));
+                    }
+                    McpServerTransportConfig::Stdio { command, args, env }
                 }
                 McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
                     let url = normalize_string_option(url).ok_or_else(|| {
@@ -135,14 +144,18 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             let url = url.and_then(normalize_string_option);
 
             match (command, url) {
-                (Some(command), None) => McpServerTransportConfig::Stdio { command, args },
+                (Some(command), None) => McpServerTransportConfig::Stdio {
+                    command,
+                    args,
+                    env: normalize_env_option(top_level_env.take()),
+                },
                 (None, Some(url)) => {
                     if !args.is_empty() {
                         return Err(SerdeError::custom(
                             "`args` is not supported when configuring MCP servers via `url`",
                         ));
                     }
-                    if env.as_ref().is_some_and(|env| !env.is_empty()) {
+                    if top_level_env.as_ref().is_some_and(|env| !env.is_empty()) {
                         return Err(SerdeError::custom(
                             "`env` is not supported when configuring MCP servers via `url`",
                         ));
@@ -164,7 +177,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             }
         };
 
-        if env.as_ref().is_some_and(|env| !env.is_empty())
+        if top_level_env.as_ref().is_some_and(|env| !env.is_empty())
             && matches!(transport, McpServerTransportConfig::StreamableHttp { .. })
         {
             return Err(SerdeError::custom(
@@ -172,9 +185,30 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             ));
         }
 
+        let transport = match (transport, top_level_env.take()) {
+            (mut transport @ McpServerTransportConfig::Stdio { .. }, Some(env)) => {
+                if !env.is_empty() {
+                    match &mut transport {
+                        McpServerTransportConfig::Stdio {
+                            env: target_env, ..
+                        } => {
+                            if target_env.is_some() {
+                                return Err(SerdeError::custom(
+                                    "MCP server config must not set both `env` and `transport.stdio.env`",
+                                ));
+                            }
+                            *target_env = Some(env);
+                        }
+                        McpServerTransportConfig::StreamableHttp { .. } => unreachable!(),
+                    }
+                }
+                transport
+            }
+            (transport, _) => transport,
+        };
+
         Ok(Self {
             transport,
-            env,
             startup_timeout_sec,
             tool_timeout_sec,
         })
@@ -188,6 +222,10 @@ fn normalize_string_option(value: String) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn normalize_env_option(env: Option<HashMap<String, String>>) -> Option<HashMap<String, String>> {
+    env.and_then(|env| if env.is_empty() { None } else { Some(env) })
 }
 
 #[cfg(test)]
@@ -206,9 +244,33 @@ mod tests {
         .expect("should deserialize command config");
 
         match cfg.transport {
-            McpServerTransportConfig::Stdio { command, args } => {
+            McpServerTransportConfig::Stdio { command, args, env } => {
                 assert_eq!(command, "echo");
                 assert_eq!(args, vec!["hello", "world"]);
+                assert!(env.is_none());
+            }
+            other => panic!("unexpected transport: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_legacy_command_server_config_with_env() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+
+            [env]
+            FOO = "BAR"
+        "#,
+        )
+        .expect("should deserialize command config with env");
+
+        match cfg.transport {
+            McpServerTransportConfig::Stdio { command, args, env } => {
+                assert_eq!(command, "echo");
+                assert!(args.is_empty());
+                let env = env.expect("env should be set");
+                assert_eq!(env.get("FOO"), Some(&"BAR".to_string()));
             }
             other => panic!("unexpected transport: {other:?}"),
         }
@@ -227,9 +289,35 @@ mod tests {
         .expect("should deserialize stdio transport");
 
         match cfg.transport {
-            McpServerTransportConfig::Stdio { command, args } => {
+            McpServerTransportConfig::Stdio { command, args, env } => {
                 assert_eq!(command, "echo");
                 assert_eq!(args, vec!["hi"]);
+                assert!(env.is_none());
+            }
+            other => panic!("unexpected transport: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_transport_stdio_config_with_env() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            [transport]
+            type = "stdio"
+            command = "echo"
+
+            [transport.env]
+            FOO = "BAR"
+        "#,
+        )
+        .expect("should deserialize stdio transport with env");
+
+        match cfg.transport {
+            McpServerTransportConfig::Stdio { command, args, env } => {
+                assert_eq!(command, "echo");
+                assert!(args.is_empty());
+                let env = env.expect("env should be present");
+                assert_eq!(env.get("FOO"), Some(&"BAR".to_string()));
             }
             other => panic!("unexpected transport: {other:?}"),
         }
@@ -247,9 +335,10 @@ mod tests {
         .expect("should deserialize stdio transport with commands alias");
 
         match cfg.transport {
-            McpServerTransportConfig::Stdio { command, args } => {
+            McpServerTransportConfig::Stdio { command, args, env } => {
                 assert_eq!(command, "echo");
                 assert!(args.is_empty());
+                assert!(env.is_none());
             }
             other => panic!("unexpected transport: {other:?}"),
         }
@@ -272,7 +361,6 @@ mod tests {
             }
             other => panic!("unexpected transport: {other:?}"),
         }
-        assert!(cfg.env.is_none());
     }
 
     #[test]
@@ -323,6 +411,29 @@ mod tests {
         .expect_err("should reject env for http transport");
 
         assert!(err.to_string().contains("`env` is not supported"));
+    }
+
+    #[test]
+    fn deserialize_rejects_duplicate_env_definitions() {
+        let err = toml::from_str::<McpServerConfig>(
+            r#"
+            [transport]
+            type = "stdio"
+            command = "echo"
+
+            [transport.env]
+            FOO = "BAR"
+
+            [env]
+            BAZ = "QUX"
+        "#,
+        )
+        .expect_err("should reject duplicate env definitions");
+
+        assert!(
+            err.to_string()
+                .contains("MCP server config must not set both `env` and `transport.stdio.env`")
+        );
     }
 }
 

@@ -222,7 +222,7 @@ impl McpConnectionManager {
 
             let use_rmcp_client_flag = use_rmcp_client;
             join_set.spawn(async move {
-                let McpServerConfig { transport, env, .. } = cfg;
+                let McpServerConfig { transport, .. } = cfg;
                 let params = mcp_types::InitializeRequestParams {
                     capabilities: ClientCapabilities {
                         experimental: None,
@@ -245,7 +245,7 @@ impl McpConnectionManager {
                 };
 
                 let client = match transport {
-                    McpServerTransportConfig::Stdio { command, args } => {
+                    McpServerTransportConfig::Stdio { command, args, env } => {
                         let command_os: OsString = command.into();
                         let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
                         McpClientAdapter::new_stdio_client(
