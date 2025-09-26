@@ -19,7 +19,9 @@ use crate::exec_events::ItemStartedEvent;
 use crate::exec_events::PatchApplyStatus;
 use crate::exec_events::PatchChangeKind;
 use crate::exec_events::ReasoningItem;
+use crate::exec_events::SessionCompletedEvent;
 use crate::exec_events::SessionCreatedEvent;
+use crate::exec_events::Usage;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningEvent;
@@ -41,6 +43,7 @@ pub struct ExperimentalEventProcessorWithJsonOutput {
     // Tracks running commands by call_id, including the associated item id.
     running_commands: HashMap<String, RunningCommand>,
     running_patch_applies: HashMap<String, PatchApplyBeginEvent>,
+    last_total_token_usage: Option<codex_core::protocol::TokenUsage>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +59,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
             next_event_id: AtomicU64::new(0),
             running_commands: HashMap::new(),
             running_patch_applies: HashMap::new(),
+            last_total_token_usage: None,
         }
     }
 
@@ -68,6 +72,13 @@ impl ExperimentalEventProcessorWithJsonOutput {
             EventMsg::ExecCommandEnd(ev) => self.handle_exec_command_end(ev),
             EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.handle_patch_apply_end(ev),
+            EventMsg::TokenCount(ev) => {
+                if let Some(info) = &ev.info {
+                    self.last_total_token_usage = Some(info.total_token_usage.clone());
+                }
+                Vec::new()
+            }
+            EventMsg::TaskComplete(_) => self.handle_task_complete(),
             EventMsg::Error(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
                 message: ev.message.clone(),
             })],
@@ -230,6 +241,22 @@ impl ExperimentalEventProcessorWithJsonOutput {
 
         vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
             item,
+        })]
+    }
+
+    fn handle_task_complete(&mut self) -> Vec<ConversationEvent> {
+        let usage = if let Some(u) = &self.last_total_token_usage {
+            Usage {
+                input_tokens: u.input_tokens,
+                cached_input_tokens: u.cached_input_tokens,
+                output_tokens: u.output_tokens,
+            }
+        } else {
+            Usage::default()
+        };
+
+        vec![ConversationEvent::SessionCompleted(SessionCompletedEvent {
+            usage,
         })]
     }
 }

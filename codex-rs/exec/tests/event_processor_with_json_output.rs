@@ -20,7 +20,9 @@ use codex_exec::exec_events::ItemStartedEvent;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
 use codex_exec::exec_events::ReasoningItem;
+use codex_exec::exec_events::SessionCompletedEvent;
 use codex_exec::exec_events::SessionCreatedEvent;
+use codex_exec::exec_events::Usage;
 use codex_exec::experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -416,4 +418,53 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
         }
         other => panic!("unexpected event: {other:?}"),
     }
+}
+
+#[test]
+fn task_complete_produces_session_completed_with_usage() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+
+    // First, feed a TokenCount event with known totals.
+    let usage = codex_core::protocol::TokenUsage {
+        input_tokens: 1200,
+        cached_input_tokens: 200,
+        output_tokens: 345,
+        reasoning_output_tokens: 0,
+        total_tokens: 0,
+    };
+    let info = codex_core::protocol::TokenUsageInfo {
+        total_token_usage: usage.clone(),
+        last_token_usage: usage,
+        model_context_window: None,
+    };
+    let token_count_event = event(
+        "e1",
+        EventMsg::TokenCount(codex_core::protocol::TokenCountEvent {
+            info: Some(info),
+            rate_limits: None,
+        }),
+    );
+    assert!(
+        ep.collect_conversation_events(&token_count_event)
+            .is_empty()
+    );
+
+    // Then TaskComplete should produce session.completed with the captured usage.
+    let complete_event = event(
+        "e2",
+        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+            last_agent_message: Some("done".to_string()),
+        }),
+    );
+    let out = ep.collect_conversation_events(&complete_event);
+    assert_eq!(
+        out,
+        vec![ConversationEvent::SessionCompleted(SessionCompletedEvent {
+            usage: Usage {
+                input_tokens: 1200,
+                cached_input_tokens: 200,
+                output_tokens: 345,
+            },
+        })]
+    );
 }
