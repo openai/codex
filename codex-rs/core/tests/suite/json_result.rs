@@ -6,8 +6,8 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
-use core_test_support::non_sandbox_test;
 use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -40,7 +40,7 @@ async fn codex_returns_json_result_for_gpt5_codex() -> anyhow::Result<()> {
 }
 
 async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
-    non_sandbox_test!(result);
+    skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
 
