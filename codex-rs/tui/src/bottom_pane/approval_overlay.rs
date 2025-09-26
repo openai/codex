@@ -8,7 +8,6 @@ use crate::bottom_pane::list_selection_view::HeaderLine;
 use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
-use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::text_formatting::truncate_text;
@@ -113,7 +112,7 @@ impl ApprovalOverlay {
 
         let params = SelectionViewParams {
             title,
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            footer_hint: Some("Press Enter to confirm or Esc to cancel".to_string()),
             items,
             header: state.header.clone(),
             ..Default::default()
@@ -271,14 +270,14 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 reason,
             } => {
                 let mut header = Vec::new();
-                if let Some(reason) = reason {
-                    if !reason.is_empty() {
-                        header.push(HeaderLine::Text {
-                            text: reason,
-                            italic: true,
-                        });
-                        header.push(HeaderLine::Spacer);
-                    }
+                if let Some(reason) = reason
+                    && !reason.is_empty()
+                {
+                    header.push(HeaderLine::Text {
+                        text: reason,
+                        italic: true,
+                    });
+                    header.push(HeaderLine::Spacer);
                 }
                 let command_snippet = exec_snippet(&command);
                 if !command_snippet.is_empty() {

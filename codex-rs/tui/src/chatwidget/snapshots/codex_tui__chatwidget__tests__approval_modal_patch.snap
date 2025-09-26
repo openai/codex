@@ -12,5 +12,5 @@ expression: terminal.backend()
 "▌ > 1. Approve  (Y) Apply the proposed changes                                  "
 "▌   2. Cancel   (N) Do not apply the changes                                    "
 "                                                                                "
-"Press Enter to confirm or Esc to go back                                        "
+"Press Enter to confirm or Esc to cancel                                         "
 "                                                                                "
