@@ -106,7 +106,7 @@ impl RmcpClient {
     pub fn new_streamable_http_client(url: String, bearer_token: Option<String>) -> Result<Self> {
         let mut config = StreamableHttpClientTransportConfig::with_uri(url);
         if let Some(token) = bearer_token {
-            config = config.auth_header(token);
+            config = config.auth_header(format!("Bearer {token}"));
         }
 
         let transport = StreamableHttpClientTransport::from_config(config);
