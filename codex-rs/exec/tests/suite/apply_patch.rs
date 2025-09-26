@@ -6,7 +6,9 @@ use codex_core::CODEX_APPLY_PATCH_ARG1;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
@@ -47,13 +49,13 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
 #[cfg(not(target_os = "windows"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_apply_patch_tool() -> anyhow::Result<()> {
-    use crate::suite::common::run_e2e_exec_test;
-    use core_test_support::non_sandbox_test;
+    use core_test_support::skip_if_no_network;
+    use core_test_support::test_codex_exec::test_codex_exec;
 
-    non_sandbox_test!(result);
+    skip_if_no_network!(Ok(()));
 
-    let tmp_cwd = tempdir().expect("failed to create temp dir");
-    let tmp_path = tmp_cwd.path().to_path_buf();
+    let test = test_codex_exec();
+    let tmp_path = test.cwd_path().to_path_buf();
     let add_patch = r#"*** Begin Patch
 *** Add File: test.md
 +Hello world
@@ -75,7 +77,16 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
         ]),
         sse(vec![ev_completed("request_2")]),
     ];
-    run_e2e_exec_test(tmp_cwd.path(), response_streams).await;
+    let server = start_mock_server().await;
+    mount_sse_sequence(&server, response_streams).await;
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("-s")
+        .arg("danger-full-access")
+        .arg("foo")
+        .assert()
+        .success();
 
     let final_path = tmp_path.join("test.md");
     let contents = std::fs::read_to_string(&final_path)
@@ -87,12 +98,12 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
 #[cfg(not(target_os = "windows"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
-    use crate::suite::common::run_e2e_exec_test;
-    use core_test_support::non_sandbox_test;
+    use core_test_support::skip_if_no_network;
+    use core_test_support::test_codex_exec::test_codex_exec;
 
-    non_sandbox_test!(result);
+    skip_if_no_network!(Ok(()));
 
-    let tmp_cwd = tempdir().expect("failed to create temp dir");
+    let test = test_codex_exec();
     let freeform_add_patch = r#"*** Begin Patch
 *** Add File: app.py
 +class BaseClass:
@@ -117,10 +128,19 @@ async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
         ]),
         sse(vec![ev_completed("request_2")]),
     ];
-    run_e2e_exec_test(tmp_cwd.path(), response_streams).await;
+    let server = start_mock_server().await;
+    mount_sse_sequence(&server, response_streams).await;
+
+    test.cmd_with_server(&server)
+        .arg("--skip-git-repo-check")
+        .arg("-s")
+        .arg("danger-full-access")
+        .arg("foo")
+        .assert()
+        .success();
 
     // Verify final file contents
-    let final_path = tmp_cwd.path().join("app.py");
+    let final_path = test.cwd_path().join("app.py");
     let contents = std::fs::read_to_string(&final_path)
         .unwrap_or_else(|e| panic!("failed reading {}: {e}", final_path.display()));
     assert_eq!(
