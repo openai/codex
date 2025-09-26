@@ -122,6 +122,7 @@ where
         .and(path("/v1/responses"))
         .and(matcher)
         .respond_with(sse_response(body))
+        .up_to_n_times(1)
         .mount(server)
         .await;
 }
