@@ -233,7 +233,7 @@ impl HistoryCell for StatusHistoryCell {
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
         }
-        push_label(&mut labels, &mut seen, "Token Usage");
+        push_label(&mut labels, &mut seen, "Token usage");
         self.collect_rate_limit_labels(&mut seen, &mut labels);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
@@ -263,7 +263,7 @@ impl HistoryCell for StatusHistoryCell {
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
-        lines.push(formatter.line("Token Usage", self.token_usage_spans()));
+        lines.push(formatter.line("Token usage", self.token_usage_spans()));
 
         lines.extend(self.rate_limit_lines(available_inner_width, &formatter));
 
