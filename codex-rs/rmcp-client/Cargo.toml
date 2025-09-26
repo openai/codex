@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-rmcp-client"
 version = { workspace = true }
-edition = "2024"
 
 [lints]
 workspace = true
@@ -32,6 +32,7 @@ tokio = { version = "1", features = [
     "process",
     "rt-multi-thread",
     "sync",
+    "io-std",
     "time",
 ] }
 tracing = { version = "0.1.41", features = ["log"] }

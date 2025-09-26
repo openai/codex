@@ -15,10 +15,13 @@ pub(crate) struct FieldFormatter {
 impl FieldFormatter {
     pub(crate) const INDENT: &'static str = " ";
 
-    pub(crate) fn from_labels(labels: impl IntoIterator<Item = &'static str>) -> Self {
+    pub(crate) fn from_labels<S>(labels: impl IntoIterator<Item = S>) -> Self
+    where
+        S: AsRef<str>,
+    {
         let label_width = labels
             .into_iter()
-            .map(UnicodeWidthStr::width)
+            .map(|label| UnicodeWidthStr::width(label.as_ref()))
             .max()
             .unwrap_or(0);
         let indent_width = UnicodeWidthStr::width(Self::INDENT);
@@ -53,7 +56,7 @@ impl FieldFormatter {
 
     pub(crate) fn full_spans(
         &self,
-        label: &'static str,
+        label: &str,
         mut value_spans: Vec<Span<'static>>,
     ) -> Vec<Span<'static>> {
         let mut spans = Vec::with_capacity(value_spans.len() + 1);
@@ -79,14 +82,14 @@ impl FieldFormatter {
     }
 }
 
-pub(crate) fn push_label(
-    labels: &mut Vec<&'static str>,
-    seen: &mut BTreeSet<&'static str>,
-    label: &'static str,
-) {
-    if seen.insert(label) {
-        labels.push(label);
+pub(crate) fn push_label(labels: &mut Vec<String>, seen: &mut BTreeSet<String>, label: &str) {
+    if seen.contains(label) {
+        return;
     }
+
+    let owned = label.to_string();
+    seen.insert(owned.clone());
+    labels.push(owned);
 }
 
 pub(crate) fn line_display_width(line: &Line<'static>) -> usize {

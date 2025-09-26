@@ -404,6 +404,8 @@ async fn create_unified_exec_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use core_test_support::skip_if_sandbox;
 
     #[test]
     fn push_chunk_trims_only_excess_bytes() {
@@ -425,6 +427,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unified_exec_persists_across_requests_jif() -> Result<(), UnifiedExecError> {
+        skip_if_sandbox!(Ok(()));
+
         let manager = UnifiedExecSessionManager::default();
 
         let open_shell = manager
@@ -462,6 +466,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn multi_unified_exec_sessions() -> Result<(), UnifiedExecError> {
+        skip_if_sandbox!(Ok(()));
+
         let manager = UnifiedExecSessionManager::default();
 
         let shell_a = manager
@@ -508,6 +514,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn unified_exec_timeouts() -> Result<(), UnifiedExecError> {
+        skip_if_sandbox!(Ok(()));
+
         let manager = UnifiedExecSessionManager::default();
 
         let open_shell = manager
@@ -601,6 +609,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reusing_completed_session_returns_unknown_session() -> Result<(), UnifiedExecError> {
+        skip_if_sandbox!(Ok(()));
+
         let manager = UnifiedExecSessionManager::default();
 
         let open_shell = manager

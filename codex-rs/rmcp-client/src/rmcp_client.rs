@@ -180,10 +180,9 @@ impl RmcpClient {
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
         let service = self.service().await?;
-        let rmcp_params = match params {
-            Some(p) => Some(convert_to_rmcp::<_, PaginatedRequestParam>(p)?),
-            None => None,
-        };
+        let rmcp_params = params
+            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .transpose()?;
 
         let fut = service.list_tools(rmcp_params);
         let result = run_with_timeout(fut, timeout, "tools/list").await?;

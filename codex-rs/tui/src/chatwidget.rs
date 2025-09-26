@@ -70,11 +70,12 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
+use crate::exec_cell::CommandOutput;
+use crate::exec_cell::ExecCell;
+use crate::exec_cell::new_active_exec_command;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
-use crate::history_cell::CommandOutput;
-use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PatchEventType;
@@ -84,7 +85,7 @@ use crate::slash_command::SlashCommand;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
-use crate::user_approval_widget::ApprovalRequest;
+use crate::bottom_pane::ApprovalRequest;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -132,7 +133,9 @@ impl RateLimitWarningState {
     fn take_warnings(
         &mut self,
         secondary_used_percent: Option<f64>,
+        secondary_window_minutes: Option<u64>,
         primary_used_percent: Option<f64>,
+        primary_window_minutes: Option<u64>,
     ) -> Vec<String> {
         let reached_secondary_cap =
             matches!(secondary_used_percent, Some(percent) if percent == 100.0);
@@ -152,8 +155,11 @@ impl RateLimitWarningState {
                 self.secondary_index += 1;
             }
             if let Some(threshold) = highest_secondary {
+                let limit_label = secondary_window_minutes
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "weekly".to_string());
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your weekly limit. Run /status for a breakdown."
+                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
                 ));
             }
         }
@@ -167,13 +173,36 @@ impl RateLimitWarningState {
                 self.primary_index += 1;
             }
             if let Some(threshold) = highest_primary {
+                let limit_label = primary_window_minutes
+                    .map(get_limits_duration)
+                    .unwrap_or_else(|| "5h".to_string());
                 warnings.push(format!(
-                    "Heads up, you've used over {threshold:.0}% of your 5h limit. Run /status for a breakdown."
+                    "Heads up, you've used over {threshold:.0}% of your {limit_label} limit. Run /status for a breakdown."
                 ));
             }
         }
 
         warnings
+    }
+}
+
+pub(crate) fn get_limits_duration(windows_minutes: u64) -> String {
+    const MINUTES_PER_HOUR: u64 = 60;
+    const MINUTES_PER_DAY: u64 = 24 * MINUTES_PER_HOUR;
+    const MINUTES_PER_WEEK: u64 = 7 * MINUTES_PER_DAY;
+    const MINUTES_PER_MONTH: u64 = 30 * MINUTES_PER_DAY;
+    const ROUNDING_BIAS_MINUTES: u64 = 3;
+
+    if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
+        let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
+        let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
+        format!("{hours}h")
+    } else if windows_minutes <= MINUTES_PER_WEEK.saturating_add(ROUNDING_BIAS_MINUTES) {
+        "weekly".to_string()
+    } else if windows_minutes <= MINUTES_PER_MONTH.saturating_add(ROUNDING_BIAS_MINUTES) {
+        "monthly".to_string()
+    } else {
+        "annual".to_string()
     }
 }
 
@@ -377,7 +406,15 @@ impl ChatWidget {
                     .secondary
                     .as_ref()
                     .map(|window| window.used_percent),
+                snapshot
+                    .secondary
+                    .as_ref()
+                    .and_then(|window| window.window_minutes),
                 snapshot.primary.as_ref().map(|window| window.used_percent),
+                snapshot
+                    .primary
+                    .as_ref()
+                    .and_then(|window| window.window_minutes),
             );
 
             let display = history_cell::rate_limit_snapshot_display(&snapshot, Local::now());
@@ -637,7 +674,7 @@ impl ChatWidget {
             .unwrap_or(true);
         if needs_new {
             self.flush_active_cell();
-            self.active_cell = Some(Box::new(history_cell::new_active_exec_command(
+            self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 command,
                 parsed,
@@ -741,7 +778,7 @@ impl ChatWidget {
         } else {
             self.flush_active_cell();
 
-            self.active_cell = Some(Box::new(history_cell::new_active_exec_command(
+            self.active_cell = Some(Box::new(new_active_exec_command(
                 ev.call_id.clone(),
                 ev.command.clone(),
                 ev.parsed_cmd,

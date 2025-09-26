@@ -646,6 +646,7 @@ dependencies = [
  "codex-mcp-server",
  "codex-protocol",
  "codex-protocol-ts",
+ "codex-responses-api-proxy",
  "codex-tui",
  "ctor 0.5.0",
  "libc",
@@ -679,6 +680,7 @@ dependencies = [
  "askama",
  "assert_cmd",
  "async-channel",
+ "async-trait",
  "base64",
  "bytes",
  "chrono",
@@ -690,8 +692,10 @@ dependencies = [
  "core_test_support",
  "dirs",
  "env-flags",
+ "escargot",
  "eventsource-stream",
  "futures",
+ "indexmap 2.10.0",
  "landlock",
  "libc",
  "maplit",
@@ -746,12 +750,15 @@ dependencies = [
  "libc",
  "owo-colors",
  "predicates",
+ "pretty_assertions",
+ "serde",
  "serde_json",
  "shlex",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ts-rs",
  "uuid",
  "walkdir",
  "wiremock",
@@ -926,6 +933,22 @@ dependencies = [
  "codex-protocol",
  "mcp-types",
  "ts-rs",
+]
+
+[[package]]
+name = "codex-responses-api-proxy"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-arg0",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -1127,6 +1150,7 @@ name = "core_test_support"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "codex-core",
  "serde_json",
  "tempfile",
@@ -1695,6 +1719,17 @@ name = "error-code"
 version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
+
+[[package]]
+name = "escargot"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11c3aea32bc97b500c9ca6a72b768a26e558264303d101d3409cf6d57a9ed0cf"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "event-listener"
