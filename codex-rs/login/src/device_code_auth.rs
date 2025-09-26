@@ -65,13 +65,13 @@ struct TokenSuccessResp {
 /// - On success, persist tokens and attempt an API key exchange for convenience.
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let client = reqwest::Client::new();
-    let auth_base_url = std::env::var(DEVICE_AUTH_BASE_URL_ENV_VAR)
-        .unwrap_or_else(|_| "https://auth.openai.com".to_string());
+    let issuer_base = opts.issuer.trim_end_matches('/').to_owned();
+    let auth_base_url =
+        std::env::var(DEVICE_AUTH_BASE_URL_ENV_VAR).unwrap_or_else(|_| issuer_base.clone());
     let auth_base_url = auth_base_url.trim_end_matches('/').to_owned();
 
     // Step 1: request a user code and polling interval
-    // let usercode_url = format!("{}/devicecode/usercode", opts.issuer.trim_end_matches('/'));
-    let usercode_url = format!("{auth_base_url}/deviceauth/usercode");
+    let usercode_url = format!("{auth_base_url}/devicecode/usercode");
     let mut payload: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
     payload.insert(
         "client_id".to_string(),
