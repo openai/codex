@@ -41,6 +41,7 @@ mod cli;
 mod clipboard_paste;
 pub mod custom_terminal;
 mod diff_render;
+mod exec_cell;
 mod exec_command;
 mod file_search;
 mod frames;
@@ -66,7 +67,6 @@ mod streaming;
 mod text_formatting;
 mod tui;
 mod ui_consts;
-mod user_approval_widget;
 mod version;
 mod wrapping;
 
