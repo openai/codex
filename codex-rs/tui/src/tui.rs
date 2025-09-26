@@ -14,10 +14,12 @@ use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
-use crossterm::cursor;
+#[cfg(unix)]
 use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
+use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
+use crossterm::event::EnableFocusChange;
 use crossterm::event::Event;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
@@ -25,7 +27,7 @@ use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
-use crossterm::terminal::ScrollUp;
+use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
@@ -60,6 +62,8 @@ pub fn set_modes() -> Result<()> {
                 | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
         )
     );
+
+    let _ = execute!(stdout(), EnableFocusChange);
     Ok(())
 }
 
@@ -111,6 +115,7 @@ pub fn restore() -> Result<()> {
     // Pop may fail on platforms that didn't support the push; ignore errors.
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     execute!(stdout(), DisableBracketedPaste)?;
+    let _ = execute!(stdout(), DisableFocusChange);
     disable_raw_mode()?;
     let _ = execute!(stdout(), crossterm::cursor::Show);
     Ok(())
@@ -121,15 +126,6 @@ pub fn init() -> Result<Terminal> {
     set_modes()?;
 
     set_panic_hook();
-
-    // Instead of clearing the screen (which can drop scrollback in some terminals),
-    // scroll existing lines up until the cursor reaches the top, then start at (0, 0).
-    if let Ok((_x, y)) = cursor::position()
-        && y > 0
-    {
-        execute!(stdout(), ScrollUp(y))?;
-    }
-    execute!(stdout(), MoveTo(0, 0))?;
 
     let backend = CrosstermBackend::new(stdout());
     let tui = CustomTerminal::with_options(backend)?;
@@ -163,6 +159,9 @@ pub struct Tui {
     suspend_cursor_y: Arc<AtomicU16>, // Bottom line of inline viewport
     // True when overlay alt-screen UI is active
     alt_screen_active: Arc<AtomicBool>,
+    // True when terminal/tab is focused; updated internally from crossterm events
+    terminal_focused: Arc<AtomicBool>,
+    enhanced_keys_supported: bool,
 }
 
 #[cfg(unix)]
@@ -214,6 +213,16 @@ impl FrameRequester {
 }
 
 impl Tui {
+    /// Emit a desktop notification now if the terminal is unfocused.
+    /// Returns true if a notification was posted.
+    pub fn notify(&mut self, message: impl AsRef<str>) -> bool {
+        if !self.terminal_focused.load(Ordering::Relaxed) {
+            let _ = execute!(stdout(), PostNotification(message.as_ref().to_string()));
+            true
+        } else {
+            false
+        }
+    }
     pub fn new(terminal: Terminal) -> Self {
         let (frame_schedule_tx, frame_schedule_rx) = tokio::sync::mpsc::unbounded_channel();
         let (draw_tx, _) = tokio::sync::broadcast::channel(1);
@@ -259,6 +268,10 @@ impl Tui {
             }
         });
 
+        // Detect keyboard enhancement support before any EventStream is created so the
+        // crossterm poller can acquire its lock without contention.
+        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+
         Self {
             frame_schedule_tx,
             draw_tx,
@@ -270,6 +283,8 @@ impl Tui {
             #[cfg(unix)]
             suspend_cursor_y: Arc::new(AtomicU16::new(0)),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
+            terminal_focused: Arc::new(AtomicBool::new(true)),
+            enhanced_keys_supported,
         }
     }
 
@@ -277,6 +292,10 @@ impl Tui {
         FrameRequester {
             frame_schedule_tx: self.frame_schedule_tx.clone(),
         }
+    }
+
+    pub fn enhanced_keys_supported(&self) -> bool {
+        self.enhanced_keys_supported
     }
 
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
@@ -289,6 +308,7 @@ impl Tui {
         let alt_screen_active = self.alt_screen_active.clone();
         #[cfg(unix)]
         let suspend_cursor_y = self.suspend_cursor_y.clone();
+        let terminal_focused = self.terminal_focused.clone();
         let event_stream = async_stream::stream! {
             loop {
                 select! {
@@ -331,6 +351,12 @@ impl Tui {
                             }
                             Event::Paste(pasted) => {
                                 yield TuiEvent::Paste(pasted);
+                            }
+                            Event::FocusGained => {
+                                terminal_focused.store(true, Ordering::Relaxed);
+                            }
+                            Event::FocusLost => {
+                                terminal_focused.store(false, Ordering::Relaxed);
                             }
                             _ => {}
                         }
@@ -533,5 +559,27 @@ impl Tui {
                 draw_fn(frame);
             })
         })?
+    }
+}
+
+/// Command that emits an OSC 9 desktop notification with a message.
+#[derive(Debug, Clone)]
+pub struct PostNotification(pub String);
+
+impl Command for PostNotification {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        write!(f, "\x1b]9;{}\x07", self.0)
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Err(std::io::Error::other(
+            "tried to execute PostNotification using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
     }
 }

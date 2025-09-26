@@ -141,7 +141,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     /// Print a concise summary of the effective configuration that will be used
     /// for the session. This mirrors the information shown in the TUI welcome
     /// screen.
-    fn print_config_summary(&mut self, config: &Config, prompt: &str) {
+    fn print_config_summary(&mut self, config: &Config, prompt: &str, _: &SessionConfiguredEvent) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         ts_println!(
             self,
@@ -539,8 +539,37 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::PlanUpdate(plan_update_event) => {
                 let UpdatePlanArgs { explanation, plan } = plan_update_event;
-                ts_println!(self, "explanation: {explanation:?}");
-                ts_println!(self, "plan: {plan:?}");
+
+                // Header
+                ts_println!(self, "{}", "Plan update".style(self.magenta));
+
+                // Optional explanation
+                if let Some(explanation) = explanation
+                    && !explanation.trim().is_empty()
+                {
+                    ts_println!(self, "{}", explanation.style(self.italic));
+                }
+
+                // Pretty-print the plan items with simple status markers.
+                for item in plan {
+                    use codex_core::plan_tool::StepStatus;
+                    match item.status {
+                        StepStatus::Completed => {
+                            ts_println!(self, "  {} {}", "✓".style(self.green), item.step);
+                        }
+                        StepStatus::InProgress => {
+                            ts_println!(self, "  {} {}", "→".style(self.cyan), item.step);
+                        }
+                        StepStatus::Pending => {
+                            ts_println!(
+                                self,
+                                "  {} {}",
+                                "•".style(self.dimmed),
+                                item.step.style(self.dimmed)
+                            );
+                        }
+                    }
+                }
             }
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
@@ -558,6 +587,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 TurnAbortReason::Replaced => {
                     ts_println!(self, "task aborted: replaced by a new task");
                 }
+                TurnAbortReason::ReviewEnded => {
+                    ts_println!(self, "task aborted: review ended");
+                }
             },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::ConversationPath(_) => {}
@@ -570,7 +602,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 }
 
 fn escape_command(command: &[String]) -> String {
-    try_join(command.iter().map(|s| s.as_str())).unwrap_or_else(|_| command.join(" "))
+    try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
 
 fn format_file_change(change: &FileChange) -> &'static str {

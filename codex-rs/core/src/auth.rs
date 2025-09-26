@@ -267,6 +267,9 @@ pub fn try_read_auth_json(auth_file: &Path) -> std::io::Result<AuthDotJson> {
 }
 
 pub fn write_auth_json(auth_file: &Path, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
+    if let Some(parent) = auth_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let json_data = serde_json::to_string_pretty(auth_dot_json)?;
     let mut options = OpenOptions::new();
     options.truncate(true).write(true).create(true);
@@ -406,6 +409,32 @@ mod tests {
 
         let same_auth_dot_json = try_read_auth_json(&file).unwrap();
         assert_eq!(auth_dot_json, same_auth_dot_json);
+    }
+
+    #[test]
+    fn login_with_api_key_overwrites_existing_auth_json() {
+        let dir = tempdir().unwrap();
+        let auth_path = dir.path().join("auth.json");
+        let stale_auth = json!({
+            "OPENAI_API_KEY": "sk-old",
+            "tokens": {
+                "id_token": "stale.header.payload",
+                "access_token": "stale-access",
+                "refresh_token": "stale-refresh",
+                "account_id": "stale-acc"
+            }
+        });
+        std::fs::write(
+            &auth_path,
+            serde_json::to_string_pretty(&stale_auth).unwrap(),
+        )
+        .unwrap();
+
+        super::login_with_api_key(dir.path(), "sk-new").expect("login_with_api_key should succeed");
+
+        let auth = super::try_read_auth_json(&auth_path).expect("auth.json should parse");
+        assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
+        assert!(auth.tokens.is_none(), "tokens should be cleared");
     }
 
     #[tokio::test]

@@ -5,20 +5,20 @@ use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ZshShell {
-    shell_path: String,
-    zshrc_path: String,
+    pub(crate) shell_path: String,
+    pub(crate) zshrc_path: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct BashShell {
-    shell_path: String,
-    bashrc_path: String,
+    pub(crate) shell_path: String,
+    pub(crate) bashrc_path: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct PowerShellConfig {
-    exe: String, // Executable name or path, e.g. "pwsh" or "powershell.exe".
-    bash_exe_fallback: Option<PathBuf>, // In case the model generates a bash command.
+    pub(crate) exe: String, // Executable name or path, e.g. "pwsh" or "powershell.exe".
+    pub(crate) bash_exe_fallback: Option<PathBuf>, // In case the model generates a bash command.
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -32,15 +32,19 @@ pub enum Shell {
 impl Shell {
     pub fn format_default_shell_invocation(&self, command: Vec<String>) -> Option<Vec<String>> {
         match self {
-            Shell::Zsh(zsh) => {
-                format_shell_invocation_with_rc(&command, &zsh.shell_path, &zsh.zshrc_path)
-            }
-            Shell::Bash(bash) => {
-                format_shell_invocation_with_rc(&command, &bash.shell_path, &bash.bashrc_path)
-            }
+            Shell::Zsh(zsh) => format_shell_invocation_with_rc(
+                command.as_slice(),
+                &zsh.shell_path,
+                &zsh.zshrc_path,
+            ),
+            Shell::Bash(bash) => format_shell_invocation_with_rc(
+                command.as_slice(),
+                &bash.shell_path,
+                &bash.bashrc_path,
+            ),
             Shell::PowerShell(ps) => {
                 // If model generated a bash command, prefer a detected bash fallback
-                if let Some(script) = strip_bash_lc(&command) {
+                if let Some(script) = strip_bash_lc(command.as_slice()) {
                     return match &ps.bash_exe_fallback {
                         Some(bash) => Some(vec![
                             bash.to_string_lossy().to_string(),
@@ -69,7 +73,7 @@ impl Shell {
                         return Some(command);
                     }
 
-                    let joined = shlex::try_join(command.iter().map(|s| s.as_str())).ok();
+                    let joined = shlex::try_join(command.iter().map(String::as_str)).ok();
                     return joined.map(|arg| {
                         vec![
                             ps.exe.clone(),
@@ -102,12 +106,12 @@ impl Shell {
 }
 
 fn format_shell_invocation_with_rc(
-    command: &Vec<String>,
+    command: &[String],
     shell_path: &str,
     rc_path: &str,
 ) -> Option<Vec<String>> {
     let joined = strip_bash_lc(command)
-        .or_else(|| shlex::try_join(command.iter().map(|s| s.as_str())).ok())?;
+        .or_else(|| shlex::try_join(command.iter().map(String::as_str)).ok())?;
 
     let rc_command = if std::path::Path::new(rc_path).exists() {
         format!("source {rc_path} && ({joined})")
@@ -118,8 +122,8 @@ fn format_shell_invocation_with_rc(
     Some(vec![shell_path.to_string(), "-lc".to_string(), rc_command])
 }
 
-fn strip_bash_lc(command: &Vec<String>) -> Option<String> {
-    match command.as_slice() {
+fn strip_bash_lc(command: &[String]) -> Option<String> {
+    match command {
         // exactly three items
         [first, second, third]
             // first two must be "bash", "-lc"
@@ -220,6 +224,7 @@ pub async fn default_user_shell() -> Shell {
 mod tests {
     use super::*;
     use std::process::Command;
+    use std::string::ToString;
 
     #[tokio::test]
     async fn test_current_shell_detects_zsh() {
@@ -323,7 +328,7 @@ mod tests {
             });
 
             let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
+                .format_default_shell_invocation(input.iter().map(ToString::to_string).collect());
             let expected_cmd = expected_cmd
                 .iter()
                 .map(|s| s.replace("BASHRC_PATH", bashrc_path.to_str().unwrap()))
@@ -345,6 +350,7 @@ mod tests {
                 },
                 SandboxType::None,
                 &SandboxPolicy::DangerFullAccess,
+                temp_home.path(),
                 &None,
                 None,
             )
@@ -366,6 +372,7 @@ mod tests {
 #[cfg(target_os = "macos")]
 mod macos_tests {
     use super::*;
+    use std::string::ToString;
 
     #[tokio::test]
     async fn test_run_with_profile_escaping_and_execution() {
@@ -429,7 +436,7 @@ mod macos_tests {
             });
 
             let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
+                .format_default_shell_invocation(input.iter().map(ToString::to_string).collect());
             let expected_cmd = expected_cmd
                 .iter()
                 .map(|s| s.replace("ZSHRC_PATH", zshrc_path.to_str().unwrap()))
@@ -451,6 +458,7 @@ mod macos_tests {
                 },
                 SandboxType::None,
                 &SandboxPolicy::DangerFullAccess,
+                temp_home.path(),
                 &None,
                 None,
             )
@@ -553,10 +561,10 @@ mod tests_windows {
 
         for (shell, input, expected_cmd) in cases {
             let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
+                .format_default_shell_invocation(input.iter().map(|s| (*s).to_string()).collect());
             assert_eq!(
                 actual_cmd,
-                Some(expected_cmd.iter().map(|s| s.to_string()).collect())
+                Some(expected_cmd.iter().map(|s| (*s).to_string()).collect())
             );
         }
     }

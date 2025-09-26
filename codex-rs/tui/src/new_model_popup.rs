@@ -1,10 +1,11 @@
+use crate::ascii_animation::AsciiAnimation;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -15,6 +16,9 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use tokio_stream::StreamExt;
+
+const MIN_ANIMATION_HEIGHT: u16 = 24;
+const MIN_ANIMATION_WIDTH: u16 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ModelUpgradeDecision {
@@ -31,7 +35,7 @@ enum ModelUpgradeOption {
 struct ModelUpgradePopup {
     highlighted: ModelUpgradeOption,
     decision: Option<ModelUpgradeDecision>,
-    request_frame: FrameRequester,
+    animation: AsciiAnimation,
 }
 
 impl ModelUpgradePopup {
@@ -39,7 +43,7 @@ impl ModelUpgradePopup {
         Self {
             highlighted: ModelUpgradeOption::TryNewModel,
             decision: None,
-            request_frame,
+            animation: AsciiAnimation::new(request_frame),
         }
     }
 
@@ -51,6 +55,11 @@ impl ModelUpgradePopup {
             KeyCode::Char('2') => self.select(ModelUpgradeOption::KeepCurrent),
             KeyCode::Enter => self.select(self.highlighted),
             KeyCode::Esc => self.select(ModelUpgradeOption::KeepCurrent),
+            KeyCode::Char('.') => {
+                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                    let _ = self.animation.pick_random_variant();
+                }
+            }
             _ => {}
         }
     }
@@ -58,13 +67,13 @@ impl ModelUpgradePopup {
     fn highlight(&mut self, option: ModelUpgradeOption) {
         if self.highlighted != option {
             self.highlighted = option;
-            self.request_frame.schedule_frame();
+            self.animation.request_frame();
         }
     }
 
     fn select(&mut self, option: ModelUpgradeOption) {
         self.decision = Some(option.into());
-        self.request_frame.schedule_frame();
+        self.animation.request_frame();
     }
 }
 
@@ -80,19 +89,30 @@ impl From<ModelUpgradeOption> for ModelUpgradeDecision {
 impl WidgetRef for &ModelUpgradePopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
+        self.animation.schedule_next_frame();
 
-        let mut lines: Vec<Line> = vec![
-            String::new().into(),
-            format!("   Codex is now powered by {SWIFTFOX_MEDIUM_MODEL}, a new model that is")
-                .into(),
-            Line::from(vec![
-                "   ".into(),
-                "faster, a better collaborator, ".bold(),
-                "and ".into(),
-                "more steerable.".bold(),
-            ]),
-            "".into(),
-        ];
+        // Skip the animation entirely when the viewport is too small so we don't clip frames.
+        let show_animation =
+            area.height >= MIN_ANIMATION_HEIGHT && area.width >= MIN_ANIMATION_WIDTH;
+
+        let mut lines: Vec<Line> = Vec::new();
+        if show_animation {
+            let frame = self.animation.current_frame();
+            lines.extend(frame.lines().map(Into::into));
+            // Spacer between animation and text content.
+            lines.push("".into());
+        }
+
+        lines.push(Line::from(vec![
+            "  ".into(),
+            "Introducing GPT-5-Codex".bold(),
+        ]));
+        lines.push("".into());
+        lines.push(
+            "  GPT-5-Codex works faster through easy tasks and harder on complex tasks,".into(),
+        );
+        lines.push("  improves on code quality, and is more steerable with AGENTS.md.".into());
+        lines.push("".into());
 
         let create_option =
             |index: usize, option: ModelUpgradeOption, text: &str| -> Line<'static> {
@@ -109,12 +129,13 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push(create_option(
             0,
             ModelUpgradeOption::TryNewModel,
-            &format!("Yes, switch me to {SWIFTFOX_MEDIUM_MODEL}"),
+            "Try the new GPT-5-Codex model",
         ));
+        lines.push("".into());
         lines.push(create_option(
             1,
             ModelUpgradeOption::KeepCurrent,
-            "Not right now",
+            "Continue using current model",
         ));
         lines.push("".into());
         lines.push(

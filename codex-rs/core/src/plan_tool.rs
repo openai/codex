@@ -2,13 +2,12 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use crate::codex::Session;
+use crate::function_tool::FunctionCallError;
 use crate::openai_tools::JsonSchema;
 use crate::openai_tools::OpenAiTool;
 use crate::openai_tools::ResponsesApiTool;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
 
 // Use the canonical plan tool types from the protocol crate to ensure
 // type-identity matches events transported via `codex_protocol`.
@@ -67,44 +66,20 @@ pub(crate) async fn handle_update_plan(
     session: &Session,
     arguments: String,
     sub_id: String,
-    call_id: String,
-) -> ResponseInputItem {
-    match parse_update_plan_arguments(arguments, &call_id) {
-        Ok(args) => {
-            let output = ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: "Plan updated".to_string(),
-                    success: Some(true),
-                },
-            };
-            session
-                .send_event(Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::PlanUpdate(args),
-                })
-                .await;
-            output
-        }
-        Err(output) => *output,
-    }
+    _call_id: String,
+) -> Result<String, FunctionCallError> {
+    let args = parse_update_plan_arguments(&arguments)?;
+    session
+        .send_event(Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::PlanUpdate(args),
+        })
+        .await;
+    Ok("Plan updated".to_string())
 }
 
-fn parse_update_plan_arguments(
-    arguments: String,
-    call_id: &str,
-) -> Result<UpdatePlanArgs, Box<ResponseInputItem>> {
-    match serde_json::from_str::<UpdatePlanArgs>(&arguments) {
-        Ok(args) => Ok(args),
-        Err(e) => {
-            let output = ResponseInputItem::FunctionCallOutput {
-                call_id: call_id.to_string(),
-                output: FunctionCallOutputPayload {
-                    content: format!("failed to parse function arguments: {e}"),
-                    success: None,
-                },
-            };
-            Err(Box::new(output))
-        }
-    }
+fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {
+    serde_json::from_str::<UpdatePlanArgs>(arguments).map_err(|e| {
+        FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
+    })
 }

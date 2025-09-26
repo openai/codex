@@ -425,32 +425,41 @@ impl CodexMessageProcessor {
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
         // then no auth step is required; otherwise, default to requiring auth.
-        let requires_openai_auth = Some(self.config.model_provider.requires_openai_auth);
+        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
 
-        let response = match self.auth_manager.auth() {
-            Some(auth) => {
-                let (reported_auth_method, token_opt) = match auth.get_token().await {
-                    Ok(token) if !token.is_empty() => {
-                        let tok = if include_token { Some(token) } else { None };
-                        (Some(auth.mode), tok)
-                    }
-                    Ok(_) => (None, None),
-                    Err(err) => {
-                        tracing::warn!("failed to get token for auth status: {err}");
-                        (None, None)
-                    }
-                };
-                codex_protocol::mcp_protocol::GetAuthStatusResponse {
-                    auth_method: reported_auth_method,
-                    auth_token: token_opt,
-                    requires_openai_auth,
-                }
-            }
-            None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
+        let response = if !requires_openai_auth {
+            codex_protocol::mcp_protocol::GetAuthStatusResponse {
                 auth_method: None,
                 auth_token: None,
-                requires_openai_auth,
-            },
+                requires_openai_auth: Some(false),
+            }
+        } else {
+            match self.auth_manager.auth() {
+                Some(auth) => {
+                    let auth_mode = auth.mode;
+                    let (reported_auth_method, token_opt) = match auth.get_token().await {
+                        Ok(token) if !token.is_empty() => {
+                            let tok = if include_token { Some(token) } else { None };
+                            (Some(auth_mode), tok)
+                        }
+                        Ok(_) => (None, None),
+                        Err(err) => {
+                            tracing::warn!("failed to get token for auth status: {err}");
+                            (None, None)
+                        }
+                    };
+                    codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                        auth_method: reported_auth_method,
+                        auth_token: token_opt,
+                        requires_openai_auth: Some(true),
+                    }
+                }
+                None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                    auth_method: None,
+                    auth_token: None,
+                    requires_openai_auth: Some(true),
+                },
+            }
         };
 
         self.outgoing.send_response(request_id, response).await;
@@ -582,12 +591,14 @@ impl CodexMessageProcessor {
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
+        let sandbox_cwd = self.config.cwd.clone();
 
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
                 sandbox_type,
                 &effective_policy,
+                sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
                 None,
             )
@@ -822,7 +833,7 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let required_suffix = format!("{}.jsonl", conversation_id.0);
+        let required_suffix = format!("{conversation_id}.jsonl");
         let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -1015,6 +1026,7 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary,
+                final_output_json_schema: None,
             })
             .await;
 
@@ -1416,19 +1428,19 @@ fn extract_conversation_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     #[test]
-    fn extract_conversation_summary_prefers_plain_user_messages() {
-        let conversation_id =
-            ConversationId(Uuid::parse_str("3f941c35-29b3-493b-b0a4-e25800d9aeb0").unwrap());
+    fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
+        let conversation_id = ConversationId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0")?;
         let timestamp = Some("2025-09-05T16:53:11.850Z".to_string());
         let path = PathBuf::from("rollout.jsonl");
 
         let head = vec![
             json!({
-                "id": conversation_id.0,
+                "id": conversation_id.to_string(),
                 "timestamp": timestamp,
                 "cwd": "/",
                 "originator": "codex",
@@ -1462,5 +1474,6 @@ mod tests {
         );
         assert_eq!(summary.path, path);
         assert_eq!(summary.preview, "Count to 5");
+        Ok(())
     }
 }

@@ -15,6 +15,7 @@ use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
+use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
@@ -23,6 +24,7 @@ use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
@@ -86,6 +88,8 @@ pub enum Op {
 
         /// Will only be honored if the model is configured to use reasoning.
         summary: ReasoningSummaryConfig,
+        // The JSON schema to use for the final assistant message
+        final_output_json_schema: Option<Value>,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
@@ -413,6 +417,7 @@ pub struct Event {
 }
 
 /// Response event from the agent
+/// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -513,7 +518,12 @@ pub enum EventMsg {
     EnteredReviewMode(ReviewRequest),
 
     /// Exited review mode with an optional final result to apply.
-    ExitedReviewMode(Option<ReviewOutputEvent>),
+    ExitedReviewMode(ExitedReviewModeEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ExitedReviewModeEvent {
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -582,6 +592,23 @@ impl TokenUsageInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
+    pub rate_limits: Option<RateLimitSnapshot>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct RateLimitSnapshot {
+    pub primary: Option<RateLimitWindow>,
+    pub secondary: Option<RateLimitWindow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct RateLimitWindow {
+    /// Percentage (0-100) of the window that has been consumed.
+    pub used_percent: f64,
+    /// Rolling window duration, in minutes.
+    pub window_minutes: Option<u64>,
+    /// Seconds until the window resets.
+    pub resets_in_seconds: Option<u64>,
 }
 
 // Includes prompts, tools and space to call compact.
@@ -862,26 +889,7 @@ impl InitialHistory {
             InitialHistory::Forked(items) => items.clone(),
         }
     }
-    pub fn get_response_items(&self) -> Vec<ResponseItem> {
-        match self {
-            InitialHistory::New => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed
-                .history
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-            InitialHistory::Forked(items) => items
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-        }
-    }
+
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
             InitialHistory::New => None,
@@ -939,6 +947,18 @@ pub enum RolloutItem {
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 pub struct CompactedItem {
     pub message: String,
+}
+
+impl From<CompactedItem> for ResponseItem {
+    fn from(value: CompactedItem) -> Self {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: value.message,
+            }],
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -1240,20 +1260,22 @@ pub struct TurnAbortedEvent {
 pub enum TurnAbortReason {
     Interrupted,
     Replaced,
+    ReviewEnded,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use serde_json::json;
     use tempfile::NamedTempFile;
 
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.
     #[test]
-    fn serialize_event() {
-        let conversation_id = ConversationId(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"));
-        let rollout_file = NamedTempFile::new().unwrap();
+    fn serialize_event() -> Result<()> {
+        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -1279,23 +1301,25 @@ mod tests {
                 "rollout_path": format!("{}", rollout_file.path().display()),
             }
         });
-        assert_eq!(expected, serde_json::to_value(&event).unwrap());
+        assert_eq!(expected, serde_json::to_value(&event)?);
+        Ok(())
     }
 
     #[test]
-    fn vec_u8_as_base64_serialization_and_deserialization() {
+    fn vec_u8_as_base64_serialization_and_deserialization() -> Result<()> {
         let event = ExecCommandOutputDeltaEvent {
             call_id: "call21".to_string(),
             stream: ExecOutputStream::Stdout,
             chunk: vec![1, 2, 3, 4, 5],
         };
-        let serialized = serde_json::to_string(&event).unwrap();
+        let serialized = serde_json::to_string(&event)?;
         assert_eq!(
             r#"{"call_id":"call21","stream":"stdout","chunk":"AQIDBAU="}"#,
             serialized,
         );
 
-        let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized).unwrap();
+        let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized)?;
         assert_eq!(deserialized, event);
+        Ok(())
     }
 }

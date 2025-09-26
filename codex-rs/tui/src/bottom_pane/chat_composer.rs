@@ -38,6 +38,7 @@ use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::key_hint;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -136,27 +137,32 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        self.textarea.desired_height(width - 1)
+        // Leave 1 column for the left border and 1 column for left padding
+        self.textarea
+            .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
             + match &self.active_popup {
                 ActivePopup::None => FOOTER_HEIGHT_WITH_HINT,
-                ActivePopup::Command(c) => c.calculate_required_height(),
+                ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let popup_constraint = match &self.active_popup {
-            ActivePopup::Command(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::Command(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::None => Constraint::Max(FOOTER_HEIGHT_WITH_HINT),
         };
         let [textarea_rect, _] =
             Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
         let mut textarea_rect = textarea_rect;
-        textarea_rect.width = textarea_rect.width.saturating_sub(1);
-        textarea_rect.x += 1;
-        let state = self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, &state)
+        // Leave 1 for border and 1 for padding
+        textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
+        textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 
     /// Returns true if the composer currently contains no user input.
@@ -258,7 +264,6 @@ impl ChatComposer {
     }
 
     /// Get the current composer text.
-    #[cfg(test)]
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
     }
@@ -415,7 +420,7 @@ impl ChatComposer {
                     // Capture any needed data from popup before clearing it.
                     let prompt_content = match sel {
                         CommandItem::UserPrompt(idx) => {
-                            popup.prompt_content(idx).map(|s| s.to_string())
+                            popup.prompt_content(idx).map(str::to_string)
                         }
                         _ => None,
                     };
@@ -544,7 +549,7 @@ impl ChatComposer {
                         let format_label = match Path::new(&sel_path)
                             .extension()
                             .and_then(|e| e.to_str())
-                            .map(|s| s.to_ascii_lowercase())
+                            .map(str::to_ascii_lowercase)
                         {
                             Some(ext) if ext == "png" => "PNG",
                             Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
@@ -611,7 +616,7 @@ impl ChatComposer {
             text[safe_cursor..]
                 .chars()
                 .next()
-                .map(|c| c.is_whitespace())
+                .map(char::is_whitespace)
                 .unwrap_or(false)
         } else {
             false
@@ -639,7 +644,7 @@ impl ChatComposer {
         let ws_len_right: usize = after_cursor
             .chars()
             .take_while(|c| c.is_whitespace())
-            .map(|c| c.len_utf8())
+            .map(char::len_utf8)
             .sum();
         let start_right = safe_cursor + ws_len_right;
         let end_right_rel = text[start_right..]
@@ -1228,7 +1233,10 @@ impl ChatComposer {
 impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let (popup_constraint, hint_spacing) = match &self.active_popup {
-            ActivePopup::Command(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
+            ActivePopup::Command(popup) => (
+                Constraint::Max(popup.calculate_required_height(area.width)),
+                0,
+            ),
             ActivePopup::File(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
             ActivePopup::None => (
                 Constraint::Length(FOOTER_HEIGHT_WITH_HINT),
@@ -1274,7 +1282,6 @@ impl WidgetRef for ChatComposer {
                         key_hint::ctrl('J')
                     };
                     vec![
-                        " ".into(),
                         key_hint::plain('⏎'),
                         " send   ".into(),
                         newline_hint_key,
@@ -1323,9 +1330,11 @@ impl WidgetRef for ChatComposer {
                     }
                 }
 
-                Line::from(hint)
-                    .style(Style::default().dim())
-                    .render_ref(hint_rect, buf);
+                let hint = hint
+                    .into_iter()
+                    .map(|span| span.patch_style(Style::default().dim()))
+                    .collect::<Vec<_>>();
+                Line::from(hint).render_ref(hint_rect, buf);
             }
         }
         let border_style = if self.has_focus {
@@ -1342,15 +1351,15 @@ impl WidgetRef for ChatComposer {
                 buf,
             );
         let mut textarea_rect = textarea_rect;
-        textarea_rect.width = textarea_rect.width.saturating_sub(1);
-        textarea_rect.x += 1;
+        // Leave 1 for border and 1 for padding
+        textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
+        textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
 
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            Line::from(self.placeholder_text.as_str())
-                .style(Style::default().dim())
-                .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
+            let placeholder = Span::from(self.placeholder_text.as_str()).dim();
+            Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
         }
     }
 }

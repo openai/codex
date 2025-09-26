@@ -5,6 +5,8 @@ use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::ResponseItem;
 use codex_core::built_in_model_providers;
+use codex_core::content_items_to_text;
+use codex_core::is_session_prefix_message;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -12,6 +14,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use core_test_support::load_default_config_for_test;
+use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -27,6 +30,8 @@ fn sse_completed(id: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_conversation_twice_drops_to_first_message() {
+    skip_if_no_network!();
+
     // Start a mock server that completes three turns.
     let server = MockServer::start().await;
     let sse = sse_completed("resp");
@@ -112,6 +117,8 @@ async fn fork_conversation_twice_drops_to_first_message() {
         for (i, it) in items.iter().enumerate() {
             if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = it
                 && role == "user"
+                && content_items_to_text(content)
+                    .is_some_and(|text| !is_session_prefix_message(&text))
             {
                 // Consider any user message as an input boundary; recorder stores both EventMsg and ResponseItem.
                 // We specifically look for input items, which are represented as ContentItem::InputText.

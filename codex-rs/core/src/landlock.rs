@@ -16,21 +16,22 @@ use tokio::process::Child;
 pub async fn spawn_command_under_linux_sandbox<P>(
     codex_linux_sandbox_exe: P,
     command: Vec<String>,
+    command_cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
-    cwd: PathBuf,
+    sandbox_policy_cwd: &Path,
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child>
 where
     P: AsRef<Path>,
 {
-    let args = create_linux_sandbox_command_args(command, sandbox_policy, &cwd);
+    let args = create_linux_sandbox_command_args(command, sandbox_policy, sandbox_policy_cwd);
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(
         codex_linux_sandbox_exe.as_ref().to_path_buf(),
         args,
         arg0,
-        cwd,
+        command_cwd,
         sandbox_policy,
         stdio_policy,
         env,
@@ -42,10 +43,13 @@ where
 fn create_linux_sandbox_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
-    cwd: &Path,
+    sandbox_policy_cwd: &Path,
 ) -> Vec<String> {
     #[expect(clippy::expect_used)]
-    let sandbox_policy_cwd = cwd.to_str().expect("cwd must be valid UTF-8").to_string();
+    let sandbox_policy_cwd = sandbox_policy_cwd
+        .to_str()
+        .expect("cwd must be valid UTF-8")
+        .to_string();
 
     #[expect(clippy::expect_used)]
     let sandbox_policy_json =

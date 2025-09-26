@@ -1,7 +1,7 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::RolloutRecorder;
 use codex_core::protocol::GitInfo;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use core_test_support::skip_if_no_network;
 use std::time::Duration;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -21,12 +21,7 @@ use wiremock::matchers::path;
 /// 4. Ensures the response is received exactly once and contains "hi"
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_mode_stream_cli() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let server = MockServer::start().await;
     let sse = concat!(
@@ -102,12 +97,7 @@ async fn chat_mode_stream_cli() {
 /// received by a mock OpenAI Responses endpoint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_cli_applies_experimental_instructions_file() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     // Start mock server which will capture the request and return a minimal
     // SSE stream for a single turn.
@@ -195,12 +185,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
 /// 4. Ensures the fixture content is correctly streamed through the CLI
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_api_stream_cli() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
@@ -232,12 +217,7 @@ async fn responses_api_stream_cli() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integration_creates_and_checks_session_file() {
     // Honor sandbox network restrictions for CI parity with the other tests.
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     // 1. Temp home so we read/write isolated session files.
     let home = TempDir::new().unwrap();
@@ -420,12 +400,6 @@ async fn integration_creates_and_checks_session_file() {
     // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    // Cross‑platform safe resume override.  On Windows, backslashes in a TOML string must be escaped
-    // or the parse will fail and the raw literal (including quotes) may be preserved all the way down
-    // to Config, which in turn breaks resume because the path is invalid. Normalize to forward slashes
-    // to sidestep the issue.
-    let resume_path_str = path.to_string_lossy().replace('\\', "/");
-    let resume_override = format!("experimental_resume=\"{resume_path_str}\"");
     let mut cmd2 = AssertCommand::new("cargo");
     cmd2.arg("run")
         .arg("-p")
@@ -434,11 +408,11 @@ async fn integration_creates_and_checks_session_file() {
         .arg("--")
         .arg("exec")
         .arg("--skip-git-repo-check")
-        .arg("-c")
-        .arg(&resume_override)
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
-        .arg(&prompt2);
+        .arg(&prompt2)
+        .arg("resume")
+        .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)

@@ -16,12 +16,12 @@ use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::mcp_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -34,16 +34,21 @@ use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 // use uuid::Uuid;
 
+#[derive(Debug, Clone)]
+pub struct AppExitInfo {
+    pub token_usage: TokenUsage,
+    pub conversation_id: Option<ConversationId>,
+}
+
 pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
+    pub(crate) auth_manager: Arc<AuthManager>,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
-    model_saved_to_profile: bool,
-    model_saved_to_global: bool,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -72,14 +77,14 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
-    ) -> Result<TokenUsage> {
+    ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
         let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        let enhanced_keys_supported = tui.enhanced_keys_supported();
 
         let chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
@@ -90,6 +95,7 @@ impl App {
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -111,6 +117,7 @@ impl App {
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -126,10 +133,9 @@ impl App {
             server: conversation_manager,
             app_event_tx,
             chat_widget,
+            auth_manager: auth_manager.clone(),
             config,
             active_profile,
-            model_saved_to_profile: false,
-            model_saved_to_global: false,
             file_search,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
@@ -154,7 +160,10 @@ impl App {
             }
         } {}
         tui.terminal.clear()?;
-        Ok(app.token_usage())
+        Ok(AppExitInfo {
+            token_usage: app.token_usage(),
+            conversation_id: app.chat_widget.conversation_id(),
+        })
     }
 
     pub(crate) async fn handle_tui_event(
@@ -178,6 +187,7 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())
@@ -209,6 +219,7 @@ impl App {
                     initial_prompt: None,
                     initial_images: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
+                    auth_manager: self.auth_manager.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
@@ -299,20 +310,58 @@ impl App {
                 self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
-                self.chat_widget.set_model(model.clone());
+                self.chat_widget.set_model(&model);
                 self.config.model = model.clone();
                 if let Some(family) = find_family_for_model(&model) {
                     self.config.model_family = family;
                 }
-                self.model_saved_to_profile = false;
-                self.model_saved_to_global = false;
-                self.show_model_save_hint();
+            }
+            AppEvent::PersistModelSelection { model, effort } => {
+                let profile = self.active_profile.as_deref();
+                match persist_model_selection(&self.config.codex_home, profile, &model, effort)
+                    .await
+                {
+                    Ok(()) => {
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_info_message(
+                                format!("Model changed to {model} for {profile} profile"),
+                                None,
+                            );
+                        } else {
+                            self.chat_widget
+                                .add_info_message(format!("Model changed to {model}"), None);
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist model selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save model for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save default model: {err}"));
+                        }
+                    }
+                }
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.chat_widget.set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
+            }
+            AppEvent::OpenReviewBranchPicker(cwd) => {
+                self.chat_widget.show_review_branch_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCommitPicker(cwd) => {
+                self.chat_widget.show_review_commit_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCustomPrompt => {
+                self.chat_widget.show_review_custom_prompt();
             }
         }
         Ok(true)
@@ -322,107 +371,9 @@ impl App {
         self.chat_widget.token_usage()
     }
 
-    fn show_model_save_hint(&mut self) {
-        let model = self.config.model.clone();
-        if self.active_profile.is_some() {
-            self.chat_widget.add_info_message(
-                format!("Model changed to {model} for the current session"),
-                Some("(ctrl+s to set as profile default)".to_string()),
-            );
-        } else {
-            self.chat_widget.add_info_message(
-                format!("Model changed to {model} for the current session"),
-                Some("(ctrl+s to set as default)".to_string()),
-            );
-        }
-    }
-
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        let changed = self.config.model_reasoning_effort != effort;
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
-        if changed {
-            let show_hint = self.model_saved_to_profile || self.model_saved_to_global;
-            self.model_saved_to_profile = false;
-            self.model_saved_to_global = false;
-            if show_hint {
-                self.show_model_save_hint();
-            }
-        }
-    }
-
-    async fn persist_model_shortcut(&mut self) {
-        enum SaveScope<'a> {
-            Profile(&'a str),
-            Global,
-            AlreadySaved,
-        }
-
-        let scope = if let Some(profile) = self
-            .active_profile
-            .as_deref()
-            .filter(|_| !self.model_saved_to_profile)
-        {
-            SaveScope::Profile(profile)
-        } else if !self.model_saved_to_global {
-            SaveScope::Global
-        } else {
-            SaveScope::AlreadySaved
-        };
-
-        let model = self.config.model.clone();
-        let effort = self.config.model_reasoning_effort;
-        let codex_home = self.config.codex_home.clone();
-
-        match scope {
-            SaveScope::Profile(profile) => {
-                match persist_model_selection(&codex_home, Some(profile), &model, effort).await {
-                    Ok(()) => {
-                        self.model_saved_to_profile = true;
-                        self.chat_widget.add_info_message(
-                            format!("Profile model changed to {model} for all sessions"),
-                            Some("(view global config in config.toml)".to_string()),
-                        );
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist model selection via shortcut"
-                        );
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save model preference for profile `{profile}`: {err}"
-                        ));
-                    }
-                }
-            }
-            SaveScope::Global => {
-                match persist_model_selection(&codex_home, None, &model, effort).await {
-                    Ok(()) => {
-                        self.model_saved_to_global = true;
-                        self.chat_widget.add_info_message(
-                            format!("Default model changed to {model} for all sessions"),
-                            Some("(view global config in config.toml)".to_string()),
-                        )
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            "failed to persist global model selection via shortcut"
-                        );
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save global model preference: {err}"
-                        ));
-                    }
-                }
-            }
-            SaveScope::AlreadySaved => {
-                self.chat_widget.add_info_message(
-                    "Model preference already saved globally; no further action needed."
-                        .to_string(),
-                    None,
-                );
-            }
-        }
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
@@ -437,14 +388,6 @@ impl App {
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
-            }
-            KeyEvent {
-                code: KeyCode::Char('s'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                self.persist_model_shortcut().await;
             }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with an empty composer. In any other state, forward Esc so the
@@ -497,10 +440,20 @@ impl App {
 mod tests {
     use super::*;
     use crate::app_backtrack::BacktrackState;
+    use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::file_search::FileSearchManager;
+    use crate::history_cell::AgentMessageCell;
+    use crate::history_cell::HistoryCell;
+    use crate::history_cell::UserHistoryCell;
+    use crate::history_cell::new_session_info;
+    use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use codex_core::protocol::SessionConfiguredEvent;
+    use codex_protocol::mcp_protocol::ConversationId;
+    use ratatui::prelude::Line;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -511,16 +464,17 @@ mod tests {
         let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
             "Test API Key",
         )));
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
 
         App {
             server,
             app_event_tx,
             chat_widget,
+            auth_manager,
             config,
             active_profile: None,
-            model_saved_to_profile: false,
-            model_saved_to_global: false,
             file_search,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -533,10 +487,8 @@ mod tests {
     }
 
     #[test]
-    fn update_reasoning_effort_updates_config_and_resets_flags() {
+    fn update_reasoning_effort_updates_config() {
         let mut app = make_test_app();
-        app.model_saved_to_profile = true;
-        app.model_saved_to_global = true;
         app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
@@ -551,7 +503,67 @@ mod tests {
             app.chat_widget.config_ref().model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
-        assert!(!app.model_saved_to_profile);
-        assert!(!app.model_saved_to_global);
+    }
+
+    #[test]
+    fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
+        let mut app = make_test_app();
+
+        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(UserHistoryCell {
+                message: text.to_string(),
+            }) as Arc<dyn HistoryCell>
+        };
+        let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(text.to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        let make_header = |is_first| {
+            let event = SessionConfiguredEvent {
+                session_id: ConversationId::new(),
+                model: "gpt-test".to_string(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: PathBuf::new(),
+            };
+            Arc::new(new_session_info(
+                app.chat_widget.config_ref(),
+                event,
+                is_first,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        // Simulate the transcript after trimming for a fork, replaying history, and
+        // appending the edited turn. The session header separates the retained history
+        // from the forked conversation's replayed turns.
+        app.transcript_cells = vec![
+            make_header(true),
+            user_cell("first question"),
+            agent_cell("answer first"),
+            user_cell("follow-up"),
+            agent_cell("answer follow-up"),
+            make_header(false),
+            user_cell("first question"),
+            agent_cell("answer first"),
+            user_cell("follow-up (edited)"),
+            agent_cell("answer edited"),
+        ];
+
+        assert_eq!(user_count(&app.transcript_cells), 2);
+
+        app.backtrack.base_id = Some(ConversationId::new());
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
+
+        app.confirm_backtrack_from_main();
+
+        let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
+        assert_eq!(nth, 1);
+        assert_eq!(prefill, "follow-up (edited)");
     }
 }
