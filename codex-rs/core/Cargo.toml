@@ -69,6 +69,9 @@ wildmatch = { workspace = true }
 landlock = { workspace = true }
 seccompiler = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
+
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
