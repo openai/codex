@@ -13,7 +13,6 @@ use rmcp::model::PaginatedRequestParam;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
-use rmcp::transport::stdio;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::task;
@@ -22,7 +21,9 @@ use tokio::task;
 struct TestToolServer {
     tools: Arc<Vec<Tool>>,
 }
-
+pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
+    (tokio::io::stdin(), tokio::io::stdout())
+}
 impl TestToolServer {
     fn new() -> Self {
         let tools = vec![Self::echo_tool()];
@@ -61,8 +62,8 @@ struct EchoArgs {
 impl ServerHandler for TestToolServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            name: Cow::Borrowed("codex-rmcp-test-server"),
-            version: Some(Cow::Borrowed("0.1.0")),
+            // name: Cow::Borrowed("codex-rmcp-test-server"),
+            // version: Some(Cow::Borrowed("0.1.0")),
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()

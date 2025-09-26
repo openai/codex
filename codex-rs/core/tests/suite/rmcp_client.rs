@@ -23,6 +23,7 @@ use wiremock::matchers::path;
 async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
     non_sandbox_test!(result);
 
+    eprintln!("waiting for task complete");
     let server = responses::start_mock_server().await;
 
     let call_id = "call-123";
@@ -46,6 +47,7 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
     mount_sse_once(&server, any(), sse_body_1).await;
     mount_sse_once(&server, any(), sse_body_2).await;
 
+    eprintln!("waiting for task complete");
     let test_server_bin = cargo_bin("rmcp_test_server");
     let expected_env_value = "propagated-env";
 
