@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
+use std::time::Duration;
+
+use codex_core::config_types::McpServerConfig;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -27,6 +30,10 @@ use wiremock::matchers::any;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rmcp_stdio_tool_call_round_trip() -> anyhow::Result<()> {
+use wiremock::matchers::any;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
