@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::test_backend::VT100Backend;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -42,7 +43,6 @@ use pretty_assertions::assert_eq;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::io::Write;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::unbounded_channel;
@@ -1004,8 +1004,7 @@ async fn binary_size_transcript_snapshot() {
     let width: u16 = 80;
     let height: u16 = 2000;
     let viewport = Rect::new(0, height - 1, width, 1);
-    let written_bytes: Vec<u8> = Vec::new();
-    let backend = ratatui::backend::CrosstermBackend::new(written_bytes);
+    let backend = VT100Backend::new(width, height);
     let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
         .expect("failed to construct terminal");
     terminal.set_viewport_area(viewport);
@@ -1112,13 +1111,12 @@ async fn binary_size_transcript_snapshot() {
 
     // Build the final VT100 visual by parsing the ANSI stream. Trim trailing spaces per line
     // and drop trailing empty lines so the shape matches the ideal fixture exactly.
-    let mut parser = vt100::Parser::new(height, width, 0);
-    parser.process(terminal.backend().writer());
+    let screen = terminal.backend().vt100().screen();
     let mut lines: Vec<String> = Vec::with_capacity(height as usize);
     for row in 0..height {
         let mut s = String::with_capacity(width as usize);
         for col in 0..width {
-            if let Some(cell) = parser.screen().cell(row, col) {
+            if let Some(cell) = screen.cell(row, col) {
                 if let Some(ch) = cell.contents().chars().next() {
                     s.push(ch);
                 } else {
@@ -1134,7 +1132,6 @@ async fn binary_size_transcript_snapshot() {
     while lines.last().is_some_and(std::string::String::is_empty) {
         lines.pop();
     }
-    println!("lines: {:?}", lines);
     // Consider content only after the last session banner marker. Skip the transient
     // 'thinking' header if present, and start from the first non-empty content line
     // that follows. This keeps the snapshot stable across sessions.
@@ -2027,7 +2024,6 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
     assert_snapshot!(combined);
 }
 
-/*
 // Combined visual snapshot using vt100 for history + direct buffer overlay for UI.
 // This renders the final visual as seen in a terminal: history above, then a blank line,
 // then the exec block, another blank line, the status line, a blank line, and the composer.
@@ -2087,66 +2083,25 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     chat.bottom_pane
         .set_composer_text("Summarize recent commits".to_string());
 
-    // Dimensions
     let width: u16 = 80;
     let ui_height: u16 = chat.desired_height(width);
     let vt_height: u16 = 40;
-    let viewport = Rect::new(0, vt_height - ui_height, width, ui_height);
+    let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
 
-    // Use TestBackend for the terminal (no real ANSI emitted by drawing),
-    // but capture VT100 escape stream for history insertion with a separate writer.
-    let backend = ratatui::backend::TestBackend::new(width, vt_height);
+    let backend = VT100Backend::new(width, vt_height);
     let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
     term.set_viewport_area(viewport);
 
-    // 1) Apply any pending history insertions by emitting ANSI to a buffer via insert_history_lines_to_writer
-    let mut ansi: Vec<u8> = Vec::new();
     for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+        crate::insert_history::insert_history_lines_to_writer(&mut term, lines);
     }
 
-    // 2) Render the ChatWidget UI into an off-screen buffer using WidgetRef directly
-    let mut ui_buf = Buffer::empty(viewport);
-    (&chat).render_ref(viewport, &mut ui_buf);
+    term.draw(|f| {
+        (&chat).render_ref(f.area(), f.buffer_mut());
+    })
+    .unwrap();
 
-    // 3) Build VT100 visual from the captured ANSI
-    let mut parser = vt100::Parser::new(vt_height, width, 0);
-    parser.process(&ansi);
-    let mut vt_lines: Vec<String> = (0..vt_height)
-        .map(|row| {
-            let mut s = String::with_capacity(width as usize);
-            for col in 0..width {
-                if let Some(cell) = parser.screen().cell(row, col) {
-                    if let Some(ch) = cell.contents().chars().next() {
-                        s.push(ch);
-                    } else {
-                        s.push(' ');
-                    }
-                } else {
-                    s.push(' ');
-                }
-            }
-            s.trim_end().to_string()
-        })
-        .collect();
-
-    // 4) Overlay UI buffer content into the viewport region of the VT output
-    for rel_y in 0..viewport.height {
-        let y = viewport.y + rel_y;
-        let mut line = String::with_capacity(width as usize);
-        for x in 0..viewport.width {
-            let ch = ui_buf[(viewport.x + x, viewport.y + rel_y)]
-                .symbol()
-                .chars()
-                .next()
-                .unwrap_or(' ');
-            line.push(ch);
-        }
-        vt_lines[y as usize] = line.trim_end().to_string();
-    }
-
-    let visual = vt_lines.join("\n");
-    assert_snapshot!(visual);
+    assert_snapshot!(term.backend().vt100().screen().contents());
 }
 
 // E2E vt100 snapshot for complex markdown with indented and nested fenced code blocks
@@ -2165,12 +2120,10 @@ fn chatwidget_markdown_code_blocks_vt100_snapshot() {
     // Build a vt100 visual from the history insertions only (no UI overlay)
     let width: u16 = 80;
     let height: u16 = 50;
-    let backend = ratatui::backend::TestBackend::new(width, height);
+    let backend = VT100Backend::new(width, height);
     let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
     // Place viewport at the last line so that history lines insert above it
     term.set_viewport_area(Rect::new(0, height - 1, width, 1));
-
-    let mut ansi: Vec<u8> = Vec::new();
 
     // Simulate streaming via AgentMessageDelta in 2-character chunks (no final AgentMessage).
     let source: &str = r#"
@@ -2217,9 +2170,7 @@ printf 'fenced within fenced\n'
             while let Ok(app_ev) = rx.try_recv() {
                 if let AppEvent::InsertHistoryCell(cell) = app_ev {
                     let lines = cell.display_lines(width);
-                    crate::insert_history::insert_history_lines_to_writer(
-                        &mut term, &mut ansi, lines,
-                    );
+                    crate::insert_history::insert_history_lines_to_writer(&mut term, lines);
                     inserted_any = true;
                 }
             }
@@ -2237,17 +2188,16 @@ printf 'fenced within fenced\n'
         }),
     });
     for lines in drain_insert_history(&mut rx) {
-        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+        crate::insert_history::insert_history_lines_to_writer(&mut term, lines);
     }
 
-    let mut parser = vt100::Parser::new(height, width, 0);
-    parser.process(&ansi);
+    let screen = term.backend().vt100().screen();
 
     let mut vt_lines: Vec<String> = (0..height)
         .map(|row| {
             let mut s = String::with_capacity(width as usize);
             for col in 0..width {
-                if let Some(cell) = parser.screen().cell(row, col) {
+                if let Some(cell) = screen.cell(row, col) {
                     if let Some(ch) = cell.contents().chars().next() {
                         s.push(ch);
                     } else {
@@ -2268,5 +2218,3 @@ printf 'fenced within fenced\n'
     let visual = vt_lines.join("\n");
     assert_snapshot!(visual);
 }
-
-*/

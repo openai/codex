@@ -39,7 +39,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
-use ratatui::prelude::CrosstermBackend;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::widgets::StatefulWidget;
@@ -167,12 +166,12 @@ impl Frame<'_> {
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
-pub struct Terminal<W>
+pub struct Terminal<B>
 where
-    W: Write,
+    B: Backend + Write,
 {
     /// The backend used to interface with the terminal
-    backend: CrosstermBackend<W>,
+    backend: B,
     /// Holds the results of the current and previous draw calls. The two are compared at the end
     /// of each draw pass to output the necessary updates to the terminal
     buffers: [Buffer; 2],
@@ -191,9 +190,10 @@ where
     frame_count: usize,
 }
 
-impl<W> Drop for Terminal<W>
+impl<B> Drop for Terminal<B>
 where
-    W: Write,
+    B: Backend,
+    B: Write,
 {
     #[allow(clippy::print_stderr)]
     fn drop(&mut self) {
@@ -206,12 +206,13 @@ where
     }
 }
 
-impl<W> Terminal<W>
+impl<B> Terminal<B>
 where
-    W: Write,
+    B: Backend,
+    B: Write,
 {
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
-    pub fn with_options(mut backend: CrosstermBackend<W>) -> io::Result<Self> {
+    pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
         let cursor_pos = backend.get_cursor_position()?;
         Ok(Self {
@@ -246,12 +247,12 @@ where
     }
 
     /// Gets the backend
-    pub const fn backend(&self) -> &CrosstermBackend<W> {
+    pub const fn backend(&self) -> &B {
         &self.backend
     }
 
     /// Gets the backend as a mutable reference
-    pub fn backend_mut(&mut self) -> &mut CrosstermBackend<W> {
+    pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
     }
 
@@ -268,7 +269,7 @@ where
         {
             self.last_known_cursor_pos = Position { x: *x, y: *y };
         }
-        draw(self.backend.writer_mut(), updates.into_iter())
+        draw(&mut self.backend, updates.into_iter())
     }
 
     /// Updates the Terminal so that internal buffers match the requested area.

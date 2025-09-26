@@ -2,7 +2,6 @@ use std::fmt;
 use std::io;
 use std::io::Write;
 
-use crate::tui;
 use crate::wrapping::word_wrap_lines_borrowed;
 use crossterm::Command;
 use crossterm::cursor::MoveTo;
@@ -25,24 +24,29 @@ use ratatui::text::Span;
 
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
-pub(crate) fn insert_history_lines(terminal: &mut tui::Terminal, lines: Vec<Line>) {
+pub(crate) fn insert_history_lines<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<Line>,
+) where
+    B: Backend + Write,
+{
     insert_history_lines_to_writer(terminal, lines);
 }
 
 /// Like `insert_history_lines`, but writes ANSI to the provided writer. This
 /// is intended for testing where a capture buffer is used instead of stdout.
-pub fn insert_history_lines_to_writer<W>(
-    terminal: &mut crate::custom_terminal::Terminal<W>,
+pub fn insert_history_lines_to_writer<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
     lines: Vec<Line>,
 ) where
-    W: Write,
+    B: Backend + Write,
 {
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
     let mut area = terminal.viewport_area;
     let mut should_update_area = false;
     let last_cursor_pos = terminal.last_known_cursor_pos;
-    let writer = terminal.backend_mut().writer_mut();
+    let writer = terminal.backend_mut();
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
@@ -291,9 +295,9 @@ where
 mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
+    use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
-    use vt100::Parser;
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -323,13 +327,12 @@ mod tests {
         );
     }
 
-    /*
     #[test]
     fn vt100_blockquote_line_emits_green_fg() {
         // Set up a small off-screen terminal
         let width: u16 = 40;
         let height: u16 = 10;
-        let backend = ratatui::backend::TestBackend::new(width, height);
+        let backend = VT100Backend::new(width, height);
         let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
         // Place viewport on the last line so history inserts scroll upward
         let viewport = Rect::new(0, height - 1, width, 1);
@@ -338,17 +341,12 @@ mod tests {
         // Build a blockquote-like line: apply line-level green style and prefix "> "
         let mut line: Line<'static> = Line::from(vec!["> ".into(), "Hello world".into()]);
         line = line.style(Color::Green);
-        let mut ansi: Vec<u8> = Vec::new();
-        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
-
-        // Parse ANSI using vt100 and assert at least one non-default fg color appears
-        let mut parser = Parser::new(height, width, 0);
-        parser.process(&ansi);
+        insert_history_lines_to_writer(&mut term, vec![line]);
 
         let mut saw_colored = false;
         'outer: for row in 0..height {
             for col in 0..width {
-                if let Some(cell) = parser.screen().cell(row, col)
+                if let Some(cell) = term.backend().vt100().screen().cell(row, col)
                     && cell.has_contents()
                     && cell.fgcolor() != vt100::Color::Default
                 {
@@ -368,7 +366,7 @@ mod tests {
         // Force wrapping by using a narrow viewport width and a long blockquote line.
         let width: u16 = 20;
         let height: u16 = 8;
-        let backend = ratatui::backend::TestBackend::new(width, height);
+        let backend = VT100Backend::new(width, height);
         let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
         // Viewport is the last line so history goes directly above it.
         let viewport = Rect::new(0, height - 1, width, 1);
@@ -381,13 +379,10 @@ mod tests {
         ]);
         line = line.style(Color::Green);
 
-        let mut ansi: Vec<u8> = Vec::new();
-        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+        insert_history_lines_to_writer(&mut term, vec![line]);
 
         // Parse and inspect the final screen buffer.
-        let mut parser = Parser::new(height, width, 0);
-        parser.process(&ansi);
-        let screen = parser.screen();
+        let screen = term.backend().vt100().screen();
 
         // Collect rows that are non-empty; these should correspond to our wrapped lines.
         let mut non_empty_rows: Vec<u16> = Vec::new();
@@ -435,7 +430,7 @@ mod tests {
     fn vt100_colored_prefix_then_plain_text_resets_color() {
         let width: u16 = 40;
         let height: u16 = 6;
-        let backend = ratatui::backend::TestBackend::new(width, height);
+        let backend = VT100Backend::new(width, height);
         let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
         let viewport = Rect::new(0, height - 1, width, 1);
         term.set_viewport_area(viewport);
@@ -446,12 +441,9 @@ mod tests {
             Span::raw("Hello world"),
         ]);
 
-        let mut ansi: Vec<u8> = Vec::new();
-        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+        insert_history_lines_to_writer(&mut term, vec![line]);
 
-        let mut parser = Parser::new(height, width, 0);
-        parser.process(&ansi);
-        let screen = parser.screen();
+        let screen = term.backend().vt100().screen();
 
         // Find the first non-empty row; verify first three cells are colored, following cells default.
         'rows: for row in 0..height {
@@ -500,17 +492,14 @@ mod tests {
 
         let width: u16 = 60;
         let height: u16 = 12;
-        let backend = ratatui::backend::TestBackend::new(width, height);
+        let backend = VT100Backend::new(width, height);
         let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
         let viewport = ratatui::layout::Rect::new(0, height - 1, width, 1);
         term.set_viewport_area(viewport);
 
-        let mut ansi: Vec<u8> = Vec::new();
-        insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+        insert_history_lines_to_writer(&mut term, lines);
 
-        let mut parser = Parser::new(height, width, 0);
-        parser.process(&ansi);
-        let screen = parser.screen();
+        let screen = term.backend().vt100().screen();
 
         // Reconstruct screen rows as strings to locate the 3rd level line.
         let mut rows: Vec<String> = Vec::with_capacity(height as usize);
@@ -559,5 +548,4 @@ mod tests {
             );
         }
     }
-    */
 }

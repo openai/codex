@@ -73,6 +73,9 @@ mod user_approval_widget;
 mod version;
 mod wrapping;
 
+#[cfg(test)]
+mod test_backend;
+
 #[cfg(not(debug_assertions))]
 mod updates;
 

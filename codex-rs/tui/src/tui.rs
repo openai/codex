@@ -43,7 +43,7 @@ use tokio::select;
 use tokio_stream::Stream;
 
 /// A type alias for the terminal type used in this application
-pub type Terminal = CustomTerminal<Stdout>;
+pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
