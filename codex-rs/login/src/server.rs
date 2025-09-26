@@ -629,4 +629,3 @@ pub(crate) async fn obtain_api_key(
     let body: ExchangeResp = resp.json().await.map_err(io::Error::other)?;
     Ok(body.access_token)
 }
-
