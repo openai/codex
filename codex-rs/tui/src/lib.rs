@@ -39,6 +39,7 @@ mod chatwidget;
 mod citation_regex;
 mod cli;
 mod clipboard_paste;
+mod color;
 pub mod custom_terminal;
 mod diff_render;
 mod exec_cell;
@@ -64,11 +65,16 @@ mod slash_command;
 mod status;
 mod status_indicator_widget;
 mod streaming;
+mod style;
+mod terminal_palette;
 mod text_formatting;
 mod tui;
 mod ui_consts;
 mod version;
 mod wrapping;
+
+#[cfg(test)]
+pub mod test_backend;
 
 #[cfg(not(debug_assertions))]
 mod updates;

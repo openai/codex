@@ -22,13 +22,25 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 use std::io;
+use std::io::Write;
 
+use crossterm::cursor::MoveTo;
+use crossterm::queue;
+use crossterm::style::Colors;
+use crossterm::style::Print;
+use crossterm::style::SetAttribute;
+use crossterm::style::SetBackgroundColor;
+use crossterm::style::SetColors;
+use crossterm::style::SetForegroundColor;
+use crossterm::terminal::Clear;
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
 
 #[derive(Debug, Hash)]
@@ -90,7 +102,7 @@ impl Frame<'_> {
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct Terminal<B>
 where
-    B: Backend,
+    B: Backend + Write,
 {
     /// The backend used to interface with the terminal
     backend: B,
@@ -113,6 +125,7 @@ where
 impl<B> Drop for Terminal<B>
 where
     B: Backend,
+    B: Write,
 {
     #[allow(clippy::print_stderr)]
     fn drop(&mut self) {
@@ -128,6 +141,7 @@ where
 impl<B> Terminal<B>
 where
     B: Backend,
+    B: Write,
 {
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
     pub fn with_options(mut backend: B) -> io::Result<Self> {
@@ -176,11 +190,15 @@ where
     pub fn flush(&mut self) -> io::Result<()> {
         let previous_buffer = &self.buffers[1 - self.current];
         let current_buffer = &self.buffers[self.current];
-        let updates = previous_buffer.diff(current_buffer);
-        if let Some((col, row, _)) = updates.last() {
-            self.last_known_cursor_pos = Position { x: *col, y: *row };
+        let updates = diff_buffers(previous_buffer, current_buffer);
+        if let Some(DrawCommand::Put { x, y, .. }) = updates
+            .iter()
+            .rev()
+            .find(|cmd| matches!(cmd, DrawCommand::Put { .. }))
+        {
+            self.last_known_cursor_pos = Position { x: *x, y: *y };
         }
-        self.backend.draw(updates.into_iter())
+        draw(&mut self.backend, updates.into_iter())
     }
 
     /// Updates the Terminal so that internal buffers match the requested area.
@@ -307,8 +325,7 @@ where
 
         self.swap_buffers();
 
-        // Flush
-        self.backend.flush()?;
+        ratatui::backend::Backend::flush(&mut self.backend)?;
 
         Ok(())
     }
@@ -365,5 +382,191 @@ where
     /// Queries the real size of the backend.
     pub fn size(&self) -> io::Result<Size> {
         self.backend.size()
+    }
+}
+
+use ratatui::buffer::Cell;
+use unicode_width::UnicodeWidthStr;
+
+#[derive(Debug)]
+enum DrawCommand<'a> {
+    Put { x: u16, y: u16, cell: &'a Cell },
+    ClearToEnd { x: u16, y: u16, bg: Color },
+}
+
+fn diff_buffers<'a>(a: &'a Buffer, b: &'a Buffer) -> Vec<DrawCommand<'a>> {
+    let previous_buffer = &a.content;
+    let next_buffer = &b.content;
+
+    let mut updates = vec![];
+    let mut last_nonblank_column = vec![0; a.area.height as usize];
+    for y in 0..a.area.height {
+        let row_start = y as usize * a.area.width as usize;
+        let row_end = row_start + a.area.width as usize;
+        let row = &next_buffer[row_start..row_end];
+        let bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
+
+        let x = row
+            .iter()
+            .rposition(|cell| cell.symbol() != " " || cell.bg != bg)
+            .unwrap_or(0);
+        last_nonblank_column[y as usize] = x as u16;
+        let (x_abs, y_abs) = a.pos_of(row_start + x + 1);
+        updates.push(DrawCommand::ClearToEnd {
+            x: x_abs,
+            y: y_abs,
+            bg,
+        });
+    }
+
+    // Cells invalidated by drawing/replacing preceding multi-width characters:
+    let mut invalidated: usize = 0;
+    // Cells from the current buffer to skip due to preceding multi-width characters taking
+    // their place (the skipped cells should be blank anyway), or due to per-cell-skipping:
+    let mut to_skip: usize = 0;
+    for (i, (current, previous)) in next_buffer.iter().zip(previous_buffer.iter()).enumerate() {
+        if !current.skip && (current != previous || invalidated > 0) && to_skip == 0 {
+            let (x, y) = a.pos_of(i);
+            let row = i / a.area.width as usize;
+            if x <= last_nonblank_column[row] {
+                updates.push(DrawCommand::Put {
+                    x,
+                    y,
+                    cell: &next_buffer[i],
+                });
+            }
+        }
+
+        to_skip = current.symbol().width().saturating_sub(1);
+
+        let affected_width = std::cmp::max(current.symbol().width(), previous.symbol().width());
+        invalidated = std::cmp::max(affected_width, invalidated).saturating_sub(1);
+    }
+    updates
+}
+
+fn draw<'a, I>(writer: &mut impl Write, commands: I) -> io::Result<()>
+where
+    I: Iterator<Item = DrawCommand<'a>>,
+{
+    let mut fg = Color::Reset;
+    let mut bg = Color::Reset;
+    let mut modifier = Modifier::empty();
+    let mut last_pos: Option<Position> = None;
+    for command in commands {
+        let (x, y) = match command {
+            DrawCommand::Put { x, y, .. } => (x, y),
+            DrawCommand::ClearToEnd { x, y, .. } => (x, y),
+        };
+        // Move the cursor if the previous location was not (x - 1, y)
+        if !matches!(last_pos, Some(p) if x == p.x + 1 && y == p.y) {
+            queue!(writer, MoveTo(x, y))?;
+        }
+        last_pos = Some(Position { x, y });
+        match command {
+            DrawCommand::Put { cell, .. } => {
+                if cell.modifier != modifier {
+                    let diff = ModifierDiff {
+                        from: modifier,
+                        to: cell.modifier,
+                    };
+                    diff.queue(writer)?;
+                    modifier = cell.modifier;
+                }
+                if cell.fg != fg || cell.bg != bg {
+                    queue!(
+                        writer,
+                        SetColors(Colors::new(cell.fg.into(), cell.bg.into()))
+                    )?;
+                    fg = cell.fg;
+                    bg = cell.bg;
+                }
+
+                queue!(writer, Print(cell.symbol()))?;
+            }
+            DrawCommand::ClearToEnd { bg: clear_bg, .. } => {
+                queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
+                modifier = Modifier::empty();
+                queue!(writer, SetBackgroundColor(clear_bg.into()))?;
+                bg = clear_bg;
+                queue!(writer, Clear(crossterm::terminal::ClearType::UntilNewLine))?;
+            }
+        }
+    }
+
+    queue!(
+        writer,
+        SetForegroundColor(crossterm::style::Color::Reset),
+        SetBackgroundColor(crossterm::style::Color::Reset),
+        SetAttribute(crossterm::style::Attribute::Reset),
+    )?;
+
+    Ok(())
+}
+
+/// The `ModifierDiff` struct is used to calculate the difference between two `Modifier`
+/// values. This is useful when updating the terminal display, as it allows for more
+/// efficient updates by only sending the necessary changes.
+struct ModifierDiff {
+    pub from: Modifier,
+    pub to: Modifier,
+}
+
+impl ModifierDiff {
+    fn queue<W: io::Write>(self, w: &mut W) -> io::Result<()> {
+        use crossterm::style::Attribute as CAttribute;
+        let removed = self.from - self.to;
+        if removed.contains(Modifier::REVERSED) {
+            queue!(w, SetAttribute(CAttribute::NoReverse))?;
+        }
+        if removed.contains(Modifier::BOLD) {
+            queue!(w, SetAttribute(CAttribute::NormalIntensity))?;
+            if self.to.contains(Modifier::DIM) {
+                queue!(w, SetAttribute(CAttribute::Dim))?;
+            }
+        }
+        if removed.contains(Modifier::ITALIC) {
+            queue!(w, SetAttribute(CAttribute::NoItalic))?;
+        }
+        if removed.contains(Modifier::UNDERLINED) {
+            queue!(w, SetAttribute(CAttribute::NoUnderline))?;
+        }
+        if removed.contains(Modifier::DIM) {
+            queue!(w, SetAttribute(CAttribute::NormalIntensity))?;
+        }
+        if removed.contains(Modifier::CROSSED_OUT) {
+            queue!(w, SetAttribute(CAttribute::NotCrossedOut))?;
+        }
+        if removed.contains(Modifier::SLOW_BLINK) || removed.contains(Modifier::RAPID_BLINK) {
+            queue!(w, SetAttribute(CAttribute::NoBlink))?;
+        }
+
+        let added = self.to - self.from;
+        if added.contains(Modifier::REVERSED) {
+            queue!(w, SetAttribute(CAttribute::Reverse))?;
+        }
+        if added.contains(Modifier::BOLD) {
+            queue!(w, SetAttribute(CAttribute::Bold))?;
+        }
+        if added.contains(Modifier::ITALIC) {
+            queue!(w, SetAttribute(CAttribute::Italic))?;
+        }
+        if added.contains(Modifier::UNDERLINED) {
+            queue!(w, SetAttribute(CAttribute::Underlined))?;
+        }
+        if added.contains(Modifier::DIM) {
+            queue!(w, SetAttribute(CAttribute::Dim))?;
+        }
+        if added.contains(Modifier::CROSSED_OUT) {
+            queue!(w, SetAttribute(CAttribute::CrossedOut))?;
+        }
+        if added.contains(Modifier::SLOW_BLINK) {
+            queue!(w, SetAttribute(CAttribute::SlowBlink))?;
+        }
+        if added.contains(Modifier::RAPID_BLINK) {
+            queue!(w, SetAttribute(CAttribute::RapidBlink))?;
+        }
+
+        Ok(())
     }
 }
