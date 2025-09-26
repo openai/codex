@@ -32,7 +32,7 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
     // Keep tmpdir alive until function end to ensure the file exists
     let _guard = tmpdir;
 
-    if req.revert {
+    if req.revert && !req.preflight {
         // Stage WT paths first to avoid index mismatch on revert.
         stage_paths(&git_root, &req.diff)?;
     }
@@ -607,6 +607,51 @@ mod tests {
         assert_eq!(res_revert.exit_code, 0, "revert apply succeeded");
         let after_revert = read_file_normalized(&root.join("file.txt"));
         assert_eq!(after_revert, "orig\n");
+    }
+
+    #[test]
+    fn revert_preflight_does_not_stage_index() {
+        let _g = env_lock().lock().unwrap();
+        let repo = init_repo();
+        let root = repo.path();
+        // Seed repo and apply forward patch so the working tree reflects the change.
+        std::fs::write(root.join("file.txt"), "orig\n").unwrap();
+        let _ = run(root, &["git", "add", "file.txt"]);
+        let _ = run(root, &["git", "commit", "-m", "seed"]);
+
+        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-orig\n+ORIG\n";
+        let apply_req = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.to_string(),
+            revert: false,
+            preflight: false,
+        };
+        let res_apply = apply_git_patch(&apply_req).expect("apply ok");
+        assert_eq!(res_apply.exit_code, 0, "forward apply succeeded");
+        let (commit_code, _, commit_err) = run(root, &["git", "commit", "-am", "apply change"]);
+        assert_eq!(commit_code, 0, "commit applied change: {commit_err}");
+
+        let (_code_before, staged_before, _stderr_before) =
+            run(root, &["git", "diff", "--cached", "--name-only"]);
+
+        let preflight_req = ApplyGitRequest {
+            cwd: root.to_path_buf(),
+            diff: diff.to_string(),
+            revert: true,
+            preflight: true,
+        };
+        let res_preflight = apply_git_patch(&preflight_req).expect("preflight ok");
+        assert_eq!(res_preflight.exit_code, 0, "revert preflight succeeded");
+        let (_code_after, staged_after, _stderr_after) =
+            run(root, &["git", "diff", "--cached", "--name-only"]);
+        assert_eq!(
+            staged_after.trim(),
+            staged_before.trim(),
+            "preflight should not stage new paths",
+        );
+
+        let after_preflight = read_file_normalized(&root.join("file.txt"));
+        assert_eq!(after_preflight, "ORIG\n");
     }
 
     #[test]
