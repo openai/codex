@@ -63,8 +63,6 @@ struct EchoArgs {
 impl ServerHandler for TestToolServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            // name: Cow::Borrowed("codex-rmcp-test-server"),
-            // version: Some(Cow::Borrowed("0.1.0")),
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()

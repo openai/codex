@@ -22,7 +22,7 @@ where
     if let Some(duration) = timeout {
         let result = time::timeout(duration, fut)
             .await
-            .map_err(|_| anyhow!("timed out awaiting {label} after {duration:?}"))?;
+            .with_context(|| anyhow!("timed out awaiting {label} after {duration:?}"))?;
         result.map_err(|err| anyhow!("{label} failed: {err}"))
     } else {
         fut.await.map_err(|err| anyhow!("{label} failed: {err}"))
