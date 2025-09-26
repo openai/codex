@@ -171,7 +171,10 @@ impl StatusHistoryCell {
                 lines
             }
             StatusRateLimitData::Missing => {
-                vec![formatter.line("Limits", vec![Span::from("data not available yet").dim()])]
+                vec![formatter.line(
+                    "Limits",
+                    vec![Span::from("send a message to load usage data").dim()],
+                )]
             }
         }
     }

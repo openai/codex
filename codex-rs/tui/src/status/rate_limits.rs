@@ -105,7 +105,7 @@ pub(crate) fn compose_rate_limit_data(
             }
 
             if rows.is_empty() {
-                StatusRateLimitData::Missing
+                StatusRateLimitData::Available(vec![])
             } else {
                 StatusRateLimitData::Available(rows)
             }
