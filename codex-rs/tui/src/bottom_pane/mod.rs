@@ -16,7 +16,8 @@ use ratatui::widgets::WidgetRef;
 use std::time::Duration;
 
 mod approval_overlay;
-pub(crate) use approval_overlay::{ApprovalOverlay, ApprovalRequest};
+pub(crate) use approval_overlay::ApprovalOverlay;
+pub(crate) use approval_overlay::ApprovalRequest;
 mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
