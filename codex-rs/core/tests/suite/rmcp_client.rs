@@ -19,7 +19,7 @@ use serde_json::Value;
 use wiremock::matchers::any;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
+async fn rmcp_stdio_tool_call_round_trip() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -54,7 +54,7 @@ async fn rmcp_tool_call_round_trip() -> anyhow::Result<()> {
     let expected_env_value = "propagated-env";
     let rmcp_test_server_bin = CargoBuild::new()
         .package("codex-rmcp-client")
-        .bin("rmcp_test_server")
+        .bin("rmcp_test_stdio_server")
         .run()?
         .path()
         .to_string_lossy()

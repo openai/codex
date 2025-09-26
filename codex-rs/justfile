@@ -27,6 +27,9 @@ fmt:
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"
 
+clippy:
+    cargo clippy --all-features --tests --allow-dirty "$@"
+
 install:
     rustup show active-toolchain
     cargo fetch
