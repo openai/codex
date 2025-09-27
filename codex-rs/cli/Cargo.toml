@@ -33,6 +33,7 @@ ctor = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
+toml_edit = "0.23.4"
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -57,3 +58,4 @@ assert_cmd = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+toml = "0.9.5"
