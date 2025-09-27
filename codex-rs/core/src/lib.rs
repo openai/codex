@@ -61,6 +61,7 @@ pub mod plan_tool;
 pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
+pub mod sandbox;
 pub mod seatbelt;
 pub mod shell;
 pub mod spawn;

@@ -27,6 +27,7 @@ pub(crate) enum InternalApplyPatchInvocation {
     DelegateToExec(ApplyPatchExec),
 }
 
+#[derive(Debug)]
 pub(crate) struct ApplyPatchExec {
     pub(crate) action: ApplyPatchAction,
     pub(crate) user_explicitly_approved_this_action: bool,

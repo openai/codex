@@ -42,7 +42,6 @@ use tracing::warn;
 use crate::ModelProviderInfo;
 use crate::apply_patch;
 use crate::apply_patch::ApplyPatchExec;
-use crate::apply_patch::CODEX_APPLY_PATCH_ARG1;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
@@ -61,7 +60,6 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
-use crate::exec::process_exec_tool_call;
 use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
 use crate::exec_command::ExecSessionManager;
@@ -111,9 +109,12 @@ use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
-use crate::safety::SafetyCheck;
-use crate::safety::assess_command_safety;
-use crate::safety::assess_safety_for_untrusted_command;
+use crate::sandbox::BackendRegistry;
+use crate::sandbox::ExecPlan;
+use crate::sandbox::ExecRuntimeContext;
+use crate::sandbox::PreparedExec;
+use crate::sandbox::prepare_exec_invocation;
+use crate::sandbox::run_with_plan;
 use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -913,15 +914,24 @@ impl Session {
         self.on_exec_command_begin(turn_diff_tracker, begin_ctx.clone())
             .await;
 
-        let result = process_exec_tool_call(
-            exec_args.params,
-            exec_args.sandbox_type,
-            exec_args.sandbox_policy,
-            exec_args.sandbox_cwd,
-            exec_args.codex_linux_sandbox_exe,
-            exec_args.stdout_stream,
-        )
-        .await;
+        let ExecInvokeArgs {
+            params,
+            plan,
+            sandbox_policy,
+            sandbox_cwd,
+            codex_linux_sandbox_exe,
+            stdout_stream,
+        } = exec_args;
+
+        let registry = BackendRegistry::new();
+        let runtime_ctx = ExecRuntimeContext {
+            sandbox_policy,
+            sandbox_cwd,
+            codex_linux_sandbox_exe,
+            stdout_stream,
+        };
+
+        let result = run_with_plan(params, &plan, &registry, &runtime_ctx).await;
 
         let output_stderr;
         let borrowed: &ExecToolCallOutput = match &result {
@@ -2522,7 +2532,7 @@ fn parse_container_exec_arguments(
 
 pub struct ExecInvokeArgs<'a> {
     pub params: ExecParams,
-    pub sandbox_type: SandboxType,
+    pub plan: ExecPlan,
     pub sandbox_policy: &'a SandboxPolicy,
     pub sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
@@ -2589,125 +2599,54 @@ async fn handle_container_exec_with_params(
         MaybeApplyPatchVerified::NotApplyPatch => None,
     };
 
-    let (params, safety, command_for_display) = match &apply_patch_exec {
-        Some(ApplyPatchExec {
-            action: ApplyPatchAction { patch, cwd, .. },
-            user_explicitly_approved_this_action,
-        }) => {
-            let path_to_codex = std::env::current_exe()
-                .ok()
-                .map(|p| p.to_string_lossy().to_string());
-            let Some(path_to_codex) = path_to_codex else {
-                return Err(FunctionCallError::RespondToModel(
-                    "failed to determine path to codex executable".to_string(),
-                ));
-            };
-
-            let params = ExecParams {
-                command: vec![
-                    path_to_codex,
-                    CODEX_APPLY_PATCH_ARG1.to_string(),
-                    patch.clone(),
-                ],
-                cwd: cwd.clone(),
-                timeout_ms: params.timeout_ms,
-                env: HashMap::new(),
-                with_escalated_permissions: params.with_escalated_permissions,
-                justification: params.justification.clone(),
-            };
-            let safety = if *user_explicitly_approved_this_action {
-                SafetyCheck::AutoApprove {
-                    sandbox_type: SandboxType::None,
-                }
-            } else {
-                assess_safety_for_untrusted_command(
-                    turn_context.approval_policy,
-                    &turn_context.sandbox_policy,
-                    params.with_escalated_permissions.unwrap_or(false),
-                )
-            };
-            (
-                params,
-                safety,
-                vec!["apply_patch".to_string(), patch.clone()],
-            )
-        }
-        None => {
-            let safety = {
-                let state = sess.state.lock().await;
-                assess_command_safety(
-                    &params.command,
-                    turn_context.approval_policy,
-                    &turn_context.sandbox_policy,
-                    state.approved_commands_ref(),
-                    params.with_escalated_permissions.unwrap_or(false),
-                )
-            };
-            let command_for_display = params.command.clone();
-            (params, safety, command_for_display)
-        }
+    let approved_session_commands = {
+        let state = sess.state.lock().await;
+        state.approved_commands_ref().clone()
     };
 
-    let sandbox_type = match safety {
-        SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
-        SafetyCheck::AskUser => {
-            let decision = sess
-                .request_command_approval(
-                    sub_id.clone(),
-                    call_id.clone(),
-                    params.command.clone(),
-                    params.cwd.clone(),
-                    params.justification.clone(),
-                )
-                .await;
-            match decision {
-                ReviewDecision::Approved => (),
-                ReviewDecision::ApprovedForSession => {
-                    sess.add_approved_command(params.command.clone()).await;
-                }
-                ReviewDecision::Denied | ReviewDecision::Abort => {
-                    return Err(FunctionCallError::RespondToModel(
-                        "exec command rejected by user".to_string(),
-                    ));
-                }
-            }
-            // No sandboxing is applied because the user has given
-            // explicit approval. Often, we end up in this case because
-            // the command cannot be run in a sandbox, such as
-            // installing a new dependency that requires network access.
-            SandboxType::None
-        }
-        SafetyCheck::Reject { reason } => {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "exec command rejected: {reason:?}"
-            )));
-        }
-    };
+    let prepared = prepare_exec_invocation(
+        sess,
+        turn_context,
+        &sub_id,
+        &call_id,
+        params,
+        apply_patch_exec,
+        approved_session_commands,
+    )
+    .await?;
+
+    let PreparedExec {
+        params,
+        plan,
+        command_for_display,
+        apply_patch_exec,
+    } = prepared;
 
     let exec_command_context = ExecCommandContext {
         sub_id: sub_id.clone(),
         call_id: call_id.clone(),
         command_for_display: command_for_display.clone(),
         cwd: params.cwd.clone(),
-        apply_patch: apply_patch_exec.map(
+        apply_patch: apply_patch_exec.as_ref().map(
             |ApplyPatchExec {
                  action,
                  user_explicitly_approved_this_action,
              }| ApplyPatchCommandContext {
-                user_explicitly_approved_this_action,
-                changes: convert_apply_patch_to_protocol(&action),
+                user_explicitly_approved_this_action: *user_explicitly_approved_this_action,
+                changes: convert_apply_patch_to_protocol(action),
             },
         ),
     };
 
     let params = maybe_translate_shell_command(params, sess, turn_context);
+    let plan_for_invocation = plan.clone();
     let output_result = sess
         .run_exec_with_events(
             turn_diff_tracker,
             exec_command_context.clone(),
             ExecInvokeArgs {
                 params: params.clone(),
-                sandbox_type,
+                plan: plan_for_invocation,
                 sandbox_policy: &turn_context.sandbox_policy,
                 sandbox_cwd: &turn_context.cwd,
                 codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
@@ -2740,7 +2679,7 @@ async fn handle_container_exec_with_params(
                 params,
                 exec_command_context,
                 error,
-                sandbox_type,
+                &plan,
                 sess,
                 turn_context,
             )
@@ -2757,7 +2696,7 @@ async fn handle_sandbox_error(
     params: ExecParams,
     exec_command_context: ExecCommandContext,
     error: SandboxErr,
-    sandbox_type: SandboxType,
+    plan: &ExecPlan,
     sess: &Session,
     turn_context: &TurnContext,
 ) -> Result<String, FunctionCallError> {
@@ -2770,15 +2709,21 @@ async fn handle_sandbox_error(
         return Err(FunctionCallError::RespondToModel(content));
     }
 
-    // Early out if either the user never wants to be asked for approval, or
-    // we're letting the model manage escalation requests. Otherwise, continue
-    match turn_context.approval_policy {
-        AskForApproval::Never | AskForApproval::OnRequest => {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "failed in sandbox {sandbox_type:?} with execution error: {error:?}"
-            )));
-        }
-        AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
+    let ExecPlan::Approved {
+        sandbox: sandbox_type,
+        on_failure_escalate,
+        ..
+    } = plan
+    else {
+        return Err(FunctionCallError::RespondToModel(
+            "execution failed without an approved plan".to_string(),
+        ));
+    };
+
+    if !on_failure_escalate {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "failed in sandbox {sandbox_type:?} with execution error: {error:?}"
+        )));
     }
 
     // Note that when `error` is `SandboxErr::Denied`, it could be a false
@@ -2793,11 +2738,12 @@ async fn handle_sandbox_error(
     sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
         .await;
 
+    let command_for_retry = params.command.clone();
     let decision = sess
         .request_command_approval(
             sub_id.clone(),
             call_id.clone(),
-            params.command.clone(),
+            command_for_retry.clone(),
             cwd.clone(),
             Some("command failed; retry without sandbox?".to_string()),
         )
@@ -2809,7 +2755,7 @@ async fn handle_sandbox_error(
             // remainder of the session so future
             // executions skip the sandbox directly.
             // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
-            sess.add_approved_command(params.command.clone()).await;
+            sess.add_approved_command(command_for_retry.clone()).await;
             // Inform UI we are retrying without sandbox.
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
@@ -2822,7 +2768,7 @@ async fn handle_sandbox_error(
                     exec_command_context.clone(),
                     ExecInvokeArgs {
                         params,
-                        sandbox_type: SandboxType::None,
+                        plan: ExecPlan::approved(SandboxType::None, false, true),
                         sandbox_policy: &turn_context.sandbox_policy,
                         sandbox_cwd: &turn_context.cwd,
                         codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
