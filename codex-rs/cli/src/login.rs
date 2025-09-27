@@ -7,6 +7,8 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
+use std::io::{self, Write};
+use std::net::TcpStream;
 use codex_protocol::mcp_protocol::AuthMode;
 use std::path::PathBuf;
 
@@ -15,9 +17,62 @@ pub async fn login_with_chatgpt(codex_home: PathBuf) -> std::io::Result<()> {
     let server = run_login_server(opts)?;
 
     eprintln!(
-        "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
-        server.actual_port, server.auth_url,
+        "\nStarting local login server on http://localhost:{}.\n\
+If your browser did not open, use ANY browser to visit:\n\n{}\n",
+        server.actual_port, server.auth_url
     );
+
+    eprintln!("If the browser cannot reach localhost, paste the final redirected URL here.");
+    eprintln!("(Or paste `code=<...>&state=<...>`). Press Enter to skip and just wait.\n");
+
+    eprint!("paste> ");
+    io::stderr().flush().ok();
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    let paste = line.trim();
+
+    if !paste.is_empty() {
+        let (code, state) = if paste.contains("code=") {
+            let q = if paste.starts_with("http") {
+                url::Url::parse(paste)
+                    .ok()
+                    .and_then(|u| u.query().map(|s| s.to_string()))
+                    .unwrap_or_else(|| paste.to_string())
+            } else {
+                paste.to_string()
+            };
+            let mut code = None::<String>;
+            let mut state = None::<String>;
+            for pair in q.split('&') {
+                if let Some((k, v)) = pair.split_once('=') {
+                    match k {
+                        "code" => code = Some(v.to_string()),
+                        "state" => state = Some(v.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+            (code.unwrap_or_default(), state.unwrap_or_default())
+        } else {
+            (paste.to_string(), String::new())
+        };
+
+        if !code.is_empty() {
+            let path = format!(
+                "/auth/callback?code={}&state={}",
+                urlencoding::encode(&code),
+                urlencoding::encode(&state)
+            );
+            let req = format!(
+                "GET {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                path
+            );
+            let mut stream =
+                TcpStream::connect(("127.0.0.1", server.actual_port))?;
+            use std::io::Write as _;
+            stream.write_all(req.as_bytes())?;
+        }
+    }
 
     server.block_until_done().await
 }
