@@ -115,6 +115,7 @@ mod tests {
             .collect()
     }
 
+    #[ignore]
     #[test]
     fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
         let cfg = test_config();

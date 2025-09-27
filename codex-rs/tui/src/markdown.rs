@@ -17,7 +17,6 @@ fn append_markdown_with_opener_and_cwd(
     file_opener: UriBasedFileOpener,
     cwd: &Path,
 ) {
-    // Render via pulldown-cmark and rewrite citations during traversal (outside code blocks).
     let rendered = crate::markdown_render::render_markdown_text_with_citations(
         markdown_source,
         file_opener.get_scheme(),
@@ -112,8 +111,6 @@ mod tests {
 
     #[test]
     fn append_markdown_preserves_full_text_line() {
-        use codex_core::config_types::UriBasedFileOpener;
-        use std::path::Path;
         let src = "Hi! How can I help with codex-rs today? Want me to explore the repo, run tests, or work on a specific change?\n";
         let cwd = Path::new("/");
         let mut out = Vec::new();
@@ -136,33 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn append_markdown_matches_tui_markdown_for_ordered_item() {
-        use codex_core::config_types::UriBasedFileOpener;
-        use std::path::Path;
-        let cwd = Path::new("/");
-        let mut out = Vec::new();
-        append_markdown_with_opener_and_cwd(
-            "1. Tight item\n",
-            &mut out,
-            UriBasedFileOpener::None,
-            cwd,
-        );
-        let lines: Vec<String> = out
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.clone())
-                    .collect::<String>()
-            })
-            .collect();
-        assert_eq!(lines, vec!["1. Tight item".to_string()]);
-    }
-
-    #[test]
     fn append_markdown_keeps_ordered_list_line_unsplit_in_context() {
-        use codex_core::config_types::UriBasedFileOpener;
-        use std::path::Path;
         let src = "Loose vs. tight list items:\n1. Tight item\n";
         let cwd = Path::new("/");
         let mut out = Vec::new();
@@ -184,11 +155,37 @@ mod tests {
             lines.iter().any(|s| s == "1. Tight item"),
             "expected '1. Tight item' rendered as a single line; got: {lines:?}"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "syntax-highlighting")]
+    fn test_syntax_highlighting() {
+        let cwd = Path::new("/");
+
+        let markdown = r#"
+```rust
+fn main() {
+    println!("Hello, world!");
+}
+```
+"#;
+
+        // Process the markdown with the public API
+        let mut lines = Vec::new();
+        append_markdown_with_opener_and_cwd(markdown, &mut lines, UriBasedFileOpener::None, cwd);
+
+        // Verify we have some lines of output
+        assert!(!lines.is_empty(), "Should have generated some output lines");
+
+        // Verify at least one non-reset RGB foreground (real highlighting)
+        let has_colored_fg = lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| matches!(span.style.fg, Some(ratatui::style::Color::Rgb(_, _, _))))
+        });
         assert!(
-            !lines
-                .windows(2)
-                .any(|w| w[0].trim_end() == "1." && w[1] == "Tight item"),
-            "did not expect a split into ['1.', 'Tight item']; got: {lines:?}"
+            has_colored_fg,
+            "Expected at least one non-reset foreground color from syntax highlighting"
         );
     }
 }

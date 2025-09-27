@@ -7,6 +7,7 @@ use pulldown_cmark::Options;
 use pulldown_cmark::Parser;
 use pulldown_cmark::Tag;
 use pulldown_cmark::TagEnd;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -14,6 +15,23 @@ use ratatui::text::Span;
 use ratatui::text::Text;
 use std::borrow::Cow;
 use std::path::Path;
+
+#[cfg(feature = "syntax-highlighting")]
+use once_cell::sync::Lazy;
+#[cfg(feature = "syntax-highlighting")]
+use syntect::easy::HighlightLines;
+#[cfg(feature = "syntax-highlighting")]
+use syntect::highlighting::{Color as SyntectColor, ThemeSet};
+#[cfg(feature = "syntax-highlighting")]
+use syntect::parsing::SyntaxSet;
+
+#[allow(clippy::disallowed_methods)]
+const DEFAULT_CODE_BG: Color = Color::Rgb(40, 44, 52);
+
+#[cfg(feature = "syntax-highlighting")]
+static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
+#[cfg(feature = "syntax-highlighting")]
+static THEME: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
 
 #[derive(Clone, Debug)]
 struct IndentContext {
@@ -32,6 +50,44 @@ impl IndentContext {
     }
 }
 
+#[cfg(feature = "syntax-highlighting")]
+fn get_syntax_definition(language: Option<&str>) -> &'static syntect::parsing::SyntaxReference {
+    let raw = language.unwrap_or("txt").trim().to_lowercase();
+    let token = raw
+        .split_whitespace()
+        .next()
+        .unwrap_or("txt")
+        .trim_start_matches("{.")
+        .trim_start_matches('.')
+        .trim_end_matches('}')
+        .split(|c| [',', ';'].contains(&c))
+        .next()
+        .unwrap_or("txt");
+
+    if token.is_empty()
+        || matches!(
+            token,
+            "nohighlight" | "text" | "plain" | "plaintext" | "txt"
+        )
+    {
+        SYNTAX_SET.find_syntax_plain_text()
+    } else {
+        SYNTAX_SET
+            .find_syntax_by_token(token)
+            .or_else(|| SYNTAX_SET.find_syntax_by_extension(token))
+            .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
+    }
+}
+
+#[cfg(feature = "syntax-highlighting")]
+fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
+    if color.a == 0 {
+        None
+    } else {
+        Some(Color::Rgb(color.r, color.g, color.b))
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) fn render_markdown_text(input: &str) -> Text<'static> {
     let mut options = Options::empty();
@@ -42,6 +98,7 @@ pub(crate) fn render_markdown_text(input: &str) -> Text<'static> {
     w.text
 }
 
+#[allow(dead_code)]
 pub(crate) fn render_markdown_text_with_citations(
     input: &str,
     scheme: Option<&str>,
@@ -71,6 +128,10 @@ where
     scheme: Option<String>,
     cwd: Option<std::path::PathBuf>,
     in_code_block: bool,
+    #[cfg(feature = "syntax-highlighting")]
+    current_highlighter: Option<HighlightLines<'static>>,
+    #[cfg(feature = "syntax-highlighting")]
+    current_code_lang: Option<String>,
 }
 
 impl<'a, I> Writer<'a, I>
@@ -91,6 +152,10 @@ where
             scheme,
             cwd,
             in_code_block: false,
+            #[cfg(feature = "syntax-highlighting")]
+            current_highlighter: None,
+            #[cfg(feature = "syntax-highlighting")]
+            current_code_lang: None,
         }
     }
 
@@ -253,23 +318,54 @@ where
                 self.push_line(Line::default());
                 self.needs_newline = false;
             }
-            if i > 0 {
+            if i > 0 && !self.in_code_block {
                 self.push_line(Line::default());
             }
-            let mut content = line.to_string();
-            if !self.in_code_block
-                && let (Some(scheme), Some(cwd)) = (&self.scheme, &self.cwd)
-            {
-                let cow = rewrite_file_citations_with_scheme(&content, Some(scheme.as_str()), cwd);
-                if let std::borrow::Cow::Owned(s) = cow {
-                    content = s;
+            if self.in_code_block {
+                #[cfg(feature = "syntax-highlighting")]
+                if let Some(highlighter) = &mut self.current_highlighter {
+                    let ranges: Vec<(syntect::highlighting::Style, &str)> = highlighter
+                        .highlight_line(line, &SYNTAX_SET)
+                        .unwrap_or_else(|_| vec![(syntect::highlighting::Style::default(), line)]);
+                    let spans: Vec<Span> = ranges
+                        .into_iter()
+                        .map(|(syn_style, text)| {
+                            let fg = syn_style.foreground;
+                            let mut style = Style::default()
+                                .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
+                            if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
+                                style = style.bg(bg_color);
+                            } else {
+                                style = style.bg(DEFAULT_CODE_BG);
+                            }
+                            Span::styled(text.to_string(), style)
+                        })
+                        .collect();
+                    self.push_line(Line::from(spans));
+                } else {
+                    let span = Span::styled(line.to_string(), Style::default().bg(DEFAULT_CODE_BG));
+                    self.push_line(Line::from(span));
                 }
+                #[cfg(not(feature = "syntax-highlighting"))]
+                {
+                    let span = Span::styled(line.to_string(), Style::default().bg(DEFAULT_CODE_BG));
+                    self.push_line(Line::from(span));
+                }
+            } else {
+                let mut content = line.to_string();
+                if let (Some(scheme), Some(cwd)) = (&self.scheme, &self.cwd) {
+                    let cow =
+                        rewrite_file_citations_with_scheme(&content, Some(scheme.as_str()), cwd);
+                    if let std::borrow::Cow::Owned(s) = cow {
+                        content = s;
+                    }
+                }
+                let span = Span::styled(
+                    content,
+                    self.inline_styles.last().copied().unwrap_or_default(),
+                );
+                self.push_span(span);
             }
-            let span = Span::styled(
-                content,
-                self.inline_styles.last().copied().unwrap_or_default(),
-            );
-            self.push_span(span);
         }
         self.needs_newline = false;
     }
@@ -350,11 +446,33 @@ where
         self.needs_newline = false;
     }
 
-    fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
+    fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
         if !self.text.lines.is_empty() {
             self.push_blank_line();
         }
         self.in_code_block = true;
+        #[cfg(feature = "syntax-highlighting")]
+        {
+            self.current_code_lang = lang.clone();
+            if let Some(lang) = &lang {
+                let syntax = get_syntax_definition(Some(lang));
+                let theme = match THEME
+                    .themes
+                    .get("base16-ocean.dark")
+                    .or_else(|| THEME.themes.get("InspiredGitHub"))
+                    .or_else(|| THEME.themes.values().next())
+                {
+                    Some(t) => t,
+                    None => {
+                        self.current_highlighter = None;
+                        return;
+                    }
+                };
+                self.current_highlighter = Some(HighlightLines::new(syntax, theme));
+            } else {
+                self.current_highlighter = None;
+            }
+        }
         self.indent_stack.push(IndentContext::new(
             vec![indent.unwrap_or_default()],
             None,
@@ -372,6 +490,11 @@ where
         // self.push_line("```".into());
         self.needs_newline = true;
         self.in_code_block = false;
+        #[cfg(feature = "syntax-highlighting")]
+        {
+            self.current_highlighter = None;
+            self.current_code_lang = None;
+        }
         self.indent_stack.pop();
     }
 
