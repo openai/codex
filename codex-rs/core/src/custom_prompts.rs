@@ -12,10 +12,46 @@ pub fn default_prompts_dir() -> Option<PathBuf> {
         .map(|home| home.join("prompts"))
 }
 
+/// Return the project-level prompts directory rooted at the provided `cwd`.
+/// The directory does not need to exist; callers should rely on
+/// [`discover_prompts_in`] handling missing paths gracefully.
+pub fn project_prompts_dir(cwd: &Path) -> PathBuf {
+    cwd.join(".codex").join("prompts")
+}
+
 /// Discover prompt files in the given directory, returning entries sorted by name.
 /// Non-files are ignored. If the directory does not exist or cannot be read, returns empty.
 pub async fn discover_prompts_in(dir: &Path) -> Vec<CustomPrompt> {
     discover_prompts_in_excluding(dir, &HashSet::new()).await
+}
+
+/// Combine prompts discovered in the project-level and global directories.
+/// Prompts from the project-level directory take precedence when names collide.
+pub async fn discover_prompts_from_sources(
+    project_dir: Option<PathBuf>,
+    global_dir: Option<PathBuf>,
+) -> Vec<CustomPrompt> {
+    let mut seen = HashSet::new();
+    let mut out: Vec<CustomPrompt> = Vec::new();
+
+    if let Some(dir) = project_dir {
+        for prompt in discover_prompts_in(&dir).await {
+            if seen.insert(prompt.name.clone()) {
+                out.push(prompt);
+            }
+        }
+    }
+
+    if let Some(dir) = global_dir {
+        for prompt in discover_prompts_in(&dir).await {
+            if seen.insert(prompt.name.clone()) {
+                out.push(prompt);
+            }
+        }
+    }
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// Discover prompt files in the given directory, excluding any with names in `exclude`.
@@ -77,6 +113,7 @@ pub async fn discover_prompts_in_excluding(
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -123,5 +160,66 @@ mod tests {
         let found = discover_prompts_in(dir).await;
         let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
         assert_eq!(names, vec!["good"]);
+    }
+
+    #[test]
+    fn project_prompts_dir_points_to_dot_codex() {
+        let base = Path::new("/workspace/project");
+        let expected = base.join(".codex").join("prompts");
+        assert_eq!(project_prompts_dir(base), expected);
+    }
+
+    #[tokio::test]
+    async fn project_prompts_override_global_prompts() {
+        let project_tmp = tempdir().expect("project tempdir");
+        let project_prompts = project_tmp.path().join(".codex").join("prompts");
+        fs::create_dir_all(&project_prompts).unwrap();
+        fs::write(project_prompts.join("shared.md"), b"from project").unwrap();
+        fs::write(project_prompts.join("project.md"), b"project only").unwrap();
+
+        let global_tmp = tempdir().expect("global tempdir");
+        let global_prompts = global_tmp.path();
+        fs::write(global_prompts.join("shared.md"), b"from global").unwrap();
+        fs::write(global_prompts.join("global.md"), b"global only").unwrap();
+
+        let combined = discover_prompts_from_sources(
+            Some(project_prompts.clone()),
+            Some(global_prompts.to_path_buf()),
+        )
+        .await;
+
+        let mut names: Vec<String> = combined.iter().map(|c| c.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, vec!["global", "project", "shared"]);
+
+        let shared = combined
+            .iter()
+            .find(|c| c.name == "shared")
+            .expect("shared prompt present");
+        assert_eq!(shared.content, "from project");
+
+        let global_only = combined
+            .iter()
+            .find(|c| c.name == "global")
+            .expect("global prompt present");
+        assert_eq!(global_only.content, "global only");
+
+        let project_only = combined
+            .iter()
+            .find(|c| c.name == "project")
+            .expect("project prompt present");
+        assert_eq!(project_only.content, "project only");
+    }
+
+    #[tokio::test]
+    async fn combined_prompts_include_global_when_project_missing() {
+        let global_tmp = tempdir().expect("global tempdir");
+        let global_prompts = global_tmp.path();
+        fs::write(global_prompts.join("only-global.md"), b"hello").unwrap();
+
+        let combined =
+            discover_prompts_from_sources(None, Some(global_prompts.to_path_buf())).await;
+        let names: Vec<String> = combined.into_iter().map(|c| c.name).collect();
+        assert_eq!(names, vec!["only-global"]);
     }
 }

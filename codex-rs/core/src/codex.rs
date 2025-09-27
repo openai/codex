@@ -127,7 +127,6 @@ use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
@@ -1332,13 +1331,14 @@ async fn submission_loop(
             }
             Op::ListCustomPrompts => {
                 let sub_id = sub.id.clone();
-
-                let custom_prompts: Vec<CustomPrompt> =
-                    if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
-                        crate::custom_prompts::discover_prompts_in(&dir).await
-                    } else {
-                        Vec::new()
-                    };
+                let config = config.clone();
+                let project_dir = crate::custom_prompts::project_prompts_dir(&config.cwd);
+                let global_dir = crate::custom_prompts::default_prompts_dir();
+                let custom_prompts = crate::custom_prompts::discover_prompts_from_sources(
+                    Some(project_dir),
+                    global_dir,
+                )
+                .await;
 
                 let event = Event {
                     id: sub_id,
