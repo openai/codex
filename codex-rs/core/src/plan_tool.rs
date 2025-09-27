@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
+use crate::openai_tools::AdditionalProperties;
 use crate::openai_tools::JsonSchema;
 use crate::openai_tools::OpenAiTool;
 use crate::openai_tools::ResponsesApiTool;
@@ -32,7 +33,7 @@ pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
         items: Box::new(JsonSchema::Object {
             properties: plan_item_props,
             required: Some(vec!["step".to_string(), "status".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(AdditionalProperties::Bool(false)),
         }),
     };
 
@@ -54,7 +55,7 @@ At most one step can be in_progress at a time.
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["plan".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(AdditionalProperties::Bool(false)),
         },
     })
 });
