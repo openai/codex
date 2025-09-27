@@ -1542,7 +1542,7 @@ mod tests {
             .content()
             .iter()
             .skip((area.width as usize) * (area.height as usize - 1))
-            .map(|cell| cell.symbol())
+            .map(ratatui::buffer::Cell::symbol)
             .collect::<Vec<_>>()
             .join("");
         assert!(footer.contains("⌃O env"));
