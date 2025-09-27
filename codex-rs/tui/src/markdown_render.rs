@@ -84,6 +84,7 @@ fn get_syntax_definition(language: Option<&str>) -> &'static syntect::parsing::S
 }
 
 #[cfg(feature = "syntax-highlighting")]
+#[allow(clippy::disallowed_methods)]
 fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
     if color.a == 0 {
         None
