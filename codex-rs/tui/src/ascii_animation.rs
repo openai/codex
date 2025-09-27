@@ -90,6 +90,7 @@ impl AsciiAnimation {
         true
     }
 
+    #[allow(dead_code)]
     pub(crate) fn request_frame(&self) {
         self.request_frame.schedule_frame();
     }
