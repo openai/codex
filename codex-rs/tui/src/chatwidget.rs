@@ -254,6 +254,8 @@ pub(crate) struct ChatWidget {
     // List of ghost commits corresponding to each turn.
     ghost_snapshots: Vec<GhostCommit>,
     ghost_snapshots_disabled: bool,
+    // Whether to add a final message separator after the last message
+    needs_final_message_separator: bool,
 }
 
 struct UserMessage {
@@ -648,6 +650,14 @@ impl ChatWidget {
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
+            if self.needs_final_message_separator {
+                let elapsed_seconds = self
+                    .bottom_pane
+                    .status_widget()
+                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
+                self.needs_final_message_separator = false;
+            }
             self.stream_controller = Some(StreamController::new(self.config.clone()));
         }
         if let Some(controller) = self.stream_controller.as_mut()
@@ -901,6 +911,7 @@ impl ChatWidget {
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
+            needs_final_message_separator: false,
         }
     }
 
@@ -962,6 +973,7 @@ impl ChatWidget {
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
+            needs_final_message_separator: false,
         }
     }
 
@@ -1188,6 +1200,7 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
+            self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
     }
@@ -1200,6 +1213,7 @@ impl ChatWidget {
         if !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
+            self.needs_final_message_separator = true;
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
@@ -1241,6 +1255,7 @@ impl ChatWidget {
         if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
+        self.needs_final_message_separator = false;
     }
 
     fn capture_ghost_snapshot(&mut self) {
