@@ -92,6 +92,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
     );
     state.load_initial_page().await?;
     state.request_frame();
+    draw_picker(alt.tui, &state)?;
 
     let mut tui_events = alt.tui.event_stream().fuse();
     let mut background_events = UnboundedReceiverStream::new(bg_rx).fuse();

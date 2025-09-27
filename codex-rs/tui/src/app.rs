@@ -2,6 +2,7 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
+use crate::chatwidget::ChatWidgetInit;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
@@ -212,17 +213,28 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: self.config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: self.app_event_tx.clone(),
-                    initial_prompt: None,
-                    initial_images: Vec::new(),
-                    enhanced_keys_supported: self.enhanced_keys_supported,
-                    auth_manager: self.auth_manager.clone(),
-                };
-                self.chat_widget = ChatWidget::new(init, self.server.clone());
-                tui.frame_requester().schedule_frame();
+                self.start_new_session(tui);
+            }
+            AppEvent::ResumeSession => {
+                match crate::resume_picker::run_resume_picker(tui, &self.config.codex_home).await? {
+                    ResumeSelection::StartFresh => {
+                        // Treat as a no-op when invoked from within Codex.
+                    }
+                    ResumeSelection::Resume(path) => {
+                        if let Err(err) = self.resume_session_from_path(tui, path.clone()).await {
+                            let display_path = path.display().to_string();
+                            tracing::error!(
+                                error = %err,
+                                path = %display_path,
+                                "failed to resume session"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to resume session from {display_path}: {err}"
+                            ));
+                        }
+                    }
+                    ResumeSelection::Exit => return Ok(false),
+                }
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
@@ -369,6 +381,51 @@ impl App {
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         self.chat_widget.token_usage()
+    }
+
+    fn start_new_session(&mut self, tui: &mut tui::Tui) {
+        self.reset_session_state();
+        let init = self.chatwidget_init_for_restart(tui);
+        self.chat_widget = ChatWidget::new(init, self.server.clone());
+        tui.frame_requester().schedule_frame();
+    }
+
+    async fn resume_session_from_path(&mut self, tui: &mut tui::Tui, path: PathBuf) -> Result<()> {
+        let resumed = self
+            .server
+            .resume_conversation_from_rollout(
+                self.config.clone(),
+                path.clone(),
+                self.auth_manager.clone(),
+            )
+            .await
+            .wrap_err_with(|| format!("Failed to resume session from {}", path.display()))?;
+
+        self.reset_session_state();
+        let init = self.chatwidget_init_for_restart(tui);
+        self.chat_widget =
+            ChatWidget::new_from_existing(init, resumed.conversation, resumed.session_configured);
+        tui.frame_requester().schedule_frame();
+        Ok(())
+    }
+
+    fn chatwidget_init_for_restart(&self, tui: &mut tui::Tui) -> ChatWidgetInit {
+        ChatWidgetInit {
+            config: self.config.clone(),
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            initial_prompt: None,
+            initial_images: Vec::new(),
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+        }
+    }
+
+    fn reset_session_state(&mut self) {
+        self.transcript_cells.clear();
+        self.deferred_history_lines.clear();
+        self.has_emitted_history_lines = false;
+        self.backtrack = BacktrackState::default();
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
