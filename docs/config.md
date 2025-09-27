@@ -93,9 +93,8 @@ Note that Azure requires `api-version` to be passed as a query parameter, so be 
 [model_providers.azure]
 name = "Azure"
 # Make sure you set the appropriate subdomain for this URL.
-base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
+base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai/v1"
 env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
-query_params = { api-version = "2025-04-01-preview" }
 wire_api = "responses"
 ```
 
