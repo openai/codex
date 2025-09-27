@@ -24,6 +24,7 @@ use supports_color::Stream;
 
 mod mcp_cmd;
 mod pre_main_hardening;
+mod notifications;
 
 use crate::mcp_cmd::McpCli;
 use crate::proto::ProtoCli;
@@ -35,9 +36,9 @@ use crate::proto::ProtoCli;
 #[clap(
     author,
     version,
-    // If a sub‑command is given, ignore requirements of the default args.
+    // If a sub-command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
-    // The executable is sometimes invoked via a platform‑specific name like
+    // The executable is sometimes invoked via a platform-specific name like
     // `codex-x86_64-unknown-linux-musl`, but the help output should always use
     // the generic `codex` command name that users run.
     bin_name = "codex"
@@ -237,124 +238,136 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    use std::time::Instant;
+    let notif_cfg = notifications::load_notifications_config();
+    let start = Instant::now();
+
     let MultitoolCli {
         config_overrides: root_config_overrides,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
 
-    match subcommand {
-        None => {
-            prepend_config_flags(
-                &mut interactive.config_overrides,
-                root_config_overrides.clone(),
-            );
-            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            print_exit_messages(exit_info);
-        }
-        Some(Subcommand::Exec(mut exec_cli)) => {
-            prepend_config_flags(
-                &mut exec_cli.config_overrides,
-                root_config_overrides.clone(),
-            );
-            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
-        }
-        Some(Subcommand::Mcp(mut mcp_cli)) => {
-            // Propagate any root-level config overrides (e.g. `-c key=value`).
-            prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
-            mcp_cli.run(codex_linux_sandbox_exe).await?;
-        }
-        Some(Subcommand::Resume(ResumeCommand {
-            session_id,
-            last,
-            config_overrides,
-        })) => {
-            interactive = finalize_resume_interactive(
-                interactive,
-                root_config_overrides.clone(),
+    let res: anyhow::Result<()> = (|| async {
+        match subcommand {
+            None => {
+                prepend_config_flags(
+                    &mut interactive.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+                print_exit_messages(exit_info);
+            }
+            Some(Subcommand::Exec(mut exec_cli)) => {
+                prepend_config_flags(
+                    &mut exec_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+            }
+            Some(Subcommand::Mcp(mut mcp_cli)) => {
+                // Propagate any root-level config overrides (e.g. `-c key=value`).
+                prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
+                mcp_cli.run(codex_linux_sandbox_exe).await?;
+            }
+            Some(Subcommand::Resume(ResumeCommand {
                 session_id,
                 last,
                 config_overrides,
-            );
-            codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-        }
-        Some(Subcommand::Login(mut login_cli)) => {
-            prepend_config_flags(
-                &mut login_cli.config_overrides,
-                root_config_overrides.clone(),
-            );
-            match login_cli.action {
-                Some(LoginSubcommand::Status) => {
-                    run_login_status(login_cli.config_overrides).await;
-                }
-                None => {
-                    if let Some(api_key) = login_cli.api_key {
-                        run_login_with_api_key(login_cli.config_overrides, api_key).await;
-                    } else {
-                        run_login_with_chatgpt(login_cli.config_overrides).await;
+            })) => {
+                interactive = finalize_resume_interactive(
+                    interactive,
+                    root_config_overrides.clone(),
+                    session_id,
+                    last,
+                    config_overrides,
+                );
+                codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            }
+            Some(Subcommand::Login(mut login_cli)) => {
+                prepend_config_flags(
+                    &mut login_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                match login_cli.action {
+                    Some(LoginSubcommand::Status) => {
+                        run_login_status(login_cli.config_overrides).await;
+                    }
+                    None => {
+                        if let Some(api_key) = login_cli.api_key {
+                            run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                        } else {
+                            run_login_with_chatgpt(login_cli.config_overrides).await;
+                        }
                     }
                 }
             }
-        }
-        Some(Subcommand::Logout(mut logout_cli)) => {
-            prepend_config_flags(
-                &mut logout_cli.config_overrides,
-                root_config_overrides.clone(),
-            );
-            run_logout(logout_cli.config_overrides).await;
-        }
-        Some(Subcommand::Proto(mut proto_cli)) => {
-            prepend_config_flags(
-                &mut proto_cli.config_overrides,
-                root_config_overrides.clone(),
-            );
-            proto::run_main(proto_cli).await?;
-        }
-        Some(Subcommand::Completion(completion_cli)) => {
-            print_completion(completion_cli);
-        }
-        Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
-            DebugCommand::Seatbelt(mut seatbelt_cli) => {
+            Some(Subcommand::Logout(mut logout_cli)) => {
                 prepend_config_flags(
-                    &mut seatbelt_cli.config_overrides,
+                    &mut logout_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                codex_cli::debug_sandbox::run_command_under_seatbelt(
-                    seatbelt_cli,
-                    codex_linux_sandbox_exe,
-                )
-                .await?;
+                run_logout(logout_cli.config_overrides).await;
             }
-            DebugCommand::Landlock(mut landlock_cli) => {
+            Some(Subcommand::Proto(mut proto_cli)) => {
                 prepend_config_flags(
-                    &mut landlock_cli.config_overrides,
+                    &mut proto_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                codex_cli::debug_sandbox::run_command_under_landlock(
-                    landlock_cli,
-                    codex_linux_sandbox_exe,
-                )
-                .await?;
+                proto::run_main(proto_cli).await?;
             }
-        },
-        Some(Subcommand::Apply(mut apply_cli)) => {
-            prepend_config_flags(
-                &mut apply_cli.config_overrides,
-                root_config_overrides.clone(),
-            );
-            run_apply_command(apply_cli, None).await?;
+            Some(Subcommand::Completion(completion_cli)) => {
+                print_completion(completion_cli);
+            }
+            Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
+                DebugCommand::Seatbelt(mut seatbelt_cli) => {
+                    prepend_config_flags(
+                        &mut seatbelt_cli.config_overrides,
+                        root_config_overrides.clone(),
+                    );
+                    codex_cli::debug_sandbox::run_command_under_seatbelt(
+                        seatbelt_cli,
+                        codex_linux_sandbox_exe,
+                    )
+                    .await?;
+                }
+                DebugCommand::Landlock(mut landlock_cli) => {
+                    prepend_config_flags(
+                        &mut landlock_cli.config_overrides,
+                        root_config_overrides.clone(),
+                    );
+                    codex_cli::debug_sandbox::run_command_under_landlock(
+                        landlock_cli,
+                        codex_linux_sandbox_exe,
+                    )
+                    .await?;
+                }
+            },
+            Some(Subcommand::Apply(mut apply_cli)) => {
+                prepend_config_flags(
+                    &mut apply_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                run_apply_command(apply_cli, None).await?;
+            }
+            Some(Subcommand::GenerateTs(gen_cli)) => {
+                codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+            }
+            Some(Subcommand::ResponsesApiProxy(args)) => {
+                tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
+                    .await
+                    .context("responses-api-proxy blocking task panicked")??;
+            }
         }
-        Some(Subcommand::GenerateTs(gen_cli)) => {
-            codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
-        }
-        Some(Subcommand::ResponsesApiProxy(args)) => {
-            tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
-                .await
-                .context("responses-api-proxy blocking task panicked")??;
-        }
+
+        Ok(())
+    })().await;
+
+    if notifications::should_notify(start, &notif_cfg) {
+        notifications::play_completion_sound(res.is_ok(), &notif_cfg);
     }
 
-    Ok(())
+    res
 }
 
 /// Prepend root-level overrides so they have lower precedence than
