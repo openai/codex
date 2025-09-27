@@ -347,7 +347,8 @@ where
                 }
             }
             if self.in_code_block {
-                let highlighted = false;
+                #[allow(unused_mut)]
+                let mut highlighted = false;
                 #[cfg(feature = "syntax-highlighting")]
                 if let Some(highlighter) = &mut self.current_highlighter {
                     let ranges: Vec<(syntect::highlighting::Style, &str)> = highlighter
@@ -369,6 +370,10 @@ where
                         .collect();
                     self.push_line(Line::from(spans));
                     highlighted = true;
+                }
+                if !highlighted {
+                    // No syntax highlighting, just push the line as is
+                    self.push_line(Line::from(line.to_string()));
                 }
                 if !highlighted {
                     // No syntax highlighting, just push the line as is

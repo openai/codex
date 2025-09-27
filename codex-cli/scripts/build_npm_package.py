@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
@@ -79,7 +80,7 @@ def main() -> int:
         stage_sources(staging_dir, version)
 
         workflow_url = args.workflow_url
-        resolved_head_sha: str | None = None
+        resolved_head_sha: Optional[str] = None
         if not workflow_url:
             if release_version:
                 workflow = resolve_release_workflow(version)
@@ -124,7 +125,7 @@ def main() -> int:
     return 0
 
 
-def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
+def prepare_staging_dir(staging_dir: Optional[Path]) -> tuple[Path, bool]:
     if staging_dir is not None:
         staging_dir = staging_dir.resolve()
         staging_dir.mkdir(parents=True, exist_ok=True)
@@ -158,7 +159,7 @@ def stage_sources(staging_dir: Path, version: str) -> None:
         out.write("\n")
 
 
-def install_native_binaries(staging_dir: Path, workflow_url: str | None) -> None:
+def install_native_binaries(staging_dir: Path, workflow_url: Optional[str]) -> None:
     cmd = ["./scripts/install_native_deps.py"]
     if workflow_url:
         cmd.extend(["--workflow-url", workflow_url])
@@ -174,15 +175,15 @@ def resolve_latest_alpha_workflow_url() -> str:
 
 def determine_latest_alpha_version() -> str:
     releases = list_releases()
-    best_key: tuple[int, int, int, int] | None = None
-    best_version: str | None = None
+    best_key: Optional[tuple[int, int, int, int]] = None
+    best_version: Optional[str] = None
     pattern = re.compile(r"^rust-v(\d+)\.(\d+)\.(\d+)-alpha\.(\d+)$")
     for release in releases:
         tag = release.get("tag_name", "")
         match = pattern.match(tag)
         if not match:
             continue
-        key = tuple(int(match.group(i)) for i in range(1, 5))
+        key = (int(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4)))
         if best_key is None or key > best_key:
             best_key = key
             best_version = (
@@ -215,7 +216,7 @@ def resolve_release_workflow(version: str) -> dict:
             "run",
             "list",
             "--branch",
-            f"rust-v{version}",
+            "main",
             "--json",
             "workflowName,url,headSha",
             "--workflow",
