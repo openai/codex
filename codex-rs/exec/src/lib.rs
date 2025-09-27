@@ -1,9 +1,7 @@
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
-pub mod event_processor_with_json_output;
-pub mod exec_events;
-pub mod experimental_event_processor_with_json_output;
+mod event_processor_with_json_output;
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -17,6 +15,7 @@ use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::git_info::git_repo_has_commits;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -26,22 +25,17 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
-use experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
-use serde_json::Value;
+use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use crate::event_processor_with_json_output::EventProcessorWithJsonOutput;
-use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
-        command,
         images,
         model: model_cli_arg,
         oss,
@@ -53,23 +47,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         color,
         last_message_file,
         json: json_mode,
-        experimental_json,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
-        output_schema: output_schema_path,
-        include_plan_tool,
         config_overrides,
     } = cli;
 
-    // Determine the prompt source (parent or subcommand) and read from stdin if needed.
-    let prompt_arg = match &command {
-        // Allow prompt before the subcommand by falling back to the parent-level prompt
-        // when the Resume subcommand did not provide its own prompt.
-        Some(ExecCommand::Resume(args)) => args.prompt.clone().or(prompt),
-        None => prompt,
-    };
-
-    let prompt = match prompt_arg {
+    // Determine the prompt based on CLI arg and/or stdin.
+    let prompt = match prompt {
         Some(p) if p != "-" => p,
         // Either `-` was passed or no positional arg.
         maybe_dash => {
@@ -102,8 +86,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             buffer
         }
     };
-
-    let output_schema = load_output_schema(output_schema_path);
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -166,7 +148,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model_provider,
         codex_linux_sandbox_exe,
         base_instructions: None,
-        include_plan_tool: Some(include_plan_tool),
+        include_plan_tool: None,
         include_apply_patch_tool: None,
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
@@ -182,22 +164,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    let mut event_processor: Box<dyn EventProcessor> = match (json_mode, experimental_json) {
-        (_, true) => Box::new(ExperimentalEventProcessorWithJsonOutput::new(
-            last_message_file.clone(),
-        )),
-        (true, _) => {
-            eprintln!(
-                "The existing `--json` output format is being deprecated. Please try the new format using `--experimental-json`."
-            );
-
-            Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
-        }
-        _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
+    let mut event_processor: Box<dyn EventProcessor> = if json_mode {
+        Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
+    } else {
+        Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stdout_with_ansi,
             &config,
             last_message_file.clone(),
-        )),
+        ))
     };
 
     if oss {
@@ -206,51 +180,32 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
     }
 
-    let default_cwd = config.cwd.to_path_buf();
-    let default_approval_policy = config.approval_policy;
-    let default_sandbox_policy = config.sandbox_policy.clone();
-    let default_model = config.model.clone();
-    let default_effort = config.model_reasoning_effort;
-    let default_summary = config.model_reasoning_summary;
+    // Print the effective configuration and prompt so users can see what Codex
+    // is using.
+    event_processor.print_config_summary(&config, &prompt);
 
-    if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
-        eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
-        std::process::exit(1);
+    if !skip_git_repo_check {
+        if get_git_repo_root(&config.cwd.to_path_buf()).is_none() {
+            eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
+            std::process::exit(1);
+        }
+        
+        // If inside a git repo but with no commits, provide a clear message
+        if !git_repo_has_commits(&config.cwd).await {
+            eprintln!(
+                "This Git repository has no commits. Initialize it first:\n  git add -A && git commit -m 'Initial commit'\nOr pass --skip-git-repo-check to bypass."
+            );
+            std::process::exit(1);
+        }
     }
 
     let conversation_manager =
         ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
-
-    // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewConversation {
         conversation_id: _,
         conversation,
         session_configured,
-    } = if let Some(ExecCommand::Resume(args)) = command {
-        let resume_path = resolve_resume_path(&config, &args).await?;
-
-        if let Some(path) = resume_path {
-            conversation_manager
-                .resume_conversation_from_rollout(
-                    config.clone(),
-                    path,
-                    AuthManager::shared(config.codex_home.clone()),
-                )
-                .await?
-        } else {
-            conversation_manager
-                .new_conversation(config.clone())
-                .await?
-        }
-    } else {
-        conversation_manager
-            .new_conversation(config.clone())
-            .await?
-    };
-    // Print the effective configuration and prompt so users can see what Codex
-    // is using.
-    event_processor.print_config_summary(&config, &prompt, &session_configured);
-
+    } = conversation_manager.new_conversation(config).await?;
     info!("Codex initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
@@ -316,18 +271,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Send the prompt.
     let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
-    let initial_prompt_task_id = conversation
-        .submit(Op::UserTurn {
-            items,
-            cwd: default_cwd,
-            approval_policy: default_approval_policy,
-            sandbox_policy: default_sandbox_policy,
-            model: default_model,
-            effort: default_effort,
-            summary: default_summary,
-            final_output_json_schema: output_schema,
-        })
-        .await?;
+    let initial_prompt_task_id = conversation.submit(Op::UserInput { items }).await?;
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
 
     // Run the loop until the task is complete.
@@ -354,50 +298,4 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     Ok(())
-}
-
-async fn resolve_resume_path(
-    config: &Config,
-    args: &crate::cli::ResumeArgs,
-) -> anyhow::Result<Option<PathBuf>> {
-    if args.last {
-        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
-            Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
-            Err(e) => {
-                error!("Error listing conversations: {e}");
-                Ok(None)
-            }
-        }
-    } else if let Some(id_str) = args.session_id.as_deref() {
-        let path = find_conversation_path_by_id_str(&config.codex_home, id_str).await?;
-        Ok(path)
-    } else {
-        Ok(None)
-    }
-}
-
-fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
-    let path = path?;
-
-    let schema_str = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(err) => {
-            eprintln!(
-                "Failed to read output schema file {}: {err}",
-                path.display()
-            );
-            std::process::exit(1);
-        }
-    };
-
-    match serde_json::from_str::<Value>(&schema_str) {
-        Ok(value) => Some(value),
-        Err(err) => {
-            eprintln!(
-                "Output schema file {} is not valid JSON: {err}",
-                path.display()
-            );
-            std::process::exit(1);
-        }
-    }
 }

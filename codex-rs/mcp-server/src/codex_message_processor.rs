@@ -25,7 +25,9 @@ use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::get_platform_sandbox;
+use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::git_diff_to_remote;
+use codex_core::git_info::git_repo_has_commits;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -635,6 +637,21 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+
+        // If inside a Git repository, ensure it has at least one commit. When a
+        // repo is empty, task creation tends to fail later with a vague error.
+        // Provide a clear, actionable message instead.
+        if get_git_repo_root(&config.cwd).is_some()
+            && !git_repo_has_commits(&config.cwd).await
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "This Git repository has no commits. Codex requires at least one commit. Run: git add -A && git commit -m 'Initial commit'".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         match self.conversation_manager.new_conversation(config).await {
             Ok(conversation_id) => {
