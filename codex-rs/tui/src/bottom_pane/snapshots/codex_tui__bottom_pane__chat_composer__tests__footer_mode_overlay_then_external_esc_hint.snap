@@ -2,12 +2,12 @@
 source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
-"▌ Ask Codex to do anything                                                                          "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
 "                                                                                                    "
-"  esc again to edit previous message                                                                "
+"› Ask Codex to do anything                                                                          "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"    esc again to edit previous message                                                              "
