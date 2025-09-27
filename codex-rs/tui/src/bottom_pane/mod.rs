@@ -102,6 +102,10 @@ impl BottomPane {
         }
     }
 
+    pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
+        self.status.as_ref()
+    }
+
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
     }
