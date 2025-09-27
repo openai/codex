@@ -215,8 +215,6 @@ def resolve_release_workflow(version: str) -> dict:
             "gh",
             "run",
             "list",
-            "--branch",
-            "main",
             "--json",
             "workflowName,url,headSha",
             "--workflow",
