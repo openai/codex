@@ -3,6 +3,7 @@ mod seek_sequence;
 mod standalone_executable;
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::Utf8Error;
@@ -597,6 +598,7 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 move_path,
                 chunks,
             } => {
+                let file_previously_exists = path.exists();
                 let AppliedPatch { new_contents, .. } =
                     derive_new_contents_from_chunks(path, chunks)?;
                 if let Some(dest) = move_path {
@@ -613,9 +615,21 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                         .with_context(|| format!("Failed to remove original {}", path.display()))?;
                     modified.push(dest.clone());
                 } else {
+                    if !file_previously_exists
+                        && let Some(parent) = path.parent()
+                        && !parent.as_os_str().is_empty()
+                    {
+                        std::fs::create_dir_all(parent).with_context(|| {
+                            format!("Failed to create parent directories for {}", path.display())
+                        })?;
+                    }
                     std::fs::write(path, new_contents)
                         .with_context(|| format!("Failed to write file {}", path.display()))?;
-                    modified.push(path.clone());
+                    if file_previously_exists {
+                        modified.push(path.clone());
+                    } else {
+                        added.push(path.clone());
+                    }
                 }
             }
         }
@@ -638,27 +652,30 @@ fn derive_new_contents_from_chunks(
     path: &Path,
     chunks: &[UpdateFileChunk],
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
+    let (original_contents, mut original_lines) = match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            let mut lines: Vec<String> = contents.split('\n').map(String::from).collect();
+            if lines.last().is_some_and(String::is_empty) {
+                lines.pop();
+            }
+            (contents, lines)
+        }
         Err(err) => {
-            return Err(ApplyPatchError::IoError(IoError {
-                context: format!("Failed to read file to update {}", path.display()),
-                source: err,
-            }));
+            if err.kind() == ErrorKind::NotFound
+                && chunks.iter().all(|chunk| chunk.old_lines.is_empty())
+            {
+                (String::new(), Vec::new())
+            } else {
+                return Err(ApplyPatchError::IoError(IoError {
+                    context: format!("Failed to read file to update {}", path.display()),
+                    source: err,
+                }));
+            }
         }
     };
 
-    let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
-
-    // Drop the trailing empty element that results from the final newline so
-    // that line counts match the behaviour of standard `diff`.
-    if original_lines.last().is_some_and(String::is_empty) {
-        original_lines.pop();
-    }
-
     let replacements = compute_replacements(&original_lines, path, chunks)?;
-    let new_lines = apply_replacements(original_lines, &replacements);
-    let mut new_lines = new_lines;
+    let mut new_lines = apply_replacements(std::mem::take(&mut original_lines), &replacements);
     if !new_lines.last().is_some_and(String::is_empty) {
         new_lines.push(String::new());
     }
@@ -1111,6 +1128,55 @@ PATCH"#,
         );
         assert_eq!(stdout_str, expected_out);
         assert_eq!(stderr_str, "");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn test_update_file_hunk_creates_missing_file_with_additions() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("new.txt");
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
++hello
++world"#,
+            path.display()
+        ));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+        let stdout_str = String::from_utf8(stdout).unwrap();
+        let stderr_str = String::from_utf8(stderr).unwrap();
+        let expected_out = format!(
+            "Success. Updated the following files:\nA {}\n",
+            path.display()
+        );
+        assert_eq!(stdout_str, expected_out);
+        assert_eq!(stderr_str, "");
+        let contents = fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "hello\nworld\n");
+    }
+
+    #[test]
+    fn test_update_file_hunk_missing_file_with_nonempty_old_lines_errors() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("missing.txt");
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
+-foo
++bar"#,
+            path.display()
+        ));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let err = apply_patch(&patch, &mut stdout, &mut stderr).unwrap_err();
+        match err {
+            ApplyPatchError::IoError(inner) => {
+                assert!(inner.context.contains("Failed to read file to update"));
+            }
+            other => panic!("expected IoError, got {other:?}"),
+        }
         assert!(!path.exists());
     }
 
