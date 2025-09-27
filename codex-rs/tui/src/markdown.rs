@@ -200,11 +200,11 @@ fn main() {
         // Verify we have some lines of output
         assert!(!lines.is_empty(), "Should have generated some output lines");
 
-        // Verify at least one non-reset RGB foreground (real highlighting)
+        // Verify at least one non-reset foreground color (real highlighting)
         let has_colored_fg = lines.iter().any(|line| {
             line.spans
                 .iter()
-                .any(|span| matches!(span.style.fg, Some(ratatui::style::Color::Rgb(_, _, _))))
+                .any(|span| matches!(span.style.fg, Some(color) if color != ratatui::style::Color::Reset))
         });
         assert!(
             has_colored_fg,

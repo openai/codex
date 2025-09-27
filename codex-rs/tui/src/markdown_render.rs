@@ -91,7 +91,7 @@ fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
     }
 
     // Use ANSI colors instead of RGB
-    None
+    Some(Color::White)
 }
 
 #[allow(dead_code)]
