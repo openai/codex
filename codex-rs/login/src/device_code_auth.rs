@@ -7,6 +7,8 @@ use std::time::Instant;
 
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
+use std::io::Write;
+use std::io::{self};
 
 #[derive(Deserialize)]
 struct UserCodeResp {
@@ -102,21 +104,36 @@ async fn poll_for_token(
     }
 }
 
+// Helper to print colored text if terminal supports ANSI
+fn print_colored_warning_device_code() {
+    // ANSI escape code for bright yellow
+    const YELLOW: &str = "\x1b[93m";
+    const RESET: &str = "\x1b[0m";
+    let warning = "WARN!!! device code authentication has potential risks and\n\
+        should be used with caution only in cases where browser support \n\
+        is missing. This is prone to attacks.\n\
+        \n\
+        - This code is valid for 15 minutes.\n\
+        - Do not share this code with anyone.\n\
+        ";
+    let mut stdout = io::stdout().lock();
+    let _ = write!(stdout, "{YELLOW}{warning}{RESET}");
+    let _ = stdout.flush();
+}
+
 /// Full device code login flow.
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let client = reqwest::Client::new();
     let auth_base_url = opts.issuer.trim_end_matches('/').to_owned();
-
     let uc = request_user_code(&client, &auth_base_url).await?;
+
+    print_colored_warning_device_code();
+    println!("⏳ Generating a new 9-digit device code for authentication...\n");
     println!(
         "To authenticate, visit: {}/deviceauth/authorize and enter code: {}",
         opts.issuer.trim_end_matches('/'),
         uc.user_code
     );
-    // eprintln!(
-    //     "To authenticate, enter this code when prompted: {} (interval {}s)",
-    //     uc.user_code, uc.interval
-    // );
 
     let code_resp = poll_for_token(
         &client,
