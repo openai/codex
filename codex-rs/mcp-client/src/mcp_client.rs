@@ -434,12 +434,24 @@ const DEFAULT_ENV_VARS: &[&str] = &[
 
 #[cfg(windows)]
 const DEFAULT_ENV_VARS: &[&str] = &[
-    // TODO: More research is necessary to curate this list.
+    // Preserve core Windows environment variables so CLI-based MCP servers
+    // (e.g., Docker CLI plugins, npm/npx wrappers) can locate helper binaries,
+    // resolve DNS via system DLLs, and load per-user configuration and caches.
     "PATH",
     "PATHEXT",
+    "COMSPEC",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMDATA",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
     "USERNAME",
     "USERDOMAIN",
-    "USERPROFILE",
     "TEMP",
     "TMP",
 ];
@@ -463,14 +475,86 @@ fn create_env_for_mcp_server(
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    use std::sync::Mutex;
+    #[cfg(windows)]
+    use std::sync::OnceLock;
+
+    #[cfg(windows)]
+    static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[cfg(windows)]
+    struct EnvVarGuard {
+        key: String,
+        original: Option<String>,
+    }
+
+    #[cfg(windows)]
+    impl EnvVarGuard {
+        fn replace(key: &str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: scoped to the lifetime of the guard within this test.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                // SAFETY: scoped test mutation restored in Drop.
+                unsafe {
+                    std::env::set_var(&self.key, value);
+                }
+            } else {
+                // SAFETY: scoped test mutation restored in Drop.
+                unsafe {
+                    std::env::remove_var(&self.key);
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_create_env_for_mcp_server() {
-        let env_var = "USER";
+        let env_var = if cfg!(windows) { "USERNAME" } else { "USER" };
         let env_var_existing_value = std::env::var(env_var).unwrap_or_default();
         let env_var_new_value = format!("{env_var_existing_value}-extra");
         let extra_env = HashMap::from([(env_var.to_owned(), env_var_new_value.clone())]);
         let mcp_server_env = create_env_for_mcp_server(Some(extra_env));
         assert!(mcp_server_env.contains_key("PATH"));
         assert_eq!(Some(&env_var_new_value), mcp_server_env.get(env_var));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_create_env_for_mcp_server_includes_windows_defaults() {
+        let _env_lock = ENV_MUTEX
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env mutex poisoned");
+        let mut guards = Vec::new();
+        for var in DEFAULT_ENV_VARS {
+            let sentinel = format!("codex-test-{var}");
+            guards.push(EnvVarGuard::replace(var, &sentinel));
+        }
+
+        let env = create_env_for_mcp_server(None);
+        for var in DEFAULT_ENV_VARS {
+            let expected = format!("codex-test-{var}");
+            assert_eq!(
+                env.get(*var),
+                Some(&expected),
+                "expected {var} to be propagated",
+            );
+        }
+
+        drop(guards);
     }
 }
