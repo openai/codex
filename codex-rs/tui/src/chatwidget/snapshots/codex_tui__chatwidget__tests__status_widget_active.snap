@@ -8,5 +8,6 @@ expression: terminal.backend()
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit                                 "
+"                                                                                "
+"  ? for shortcuts                                                               "
 "                                                                                "

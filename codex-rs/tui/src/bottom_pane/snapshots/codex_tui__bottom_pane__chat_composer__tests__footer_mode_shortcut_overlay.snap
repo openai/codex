@@ -10,5 +10,6 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"                                                                                                    "
-"  ? for shortcuts                                                                                   "
+"    / for commands          shift + enter for newline      shift + tab to change mode               "
+"    @ for file paths        ctrl + v to paste images       esc again to edit previous message       "
+"    ctrl + c to exit        ctrl + t to view transcript                                             "

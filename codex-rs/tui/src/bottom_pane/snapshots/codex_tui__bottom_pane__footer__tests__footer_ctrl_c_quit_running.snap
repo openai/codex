@@ -2,6 +2,4 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-" ⌃C again to interrupt                                                          "
-"                                                                                "
-"                                                                                "
+"  ctrl + c again to interrupt                                                   "
