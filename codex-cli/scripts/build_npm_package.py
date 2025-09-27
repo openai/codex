@@ -88,8 +88,8 @@ def main() -> int:
                     workflow_url = workflow["url"]
                     resolved_head_sha = workflow.get("headSha")
                 except RuntimeError:
-                    # No workflow found, proceed without it
-                    pass
+                    # Fall back to latest alpha workflow
+                    workflow_url = resolve_latest_alpha_workflow_url()
             else:
                 workflow_url = resolve_latest_alpha_workflow_url()
         elif release_version:
