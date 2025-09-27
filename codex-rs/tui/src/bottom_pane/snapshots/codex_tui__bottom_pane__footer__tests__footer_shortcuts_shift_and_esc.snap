@@ -1,0 +1,7 @@
+---
+source: tui/src/bottom_pane/footer.rs
+expression: terminal.backend()
+---
+"  / for commands            @ for file paths                shift + enter for ne"
+"  ctrl + v to paste images  ctrl + c to exit                ctrl + t to view tra"
+"  ? to hide shortcuts       esc again to edit previous message                  "

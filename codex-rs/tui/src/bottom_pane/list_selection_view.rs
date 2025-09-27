@@ -8,6 +8,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use textwrap::wrap;
 
 use crate::app_event_sender::AppEventSender;
 
@@ -21,6 +22,12 @@ use super::selection_popup_common::render_rows;
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum HeaderLine {
+    Text { text: String, italic: bool },
+    Spacer,
+}
 
 pub(crate) struct SelectionItem {
     pub name: String,
@@ -39,6 +46,7 @@ pub(crate) struct SelectionViewParams {
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
+    pub header: Vec<HeaderLine>,
 }
 
 pub(crate) struct ListSelectionView {
@@ -53,6 +61,8 @@ pub(crate) struct ListSelectionView {
     search_query: String,
     search_placeholder: Option<String>,
     filtered_indices: Vec<usize>,
+    last_selected_actual_idx: Option<usize>,
+    header: Vec<HeaderLine>,
 }
 
 impl ListSelectionView {
@@ -82,6 +92,8 @@ impl ListSelectionView {
                 None
             },
             filtered_indices: Vec::new(),
+            last_selected_actual_idx: None,
+            header: params.header,
         };
         s.apply_filter();
         s
@@ -198,6 +210,7 @@ impl ListSelectionView {
             && let Some(actual_idx) = self.filtered_indices.get(idx)
             && let Some(item) = self.items.get(*actual_idx)
         {
+            self.last_selected_actual_idx = Some(*actual_idx);
             for act in &item.actions {
                 act(&self.app_event_tx);
             }
@@ -213,6 +226,43 @@ impl ListSelectionView {
     pub(crate) fn set_search_query(&mut self, query: String) {
         self.search_query = query;
         self.apply_filter();
+    }
+
+    pub(crate) fn take_last_selected_index(&mut self) -> Option<usize> {
+        self.last_selected_actual_idx.take()
+    }
+
+    fn header_spans_for_width(&self, width: u16) -> Vec<Vec<Span<'static>>> {
+        if self.header.is_empty() || width == 0 {
+            return Vec::new();
+        }
+        let prefix_width = Self::dim_prefix_span().width() as u16;
+        let available = width.saturating_sub(prefix_width).max(1) as usize;
+        let mut lines = Vec::new();
+        for entry in &self.header {
+            match entry {
+                HeaderLine::Spacer => lines.push(Vec::new()),
+                HeaderLine::Text { text, italic } => {
+                    if text.is_empty() {
+                        lines.push(Vec::new());
+                        continue;
+                    }
+                    for part in wrap(text, available) {
+                        let span = if *italic {
+                            Span::from(part.into_owned()).italic()
+                        } else {
+                            Span::from(part.into_owned())
+                        };
+                        lines.push(vec![span]);
+                    }
+                }
+            }
+        }
+        lines
+    }
+
+    fn header_height(&self, width: u16) -> u16 {
+        self.header_spans_for_width(width).len() as u16
     }
 }
 
@@ -276,7 +326,8 @@ impl BottomPaneView for ListSelectionView {
 
         // +1 for the title row, +1 for a spacer line beneath the header,
         // +1 for optional subtitle, +1 for optional footer (2 lines incl. spacing)
-        let mut height = rows_height + 2;
+        let mut height = self.header_height(width);
+        height = height.saturating_add(rows_height + 2);
         if self.is_searchable {
             height = height.saturating_add(1);
         }
@@ -295,20 +346,46 @@ impl BottomPaneView for ListSelectionView {
             return;
         }
 
+        let mut next_y = area.y;
+        let header_spans = self.header_spans_for_width(area.width);
+        for spans in header_spans.into_iter() {
+            if next_y >= area.y + area.height {
+                return;
+            }
+            let row = Rect {
+                x: area.x,
+                y: next_y,
+                width: area.width,
+                height: 1,
+            };
+            let mut prefixed: Vec<Span<'static>> = vec![Self::dim_prefix_span()];
+            if spans.is_empty() {
+                prefixed.push(String::new().into());
+            } else {
+                prefixed.extend(spans);
+            }
+            Paragraph::new(Line::from(prefixed)).render(row, buf);
+            next_y = next_y.saturating_add(1);
+        }
+
+        if next_y >= area.y + area.height {
+            return;
+        }
+
         let title_area = Rect {
             x: area.x,
-            y: area.y,
+            y: next_y,
             width: area.width,
             height: 1,
         };
+        Paragraph::new(Line::from(vec![
+            Self::dim_prefix_span(),
+            self.title.clone().bold(),
+        ]))
+        .render(title_area, buf);
+        next_y = next_y.saturating_add(1);
 
-        let title_spans: Vec<Span<'static>> =
-            vec![Self::dim_prefix_span(), self.title.clone().bold()];
-        let title_para = Paragraph::new(Line::from(title_spans));
-        title_para.render(title_area, buf);
-
-        let mut next_y = area.y.saturating_add(1);
-        if self.is_searchable {
+        if self.is_searchable && next_y < area.y + area.height {
             let search_area = Rect {
                 x: area.x,
                 y: next_y,
@@ -327,20 +404,25 @@ impl BottomPaneView for ListSelectionView {
                 .render(search_area, buf);
             next_y = next_y.saturating_add(1);
         }
+
         if let Some(sub) = &self.subtitle {
+            if next_y >= area.y + area.height {
+                return;
+            }
             let subtitle_area = Rect {
                 x: area.x,
                 y: next_y,
                 width: area.width,
                 height: 1,
             };
-            let subtitle_spans: Vec<Span<'static>> =
-                vec![Self::dim_prefix_span(), sub.clone().dim()];
-            let subtitle_para = Paragraph::new(Line::from(subtitle_spans));
-            subtitle_para.render(subtitle_area, buf);
+            Paragraph::new(Line::from(vec![Self::dim_prefix_span(), sub.clone().dim()]))
+                .render(subtitle_area, buf);
             next_y = next_y.saturating_add(1);
         }
 
+        if next_y >= area.y + area.height {
+            return;
+        }
         let spacer_area = Rect {
             x: area.x,
             y: next_y,
@@ -351,6 +433,9 @@ impl BottomPaneView for ListSelectionView {
         next_y = next_y.saturating_add(1);
 
         let footer_reserved = if self.footer_hint.is_some() { 2 } else { 0 };
+        if next_y >= area.y + area.height {
+            return;
+        }
         let rows_area = Rect {
             x: area.x,
             y: next_y,
@@ -369,8 +454,8 @@ impl BottomPaneView for ListSelectionView {
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
-                true,
                 "no matches",
+                true,
             );
         }
 
@@ -381,8 +466,7 @@ impl BottomPaneView for ListSelectionView {
                 width: area.width,
                 height: 1,
             };
-            let footer_para = Paragraph::new(hint.clone().dim());
-            footer_para.render(footer_area, buf);
+            Paragraph::new(hint.clone().dim()).render(footer_area, buf);
         }
     }
 }

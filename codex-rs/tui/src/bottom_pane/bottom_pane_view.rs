@@ -1,4 +1,4 @@
-use crate::user_approval_widget::ApprovalRequest;
+use crate::bottom_pane::ApprovalRequest;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

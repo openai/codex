@@ -556,7 +556,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::history_cell::CommandOutput;
+    use crate::exec_cell::CommandOutput;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::PatchEventType;
     use crate::history_cell::new_patch_event;
@@ -687,7 +687,7 @@ mod tests {
             ]));
         cells.push(apply_end_cell);
 
-        let mut exec_cell = crate::history_cell::new_active_exec_command(
+        let mut exec_cell = crate::exec_cell::new_active_exec_command(
             "exec-1".into(),
             vec!["bash".into(), "-lc".into(), "ls".into()],
             vec![ParsedCommand::Unknown { cmd: "ls".into() }],
