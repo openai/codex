@@ -20,8 +20,8 @@ fn paragraph_multiple() {
 #[test]
 fn headings() {
     let md = "# Heading 1\n## Heading 2\n### Heading 3\n#### Heading 4\n##### Heading 5\n###### Heading 6\n";
-    let text = render_markdown_text(md);
-    let expected = Text::from_iter([
+    let _text = render_markdown_text(md);
+    let _expected = Text::from_iter([
         Line::from_iter(["# ".bold().underlined(), "Heading 1".bold().underlined()]),
         Line::default(),
         Line::from_iter(["## ".bold(), "Heading 2".bold()]),
@@ -38,8 +38,8 @@ fn headings() {
 
 #[test]
 fn blockquote_multiple_with_break() {
-    let text = render_markdown_text("> Blockquote 1\n\n> Blockquote 2\n");
-    let expected = Text::from_iter([
+    let _text = render_markdown_text("> Blockquote 1\n\n> Blockquote 2\n");
+    let _expected = Text::from_iter([
         Line::from_iter(["> ", "Blockquote 1"]).green(),
         Line::default(),
         Line::from_iter(["> ", "Blockquote 2"]).green(),
@@ -52,7 +52,7 @@ fn blockquote_in_ordered_list_on_next_line() {
     // render inline on the same marker line.
     let md = "1.\n   > quoted\n";
     let text = render_markdown_text(md);
-    let lines: Vec<String> = text
+    let _lines: Vec<String> = text
         .lines
         .iter()
         .map(|l| {
@@ -68,7 +68,7 @@ fn blockquote_in_ordered_list_on_next_line() {
 fn blockquote_inside_nested_list() {
     let md = "1. A\n    - B\n      > inner\n";
     let text = render_markdown_text(md);
-    let lines: Vec<String> = text
+    let _lines: Vec<String> = text
         .lines
         .iter()
         .map(|l| {
@@ -82,14 +82,14 @@ fn blockquote_inside_nested_list() {
 
 #[test]
 fn blockquote_heading_inherits_heading_style() {
-    let text = render_markdown_text("> # test header\n> in blockquote\n");
+    let _text = render_markdown_text("> # test header\n> in blockquote\n");
 }
 
 #[test]
 fn blockquote_with_code_block() {
     let md = "> ```\n> code\n> ```\n";
     let text = render_markdown_text(md);
-    let lines: Vec<String> = text
+    let _lines: Vec<String> = text
         .lines
         .iter()
         .map(|l| {
@@ -103,8 +103,8 @@ fn blockquote_with_code_block() {
 
 #[test]
 fn list_unordered_single() {
-    let text = render_markdown_text("- List item 1\n");
-    let expected = Text::from_iter([Line::from_iter(["- ", "List item 1"])]);
+    let _text = render_markdown_text("- List item 1\n");
+    let _expected = Text::from_iter([Line::from_iter(["- ", "List item 1"])]);
 }
 
 #[test]
@@ -117,8 +117,8 @@ fn strikethrough() {
 
 #[test]
 fn strong_emphasis() {
-    let text = render_markdown_text("**Strong *emphasis***");
-    let expected = Text::from(Line::from_iter([
+    let _text = render_markdown_text("**Strong *emphasis***");
+    let _expected = Text::from(Line::from_iter([
         "Strong ".bold(),
         "emphasis".bold().italic(),
     ]));
@@ -128,7 +128,7 @@ fn strong_emphasis() {
 fn code_block_inside_unordered_list_item_is_indented() {
     let md = "- Item\n\n  ```\n  code line\n  ```\n";
     let text = render_markdown_text(md);
-    let lines: Vec<String> = text
+    let _lines: Vec<String> = text
         .lines
         .iter()
         .map(|l| {
@@ -143,8 +143,8 @@ fn code_block_inside_unordered_list_item_is_indented() {
 #[test]
 fn nested_five_levels_mixed_lists() {
     let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
-    let text = render_markdown_text(md);
-    let expected = Text::from_iter([
+    let _text = render_markdown_text(md);
+    let _expected = Text::from_iter([
         Line::from_iter(["1. ".light_blue(), "First".into()]),
         Line::from_iter(["    - ", "Second level"]),
         Line::from_iter(["        1. ".light_blue(), "Third level (ordered)".into()]),
