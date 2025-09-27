@@ -199,6 +199,9 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+
+    /// Theme to use for syntax highlighting in code blocks.
+    pub syntax_highlight_theme: String,
 }
 
 impl Config {
@@ -1068,6 +1071,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            syntax_highlight_theme: cfg
+                .tui
+                .as_ref()
+                .and_then(|t| t.syntax_highlight_theme.clone())
+                .unwrap_or("base16-ocean.dark".to_string()),
         };
         Ok(config)
     }
@@ -1808,6 +1816,7 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
+                syntax_highlight_theme: "base16-ocean.dark".to_string(),
                 tui_notifications: Default::default(),
             },
             o3_profile_config
@@ -1867,6 +1876,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
+            syntax_highlight_theme: "base16-ocean.dark".to_string(),
             tui_notifications: Default::default(),
         };
 
@@ -1941,6 +1951,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
+            syntax_highlight_theme: "base16-ocean.dark".to_string(),
             tui_notifications: Default::default(),
         };
 
@@ -2001,6 +2012,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
+            syntax_highlight_theme: "base16-ocean.dark".to_string(),
             tui_notifications: Default::default(),
         };
 

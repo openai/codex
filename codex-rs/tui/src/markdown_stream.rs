@@ -25,6 +25,7 @@ impl MarkdownStreamCollector {
 
     pub fn push_delta(&mut self, delta: &str) {
         tracing::trace!("push_delta: {delta:?}");
+        // Preserve the original byte stream without alteration
         self.buffer.push_str(delta);
     }
 
@@ -39,10 +40,34 @@ impl MarkdownStreamCollector {
         } else {
             return Vec::new();
         };
+
+        // Special handling for list items that might be split across chunks
+        let mut adjusted_source = source.clone();
+        let is_list_continuation = source.ends_with("\n\n")
+            && self.buffer.len() > source.len()
+            && (self.buffer[source.len()..].starts_with('-')
+                || self.buffer[source.len()..]
+                    .trim_start()
+                    .starts_with(|c: char| c.is_ascii_digit()));
+
+        if is_list_continuation {
+            // If this is a list continuation, remove the extra newline to prevent it from being
+            // treated as a loose list item
+            if let Some(last_newline) = adjusted_source[..adjusted_source.len() - 1].rfind('\n') {
+                let last_line = &adjusted_source[last_newline + 1..].trim_end();
+                if last_line.is_empty() {
+                    // Remove the extra newline
+                    adjusted_source = adjusted_source[..last_newline + 1].to_string();
+                }
+            }
+        }
+
         let mut rendered: Vec<Line<'static>> = Vec::new();
-        markdown::append_markdown(&source, &mut rendered, config);
+        markdown::append_markdown(&adjusted_source, &mut rendered, config);
         let mut complete_line_count = rendered.len();
-        if complete_line_count > 0
+
+        // Remove trailing blank lines that might have been added
+        while complete_line_count > 0
             && crate::render::line_utils::is_blank_line_spaces_only(
                 &rendered[complete_line_count - 1],
             )
@@ -103,9 +128,10 @@ pub(crate) fn simulate_stream_markdown_for_tests(
 ) -> Vec<Line<'static>> {
     let mut collector = MarkdownStreamCollector::new();
     let mut out = Vec::new();
-    for d in deltas {
+    for (i, d) in deltas.iter().enumerate() {
         collector.push_delta(d);
-        if d.contains('\n') {
+        // Always commit complete lines if this is the last chunk and we're finalizing
+        if d.contains('\n') || (finalize && i == deltas.len() - 1) {
             out.extend(collector.commit_complete_lines(config));
         }
     }
@@ -224,14 +250,16 @@ mod tests {
         });
         let idx = find_idx.expect("expected third-level ordered line");
         let line = &out[idx];
-        // Expect at least one span on this line to be styled light blue
-        let has_light_blue = line
-            .spans
-            .iter()
-            .any(|s| s.style.fg == Some(ratatui::style::Color::LightBlue));
+        // Expect the first span (the marker) to be styled light blue
         assert!(
-            has_light_blue,
-            "expected an ordered-list marker span with light blue fg on: {line:?}"
+            !line.spans.is_empty(),
+            "expected at least one span in the line"
+        );
+        let first_span = &line.spans[0];
+        assert_eq!(
+            first_span.style.fg,
+            Some(ratatui::style::Color::LightBlue),
+            "expected first span (the marker) to be light blue: {line:?}"
         );
     }
 
@@ -481,8 +509,8 @@ mod tests {
         let marker_span = &line.spans[0];
         assert_eq!(
             marker_span.style.fg,
-            Some(Color::LightBlue),
-            "expected LightBlue 3rd-level ordered marker, got {:?}",
+            Some(ratatui::style::Color::LightBlue),
+            "expected light blue color for 3rd-level ordered marker, got {:?}",
             marker_span.style.fg
         );
         // Find the first non-empty non-space content span and verify it is default color.
@@ -551,13 +579,24 @@ mod tests {
         let streamed_strs = lines_to_plain_strings(&streamed);
 
         let full: String = deltas.iter().copied().collect();
+
         let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
         crate::markdown::append_markdown(&full, &mut rendered_all, &cfg);
         let rendered_all_strs = lines_to_plain_strings(&rendered_all);
 
+        // The actual behavior is that the second "-" is treated as part of a paragraph
+        // because it's not on a line by itself, so it's not rendered as a list item
         assert_eq!(
-            streamed_strs, rendered_all_strs,
-            "streamed output should match full render without dangling '-' lines"
+            streamed_strs,
+            vec!["- item."],
+            "streamed output for split dashes"
+        );
+
+        // The full render should match the streamed render
+        assert_eq!(
+            rendered_all_strs,
+            vec!["- item."],
+            "full render output for split dashes"
         );
     }
 

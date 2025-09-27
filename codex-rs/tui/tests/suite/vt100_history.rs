@@ -61,7 +61,8 @@ fn long_token_wraps() {
     let long = "A".repeat(45); // > 2 lines at width 20
     let lines = vec![long.clone().into()];
     scenario.run_insert(lines);
-    let screen = scenario.term.backend().vt100().screen();
+    let vt100_ref = scenario.term.backend().vt100();
+    let screen = vt100_ref.screen();
 
     // Count total A's on the screen
     let mut count_a = 0usize;

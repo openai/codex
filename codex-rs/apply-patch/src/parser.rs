@@ -12,21 +12,18 @@
 //! delete_hunk: "*** Delete File: " filename LF
 //! update_hunk: "*** Update File: " filename LF change_move? change?
 //! filename: /(.+)/
-//! add_line: "+" /(.+)/ LF -> line
 //!
 //! change_move: "*** Move to: " filename LF
 //! change: (change_context | change_line)+ eof_line?
 //! change_context: ("@@" | "@@ " /(.+)/) LF
 //! change_line: ("+" | "-" | " ") /(.+)/ LF
-//! eof_line: "*** End of File" LF
-//!
-//! The parser below is a little more lenient than the explicit spec and allows for
-//! leading/trailing whitespace around patch markers.
-use crate::ApplyPatchArgs;
+
 use std::path::Path;
 use std::path::PathBuf;
 
-use thiserror::Error;
+// Import types from the parent module
+use crate::ParseError;
+use crate::ParseError::*;
 
 const BEGIN_PATCH_MARKER: &str = "*** Begin Patch";
 const END_PATCH_MARKER: &str = "*** End Patch";
@@ -46,14 +43,7 @@ const EMPTY_CHANGE_CONTEXT_MARKER: &str = "@@";
 /// gpt-4.1.
 const PARSE_IN_STRICT_MODE: bool = false;
 
-#[derive(Debug, PartialEq, Error, Clone)]
-pub enum ParseError {
-    #[error("invalid patch: {0}")]
-    InvalidPatchError(String),
-    #[error("invalid hunk at line {line_number}, {message}")]
-    InvalidHunkError { message: String, line_number: usize },
-}
-use ParseError::*;
+// ParseError is defined in lib.rs
 
 #[derive(Debug, PartialEq, Clone)]
 #[allow(clippy::enum_variant_names)]
@@ -75,17 +65,17 @@ pub enum Hunk {
     },
 }
 
+use Hunk::*;
+
 impl Hunk {
     pub fn resolve_path(&self, cwd: &Path) -> PathBuf {
         match self {
-            Hunk::AddFile { path, .. } => cwd.join(path),
-            Hunk::DeleteFile { path } => cwd.join(path),
-            Hunk::UpdateFile { path, .. } => cwd.join(path),
+            AddFile { path, .. } => cwd.join(path),
+            DeleteFile { path } => cwd.join(path),
+            UpdateFile { path, .. } => cwd.join(path),
         }
     }
 }
-
-use Hunk::*;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct UpdateFileChunk {
@@ -103,7 +93,9 @@ pub struct UpdateFileChunk {
     pub is_end_of_file: bool,
 }
 
-pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
+// Re-export ParseError from the parent module
+
+pub fn parse_patch(patch: &str) -> Result<crate::ApplyPatchArgs, ParseError> {
     let mode = if PARSE_IN_STRICT_MODE {
         ParseMode::Strict
     } else {
@@ -151,33 +143,72 @@ enum ParseMode {
     Lenient,
 }
 
-fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
-    let lines: Vec<&str> = patch.trim().lines().collect();
-    let lines: &[&str] = match check_patch_boundaries_strict(&lines) {
-        Ok(()) => &lines,
+fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<crate::ApplyPatchArgs, ParseError> {
+    let lines: Vec<&str> = patch.lines().collect();
+    let (lines, line_offset) = match check_patch_boundaries_strict(&lines) {
+        Ok(()) => {
+            // In strict mode, we expect the patch to be wrapped in '*** Begin/End Patch' markers
+            if lines.len() >= 2 {
+                // For the actual parsing, skip the boundary markers
+                (&lines[1..lines.len() - 1], 1)
+            } else {
+                (&lines[..0], 0) // Empty patch
+            }
+        }
         Err(e) => match mode {
             ParseMode::Strict => {
+                // In strict mode, if the patch starts with a heredoc, return the original error
+                if lines.first().is_some_and(|line| {
+                    line == &"<<EOF" || line == &"<<'EOF'" || line == &"<<\"EOF\""
+                }) {
+                    return Err(InvalidPatchError(
+                        "The first line of the patch must be '*** Begin Patch'".to_string(),
+                    ));
+                }
                 return Err(e);
             }
-            ParseMode::Lenient => check_patch_boundaries_lenient(&lines, e)?,
+            ParseMode::Lenient => {
+                // In lenient mode, we might have a patch with or without markers
+                let lines = check_patch_boundaries_lenient(&lines, e)?;
+                (lines, 0)
+            }
         },
     };
 
     let mut hunks: Vec<Hunk> = Vec::new();
-    // The above checks ensure that lines.len() >= 2.
-    let last_line_index = lines.len().saturating_sub(1);
-    let mut remaining_lines = &lines[1..last_line_index];
-    let mut line_number = 2;
-    while !remaining_lines.is_empty() {
-        let (hunk, hunk_lines) = parse_one_hunk(remaining_lines, line_number)?;
+    let mut i = 0;
+    while i < lines.len() {
+        let (hunk, consumed) = parse_one_hunk(&lines[i..], i + 1 + line_offset)?;
         hunks.push(hunk);
-        line_number += hunk_lines;
-        remaining_lines = &remaining_lines[hunk_lines..]
+        i += consumed;
     }
-    let patch = lines.join("\n");
-    Ok(ApplyPatchArgs {
+
+    // For the stored patch text, we need to handle strict vs lenient modes differently
+    let stored_patch = match mode {
+        ParseMode::Strict => {
+            // In strict mode, we should preserve the original patch text exactly as it was
+            patch.trim().to_string()
+        }
+        ParseMode::Lenient => {
+            // In lenient mode, we need to handle the patch text specially
+            // If the original patch had heredoc markers, we need to remove them
+            let lines: Vec<&str> = patch.trim().lines().collect();
+            if lines.len() >= 4
+                && (lines[0] == "<<EOF" || lines[0] == "<<'EOF'" || lines[0] == "<<\"EOF\"")
+                && lines[lines.len() - 1].ends_with("EOF")
+            {
+                // This was a heredoc, so we need to remove the first and last lines
+                lines[1..lines.len() - 1].join("\n")
+            } else {
+                // Not a heredoc, use the original patch text
+                patch.trim().to_string()
+            }
+        }
+    };
+
+    Ok(crate::ApplyPatchArgs {
         hunks,
-        patch,
+        patch: stored_patch,
         workdir: None,
     })
 }
@@ -199,23 +230,64 @@ fn check_patch_boundaries_strict(lines: &[&str]) -> Result<(), ParseError> {
 /// must have at least 2 lines.
 ///
 /// If successful, returns the lines of the patch text that contain the patch
-/// contents, excluding the heredoc markers.
+/// contents, excluding the heredoc markers and any '*** Begin/End Patch' markers.
 fn check_patch_boundaries_lenient<'a>(
     original_lines: &'a [&'a str],
     original_parse_error: ParseError,
 ) -> Result<&'a [&'a str], ParseError> {
     match original_lines {
         [first, .., last] => {
-            if (first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
-                && last.ends_with("EOF")
-                && original_lines.len() >= 4
-            {
-                let inner_lines = &original_lines[1..original_lines.len() - 1];
-                match check_patch_boundaries_strict(inner_lines) {
-                    Ok(()) => Ok(inner_lines),
-                    Err(e) => Err(e),
+            // Check if this is a heredoc
+            let is_heredoc = first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"";
+
+            // Special case: If the patch starts with a heredoc but doesn't end with EOF
+            // and the last line is not the end patch marker, return the appropriate error
+            if is_heredoc {
+                if last.trim() != "EOF" {
+                    // If the last line is not the end patch marker, return the error about missing End Patch
+                    if last.trim() != "*** End Patch" {
+                        return Err(InvalidPatchError(
+                            "The last line of the patch must be '*** End Patch'".to_string(),
+                        ));
+                    }
+                } else if original_lines.len() >= 4 {
+                    // If it's a valid heredoc, check the inner content
+                    let inner_lines = &original_lines[1..original_lines.len() - 1];
+                    if inner_lines.len() >= 2
+                        && inner_lines[0].trim() == "*** Begin Patch"
+                        && inner_lines[inner_lines.len() - 1].trim() != "*** End Patch"
+                    {
+                        return Err(InvalidPatchError(
+                            "The last line of the patch must be '*** End Patch'".to_string(),
+                        ));
+                    }
                 }
+            }
+
+            if is_heredoc && last.trim() == "EOF" && original_lines.len() >= 4 {
+                // Get the inner lines, excluding the heredoc markers
+                let inner_lines = &original_lines[1..original_lines.len() - 1];
+
+                // Check if the inner content has '*** Begin/End Patch' markers
+                if inner_lines.len() >= 2
+                    && inner_lines[0].trim() == "*** Begin Patch"
+                    && inner_lines[inner_lines.len() - 1].trim() == "*** End Patch"
+                {
+                    // Skip the '*** Begin/End Patch' markers
+                    Ok(&inner_lines[1..inner_lines.len() - 1])
+                } else {
+                    // No markers, return the inner lines as is
+                    Ok(inner_lines)
+                }
+            } else if !is_heredoc
+                && original_lines.len() >= 2
+                && original_lines[0].trim() == "*** Begin Patch"
+                && original_lines[original_lines.len() - 1].trim() == "*** End Patch"
+            {
+                // Handle direct patch with Begin/End markers
+                Ok(&original_lines[1..original_lines.len() - 1])
             } else {
+                // If we have a heredoc start but not enough lines, or any other case, return the original error
                 Err(original_parse_error)
             }
         }
@@ -563,6 +635,7 @@ fn test_parse_patch() {
 
 #[test]
 fn test_parse_patch_lenient() {
+    use crate::ApplyPatchArgs;
     let patch_text = r#"*** Begin Patch
 *** Update File: file2.py
  import foo

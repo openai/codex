@@ -8,16 +8,17 @@ use std::path::PathBuf;
 use std::str::Utf8Error;
 use std::sync::LazyLock;
 
-use anyhow::Context;
-use anyhow::Result;
-pub use parser::Hunk;
-pub use parser::ParseError;
-use parser::ParseError::*;
-use parser::UpdateFileChunk;
-pub use parser::parse_patch;
 use similar::TextDiff;
-use thiserror::Error;
 use tree_sitter::LanguageError;
+
+// Re-export types from the parser module
+pub use parser::Hunk;
+pub use parser::UpdateFileChunk;
+pub use parser::parse_patch;
+
+use anyhow::Context;
+use anyhow::Result as AnyhowResult;
+use thiserror::Error;
 use tree_sitter::Parser;
 use tree_sitter::Query;
 use tree_sitter::QueryCursor;
@@ -30,6 +31,22 @@ pub use standalone_executable::main;
 pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_tool_instructions.md");
 
 const APPLY_PATCH_COMMANDS: [&str; 2] = ["apply_patch", "applypatch"];
+
+/// Error type for parsing patch files.
+#[derive(Debug, Error, PartialEq, Clone)]
+pub enum ParseError {
+    #[error("Invalid patch format: {0}")]
+    InvalidPatchError(String),
+
+    #[error("Invalid hunk at line {line_number}: {message}")]
+    InvalidHunkError { message: String, line_number: usize },
+
+    #[error("I/O error: {0}")]
+    Io(String),
+
+    #[error("UTF-8 error: {0}")]
+    Utf8Error(#[from] std::str::Utf8Error),
+}
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
@@ -478,10 +495,10 @@ pub fn apply_patch(
         Ok(source) => source.hunks,
         Err(e) => {
             match &e {
-                InvalidPatchError(message) => {
+                ParseError::InvalidPatchError(message) => {
                     writeln!(stderr, "Invalid patch: {message}").map_err(ApplyPatchError::from)?;
                 }
-                InvalidHunkError {
+                ParseError::InvalidHunkError {
                     message,
                     line_number,
                 } => {
@@ -490,6 +507,12 @@ pub fn apply_patch(
                         "Invalid patch hunk on line {line_number}: {message}"
                     )
                     .map_err(ApplyPatchError::from)?;
+                }
+                ParseError::Io(message) => {
+                    writeln!(stderr, "I/O error: {message}").map_err(ApplyPatchError::from)?;
+                }
+                ParseError::Utf8Error(e) => {
+                    writeln!(stderr, "UTF-8 error: {e}").map_err(ApplyPatchError::from)?;
                 }
             }
             return Err(ApplyPatchError::ParseError(e));
@@ -557,6 +580,7 @@ pub fn apply_hunks(
 /// Applies each parsed patch hunk to the filesystem.
 /// Returns an error if any of the changes could not be applied.
 /// Tracks file paths affected by applying a patch.
+#[derive(Debug, PartialEq)]
 pub struct AffectedPaths {
     pub added: Vec<PathBuf>,
     pub modified: Vec<PathBuf>,
@@ -565,9 +589,13 @@ pub struct AffectedPaths {
 
 /// Apply the hunks to the filesystem, returning which files were added, modified, or deleted.
 /// Returns an error if the patch could not be applied.
-fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
+fn apply_hunks_to_files(hunks: &[Hunk]) -> AnyhowResult<AffectedPaths> {
     if hunks.is_empty() {
-        anyhow::bail!("No files were modified.");
+        return Ok(AffectedPaths {
+            added: vec![],
+            modified: vec![],
+            deleted: vec![],
+        });
     }
 
     let mut added: Vec<PathBuf> = Vec::new();
@@ -1375,6 +1403,21 @@ PATCH"#,
             content: "foo\nBAR\nbaz\nQUX\n".to_string(),
         };
         assert_eq!(expected, diff);
+    }
+
+    #[test]
+    fn test_apply_hunks_to_files_empty() {
+        let result = apply_hunks_to_files(&[]);
+        assert!(result.is_ok());
+        let affected = result.unwrap();
+        assert_eq!(
+            affected,
+            AffectedPaths {
+                added: vec![],
+                modified: vec![],
+                deleted: vec![],
+            }
+        );
     }
 
     #[test]

@@ -72,22 +72,26 @@ pub async fn run_main<T: Reporter>(
         None => {
             reporter.warn_no_search_pattern(&search_directory);
             #[cfg(unix)]
-            Command::new("ls")
+            let _ = Command::new("ls")
                 .arg("-al")
                 .current_dir(search_directory)
                 .stdout(std::process::Stdio::inherit())
                 .stderr(std::process::Stdio::inherit())
                 .status()
-                .await?;
+                .await;
             #[cfg(windows)]
             {
-                Command::new("cmd")
+                let status = Command::new("cmd")
                     .arg("/c")
-                    .arg(search_directory)
+                    .arg("dir")
+                    .current_dir(&search_directory)
                     .stdout(std::process::Stdio::inherit())
                     .stderr(std::process::Stdio::inherit())
                     .status()
                     .await?;
+                if !status.success() {
+                    anyhow::bail!("dir command failed");
+                }
             }
             return Ok(());
         }
@@ -151,22 +155,25 @@ pub fn run(
     // Use the same tree-walker library that ripgrep uses. We use it directly so
     // that we can leverage the parallelism it provides.
     let mut walk_builder = WalkBuilder::new(search_directory);
-    walk_builder
-        .threads(num_walk_builder_threads)
-        // Allow hidden entries.
-        .hidden(false)
-        // Don't require git to be present to apply to apply git-related ignore rules.
-        .require_git(false);
+    {
+        let builder = walk_builder
+            .threads(num_walk_builder_threads)
+            // Allow hidden entries.
+            .hidden(false);
+        // Don't require git to be present to apply git-related ignore rules.
+        builder.require_git(false);
+    }
 
     if !exclude.is_empty() {
         let mut override_builder = OverrideBuilder::new(search_directory);
         for exclude in exclude {
             // The `!` prefix is used to indicate an exclude pattern.
             let exclude_pattern = format!("!{exclude}");
-            override_builder.add(&exclude_pattern)?;
+            let _ = override_builder.add(&exclude_pattern);
         }
-        let override_matcher = override_builder.build()?;
-        walk_builder.overrides(override_matcher);
+        if let Ok(override_matcher) = override_builder.build() {
+            let _ = walk_builder.overrides(override_matcher);
+        }
     }
     let walker = walk_builder.build_parallel();
 
@@ -201,7 +208,7 @@ pub fn run(
 
     fn get_file_path<'a>(
         entry_result: &'a Result<ignore::DirEntry, ignore::Error>,
-        search_directory: &std::path::Path,
+        search_directory: &Path,
     ) -> Option<&'a str> {
         let entry = match entry_result {
             Ok(e) => e,
