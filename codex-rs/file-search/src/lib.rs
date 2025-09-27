@@ -287,10 +287,27 @@ pub fn run(
 
 /// Sort matches in-place by descending score, then ascending path.
 fn sort_matches(matches: &mut [(u32, String)]) {
-    matches.sort_by(|a, b| match b.0.cmp(&a.0) {
-        std::cmp::Ordering::Equal => a.1.cmp(&b.1),
+    matches.sort_by(cmp_by_score_desc_then_path_asc::<(u32, String), _, _>(
+        |t| t.0,
+        |t| t.1.as_str(),
+    ));
+}
+
+/// Returns a comparator closure suitable for `slice.sort_by(...)` that orders
+/// items by descending score and then ascending path using the provided accessors.
+pub fn cmp_by_score_desc_then_path_asc<T, FScore, FPath>(
+    score_of: FScore,
+    path_of: FPath,
+) -> impl FnMut(&T, &T) -> std::cmp::Ordering
+where
+    FScore: Fn(&T) -> u32,
+    FPath: Fn(&T) -> &str,
+{
+    use std::cmp::Ordering;
+    move |a, b| match score_of(b).cmp(&score_of(a)) {
+        Ordering::Equal => path_of(a).cmp(path_of(b)),
         other => other,
-    });
+    }
 }
 
 /// Maintains the `max_count` best matches for a given pattern.

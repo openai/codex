@@ -1,5 +1,6 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::json_to_toml::json_to_toml;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
@@ -52,6 +53,8 @@ use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
+use codex_protocol::mcp_protocol::FuzzyFileSearchParams;
+use codex_protocol::mcp_protocol::FuzzyFileSearchResponse;
 use codex_protocol::mcp_protocol::GetUserAgentResponse;
 use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
@@ -88,6 +91,8 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::Mutex;
@@ -122,6 +127,7 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
+    pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
 impl CodexMessageProcessor {
@@ -141,6 +147,7 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
+            pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -205,6 +212,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::UserInfo { request_id } => {
                 self.get_user_info(request_id).await;
+            }
+            ClientRequest::FuzzyFileSearch { request_id, params } => {
+                self.fuzzy_file_search(request_id, params).await;
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
@@ -1166,6 +1176,46 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
+    }
+
+    async fn fuzzy_file_search(&mut self, request_id: RequestId, params: FuzzyFileSearchParams) {
+        let FuzzyFileSearchParams {
+            query,
+            roots,
+            cancellation_token,
+        } = params;
+
+        let cancel_flag = match cancellation_token.clone() {
+            Some(token) => {
+                let mut pending_fuzzy_searches = self.pending_fuzzy_searches.lock().await;
+                // if a cancellation_token is provided and a pending_request exists for
+                // that token, cancel it
+                if let Some(existing) = pending_fuzzy_searches.get(&token) {
+                    existing.store(true, Ordering::Relaxed);
+                }
+                let flag = Arc::new(AtomicBool::new(false));
+                pending_fuzzy_searches.insert(token.clone(), flag.clone());
+                flag
+            }
+            None => Arc::new(AtomicBool::new(false)),
+        };
+
+        let results = match query.as_str() {
+            "" => vec![],
+            _ => run_fuzzy_file_search(query, roots, cancel_flag.clone()).await,
+        };
+
+        if let Some(token) = cancellation_token {
+            let mut pending_fuzzy_searches = self.pending_fuzzy_searches.lock().await;
+            if let Some(current_flag) = pending_fuzzy_searches.get(&token)
+                && Arc::ptr_eq(current_flag, &cancel_flag)
+            {
+                pending_fuzzy_searches.remove(&token);
+            }
+        }
+
+        let response = FuzzyFileSearchResponse { files: results };
+        self.outgoing.send_response(request_id, response).await;
     }
 }
 
