@@ -90,6 +90,8 @@ async fn test_codex_jsonrpc_conversation_flow() {
     let NewConversationResponse {
         conversation_id,
         model,
+        reasoning_effort: _,
+        rollout_path: _,
     } = new_conv_resp;
     assert_eq!(model, "mock-model");
 
@@ -318,7 +320,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: "mock-model".to_string(),
-            effort: ReasoningEffort::Medium,
+            effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
         })
         .await

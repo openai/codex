@@ -7,8 +7,6 @@ use std::collections::HashMap;
 
 use crate::model_family::ModelFamily;
 use crate::plan_tool::PLAN_TOOL;
-use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPolicy;
 use crate::tool_apply_patch::ApplyPatchToolType;
 use crate::tool_apply_patch::create_apply_patch_freeform_tool;
 use crate::tool_apply_patch::create_apply_patch_json_tool;
@@ -57,10 +55,9 @@ pub(crate) enum OpenAiTool {
 
 #[derive(Debug, Clone)]
 pub enum ConfigShellToolType {
-    DefaultShell,
-    ShellWithRequest { sandbox_policy: SandboxPolicy },
-    LocalShell,
-    StreamableShell,
+    Default,
+    Local,
+    Streamable,
 }
 
 #[derive(Debug, Clone)]
@@ -70,43 +67,37 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    pub experimental_unified_exec_tool: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_family: &'a ModelFamily,
-    pub(crate) approval_policy: AskForApproval,
-    pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) include_plan_tool: bool,
     pub(crate) include_apply_patch_tool: bool,
     pub(crate) include_web_search_request: bool,
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
+    pub(crate) experimental_unified_exec_tool: bool,
 }
 
 impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let ToolsConfigParams {
             model_family,
-            approval_policy,
-            sandbox_policy,
             include_plan_tool,
             include_apply_patch_tool,
             include_web_search_request,
             use_streamable_shell_tool,
             include_view_image_tool,
+            experimental_unified_exec_tool,
         } = params;
-        let mut shell_type = if *use_streamable_shell_tool {
-            ConfigShellToolType::StreamableShell
+        let shell_type = if *use_streamable_shell_tool {
+            ConfigShellToolType::Streamable
         } else if model_family.uses_local_shell_tool {
-            ConfigShellToolType::LocalShell
+            ConfigShellToolType::Local
         } else {
-            ConfigShellToolType::DefaultShell
+            ConfigShellToolType::Default
         };
-        if matches!(approval_policy, AskForApproval::OnRequest) && !use_streamable_shell_tool {
-            shell_type = ConfigShellToolType::ShellWithRequest {
-                sandbox_policy: sandbox_policy.clone(),
-            }
-        }
 
         let apply_patch_tool_type = match model_family.apply_patch_tool_type {
             Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
@@ -126,6 +117,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
+            experimental_unified_exec_tool: *experimental_unified_exec_tool,
         }
     }
 }
@@ -166,6 +158,53 @@ pub(crate) enum JsonSchema {
     },
 }
 
+fn create_unified_exec_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "input".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::String { description: None }),
+            description: Some(
+                "When no session_id is provided, treat the array as the command and arguments \
+                 to launch. When session_id is set, concatenate the strings (in order) and write \
+                 them to the session's stdin."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "session_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Identifier for an existing interactive session. If omitted, a new command \
+                 is spawned."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum time in milliseconds to wait for output after writing the input."
+                    .to_string(),
+            ),
+        },
+    );
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "unified_exec".to_string(),
+        description:
+            "Runs a command in a PTY. Provide a session_id to reuse an existing interactive session.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["input".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
 fn create_shell_tool() -> OpenAiTool {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -188,110 +227,22 @@ fn create_shell_tool() -> OpenAiTool {
         },
     );
 
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "shell".to_string(),
-        description: "Runs a shell command and returns its output".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["command".to_string()]),
-            additional_properties: Some(false),
-        },
-    })
-}
-
-fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
-    let mut properties = BTreeMap::new();
     properties.insert(
-        "command".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String { description: None }),
-            description: Some("The command to execute".to_string()),
-        },
-    );
-    properties.insert(
-        "workdir".to_string(),
-        JsonSchema::String {
-            description: Some("The working directory to execute the command in".to_string()),
-        },
-    );
-    properties.insert(
-        "timeout_ms".to_string(),
-        JsonSchema::Number {
-            description: Some("The timeout for the command in milliseconds".to_string()),
-        },
-    );
-
-    if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        properties.insert(
         "with_escalated_permissions".to_string(),
         JsonSchema::Boolean {
             description: Some("Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string()),
         },
     );
-        properties.insert(
+    properties.insert(
         "justification".to_string(),
         JsonSchema::String {
             description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
         },
     );
-    }
-
-    let description = match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite {
-            network_access,
-            writable_roots,
-            ..
-        } => {
-            format!(
-                r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a sandbox, and some shell commands will require escalated privileges:
-  - Types of actions that require escalated privileges:
-    - Writing files other than those in the writable roots
-      - writable roots:
-{}{}
-  - Examples of commands that require escalated privileges:
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter."#,
-                writable_roots.iter().map(|wr| format!("        - {}", wr.to_string_lossy())).collect::<Vec<String>>().join("\n"),
-                if !network_access {
-                    "\n    - Commands that require network access\n"
-                } else {
-                    ""
-                }
-            )
-        }
-        SandboxPolicy::DangerFullAccess => {
-            "Runs a shell command and returns its output.".to_string()
-        }
-        SandboxPolicy::ReadOnly => {
-            r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a sandbox, and some shell commands (including apply_patch) will require escalated permissions:
-  - Types of actions that require escalated privileges:
-    - Writing files
-    - Applying patches
-  - Examples of commands that require escalated privileges:
-    - apply_patch
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter"#.to_string()
-        }
-    };
 
     OpenAiTool::Function(ResponsesApiTool {
         name: "shell".to_string(),
-        description,
+        description: "Runs a shell command and returns its output.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -334,7 +285,7 @@ pub(crate) struct ApplyPatchToolArgs {
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
 pub fn create_tools_json_for_responses_api(
-    tools: &Vec<OpenAiTool>,
+    tools: &[OpenAiTool],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     let mut tools_json = Vec::new();
 
@@ -349,7 +300,7 @@ pub fn create_tools_json_for_responses_api(
 /// Chat Completions API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
 pub(crate) fn create_tools_json_for_chat_completions_api(
-    tools: &Vec<OpenAiTool>,
+    tools: &[OpenAiTool],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // We start with the JSON for the Responses API and than rewrite it to match
     // the chat completions tool call format.
@@ -449,10 +400,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
             }
 
             // Normalize/ensure type
-            let mut ty = map
-                .get("type")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+            let mut ty = map.get("type").and_then(|v| v.as_str()).map(str::to_string);
 
             // If type is an array (union), pick first supported; else leave to inference
             if ty.is_none()
@@ -534,23 +482,24 @@ pub(crate) fn get_openai_tools(
 ) -> Vec<OpenAiTool> {
     let mut tools: Vec<OpenAiTool> = Vec::new();
 
-    match &config.shell_type {
-        ConfigShellToolType::DefaultShell => {
-            tools.push(create_shell_tool());
-        }
-        ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
-            tools.push(create_shell_tool_for_sandbox(sandbox_policy));
-        }
-        ConfigShellToolType::LocalShell => {
-            tools.push(OpenAiTool::LocalShell {});
-        }
-        ConfigShellToolType::StreamableShell => {
-            tools.push(OpenAiTool::Function(
-                crate::exec_command::create_exec_command_tool_for_responses_api(),
-            ));
-            tools.push(OpenAiTool::Function(
-                crate::exec_command::create_write_stdin_tool_for_responses_api(),
-            ));
+    if config.experimental_unified_exec_tool {
+        tools.push(create_unified_exec_tool());
+    } else {
+        match &config.shell_type {
+            ConfigShellToolType::Default => {
+                tools.push(create_shell_tool());
+            }
+            ConfigShellToolType::Local => {
+                tools.push(OpenAiTool::LocalShell {});
+            }
+            ConfigShellToolType::Streamable => {
+                tools.push(OpenAiTool::Function(
+                    crate::exec_command::create_exec_command_tool_for_responses_api(),
+                ));
+                tools.push(OpenAiTool::Function(
+                    crate::exec_command::create_write_stdin_tool_for_responses_api(),
+                ));
+            }
         }
     }
 
@@ -577,10 +526,8 @@ pub(crate) fn get_openai_tools(
     if config.include_view_image_tool {
         tools.push(create_view_image_tool());
     }
-
     if let Some(mcp_tools) = mcp_tools {
         // Ensure deterministic ordering to maximize prompt cache hits.
-        // HashMap iteration order is non-deterministic, so sort by fully-qualified tool name.
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -635,19 +582,18 @@ mod tests {
             .expect("codex-mini-latest should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: true,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
         assert_eq_tool_names(
             &tools,
-            &["local_shell", "update_plan", "web_search", "view_image"],
+            &["unified_exec", "update_plan", "web_search", "view_image"],
         );
     }
 
@@ -656,19 +602,18 @@ mod tests {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: true,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
         assert_eq_tool_names(
             &tools,
-            &["shell", "update_plan", "web_search", "view_image"],
+            &["unified_exec", "update_plan", "web_search", "view_image"],
         );
     }
 
@@ -677,13 +622,12 @@ mod tests {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let tools = get_openai_tools(
             &config,
@@ -726,7 +670,7 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "shell",
+                "unified_exec",
                 "web_search",
                 "view_image",
                 "test_server/do_something_cool",
@@ -782,13 +726,12 @@ mod tests {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: false,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -841,11 +784,11 @@ mod tests {
         ]);
 
         let tools = get_openai_tools(&config, Some(tools_map));
-        // Expect shell first, followed by MCP tools sorted by fully-qualified name.
+        // Expect unified_exec first, followed by MCP tools sorted by fully-qualified name.
         assert_eq_tool_names(
             &tools,
             &[
-                "shell",
+                "unified_exec",
                 "view_image",
                 "test_server/cool",
                 "test_server/do",
@@ -859,13 +802,12 @@ mod tests {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -893,7 +835,7 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["shell", "web_search", "view_image", "dash/search"],
+            &["unified_exec", "web_search", "view_image", "dash/search"],
         );
 
         assert_eq!(
@@ -921,13 +863,12 @@ mod tests {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -953,7 +894,7 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["shell", "web_search", "view_image", "dash/paginate"],
+            &["unified_exec", "web_search", "view_image", "dash/paginate"],
         );
         assert_eq!(
             tools[3],
@@ -978,13 +919,12 @@ mod tests {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -1008,7 +948,10 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "view_image", "dash/tags"]);
+        assert_eq_tool_names(
+            &tools,
+            &["unified_exec", "web_search", "view_image", "dash/tags"],
+        );
         assert_eq!(
             tools[3],
             OpenAiTool::Function(ResponsesApiTool {
@@ -1035,13 +978,12 @@ mod tests {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -1065,7 +1007,10 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "view_image", "dash/value"]);
+        assert_eq_tool_names(
+            &tools,
+            &["unified_exec", "web_search", "view_image", "dash/value"],
+        );
         assert_eq!(
             tools[3],
             OpenAiTool::Function(ResponsesApiTool {
@@ -1085,14 +1030,8 @@ mod tests {
     }
 
     #[test]
-    fn test_shell_tool_for_sandbox_workspace_write() {
-        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec!["workspace".into()],
-            network_access: false,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
-        };
-        let tool = super::create_shell_tool_for_sandbox(&sandbox_policy);
+    fn test_shell_tool() {
+        let tool = super::create_shell_tool();
         let OpenAiTool::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool
@@ -1101,66 +1040,7 @@ mod tests {
         };
         assert_eq!(name, "shell");
 
-        let expected = r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a sandbox, and some shell commands will require escalated privileges:
-  - Types of actions that require escalated privileges:
-    - Writing files other than those in the writable roots
-      - writable roots:
-        - workspace
-    - Commands that require network access
-
-  - Examples of commands that require escalated privileges:
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter."#;
+        let expected = "Runs a shell command and returns its output.";
         assert_eq!(description, expected);
-    }
-
-    #[test]
-    fn test_shell_tool_for_sandbox_readonly() {
-        let tool = super::create_shell_tool_for_sandbox(&SandboxPolicy::ReadOnly);
-        let OpenAiTool::Function(ResponsesApiTool {
-            description, name, ..
-        }) = &tool
-        else {
-            panic!("expected function tool");
-        };
-        assert_eq!(name, "shell");
-
-        let expected = r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a sandbox, and some shell commands (including apply_patch) will require escalated permissions:
-  - Types of actions that require escalated privileges:
-    - Writing files
-    - Applying patches
-  - Examples of commands that require escalated privileges:
-    - apply_patch
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter"#;
-        assert_eq!(description, expected);
-    }
-
-    #[test]
-    fn test_shell_tool_for_sandbox_danger_full_access() {
-        let tool = super::create_shell_tool_for_sandbox(&SandboxPolicy::DangerFullAccess);
-        let OpenAiTool::Function(ResponsesApiTool {
-            description, name, ..
-        }) = &tool
-        else {
-            panic!("expected function tool");
-        };
-        assert_eq!(name, "shell");
-
-        assert_eq!(description, "Runs a shell command and returns its output.");
     }
 }

@@ -77,7 +77,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}
 
@@ -167,6 +167,14 @@ jobs:
     needs: build
     name: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      version: ${{ steps.release_name.outputs.name }}
+      tag: ${{ github.ref_name }}
+      should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
+      npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
 
     steps:
       - name: Checkout repository
@@ -187,21 +195,37 @@ jobs:
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
+      - name: Determine npm publish settings
+        id: npm_publish_settings
+        env:
+          VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION}"
+
+          if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # build_npm_package.py requires DotSlash when staging releases.
+      - uses: facebook/install-dotslash@v2
       - name: Stage npm package
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TMP_DIR="${RUNNER_TEMP}/npm-stage"
-          python3 codex-cli/scripts/stage_rust_release.py \
+          ./codex-cli/scripts/build_npm_package.py \
             --release-version "${{ steps.release_name.outputs.name }}" \
-            --tmp "${TMP_DIR}"
-          mkdir -p dist/npm
-          # Produce an npm-ready tarball using `npm pack` and store it in dist/npm.
-          # We then rename it to a stable name used by our publishing script.
-          (cd "$TMP_DIR" && npm pack --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
-          mv "${GITHUB_WORKSPACE}"/dist/npm/*.tgz \
-             "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
+            --staging-dir "${TMP_DIR}" \
+            --pack-output "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -219,3 +243,74 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+  # Publish to npm using OIDC authentication.
+  # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
+  # npm docs: https://docs.npmjs.com/trusted-publishers
+  publish-npm:
+    # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
+    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    name: publish-npm
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for OIDC
+      contents: read
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+          scope: "@openai"
+
+      # Trusted publishing requires npm CLI version 11.5.1 or later.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Download npm tarball from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.release.outputs.version }}"
+          tag="${{ needs.release.outputs.tag }}"
+          mkdir -p dist/npm
+          gh release download "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "codex-npm-${version}.tgz" \
+            --dir dist/npm
+
+      # No NODE_AUTH_TOKEN needed because we use OIDC.
+      - name: Publish to npm
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+        run: |
+          set -euo pipefail
+          tag_args=()
+          if [[ -n "${NPM_TAG}" ]]; then
+            tag_args+=(--tag "${NPM_TAG}")
+          fi
+
+          npm publish "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${VERSION}.tgz" "${tag_args[@]}"
+
+  update-branch:
+    name: Update latest-alpha-cli branch
+    permissions:
+      contents: write
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Update latest-alpha-cli branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api \
+            repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli \
+            -X PATCH \
+            -f sha="${GITHUB_SHA}" \
+            -F force=true

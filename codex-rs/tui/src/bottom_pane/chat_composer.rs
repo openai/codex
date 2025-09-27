@@ -1,5 +1,3 @@
-use codex_core::protocol::TokenUsageInfo;
-use codex_protocol::num_format::format_si_suffix;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -9,15 +7,10 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
@@ -25,10 +18,20 @@ use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
+use super::footer::FooterMode;
+use super::footer::FooterProps;
+use super::footer::esc_hint_mode;
+use super::footer::footer_height;
+use super::footer::prompt_mode;
+use super::footer::render_footer;
+use super::footer::reset_mode_after_activity;
+use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::slash_command::SlashCommand;
+use crate::style::user_message_style;
+use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::app_event::AppEvent;
@@ -37,7 +40,7 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
-use crate::key_hint;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -76,7 +79,6 @@ pub(crate) struct ChatComposer {
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
-    token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
@@ -86,6 +88,7 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    footer_mode: FooterMode,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -94,6 +97,8 @@ enum ActivePopup {
     Command(CommandPopup),
     File(FileSearchPopup),
 }
+
+const FOOTER_SPACING_HEIGHT: u16 = 1;
 
 impl ChatComposer {
     pub fn new(
@@ -117,7 +122,6 @@ impl ChatComposer {
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
-            token_usage_info: None,
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
@@ -125,6 +129,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            footer_mode: FooterMode::ShortcutPrompt,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -132,39 +137,62 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        self.textarea.desired_height(width - 1)
+        let footer_props = self.footer_props();
+        let footer_hint_height = footer_height(footer_props);
+        let footer_spacing = if footer_hint_height > 0 {
+            FOOTER_SPACING_HEIGHT
+        } else {
+            0
+        };
+        let footer_total_height = footer_hint_height + footer_spacing;
+        self.textarea
+            .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
+            + 2
             + match &self.active_popup {
-                ActivePopup::None => 1u16,
-                ActivePopup::Command(c) => c.calculate_required_height(),
+                ActivePopup::None => footer_total_height,
+                ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
 
-    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let popup_height = match &self.active_popup {
-            ActivePopup::Command(popup) => popup.calculate_required_height(),
-            ActivePopup::File(popup) => popup.calculate_required_height(),
-            ActivePopup::None => 1,
+    fn layout_areas(&self, area: Rect) -> [Rect; 3] {
+        let footer_props = self.footer_props();
+        let footer_hint_height = footer_height(footer_props);
+        let footer_spacing = if footer_hint_height > 0 {
+            FOOTER_SPACING_HEIGHT
+        } else {
+            0
         };
-        let [textarea_rect, _] =
-            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
-        let mut textarea_rect = textarea_rect;
-        textarea_rect.width = textarea_rect.width.saturating_sub(1);
-        textarea_rect.x += 1;
-        let state = self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, &state)
+        let footer_total_height = footer_hint_height + footer_spacing;
+        let popup_constraint = match &self.active_popup {
+            ActivePopup::Command(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
+            ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::None => Constraint::Max(footer_total_height),
+        };
+        let mut area = area;
+        if area.height > 1 {
+            area.height -= 1;
+            area.y += 1;
+        }
+        let [composer_rect, popup_rect] =
+            Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
+        let mut textarea_rect = composer_rect;
+        textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
+        textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
+        [composer_rect, textarea_rect, popup_rect]
+    }
+
+    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        let [_, textarea_rect, _] = self.layout_areas(area);
+        let state = *self.textarea_state.borrow();
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 
     /// Returns true if the composer currently contains no user input.
     pub(crate) fn is_empty(&self) -> bool {
         self.textarea.is_empty()
-    }
-
-    /// Update the cached *context-left* percentage and refresh the placeholder
-    /// text. The UI relies on the placeholder to convey the remaining
-    /// context when the composer is empty.
-    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
-        self.token_usage_info = token_info;
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
@@ -243,6 +271,10 @@ impl ChatComposer {
 
     /// Replace the entire composer content with `text` and reset cursor.
     pub(crate) fn set_text_content(&mut self, text: String) {
+        // Clear any existing content, placeholders, and attachments first.
+        self.textarea.set_text("");
+        self.pending_pastes.clear();
+        self.attached_images.clear();
         self.textarea.set_text(&text);
         self.textarea.set_cursor(0);
         self.sync_command_popup();
@@ -250,7 +282,6 @@ impl ChatComposer {
     }
 
     /// Get the current composer text.
-    #[cfg(test)]
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
     }
@@ -301,6 +332,11 @@ impl ChatComposer {
 
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
+        if show {
+            self.footer_mode = prompt_mode();
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
         self.set_has_focus(has_focus);
     }
 
@@ -336,6 +372,18 @@ impl ChatComposer {
 
     /// Handle key event when the slash-command popup is visible.
     fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        if key_event.code == KeyCode::Esc {
+            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+            if next_mode != self.footer_mode {
+                self.footer_mode = next_mode;
+                return (InputResult::None, true);
+            }
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
         let ActivePopup::Command(popup) = &mut self.active_popup else {
             unreachable!();
         };
@@ -407,7 +455,7 @@ impl ChatComposer {
                     // Capture any needed data from popup before clearing it.
                     let prompt_content = match sel {
                         CommandItem::UserPrompt(idx) => {
-                            popup.prompt_content(idx).map(|s| s.to_string())
+                            popup.prompt_content(idx).map(str::to_string)
                         }
                         _ => None,
                     };
@@ -460,6 +508,18 @@ impl ChatComposer {
 
     /// Handle key events when file search popup is visible.
     fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        if key_event.code == KeyCode::Esc {
+            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+            if next_mode != self.footer_mode {
+                self.footer_mode = next_mode;
+                return (InputResult::None, true);
+            }
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
         let ActivePopup::File(popup) = &mut self.active_popup else {
             unreachable!();
         };
@@ -483,7 +543,7 @@ impl ChatComposer {
             } => {
                 // Hide popup without modifying text, remember token to avoid immediate reopen.
                 if let Some(tok) = Self::current_at_token(&self.textarea) {
-                    self.dismissed_file_popup_token = Some(tok.to_string());
+                    self.dismissed_file_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
@@ -536,13 +596,13 @@ impl ChatComposer {
                         let format_label = match Path::new(&sel_path)
                             .extension()
                             .and_then(|e| e.to_str())
-                            .map(|s| s.to_ascii_lowercase())
+                            .map(str::to_ascii_lowercase)
                         {
                             Some(ext) if ext == "png" => "PNG",
                             Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
                             _ => "IMG",
                         };
-                        self.attach_image(path_buf.clone(), w, h, format_label);
+                        self.attach_image(path_buf, w, h, format_label);
                         // Add a trailing space to keep typing fluid.
                         self.textarea.insert_str(" ");
                     } else {
@@ -603,7 +663,7 @@ impl ChatComposer {
             text[safe_cursor..]
                 .chars()
                 .next()
-                .map(|c| c.is_whitespace())
+                .map(char::is_whitespace)
                 .unwrap_or(false)
         } else {
             false
@@ -631,7 +691,7 @@ impl ChatComposer {
         let ws_len_right: usize = after_cursor
             .chars()
             .take_while(|c| c.is_whitespace())
-            .map(|c| c.len_utf8())
+            .map(char::len_utf8)
             .sum();
         let start_right = safe_cursor + ws_len_right;
         let end_right_rel = text[start_right..]
@@ -711,6 +771,18 @@ impl ChatComposer {
 
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        if key_event.code == KeyCode::Esc {
+            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+            if next_mode != self.footer_mode {
+                self.footer_mode = next_mode;
+                return (InputResult::None, true);
+            }
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -853,6 +925,10 @@ impl ChatComposer {
         // elapsed since the last char, flush it before handling a new input.
         let now = Instant::now();
         self.handle_paste_burst_flush(now);
+
+        if !matches!(input.code, KeyCode::Esc) {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
         if matches!(input.code, KeyCode::Enter)
@@ -1127,6 +1203,47 @@ impl ChatComposer {
         false
     }
 
+    fn handle_shortcut_overlay_key(&mut self, key_event: &KeyEvent) -> bool {
+        if key_event.kind != KeyEventKind::Press {
+            return false;
+        }
+
+        let toggles = match key_event.code {
+            KeyCode::Char('?') if key_event.modifiers.is_empty() => true,
+            KeyCode::BackTab => true,
+            KeyCode::Tab if key_event.modifiers.contains(KeyModifiers::SHIFT) => true,
+            _ => false,
+        };
+
+        if !toggles {
+            return false;
+        }
+
+        let next = toggle_shortcut_mode(self.footer_mode, self.ctrl_c_quit_hint);
+        let changed = next != self.footer_mode;
+        self.footer_mode = next;
+        changed
+    }
+
+    fn footer_props(&self) -> FooterProps {
+        FooterProps {
+            mode: self.footer_mode(),
+            esc_backtrack_hint: self.esc_backtrack_hint,
+            use_shift_enter_hint: self.use_shift_enter_hint,
+            is_task_running: self.is_task_running,
+        }
+    }
+
+    fn footer_mode(&self) -> FooterMode {
+        if matches!(self.footer_mode, FooterMode::EscHint) {
+            FooterMode::EscHint
+        } else if self.ctrl_c_quit_hint {
+            FooterMode::CtrlCReminder
+        } else {
+            self.footer_mode
+        }
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
@@ -1210,22 +1327,30 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        if running {
+            self.footer_mode = prompt_mode();
+        }
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
+        if show {
+            self.footer_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
     }
 }
 
 impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let popup_height = match &self.active_popup {
-            ActivePopup::Command(popup) => popup.calculate_required_height(),
-            ActivePopup::File(popup) => popup.calculate_required_height(),
-            ActivePopup::None => 1,
-        };
-        let [textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
+        let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
+        if !matches!(self.active_popup, ActivePopup::None) {
+            buf.set_style(
+                popup_rect,
+                user_message_style(terminal_palette::default_bg()),
+            );
+        }
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -1234,103 +1359,45 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let bottom_line_rect = popup_rect;
-                let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
-                    let ctrl_c_followup = if self.is_task_running {
-                        " to interrupt"
-                    } else {
-                        " to quit"
-                    };
-                    vec![
-                        " ".into(),
-                        key_hint::ctrl('C'),
-                        " again".into(),
-                        ctrl_c_followup.into(),
-                    ]
+                let footer_hint_height = footer_height(self.footer_props());
+                let footer_spacing = if footer_hint_height > 0 {
+                    FOOTER_SPACING_HEIGHT
                 } else {
-                    let newline_hint_key = if self.use_shift_enter_hint {
-                        key_hint::shift('⏎')
-                    } else {
-                        key_hint::ctrl('J')
-                    };
-                    vec![
-                        " ".into(),
-                        key_hint::plain('⏎'),
-                        " send   ".into(),
-                        newline_hint_key,
-                        " newline   ".into(),
-                        key_hint::ctrl('T'),
-                        " transcript   ".into(),
-                        key_hint::ctrl('C'),
-                        " quit".into(),
-                    ]
+                    0
                 };
-
-                if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
-                    hint.push("   ".into());
-                    hint.push(key_hint::plain("Esc"));
-                    hint.push(" edit prev".into());
-                }
-
-                // Append token/context usage info to the footer hints when available.
-                if let Some(token_usage_info) = &self.token_usage_info {
-                    let token_usage = &token_usage_info.total_token_usage;
-                    hint.push("   ".into());
-                    hint.push(
-                        Span::from(format!(
-                            "{} tokens used",
-                            format_si_suffix(token_usage.blended_total())
-                        ))
-                        .style(Style::default().add_modifier(Modifier::DIM)),
-                    );
-                    let last_token_usage = &token_usage_info.last_token_usage;
-                    if let Some(context_window) = token_usage_info.model_context_window {
-                        let percent_remaining: u8 = if context_window > 0 {
-                            last_token_usage.percent_of_context_window_remaining(context_window)
-                        } else {
-                            100
-                        };
-                        let context_style = if percent_remaining < 20 {
-                            Style::default().fg(Color::Yellow)
-                        } else {
-                            Style::default().add_modifier(Modifier::DIM)
-                        };
-                        hint.push("   ".into());
-                        hint.push(Span::styled(
-                            format!("{percent_remaining}% context left"),
-                            context_style,
-                        ));
-                    }
-                }
-
-                Line::from(hint)
-                    .style(Style::default().dim())
-                    .render_ref(bottom_line_rect, buf);
+                let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
+                    let [_, hint_rect] = Layout::vertical([
+                        Constraint::Length(footer_spacing),
+                        Constraint::Length(footer_hint_height),
+                    ])
+                    .areas(popup_rect);
+                    hint_rect
+                } else {
+                    popup_rect
+                };
+                let mut footer_rect = hint_rect;
+                footer_rect.x = footer_rect.x.saturating_add(2);
+                footer_rect.width = footer_rect.width.saturating_sub(2);
+                render_footer(footer_rect, buf, self.footer_props());
             }
         }
-        let border_style = if self.has_focus {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().add_modifier(Modifier::DIM)
-        };
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_type(BorderType::QuadrantOutside)
-            .border_style(border_style)
-            .render_ref(
-                Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
-                buf,
-            );
-        let mut textarea_rect = textarea_rect;
-        textarea_rect.width = textarea_rect.width.saturating_sub(1);
-        textarea_rect.x += 1;
+        let style = user_message_style(terminal_palette::default_bg());
+        let mut block_rect = composer_rect;
+        block_rect.y = composer_rect.y.saturating_sub(1);
+        block_rect.height = composer_rect.height.saturating_add(1);
+        Block::default().style(style).render_ref(block_rect, buf);
+        buf.set_span(
+            composer_rect.x,
+            composer_rect.y,
+            &"›".bold(),
+            composer_rect.width,
+        );
 
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            Line::from(self.placeholder_text.as_str())
-                .style(Style::default().dim())
-                .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
+            let placeholder = Span::from(self.placeholder_text.as_str()).dim();
+            Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
         }
     }
 }
@@ -1340,6 +1407,7 @@ mod tests {
     use super::*;
     use image::ImageBuffer;
     use image::Rgba;
+    use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -1349,8 +1417,138 @@ mod tests {
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
+    use crate::bottom_pane::footer::footer_height;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn footer_hint_row_is_separated_from_composer() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render_ref(area, &mut buf);
+
+        let row_to_string = |y: u16| {
+            let mut row = String::new();
+            for x in 0..area.width {
+                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            row
+        };
+
+        let mut hint_row: Option<(u16, String)> = None;
+        for y in 0..area.height {
+            let row = row_to_string(y);
+            if row.contains("? for shortcuts") {
+                hint_row = Some((y, row));
+                break;
+            }
+        }
+
+        let (hint_row_idx, hint_row_contents) =
+            hint_row.expect("expected footer hint row to be rendered");
+        assert_eq!(
+            hint_row_idx,
+            area.height - 1,
+            "hint row should occupy the bottom line: {hint_row_contents:?}",
+        );
+
+        assert!(
+            hint_row_idx > 0,
+            "expected a spacing row above the footer hints",
+        );
+
+        let spacing_row = row_to_string(hint_row_idx - 1);
+        assert_eq!(
+            spacing_row.trim(),
+            "",
+            "expected blank spacing row above hints but saw: {spacing_row:?}",
+        );
+    }
+
+    fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
+    where
+        F: FnOnce(&mut ChatComposer),
+    {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let width = 100;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            enhanced_keys_supported,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        setup(&mut composer);
+        let footer_lines = footer_height(composer.footer_props());
+        let height = footer_lines + 8;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| f.render_widget_ref(composer, f.area()))
+            .unwrap();
+        insta::assert_snapshot!(name, terminal.backend());
+    }
+
+    #[test]
+    fn footer_mode_snapshots() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        snapshot_composer_state("footer_mode_shortcut_overlay", true, |composer| {
+            composer.set_esc_backtrack_hint(true);
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        });
+
+        snapshot_composer_state("footer_mode_ctrl_c_quit", true, |composer| {
+            composer.set_ctrl_c_quit_hint(true, true);
+        });
+
+        snapshot_composer_state("footer_mode_ctrl_c_interrupt", true, |composer| {
+            composer.set_task_running(true);
+            composer.set_ctrl_c_quit_hint(true, true);
+        });
+
+        snapshot_composer_state("footer_mode_ctrl_c_then_esc_hint", true, |composer| {
+            composer.set_ctrl_c_quit_hint(true, true);
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        });
+
+        snapshot_composer_state("footer_mode_esc_hint_from_overlay", true, |composer| {
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        });
+
+        snapshot_composer_state("footer_mode_esc_hint_backtrack", true, |composer| {
+            composer.set_esc_backtrack_hint(true);
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        });
+
+        snapshot_composer_state(
+            "footer_mode_overlay_then_external_esc_hint",
+            true,
+            |composer| {
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+                composer.set_esc_backtrack_hint(true);
+            },
+        );
+    }
 
     #[test]
     fn test_current_at_token_basic_cases() {
@@ -2119,7 +2317,7 @@ mod tests {
 
         // Re-add and test backspace in middle: should break the placeholder string
         // and drop the image mapping (same as text placeholder behavior).
-        composer.attach_image(path.clone(), 20, 10, "PNG");
+        composer.attach_image(path, 20, 10, "PNG");
         let placeholder2 = composer.attached_images[0].placeholder.clone();
         // Move cursor to roughly middle of placeholder
         if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
@@ -2178,7 +2376,7 @@ mod tests {
         let path1 = PathBuf::from("/tmp/image_dup1.png");
         let path2 = PathBuf::from("/tmp/image_dup2.png");
 
-        composer.attach_image(path1.clone(), 10, 5, "PNG");
+        composer.attach_image(path1, 10, 5, "PNG");
         // separate placeholders with a space for clarity
         composer.handle_paste(" ".into());
         composer.attach_image(path2.clone(), 10, 5, "PNG");
@@ -2227,7 +2425,7 @@ mod tests {
         assert!(composer.textarea.text().starts_with("[image 3x2 PNG] "));
 
         let imgs = composer.take_recent_submission_images();
-        assert_eq!(imgs, vec![tmp_path.clone()]);
+        assert_eq!(imgs, vec![tmp_path]);
     }
 
     #[test]

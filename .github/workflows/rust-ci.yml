@@ -57,11 +57,13 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: dtolnay/rust-toolchain@1.90
         with:
           components: rustfmt
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
+      - name: Verify codegen for mcp-types
+        run: ./mcp-types/check_lib_rs.py
 
   cargo_shear:
     name: cargo shear
@@ -73,7 +75,7 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: dtolnay/rust-toolchain@1.90
       - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
         with:
           tool: cargo-shear
@@ -141,7 +143,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}
           components: clippy
@@ -188,7 +190,7 @@ jobs:
         # Tests take too long for release builds to run them on every PR.
         if: ${{ matrix.profile != 'release' }}
         continue-on-error: true
-        run: cargo nextest run --all-features --target ${{ matrix.target }}
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }}
         env:
           RUST_BACKTRACE: 1
 

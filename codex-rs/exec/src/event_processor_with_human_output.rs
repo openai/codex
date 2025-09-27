@@ -141,7 +141,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     /// Print a concise summary of the effective configuration that will be used
     /// for the session. This mirrors the information shown in the TUI welcome
     /// screen.
-    fn print_config_summary(&mut self, config: &Config, prompt: &str) {
+    fn print_config_summary(&mut self, config: &Config, prompt: &str, _: &SessionConfiguredEvent) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         ts_println!(
             self,
@@ -280,7 +280,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 parsed_cmd: _,
             }) => {
                 self.call_id_to_command.insert(
-                    call_id.clone(),
+                    call_id,
                     ExecCommandBegin {
                         command: command.clone(),
                     },
@@ -382,7 +382,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Store metadata so we can calculate duration later when we
                 // receive the corresponding PatchApplyEnd event.
                 self.call_id_to_patch.insert(
-                    call_id.clone(),
+                    call_id,
                     PatchApplyBegin {
                         start_time: Instant::now(),
                         auto_approved,
@@ -520,9 +520,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let SessionConfiguredEvent {
                     session_id: conversation_id,
                     model,
+                    reasoning_effort: _,
                     history_log_id: _,
                     history_entry_count: _,
                     initial_messages: _,
+                    rollout_path: _,
                 } = session_configured_event;
 
                 ts_println!(
@@ -537,8 +539,37 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::PlanUpdate(plan_update_event) => {
                 let UpdatePlanArgs { explanation, plan } = plan_update_event;
-                ts_println!(self, "explanation: {explanation:?}");
-                ts_println!(self, "plan: {plan:?}");
+
+                // Header
+                ts_println!(self, "{}", "Plan update".style(self.magenta));
+
+                // Optional explanation
+                if let Some(explanation) = explanation
+                    && !explanation.trim().is_empty()
+                {
+                    ts_println!(self, "{}", explanation.style(self.italic));
+                }
+
+                // Pretty-print the plan items with simple status markers.
+                for item in plan {
+                    use codex_core::plan_tool::StepStatus;
+                    match item.status {
+                        StepStatus::Completed => {
+                            ts_println!(self, "  {} {}", "✓".style(self.green), item.step);
+                        }
+                        StepStatus::InProgress => {
+                            ts_println!(self, "  {} {}", "→".style(self.cyan), item.step);
+                        }
+                        StepStatus::Pending => {
+                            ts_println!(
+                                self,
+                                "  {} {}",
+                                "•".style(self.dimmed),
+                                item.step.style(self.dimmed)
+                            );
+                        }
+                    }
+                }
             }
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
@@ -556,17 +587,22 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 TurnAbortReason::Replaced => {
                     ts_println!(self, "task aborted: replaced by a new task");
                 }
+                TurnAbortReason::ReviewEnded => {
+                    ts_println!(self, "task aborted: review ended");
+                }
             },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
-            EventMsg::ConversationHistory(_) => {}
+            EventMsg::ConversationPath(_) => {}
             EventMsg::UserMessage(_) => {}
+            EventMsg::EnteredReviewMode(_) => {}
+            EventMsg::ExitedReviewMode(_) => {}
         }
         CodexStatus::Running
     }
 }
 
 fn escape_command(command: &[String]) -> String {
-    try_join(command.iter().map(|s| s.as_str())).unwrap_or_else(|_| command.join(" "))
+    try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
 
 fn format_file_change(change: &FileChange) -> &'static str {

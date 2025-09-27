@@ -15,6 +15,7 @@ use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
+use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
@@ -23,6 +24,7 @@ use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
@@ -81,10 +83,13 @@ pub enum Op {
         model: String,
 
         /// Will only be honored if the model is configured to use reasoning.
-        effort: ReasoningEffortConfig,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        effort: Option<ReasoningEffortConfig>,
 
         /// Will only be honored if the model is configured to use reasoning.
         summary: ReasoningSummaryConfig,
+        // The JSON schema to use for the final assistant message
+        final_output_json_schema: Option<Value>,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
@@ -111,8 +116,11 @@ pub enum Op {
         model: Option<String>,
 
         /// Updated reasoning effort (honored only for reasoning-capable models).
+        ///
+        /// Use `Some(Some(_))` to set a specific effort, `Some(None)` to clear
+        /// the effort, or `None` to leave the existing value unchanged.
         #[serde(skip_serializing_if = "Option::is_none")]
-        effort: Option<ReasoningEffortConfig>,
+        effort: Option<Option<ReasoningEffortConfig>>,
 
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,7 +157,7 @@ pub enum Op {
 
     /// Request the full in-memory conversation transcript for the current session.
     /// Reply is delivered via `EventMsg::ConversationHistory`.
-    GetHistory,
+    GetPath,
 
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
@@ -162,6 +170,10 @@ pub enum Op {
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
+
+    /// Request a code review from the agent.
+    Review { review_request: ReviewRequest },
+
     /// Request to shut down codex instance.
     Shutdown,
 }
@@ -405,6 +417,7 @@ pub struct Event {
 }
 
 /// Response event from the agent
+/// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -499,7 +512,18 @@ pub enum EventMsg {
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
-    ConversationHistory(ConversationHistoryResponseEvent),
+    ConversationPath(ConversationPathResponseEvent),
+
+    /// Entered review mode.
+    EnteredReviewMode(ReviewRequest),
+
+    /// Exited review mode with an optional final result to apply.
+    ExitedReviewMode(ExitedReviewModeEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ExitedReviewModeEvent {
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -568,6 +592,23 @@ impl TokenUsageInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
+    pub rate_limits: Option<RateLimitSnapshot>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct RateLimitSnapshot {
+    pub primary: Option<RateLimitWindow>,
+    pub secondary: Option<RateLimitWindow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct RateLimitWindow {
+    /// Percentage (0-100) of the window that has been consumed.
+    pub used_percent: f64,
+    /// Rolling window duration, in minutes.
+    pub window_minutes: Option<u64>,
+    /// Seconds until the window resets.
+    pub resets_in_seconds: Option<u64>,
 }
 
 // Includes prompts, tools and space to call compact.
@@ -695,6 +736,8 @@ pub struct UserMessageEvent {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<InputMessageKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
 }
 
 impl<T, U> From<(T, U)> for InputMessageKind
@@ -706,18 +749,38 @@ where
         let (_role, message) = value;
         let message = message.as_ref();
         let trimmed = message.trim();
-        if trimmed.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
-            && trimmed.ends_with(ENVIRONMENT_CONTEXT_CLOSE_TAG)
+        if starts_with_ignore_ascii_case(trimmed, ENVIRONMENT_CONTEXT_OPEN_TAG)
+            && ends_with_ignore_ascii_case(trimmed, ENVIRONMENT_CONTEXT_CLOSE_TAG)
         {
             InputMessageKind::EnvironmentContext
-        } else if trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
-            && trimmed.ends_with(USER_INSTRUCTIONS_CLOSE_TAG)
+        } else if starts_with_ignore_ascii_case(trimmed, USER_INSTRUCTIONS_OPEN_TAG)
+            && ends_with_ignore_ascii_case(trimmed, USER_INSTRUCTIONS_CLOSE_TAG)
         {
             InputMessageKind::UserInstructions
         } else {
             InputMessageKind::Plain
         }
     }
+}
+
+fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
+    let text_bytes = text.as_bytes();
+    let prefix_bytes = prefix.as_bytes();
+    text_bytes.len() >= prefix_bytes.len()
+        && text_bytes
+            .iter()
+            .zip(prefix_bytes.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
+
+fn ends_with_ignore_ascii_case(text: &str, suffix: &str) -> bool {
+    let text_bytes = text.as_bytes();
+    let suffix_bytes = suffix.as_bytes();
+    text_bytes.len() >= suffix_bytes.len()
+        && text_bytes[text_bytes.len() - suffix_bytes.len()..]
+            .iter()
+            .zip(suffix_bytes.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -799,9 +862,185 @@ pub struct WebSearchEndEvent {
 /// Response payload for `Op::GetHistory` containing the current session's
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
-pub struct ConversationHistoryResponseEvent {
+pub struct ConversationPathResponseEvent {
     pub conversation_id: ConversationId,
-    pub entries: Vec<ResponseItem>,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ResumedHistory {
+    pub conversation_id: ConversationId,
+    pub history: Vec<RolloutItem>,
+    pub rollout_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub enum InitialHistory {
+    New,
+    Resumed(ResumedHistory),
+    Forked(Vec<RolloutItem>),
+}
+
+impl InitialHistory {
+    pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
+        match self {
+            InitialHistory::New => Vec::new(),
+            InitialHistory::Resumed(resumed) => resumed.history.clone(),
+            InitialHistory::Forked(items) => items.clone(),
+        }
+    }
+
+    pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => Some(
+                resumed
+                    .history
+                    .iter()
+                    .filter_map(|ri| match ri {
+                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            InitialHistory::Forked(items) => Some(
+                items
+                    .iter()
+                    .filter_map(|ri| match ri {
+                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug, TS)]
+pub struct SessionMeta {
+    pub id: ConversationId,
+    pub timestamp: String,
+    pub cwd: PathBuf,
+    pub originator: String,
+    pub cli_version: String,
+    pub instructions: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
+pub struct SessionMetaLine {
+    #[serde(flatten)]
+    pub meta: SessionMeta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum RolloutItem {
+    SessionMeta(SessionMetaLine),
+    ResponseItem(ResponseItem),
+    Compacted(CompactedItem),
+    TurnContext(TurnContextItem),
+    EventMsg(EventMsg),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct CompactedItem {
+    pub message: String,
+}
+
+impl From<CompactedItem> for ResponseItem {
+    fn from(value: CompactedItem) -> Self {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: value.message,
+            }],
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct TurnContextItem {
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox_policy: SandboxPolicy,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ReasoningEffortConfig>,
+    pub summary: ReasoningSummaryConfig,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RolloutLine {
+    pub timestamp: String,
+    #[serde(flatten)]
+    pub item: RolloutItem,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct GitInfo {
+    /// Current commit hash (SHA)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_hash: Option<String>,
+    /// Current branch name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Repository URL (if available from remote)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_url: Option<String>,
+}
+
+/// Review request sent to the review session.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewRequest {
+    pub prompt: String,
+    pub user_facing_hint: String,
+}
+
+/// Structured review result produced by a child review session.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewOutputEvent {
+    pub findings: Vec<ReviewFinding>,
+    pub overall_correctness: String,
+    pub overall_explanation: String,
+    pub overall_confidence_score: f32,
+}
+
+impl Default for ReviewOutputEvent {
+    fn default() -> Self {
+        Self {
+            findings: Vec::new(),
+            overall_correctness: String::default(),
+            overall_explanation: String::default(),
+            overall_confidence_score: 0.0,
+        }
+    }
+}
+
+/// A single review finding describing an observed issue or recommendation.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewFinding {
+    pub title: String,
+    pub body: String,
+    pub confidence_score: f32,
+    pub priority: i32,
+    pub code_location: ReviewCodeLocation,
+}
+
+/// Location of the code related to a review finding.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewCodeLocation {
+    pub absolute_file_path: PathBuf,
+    pub line_range: ReviewLineRange,
+}
+
+/// Inclusive line range in a file associated with the finding.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewLineRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -948,6 +1187,10 @@ pub struct SessionConfiguredEvent {
     /// Tell the client what model is being queried.
     pub model: String,
 
+    /// The effort the model is putting into reasoning about the user's request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
+
     /// Identifier of the history log file (inode on Unix, 0 otherwise).
     pub history_log_id: u64,
 
@@ -958,6 +1201,8 @@ pub struct SessionConfiguredEvent {
     /// When present, UIs can use these to seed the history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
+
+    pub rollout_path: PathBuf,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -1015,48 +1260,66 @@ pub struct TurnAbortedEvent {
 pub enum TurnAbortReason {
     Interrupted,
     Replaced,
+    ReviewEnded,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
+    use serde_json::json;
+    use tempfile::NamedTempFile;
 
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.
     #[test]
-    fn serialize_event() {
-        let conversation_id = ConversationId(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"));
+    fn serialize_event() -> Result<()> {
+        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                rollout_path: rollout_file.path().to_path_buf(),
             }),
         };
-        let serialized = serde_json::to_string(&event).unwrap();
-        assert_eq!(
-            serialized,
-            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
-        );
+
+        let expected = json!({
+            "id": "1234",
+            "msg": {
+                "type": "session_configured",
+                "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                "model": "codex-mini-latest",
+                "reasoning_effort": "medium",
+                "history_log_id": 0,
+                "history_entry_count": 0,
+                "rollout_path": format!("{}", rollout_file.path().display()),
+            }
+        });
+        assert_eq!(expected, serde_json::to_value(&event)?);
+        Ok(())
     }
 
     #[test]
-    fn vec_u8_as_base64_serialization_and_deserialization() {
+    fn vec_u8_as_base64_serialization_and_deserialization() -> Result<()> {
         let event = ExecCommandOutputDeltaEvent {
             call_id: "call21".to_string(),
             stream: ExecOutputStream::Stdout,
             chunk: vec![1, 2, 3, 4, 5],
         };
-        let serialized = serde_json::to_string(&event).unwrap();
+        let serialized = serde_json::to_string(&event)?;
         assert_eq!(
             r#"{"call_id":"call21","stream":"stdout","chunk":"AQIDBAU="}"#,
             serialized,
         );
 
-        let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized).unwrap();
+        let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized)?;
         assert_eq!(deserialized, event);
+        Ok(())
     }
 }

@@ -11,10 +11,16 @@ use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::auth::CLIENT_ID;
+use codex_core::auth::get_auth_file;
+use codex_core::auth::login_with_api_key;
+use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::load_config_as_toml;
+use codex_core::config_edit::CONFIG_KEY_EFFORT;
+use codex_core::config_edit::CONFIG_KEY_MODEL;
+use codex_core::config_edit::persist_overrides_and_clear_if_none;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -35,7 +41,8 @@ use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalResponse;
-use codex_protocol::mcp_protocol::AuthMode;
+use codex_protocol::mcp_protocol::ArchiveConversationParams;
+use codex_protocol::mcp_protocol::ArchiveConversationResponse;
 use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -53,6 +60,8 @@ use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::InterruptConversationResponse;
 use codex_protocol::mcp_protocol::ListConversationsParams;
 use codex_protocol::mcp_protocol::ListConversationsResponse;
+use codex_protocol::mcp_protocol::LoginApiKeyParams;
+use codex_protocol::mcp_protocol::LoginApiKeyResponse;
 use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
 use codex_protocol::mcp_protocol::LoginChatGptResponse;
 use codex_protocol::mcp_protocol::NewConversationParams;
@@ -65,6 +74,9 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::SetDefaultModelParams;
+use codex_protocol::mcp_protocol::SetDefaultModelResponse;
+use codex_protocol::mcp_protocol::UserInfoResponse;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -73,12 +85,16 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
+use tracing::info;
+use tracing::warn;
 use uuid::Uuid;
 
 // Duration before a ChatGPT login attempt is abandoned.
@@ -142,6 +158,9 @@ impl CodexMessageProcessor {
             ClientRequest::ResumeConversation { request_id, params } => {
                 self.handle_resume_conversation(request_id, params).await;
             }
+            ClientRequest::ArchiveConversation { request_id, params } => {
+                self.archive_conversation(request_id, params).await;
+            }
             ClientRequest::SendUserMessage { request_id, params } => {
                 self.send_user_message(request_id, params).await;
             }
@@ -160,6 +179,9 @@ impl CodexMessageProcessor {
             ClientRequest::GitDiffToRemote { request_id, params } => {
                 self.git_diff_to_origin(request_id, params.cwd).await;
             }
+            ClientRequest::LoginApiKey { request_id, params } => {
+                self.login_api_key(request_id, params).await;
+            }
             ClientRequest::LoginChatGpt { request_id } => {
                 self.login_chatgpt(request_id).await;
             }
@@ -175,11 +197,50 @@ impl CodexMessageProcessor {
             ClientRequest::GetUserSavedConfig { request_id } => {
                 self.get_user_saved_config(request_id).await;
             }
+            ClientRequest::SetDefaultModel { request_id, params } => {
+                self.set_default_model(request_id, params).await;
+            }
             ClientRequest::GetUserAgent { request_id } => {
                 self.get_user_agent(request_id).await;
             }
+            ClientRequest::UserInfo { request_id } => {
+                self.get_user_info(request_id).await;
+            }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
+            }
+        }
+    }
+
+    async fn login_api_key(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(active) = guard.take() {
+                active.drop();
+            }
+        }
+
+        match login_with_api_key(&self.config.codex_home, &params.api_key) {
+            Ok(()) => {
+                self.auth_manager.reload();
+                self.outgoing
+                    .send_response(request_id, LoginApiKeyResponse {})
+                    .await;
+
+                let payload = AuthStatusChangeNotification {
+                    auth_method: self.auth_manager.auth().map(|auth| auth.mode),
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AuthStatusChange(payload))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to save api key: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
             }
         }
     }
@@ -189,11 +250,7 @@ impl CodexMessageProcessor {
 
         let opts = LoginServerOptions {
             open_browser: false,
-            ..LoginServerOptions::new(
-                config.codex_home.clone(),
-                CLIENT_ID.to_string(),
-                config.responses_originator_header.clone(),
-            )
+            ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
         };
 
         enum LoginChatGptReply {
@@ -341,7 +398,7 @@ impl CodexMessageProcessor {
             .await;
 
         // Send auth status change notification reflecting the current auth mode
-        // after logout (which may fall back to API key via env var).
+        // after logout.
         let current_auth_method = self.auth_manager.auth().map(|auth| auth.mode);
         let payload = AuthStatusChangeNotification {
             auth_method: current_auth_method,
@@ -356,7 +413,6 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: codex_protocol::mcp_protocol::GetAuthStatusParams,
     ) {
-        let preferred_auth_method: AuthMode = self.auth_manager.preferred_auth_method();
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
@@ -364,37 +420,51 @@ impl CodexMessageProcessor {
             tracing::warn!("failed to refresh token while getting auth status: {err}");
         }
 
-        let response = match self.auth_manager.auth() {
-            Some(auth) => {
-                let (reported_auth_method, token_opt) = match auth.get_token().await {
-                    Ok(token) if !token.is_empty() => {
-                        let tok = if include_token { Some(token) } else { None };
-                        (Some(auth.mode), tok)
-                    }
-                    Ok(_) => (None, None),
-                    Err(err) => {
-                        tracing::warn!("failed to get token for auth status: {err}");
-                        (None, None)
-                    }
-                };
-                codex_protocol::mcp_protocol::GetAuthStatusResponse {
-                    auth_method: reported_auth_method,
-                    preferred_auth_method,
-                    auth_token: token_opt,
-                }
-            }
-            None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
+        // Determine whether auth is required based on the active model provider.
+        // If a custom provider is configured with `requires_openai_auth == false`,
+        // then no auth step is required; otherwise, default to requiring auth.
+        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
+
+        let response = if !requires_openai_auth {
+            codex_protocol::mcp_protocol::GetAuthStatusResponse {
                 auth_method: None,
-                preferred_auth_method,
                 auth_token: None,
-            },
+                requires_openai_auth: Some(false),
+            }
+        } else {
+            match self.auth_manager.auth() {
+                Some(auth) => {
+                    let auth_mode = auth.mode;
+                    let (reported_auth_method, token_opt) = match auth.get_token().await {
+                        Ok(token) if !token.is_empty() => {
+                            let tok = if include_token { Some(token) } else { None };
+                            (Some(auth_mode), tok)
+                        }
+                        Ok(_) => (None, None),
+                        Err(err) => {
+                            tracing::warn!("failed to get token for auth status: {err}");
+                            (None, None)
+                        }
+                    };
+                    codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                        auth_method: reported_auth_method,
+                        auth_token: token_opt,
+                        requires_openai_auth: Some(true),
+                    }
+                }
+                None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                    auth_method: None,
+                    auth_token: None,
+                    requires_openai_auth: Some(true),
+                },
+            }
         };
 
         self.outgoing.send_response(request_id, response).await;
     }
 
     async fn get_user_agent(&self, request_id: RequestId) {
-        let user_agent = get_codex_user_agent(Some(&self.config.responses_originator_header));
+        let user_agent = get_codex_user_agent();
         let response = GetUserAgentResponse { user_agent };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -432,6 +502,52 @@ impl CodexMessageProcessor {
             config: user_saved_config,
         };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_user_info(&self, request_id: RequestId) {
+        // Read alleged user email from auth.json (best-effort; not verified).
+        let auth_path = get_auth_file(&self.config.codex_home);
+        let alleged_user_email = match try_read_auth_json(&auth_path) {
+            Ok(auth) => auth.tokens.and_then(|t| t.id_token.email),
+            Err(_) => None,
+        };
+
+        let response = UserInfoResponse { alleged_user_email };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn set_default_model(&self, request_id: RequestId, params: SetDefaultModelParams) {
+        let SetDefaultModelParams {
+            model,
+            reasoning_effort,
+        } = params;
+        let effort_str = reasoning_effort.map(|effort| effort.to_string());
+
+        let overrides: [(&[&str], Option<&str>); 2] = [
+            (&[CONFIG_KEY_MODEL], model.as_deref()),
+            (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
+        ];
+
+        match persist_overrides_and_clear_if_none(
+            &self.config.codex_home,
+            self.config.active_profile.as_deref(),
+            &overrides,
+        )
+        .await
+        {
+            Ok(()) => {
+                let response = SetDefaultModelResponse {};
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to persist overrides: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
     }
 
     async fn exec_one_off_command(&self, request_id: RequestId, params: ExecOneOffCommandParams) {
@@ -473,12 +589,14 @@ impl CodexMessageProcessor {
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
+        let sandbox_cwd = self.config.cwd.clone();
 
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
                 sandbox_type,
                 &effective_policy,
+                sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
                 None,
             )
@@ -528,6 +646,8 @@ impl CodexMessageProcessor {
                 let response = NewConversationResponse {
                     conversation_id,
                     model: session_configured.model,
+                    reasoning_effort: session_configured.reasoning_effort,
+                    rollout_path: session_configured.rollout_path,
                 };
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -669,6 +789,141 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn archive_conversation(&self, request_id: RequestId, params: ArchiveConversationParams) {
+        let ArchiveConversationParams {
+            conversation_id,
+            rollout_path,
+        } = params;
+
+        // Verify that the rollout path is in the sessions directory or else
+        // a malicious client could specify an arbitrary path.
+        let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+        let canonical_rollout_path = tokio::fs::canonicalize(&rollout_path).await;
+        let canonical_rollout_path = if let Ok(path) = canonical_rollout_path
+            && path.starts_with(&rollout_folder)
+        {
+            path
+        } else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "rollout path `{}` must be in sessions directory",
+                    rollout_path.display()
+                ),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        let required_suffix = format!("{conversation_id}.jsonl");
+        let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "rollout path `{}` missing file name",
+                    rollout_path.display()
+                ),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        if !file_name
+            .to_string_lossy()
+            .ends_with(required_suffix.as_str())
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "rollout path `{}` does not match conversation id {conversation_id}",
+                    rollout_path.display()
+                ),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let removed_conversation = self
+            .conversation_manager
+            .remove_conversation(&conversation_id)
+            .await;
+        if let Some(conversation) = removed_conversation {
+            info!("conversation {conversation_id} was active; shutting down");
+            let conversation_clone = conversation.clone();
+            let notify = Arc::new(tokio::sync::Notify::new());
+            let notify_clone = notify.clone();
+
+            // Establish the listener for ShutdownComplete before submitting
+            // Shutdown so it is not missed.
+            let is_shutdown = tokio::spawn(async move {
+                loop {
+                    select! {
+                        _ = notify_clone.notified() => {
+                            break;
+                        }
+                        event = conversation_clone.next_event() => {
+                            if let Ok(event) = event && matches!(event.msg, EventMsg::ShutdownComplete) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Request shutdown.
+            match conversation.submit(Op::Shutdown).await {
+                Ok(_) => {
+                    // Successfully submitted Shutdown; wait before proceeding.
+                    select! {
+                        _ = is_shutdown => {
+                            // Normal shutdown: proceed with archive.
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                            warn!("conversation {conversation_id} shutdown timed out; proceeding with archive");
+                            notify.notify_one();
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("failed to submit Shutdown to conversation {conversation_id}: {err}");
+                    notify.notify_one();
+                    // Perhaps we lost a shutdown race, so let's continue to
+                    // clean up the .jsonl file.
+                }
+            }
+        }
+
+        // Move the .jsonl file to the archived sessions subdir.
+        let result: std::io::Result<()> = async {
+            let archive_folder = self
+                .config
+                .codex_home
+                .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
+            tokio::fs::create_dir_all(&archive_folder).await?;
+            tokio::fs::rename(&canonical_rollout_path, &archive_folder.join(&file_name)).await?;
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                let response = ArchiveConversationResponse {};
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to archive conversation: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
     async fn send_user_message(&self, request_id: RequestId, params: SendUserMessageParams) {
         let SendUserMessageParams {
             conversation_id,
@@ -754,6 +1009,7 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary,
+                final_output_json_schema: None,
             })
             .await;
 
@@ -1004,6 +1260,7 @@ fn derive_config_from_params(
     } = params;
     let overrides = ConfigOverrides {
         model,
+        review_model: None,
         config_profile: profile,
         cwd: cwd.map(PathBuf::from),
         approval_policy,
@@ -1110,10 +1367,7 @@ fn extract_conversation_summary(
     head: &[serde_json::Value],
 ) -> Option<ConversationSummary> {
     let session_meta = match head.first() {
-        Some(first_line) => match serde_json::from_value::<SessionMeta>(first_line.clone()) {
-            Ok(session_meta) => session_meta,
-            Err(..) => return None,
-        },
+        Some(first_line) => serde_json::from_value::<SessionMeta>(first_line.clone()).ok()?,
         None => return None,
     };
 
@@ -1157,20 +1411,24 @@ fn extract_conversation_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     #[test]
-    fn extract_conversation_summary_prefers_plain_user_messages() {
-        let conversation_id =
-            ConversationId(Uuid::parse_str("3f941c35-29b3-493b-b0a4-e25800d9aeb0").unwrap());
+    fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
+        let conversation_id = ConversationId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0")?;
         let timestamp = Some("2025-09-05T16:53:11.850Z".to_string());
         let path = PathBuf::from("rollout.jsonl");
 
         let head = vec![
             json!({
-                "id": conversation_id.0,
+                "id": conversation_id.to_string(),
                 "timestamp": timestamp,
+                "cwd": "/",
+                "originator": "codex",
+                "cli_version": "0.0.0",
+                "instructions": null
             }),
             json!({
                 "type": "message",
@@ -1199,5 +1457,6 @@ mod tests {
         );
         assert_eq!(summary.path, path);
         assert_eq!(summary.preview, "Count to 5");
+        Ok(())
     }
 }
