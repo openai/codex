@@ -3,25 +3,20 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
+use serde::Deserializer;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
-use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
-    pub command: String,
-
-    #[serde(default)]
-    pub args: Vec<String>,
-
-    #[serde(default)]
-    pub env: Option<HashMap<String, String>>,
+    #[serde(flatten)]
+    pub transport: McpServerTransportConfig,
 
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
@@ -43,11 +38,15 @@ impl<'de> Deserialize<'de> for McpServerConfig {
     {
         #[derive(Deserialize)]
         struct RawMcpServerConfig {
-            command: String,
+            command: Option<String>,
             #[serde(default)]
-            args: Vec<String>,
+            args: Option<Vec<String>>,
             #[serde(default)]
             env: Option<HashMap<String, String>>,
+
+            url: Option<String>,
+            bearer_token: Option<String>,
+
             #[serde(default)]
             startup_timeout_sec: Option<f64>,
             #[serde(default)]
@@ -67,14 +66,79 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             (None, None) => None,
         };
 
+        fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
+        where
+            E: SerdeError,
+        {
+            if value.is_none() {
+                return Ok(());
+            }
+            Err(E::custom(format!(
+                "{field} is not supported for {transport}",
+            )))
+        }
+
+        let transport = match raw {
+            RawMcpServerConfig {
+                command: Some(command),
+                args,
+                env,
+                url,
+                bearer_token,
+                ..
+            } => {
+                throw_if_set("stdio", "url", url.as_ref())?;
+                throw_if_set("stdio", "bearer_token", bearer_token.as_ref())?;
+                McpServerTransportConfig::Stdio {
+                    command,
+                    args: args.unwrap_or_default(),
+                    env,
+                }
+            }
+            RawMcpServerConfig {
+                url: Some(url),
+                bearer_token,
+                command,
+                args,
+                env,
+                ..
+            } => {
+                throw_if_set("streamable_http", "command", command.as_ref())?;
+                throw_if_set("streamable_http", "args", args.as_ref())?;
+                throw_if_set("streamable_http", "env", env.as_ref())?;
+                McpServerTransportConfig::StreamableHttp { url, bearer_token }
+            }
+            _ => return Err(SerdeError::custom("invalid transport")),
+        };
+
         Ok(Self {
-            command: raw.command,
-            args: raw.args,
-            env: raw.env,
+            transport,
             startup_timeout_sec,
             tool_timeout_sec: raw.tool_timeout_sec,
         })
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
+pub enum McpServerTransportConfig {
+    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env: Option<HashMap<String, String>>,
+    },
+    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
+    StreamableHttp {
+        url: String,
+        /// A plain text bearer token to use for authentication.
+        /// This bearer token will be included in the HTTP request header as an `Authorization: Bearer <token>` header.
+        /// This should be used with caution because it lives on disk in clear text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer_token: Option<String>,
+    },
 }
 
 mod option_duration_secs {
@@ -302,4 +366,140 @@ pub enum ReasoningSummaryFormat {
     #[default]
     None,
     Experimental,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn deserialize_stdio_command_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_args() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            args = ["hello", "world"]
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec!["hello".to_string(), "world".to_string()],
+                env: None
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_arg_with_args_and_env() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            args = ["hello", "world"]
+            env = { "FOO" = "BAR" }
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec!["hello".to_string(), "world".to_string()],
+                env: Some(HashMap::from([("FOO".to_string(), "BAR".to_string())]))
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+        "#,
+        )
+        .expect("should deserialize http config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token: None
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config_with_bearer_token() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+            bearer_token = "secret"
+        "#,
+        )
+        .expect("should deserialize http config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token: Some("secret".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_command_and_url() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            url = "https://example.com"
+        "#,
+        )
+        .expect_err("should reject command+url");
+    }
+
+    #[test]
+    fn deserialize_rejects_env_for_http_transport() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            url = "https://example.com"
+            env = { "FOO" = "BAR" }
+        "#,
+        )
+        .expect_err("should reject env for http transport");
+    }
+
+    #[test]
+    fn deserialize_rejects_bearer_token_for_stdio_transport() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            bearer_token = "secret"
+        "#,
+        )
+        .expect_err("should reject bearer token for stdio transport");
+    }
 }
