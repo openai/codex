@@ -24,6 +24,9 @@ use codex_exec::exec_events::ReasoningItem;
 use codex_exec::exec_events::SessionCreatedEvent;
 use codex_exec::exec_events::TodoItem as ExecTodoItem;
 use codex_exec::exec_events::TodoListItem as ExecTodoListItem;
+use codex_exec::exec_events::TurnCompletedEvent;
+use codex_exec::exec_events::TurnStartedEvent;
+use codex_exec::exec_events::Usage;
 use codex_exec::experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -62,6 +65,22 @@ fn session_configured_produces_session_created_event() {
         vec![ConversationEvent::SessionCreated(SessionCreatedEvent {
             session_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
         })]
+    );
+}
+
+#[test]
+fn task_started_produces_turn_started_event() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_conversation_events(&event(
+        "t1",
+        EventMsg::TaskStarted(codex_core::protocol::TaskStartedEvent {
+            model_context_window: Some(32_000),
+        }),
+    ));
+
+    assert_eq!(
+        out,
+        vec![ConversationEvent::TurnStarted(TurnStartedEvent {})]
     );
 }
 
@@ -161,23 +180,28 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
     let out_complete = ep.collect_conversation_events(&complete);
     assert_eq!(
         out_complete,
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item: ConversationItem {
-                id: "item_0".to_string(),
-                details: ConversationItemDetails::TodoList(ExecTodoListItem {
-                    items: vec![
-                        ExecTodoItem {
-                            text: "step one".to_string(),
-                            completed: true
-                        },
-                        ExecTodoItem {
-                            text: "step two".to_string(),
-                            completed: false
-                        },
-                    ],
-                }),
-            },
-        })]
+        vec![
+            ConversationEvent::ItemCompleted(ItemCompletedEvent {
+                item: ConversationItem {
+                    id: "item_0".to_string(),
+                    details: ConversationItemDetails::TodoList(ExecTodoListItem {
+                        items: vec![
+                            ExecTodoItem {
+                                text: "step one".to_string(),
+                                completed: true
+                            },
+                            ExecTodoItem {
+                                text: "step two".to_string(),
+                                completed: false
+                            },
+                        ],
+                    }),
+                },
+            }),
+            ConversationEvent::TurnCompleted(TurnCompletedEvent {
+                usage: Usage::default(),
+            }),
+        ]
     );
 }
 
@@ -584,4 +608,53 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
         }
         other => panic!("unexpected event: {other:?}"),
     }
+}
+
+#[test]
+fn task_complete_produces_turn_completed_with_usage() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+
+    // First, feed a TokenCount event with known totals.
+    let usage = codex_core::protocol::TokenUsage {
+        input_tokens: 1200,
+        cached_input_tokens: 200,
+        output_tokens: 345,
+        reasoning_output_tokens: 0,
+        total_tokens: 0,
+    };
+    let info = codex_core::protocol::TokenUsageInfo {
+        total_token_usage: usage.clone(),
+        last_token_usage: usage,
+        model_context_window: None,
+    };
+    let token_count_event = event(
+        "e1",
+        EventMsg::TokenCount(codex_core::protocol::TokenCountEvent {
+            info: Some(info),
+            rate_limits: None,
+        }),
+    );
+    assert!(
+        ep.collect_conversation_events(&token_count_event)
+            .is_empty()
+    );
+
+    // Then TaskComplete should produce turn.completed with the captured usage.
+    let complete_event = event(
+        "e2",
+        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+            last_agent_message: Some("done".to_string()),
+        }),
+    );
+    let out = ep.collect_conversation_events(&complete_event);
+    assert_eq!(
+        out,
+        vec![ConversationEvent::TurnCompleted(TurnCompletedEvent {
+            usage: Usage {
+                input_tokens: 1200,
+                cached_input_tokens: 200,
+                output_tokens: 345,
+            },
+        })]
+    );
 }
