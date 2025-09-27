@@ -19,6 +19,7 @@ pub struct ConfigProfile {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
+    pub http_proxy: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
 }
 
