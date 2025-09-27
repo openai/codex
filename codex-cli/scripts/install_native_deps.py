@@ -15,11 +15,16 @@ from typing import Iterable, Sequence
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+# ------------------------------------------------------------
+# Constants and paths
+# ------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
 DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/17952349351"  # rust-v0.40.0
 VENDOR_DIR_NAME = "vendor"
 RG_MANIFEST = CODEX_CLI_ROOT / "bin" / "rg"
+
+# Supported compilation targets for Codex binaries
 CODEX_TARGETS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
@@ -29,6 +34,7 @@ CODEX_TARGETS = (
     "aarch64-pc-windows-msvc",
 )
 
+# Ripgrep target-platform mapping
 RG_TARGET_PLATFORM_PAIRS: list[tuple[str, str]] = [
     ("x86_64-unknown-linux-musl", "linux-x86_64"),
     ("aarch64-unknown-linux-musl", "linux-aarch64"),
@@ -41,6 +47,17 @@ RG_TARGET_TO_PLATFORM = {target: platform for target, platform in RG_TARGET_PLAT
 DEFAULT_RG_TARGETS = [target for target, _ in RG_TARGET_PLATFORM_PAIRS]
 
 
+# ------------------------------------------------------------
+# parse_args()
+# ------------------------------------------------------------
+# Logical:
+#   - Defines CLI options for workflow URL and staging root.
+#   - Defaults to known GitHub Actions run when omitted.
+#
+# Electronic:
+#   - Reads argv[] provided by the shell.
+#   - argparse parses into Namespace (kept in user memory).
+# ------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install native Codex binaries.")
     parser.add_argument(
@@ -62,6 +79,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# ------------------------------------------------------------
+# main()
+# ------------------------------------------------------------
+# Logical:
+#   - Creates vendor directory.
+#   - Downloads artifacts from GitHub Actions.
+#   - Installs Codex binaries and ripgrep helpers.
+#
+# Electronic:
+#   - mkdir syscalls to create directories.
+#   - Subprocess runs gh CLI for artifact download.
+#   - File I/O for extracting and writing binaries.
+# ------------------------------------------------------------
 def main() -> int:
     args = parse_args()
 
@@ -86,6 +116,19 @@ def main() -> int:
     return 0
 
 
+# ------------------------------------------------------------
+# fetch_rg()
+# ------------------------------------------------------------
+# Logical:
+#   - Downloads ripgrep binaries from URLs listed in DotSlash manifest.
+#   - Matches target → platform → provider URL.
+#   - Uses thread pool for parallel fetching.
+#
+# Electronic:
+#   - Network I/O via urllib to download binaries.
+#   - ThreadPoolExecutor creates worker threads.
+#   - Files written to vendor directory on disk.
+# ------------------------------------------------------------
 def fetch_rg(
     vendor_dir: Path,
     targets: Sequence[str] | None = None,
@@ -144,6 +187,17 @@ def fetch_rg(
     return [results[target] for target in targets]
 
 
+# ------------------------------------------------------------
+# _download_artifacts()
+# ------------------------------------------------------------
+# Logical:
+#   - Downloads workflow artifacts from GitHub.
+#
+# Electronic:
+#   - Spawns subprocess → gh run download.
+#   - Makes HTTPS request to GitHub servers.
+#   - Saves files under dest_dir.
+# ------------------------------------------------------------
 def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
     cmd = [
         "gh",
@@ -158,6 +212,17 @@ def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
     subprocess.check_call(cmd)
 
 
+# ------------------------------------------------------------
+# install_codex_binaries()
+# ------------------------------------------------------------
+# Logical:
+#   - Installs Codex binaries for all targets in parallel.
+#   - Delegates to _install_single_codex_binary().
+#
+# Electronic:
+#   - Thread pool spawns multiple tasks.
+#   - Each task extracts archive into vendor directory.
+# ------------------------------------------------------------
 def install_codex_binaries(
     artifacts_dir: Path, vendor_dir: Path, targets: Iterable[str]
 ) -> list[Path]:
@@ -181,6 +246,18 @@ def install_codex_binaries(
     return [results[target] for target in targets]
 
 
+# ------------------------------------------------------------
+# _install_single_codex_binary()
+# ------------------------------------------------------------
+# Logical:
+#   - Extracts a single Codex binary archive.
+#   - Places result into vendor/<target>/codex.
+#
+# Electronic:
+#   - Reads compressed .zst archive.
+#   - Writes binary to disk.
+#   - chmod sets executable bit on UNIX systems.
+# ------------------------------------------------------------
 def _install_single_codex_binary(artifacts_dir: Path, vendor_dir: Path, target: str) -> Path:
     artifact_subdir = artifacts_dir / target
     archive_name = _archive_name_for_target(target)
@@ -200,12 +277,33 @@ def _install_single_codex_binary(artifacts_dir: Path, vendor_dir: Path, target: 
     return dest
 
 
+# ------------------------------------------------------------
+# _archive_name_for_target()
+# ------------------------------------------------------------
+# Logical:
+#   - Determines expected filename for Codex binary archive.
+#
+# Electronic:
+#   - Pure string handling in memory.
+# ------------------------------------------------------------
 def _archive_name_for_target(target: str) -> str:
     if "windows" in target:
         return f"codex-{target}.exe.zst"
     return f"codex-{target}.zst"
 
 
+# ------------------------------------------------------------
+# _fetch_single_rg()
+# ------------------------------------------------------------
+# Logical:
+#   - Downloads and extracts a single ripgrep binary.
+#   - Uses first provider URL from manifest.
+#
+# Electronic:
+#   - urllib makes HTTPS request.
+#   - Archive extracted (zst, tar.gz, zip).
+#   - chmod sets +x for non-Windows.
+# ------------------------------------------------------------
 def _fetch_single_rg(
     vendor_dir: Path,
     target: str,
@@ -243,12 +341,34 @@ def _fetch_single_rg(
     return dest
 
 
+# ------------------------------------------------------------
+# _download_file()
+# ------------------------------------------------------------
+# Logical:
+#   - Fetches file from URL and writes to disk.
+#
+# Electronic:
+#   - HTTP GET via urllib (network stack).
+#   - File written with copyfileobj (read/write syscalls).
+# ------------------------------------------------------------
 def _download_file(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with urlopen(url) as response, open(dest, "wb") as out:
         shutil.copyfileobj(response, out)
 
 
+# ------------------------------------------------------------
+# extract_archive()
+# ------------------------------------------------------------
+# Logical:
+#   - Extracts archive depending on format (zst, tar.gz, zip).
+#   - Moves binary to destination path.
+#
+# Electronic:
+#   - Calls zstd (subprocess) for .zst files.
+#   - tarfile/zipfile stdlib modules handle streams.
+#   - chmod sets permissions when required.
+# ------------------------------------------------------------
 def extract_archive(
     archive_path: Path,
     archive_format: str,
@@ -296,6 +416,17 @@ def extract_archive(
     raise RuntimeError(f"Unsupported archive format '{archive_format}'.")
 
 
+# ------------------------------------------------------------
+# _load_manifest()
+# ------------------------------------------------------------
+# Logical:
+#   - Loads DotSlash manifest describing ripgrep binaries.
+#   - Parses JSON output into dict.
+#
+# Electronic:
+#   - Runs dotslash as subprocess.
+#   - Reads stdout, parses JSON in memory.
+# ------------------------------------------------------------
 def _load_manifest(manifest_path: Path) -> dict:
     cmd = ["dotslash", "--", "parse", str(manifest_path)]
     stdout = subprocess.check_output(cmd, text=True)
@@ -312,6 +443,15 @@ def _load_manifest(manifest_path: Path) -> dict:
     return manifest
 
 
+# ------------------------------------------------------------
+# Script entry point
+# ------------------------------------------------------------
+# Logical:
+#   - Runs main() and propagates exit code to shell.
+#
+# Electronic:
+#   - sys.exit sets process exit code visible to parent shell.
+# ------------------------------------------------------------
 if __name__ == "__main__":
     import sys
 
