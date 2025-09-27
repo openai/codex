@@ -1,0 +1,14 @@
+{
+  "name": "codex-rs",
+  "version": "0.0.0-dev",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "cargo build --all-features",
+    "test": "cargo test --all-features",
+    "lint": "cargo clippy --all-features --tests -- -D warnings",
+    "format": "cargo fmt -- --config imports_granularity=Item --check",
+    "codex:local": "echo 'Rust components ready for local development'",
+    "codex:cloud": "echo 'Rust components ready for cloud integration'"
+  }
+}

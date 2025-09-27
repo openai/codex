@@ -3,11 +3,18 @@
   "private": true,
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
     "format": "prettier --check *.json *.md .github/workflows/*.yml **/*.js",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml **/*.js"
+    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml **/*.js",
+    "codex:local": "turbo run codex:local",
+    "codex:cloud": "turbo run codex:cloud",
+    "codex:build": "turbo run codex:build"
   },
   "devDependencies": {
-    "prettier": "^3.5.3"
+    "prettier": "^3.5.3",
+    "turbo": "^2.5.6"
   },
   "resolutions": {
     "braces": "^3.0.3",
