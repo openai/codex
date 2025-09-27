@@ -274,8 +274,7 @@ impl McpClient {
                 err.error.code, err.error.message
             ))),
             other => Err(anyhow!(format!(
-                "unexpected message variant received in reply path: {:?}",
-                other
+                "unexpected message variant received in reply path: {other:?}"
             ))),
         }
     }

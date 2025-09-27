@@ -24,6 +24,7 @@ use super::footer::render_footer;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
+use crate::key_hint;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
 use crate::terminal_palette;
@@ -84,6 +85,8 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    // Optional override for footer hint items.
+    footer_hint_override: Option<Vec<(String, String)>>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -125,6 +128,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            footer_hint_override: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -227,6 +231,10 @@ impl ChatComposer {
             self.sync_file_search_popup();
         }
         true
+    }
+
+    pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.footer_hint_override = items;
     }
 
     pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
@@ -1252,20 +1260,43 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let mut hint_rect = popup_rect;
-                hint_rect.x += 2;
-                hint_rect.width = hint_rect.width.saturating_sub(2);
-                render_footer(
-                    hint_rect,
-                    buf,
-                    FooterProps {
-                        ctrl_c_quit_hint: self.ctrl_c_quit_hint,
-                        is_task_running: self.is_task_running,
-                        esc_backtrack_hint: self.esc_backtrack_hint,
-                        use_shift_enter_hint: self.use_shift_enter_hint,
-                        token_usage_info: self.token_usage_info.as_ref(),
-                    },
-                );
+                let hint_spacing = popup_rect.height.saturating_sub(FOOTER_HINT_HEIGHT);
+                let mut hint_rect = if hint_spacing > 0 {
+                    let [_, hint_rect] = Layout::vertical([
+                        Constraint::Length(hint_spacing),
+                        Constraint::Length(FOOTER_HINT_HEIGHT),
+                    ])
+                    .areas(popup_rect);
+                    hint_rect
+                } else {
+                    popup_rect
+                };
+                if self.ctrl_c_quit_hint || self.footer_hint_override.is_none() {
+                    hint_rect.x += 2;
+                    hint_rect.width = hint_rect.width.saturating_sub(2);
+                    render_footer(
+                        hint_rect,
+                        buf,
+                        FooterProps {
+                            ctrl_c_quit_hint: self.ctrl_c_quit_hint,
+                            is_task_running: self.is_task_running,
+                            esc_backtrack_hint: self.esc_backtrack_hint,
+                            use_shift_enter_hint: self.use_shift_enter_hint,
+                            token_usage_info: self.token_usage_info.as_ref(),
+                        },
+                    );
+                } else if let Some(items) = &self.footer_hint_override {
+                    let mut spans: Vec<Span<'static>> = Vec::with_capacity(items.len() * 4);
+                    for (idx, (key, label)) in items.iter().enumerate() {
+                        spans.push(" ".into());
+                        spans.push(key_hint::plain(key));
+                        spans.push(format!(" {label}").into());
+                        if idx + 1 != items.len() {
+                            spans.push("   ".into());
+                        }
+                    }
+                    Line::from(spans).render_ref(hint_rect, buf);
+                }
             }
         }
         let style = user_message_style(terminal_palette::default_bg());

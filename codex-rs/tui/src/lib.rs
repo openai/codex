@@ -57,6 +57,7 @@ mod markdown_stream;
 mod new_model_popup;
 pub mod onboarding;
 mod pager_overlay;
+pub mod public_widgets;
 mod render;
 mod resume_picker;
 mod session_log;
@@ -87,6 +88,8 @@ use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
 pub use cli::Cli;
 use codex_core::internal_storage::InternalStorage;
+pub use public_widgets::composer_input::ComposerAction;
+pub use public_widgets::composer_input::ComposerInput;
 
 // (tests access modules directly within the crate)
 
