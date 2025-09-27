@@ -1,5 +1,6 @@
 use reqwest::StatusCode;
 use serde::Deserialize;
+use serde::Serialize;
 use serde::de::Deserializer;
 use serde::de::{self};
 use std::time::Duration;
@@ -16,6 +17,12 @@ struct UserCodeResp {
     user_code: String,
     #[serde(default, deserialize_with = "deserialize_interval")]
     interval: u64,
+}
+
+#[derive(Serialize)]
+struct TokenPollReq<'a> {
+    client_id: &'a str,
+    user_code: &'a str,
 }
 
 fn deserialize_interval<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -72,12 +79,15 @@ async fn poll_for_token(
     let start = Instant::now();
 
     loop {
+        let body = serde_json::to_string(&TokenPollReq {
+            client_id,
+            user_code,
+        })
+        .map_err(std::io::Error::other)?;
         let resp = client
             .post(&url)
             .header("Content-Type", "application/json")
-            .body(format!(
-                "{{\"client_id\":\"{client_id}\",\"user_code\":\"{user_code}\"}}"
-            ))
+            .body(body)
             .send()
             .await
             .map_err(std::io::Error::other)?;
