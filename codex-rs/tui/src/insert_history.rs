@@ -24,7 +24,10 @@ use ratatui::text::Span;
 
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
-pub fn insert_history_lines<B>(terminal: &mut crate::custom_terminal::Terminal<B>, lines: Vec<Line>)
+pub fn insert_history_lines<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<Line>,
+) -> io::Result<()>
 where
     B: Backend + Write,
 {
@@ -90,7 +93,7 @@ where
     queue!(writer, MoveTo(0, cursor_top))?;
 
     for line in wrapped {
-        queue!(writer, Print("\r\n")).ok();
+        queue!(writer, Print("\r\n"))?;
         queue!(
             writer,
             SetColors(Colors::new(
@@ -103,9 +106,8 @@ where
                     .map(std::convert::Into::into)
                     .unwrap_or(CColor::Reset)
             ))
-        )
-        .ok();
-        queue!(writer, Clear(ClearType::UntilNewLine)).ok();
+        )?;
+        queue!(writer, Clear(ClearType::UntilNewLine))?;
         // Merge line-level style into each span so that ANSI colors reflect
         // line styles (e.g., blockquotes with green fg).
         let merged_spans: Vec<Span> = line
@@ -122,12 +124,14 @@ where
     queue!(writer, ResetScrollRegion)?;
 
     // Restore the cursor position to where it was before we started.
-    queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y)).ok();
+    queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
 
     let _ = writer;
     if should_update_area {
         terminal.set_viewport_area(area);
     }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,7 +332,8 @@ mod tests {
         // Build a blockquote-like line: apply line-level green style and prefix "> "
         let mut line: Line<'static> = Line::from(vec!["> ".into(), "Hello world".into()]);
         line = line.style(Color::Green);
-        insert_history_lines(&mut term, vec![line]);
+        insert_history_lines(&mut term, vec![line])
+            .expect("Failed to insert history lines in test");
 
         let mut saw_colored = false;
         'outer: for row in 0..height {
@@ -366,7 +371,8 @@ mod tests {
         ]);
         line = line.style(Color::Green);
 
-        insert_history_lines(&mut term, vec![line]);
+        insert_history_lines(&mut term, vec![line])
+            .expect("Failed to insert history lines in test");
 
         // Parse and inspect the final screen buffer.
         let screen = term.backend().vt100().screen();
@@ -428,7 +434,8 @@ mod tests {
             Span::raw("Hello world"),
         ]);
 
-        insert_history_lines(&mut term, vec![line]);
+        insert_history_lines(&mut term, vec![line])
+            .expect("Failed to insert history lines in test");
 
         let screen = term.backend().vt100().screen();
 
@@ -484,7 +491,7 @@ mod tests {
         let viewport = ratatui::layout::Rect::new(0, height - 1, width, 1);
         term.set_viewport_area(viewport);
 
-        insert_history_lines(&mut term, lines);
+        insert_history_lines(&mut term, lines).expect("Failed to insert history lines in test");
 
         let screen = term.backend().vt100().screen();
 
