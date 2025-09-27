@@ -1017,14 +1017,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-tournament"
-version = "0.1.0"
-dependencies = [
- "codex-core",
- "codex-protocol",
-]
-
-[[package]]
 name = "codex-tui"
 version = "0.0.0"
 dependencies = [
