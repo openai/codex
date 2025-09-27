@@ -83,9 +83,13 @@ def main() -> int:
         resolved_head_sha: Optional[str] = None
         if not workflow_url:
             if release_version:
-                workflow = resolve_release_workflow(version)
-                workflow_url = workflow["url"]
-                resolved_head_sha = workflow.get("headSha")
+                try:
+                    workflow = resolve_release_workflow(version)
+                    workflow_url = workflow["url"]
+                    resolved_head_sha = workflow.get("headSha")
+                except RuntimeError:
+                    # No workflow found, proceed without it
+                    pass
             else:
                 workflow_url = resolve_latest_alpha_workflow_url()
         elif release_version:
