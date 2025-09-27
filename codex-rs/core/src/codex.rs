@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::function_tool::FunctionCallError;
 use crate::review_format::format_review_findings_block;
+use crate::terminal;
 use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -125,6 +127,8 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_otel::otel_event_manager::ToolDecisionSource;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -422,11 +426,35 @@ impl Session {
             }
         }
 
+        let otel_event_manager = OtelEventManager::new(
+            conversation_id,
+            config.model.as_str(),
+            config.model_family.slug.as_str(),
+            auth_manager.auth().and_then(|a| a.get_account_id()),
+            auth_manager.auth().map(|a| a.mode),
+            config.otel.log_user_prompt,
+            terminal::user_agent(),
+        );
+
+        otel_event_manager.conversation_starts(
+            config.model_provider.name.as_str(),
+            config.model_reasoning_effort,
+            config.model_reasoning_summary,
+            config.model_context_window,
+            config.model_max_output_tokens,
+            config.model_auto_compact_token_limit,
+            config.approval_policy,
+            config.sandbox_policy.clone(),
+            config.mcp_servers.keys().map(String::as_str).collect(),
+            config.active_profile.clone(),
+        );
+
         // Now that the conversation id is final (may have been updated by resume),
         // construct the model client.
         let client = ModelClient::new(
             config.clone(),
             Some(auth_manager.clone()),
+            otel_event_manager,
             provider.clone(),
             model_reasoning_effort,
             model_reasoning_summary,
@@ -1122,9 +1150,15 @@ async fn submission_loop(
                     updated_config.model_context_window = Some(model_info.context_window);
                 }
 
+                let otel_event_manager = prev.client.get_otel_event_manager().with_model(
+                    updated_config.model.as_str(),
+                    updated_config.model_family.slug.as_str(),
+                );
+
                 let client = ModelClient::new(
                     Arc::new(updated_config),
                     auth_manager,
+                    otel_event_manager,
                     provider,
                     effective_effort,
                     effective_summary,
@@ -1176,6 +1210,10 @@ async fn submission_loop(
                 }
             }
             Op::UserInput { items } => {
+                turn_context
+                    .client
+                    .get_otel_event_manager()
+                    .user_prompt(&items);
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
                     // no current task, spawn a new one
@@ -1193,6 +1231,10 @@ async fn submission_loop(
                 summary,
                 final_output_json_schema,
             } => {
+                turn_context
+                    .client
+                    .get_otel_event_manager()
+                    .user_prompt(&items);
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
                     // Derive a fresh TurnContext for this turn using the provided overrides.
@@ -1211,11 +1253,18 @@ async fn submission_loop(
                         per_turn_config.model_context_window = Some(model_info.context_window);
                     }
 
+                    let otel_event_manager =
+                        turn_context.client.get_otel_event_manager().with_model(
+                            per_turn_config.model.as_str(),
+                            per_turn_config.model_family.slug.as_str(),
+                        );
+
                     // Build a new client with per‑turn reasoning settings.
                     // Reuse the same provider and session id; auth defaults to env/API key.
                     let client = ModelClient::new(
                         Arc::new(per_turn_config),
                         auth_manager,
+                        otel_event_manager,
                         provider,
                         effort,
                         summary,
@@ -1472,10 +1521,19 @@ async fn spawn_review_thread(
         per_turn_config.model_context_window = Some(model_info.context_window);
     }
 
+    let otel_event_manager = parent_turn_context
+        .client
+        .get_otel_event_manager()
+        .with_model(
+            per_turn_config.model.as_str(),
+            per_turn_config.model_family.slug.as_str(),
+        );
+
     let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
         per_turn_config.clone(),
         auth_manager,
+        otel_event_manager,
         provider,
         per_turn_config.model_reasoning_effort,
         per_turn_config.model_reasoning_summary,
@@ -2140,16 +2198,21 @@ async fn handle_response_item(
                 .await;
                 Some(resp)
             } else {
-                let result = handle_function_call(
-                    sess,
-                    turn_context,
-                    turn_diff_tracker,
-                    sub_id.to_string(),
-                    name,
-                    arguments,
-                    call_id.clone(),
-                )
-                .await;
+                let result = turn_context
+                    .client
+                    .get_otel_event_manager()
+                    .log_tool_result(name.as_str(), call_id.as_str(), arguments.as_str(), || {
+                        handle_function_call(
+                            sess,
+                            turn_context,
+                            turn_diff_tracker,
+                            sub_id.to_string(),
+                            name.to_owned(),
+                            arguments.to_owned(),
+                            call_id.clone(),
+                        )
+                    })
+                    .await;
 
                 let output = match result {
                     Ok(content) => FunctionCallOutputPayload {
@@ -2170,6 +2233,7 @@ async fn handle_response_item(
             status: _,
             action,
         } => {
+            let name = "local_shell";
             let LocalShellAction::Exec(action) = action;
             tracing::info!("LocalShellCall: {action:?}");
             let params = ShellToolCallParams {
@@ -2183,11 +2247,18 @@ async fn handle_response_item(
                 (Some(call_id), _) => call_id,
                 (None, Some(id)) => id,
                 (None, None) => {
-                    error!("LocalShellCall without call_id or id");
+                    let error_message = "LocalShellCall without call_id or id";
+
+                    turn_context
+                        .client
+                        .get_otel_event_manager()
+                        .log_tool_failed(name, error_message);
+
+                    error!(error_message);
                     return Ok(Some(ResponseInputItem::FunctionCallOutput {
                         call_id: "".to_string(),
                         output: FunctionCallOutputPayload {
-                            content: "LocalShellCall without call_id or id".to_string(),
+                            content: error_message.to_string(),
                             success: None,
                         },
                     }));
@@ -2196,15 +2267,26 @@ async fn handle_response_item(
 
             let exec_params = to_exec_params(params, turn_context);
             {
-                let result = handle_container_exec_with_params(
-                    exec_params,
-                    sess,
-                    turn_context,
-                    turn_diff_tracker,
-                    sub_id.to_string(),
-                    effective_call_id.clone(),
-                )
-                .await;
+                let result = turn_context
+                    .client
+                    .get_otel_event_manager()
+                    .log_tool_result(
+                        name,
+                        effective_call_id.as_str(),
+                        exec_params.command.join(" ").as_str(),
+                        || {
+                            handle_container_exec_with_params(
+                                name,
+                                exec_params,
+                                sess,
+                                turn_context,
+                                turn_diff_tracker,
+                                sub_id.to_string(),
+                                effective_call_id.clone(),
+                            )
+                        },
+                    )
+                    .await;
 
                 let output = match result {
                     Ok(content) => FunctionCallOutputPayload {
@@ -2229,16 +2311,21 @@ async fn handle_response_item(
             input,
             status: _,
         } => {
-            let result = handle_custom_tool_call(
-                sess,
-                turn_context,
-                turn_diff_tracker,
-                sub_id.to_string(),
-                name,
-                input,
-                call_id.clone(),
-            )
-            .await;
+            let result = turn_context
+                .client
+                .get_otel_event_manager()
+                .log_tool_result(name.as_str(), call_id.as_str(), input.as_str(), || {
+                    handle_custom_tool_call(
+                        sess,
+                        turn_context,
+                        turn_diff_tracker,
+                        sub_id.to_string(),
+                        name.to_owned(),
+                        input.to_owned(),
+                        call_id.clone(),
+                    )
+                })
+                .await;
 
             let output = match result {
                 Ok(content) => content,
@@ -2344,6 +2431,7 @@ async fn handle_function_call(
         "container.exec" | "shell" => {
             let params = parse_container_exec_arguments(arguments, turn_context, &call_id)?;
             handle_container_exec_with_params(
+                name.as_str(),
                 params,
                 sess,
                 turn_context,
@@ -2407,6 +2495,7 @@ async fn handle_function_call(
                 justification: None,
             };
             handle_container_exec_with_params(
+                name.as_str(),
                 exec_params,
                 sess,
                 turn_context,
@@ -2479,6 +2568,7 @@ async fn handle_custom_tool_call(
             };
 
             handle_container_exec_with_params(
+                name.as_str(),
                 exec_params,
                 sess,
                 turn_context,
@@ -2548,6 +2638,7 @@ fn maybe_translate_shell_command(
 }
 
 async fn handle_container_exec_with_params(
+    tool_name: &str,
     params: ExecParams,
     sess: &Session,
     turn_context: &TurnContext,
@@ -2555,6 +2646,8 @@ async fn handle_container_exec_with_params(
     sub_id: String,
     call_id: String,
 ) -> Result<String, FunctionCallError> {
+    let otel_event_manager = turn_context.client.get_otel_event_manager();
+
     if params.with_escalated_permissions.unwrap_or(false)
         && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
     {
@@ -2618,6 +2711,7 @@ async fn handle_container_exec_with_params(
             let safety = if *user_explicitly_approved_this_action {
                 SafetyCheck::AutoApprove {
                     sandbox_type: SandboxType::None,
+                    user_explicitly_approved: true,
                 }
             } else {
                 assess_safety_for_untrusted_command(
@@ -2649,7 +2743,23 @@ async fn handle_container_exec_with_params(
     };
 
     let sandbox_type = match safety {
-        SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
+        SafetyCheck::AutoApprove {
+            sandbox_type,
+            user_explicitly_approved,
+        } => {
+            otel_event_manager.tool_decision(
+                tool_name,
+                call_id.as_str(),
+                ReviewDecision::Approved,
+                if user_explicitly_approved {
+                    ToolDecisionSource::User
+                } else {
+                    ToolDecisionSource::Config
+                },
+            );
+
+            sandbox_type
+        }
         SafetyCheck::AskUser => {
             let decision = sess
                 .request_command_approval(
@@ -2661,13 +2771,43 @@ async fn handle_container_exec_with_params(
                 )
                 .await;
             match decision {
-                ReviewDecision::Approved => (),
+                ReviewDecision::Approved => {
+                    otel_event_manager.tool_decision(
+                        tool_name,
+                        call_id.as_str(),
+                        ReviewDecision::Approved,
+                        ToolDecisionSource::User,
+                    );
+                }
                 ReviewDecision::ApprovedForSession => {
+                    otel_event_manager.tool_decision(
+                        tool_name,
+                        call_id.as_str(),
+                        ReviewDecision::ApprovedForSession,
+                        ToolDecisionSource::User,
+                    );
                     sess.add_approved_command(params.command.clone()).await;
                 }
-                ReviewDecision::Denied | ReviewDecision::Abort => {
+                ReviewDecision::Denied => {
+                    otel_event_manager.tool_decision(
+                        tool_name,
+                        call_id.as_str(),
+                        ReviewDecision::Denied,
+                        ToolDecisionSource::User,
+                    );
                     return Err(FunctionCallError::RespondToModel(
                         "exec command rejected by user".to_string(),
+                    ));
+                }
+                ReviewDecision::Abort => {
+                    otel_event_manager.tool_decision(
+                        tool_name,
+                        call_id.as_str(),
+                        ReviewDecision::Abort,
+                        ToolDecisionSource::User,
+                    );
+                    return Err(FunctionCallError::RespondToModel(
+                        "exec command aborted by user".to_string(),
                     ));
                 }
             }
@@ -2678,6 +2818,12 @@ async fn handle_container_exec_with_params(
             SandboxType::None
         }
         SafetyCheck::Reject { reason } => {
+            otel_event_manager.tool_decision(
+                tool_name,
+                call_id.as_str(),
+                ReviewDecision::Denied,
+                ToolDecisionSource::Config,
+            );
             return Err(FunctionCallError::RespondToModel(format!(
                 "exec command rejected: {reason:?}"
             )));
@@ -2736,6 +2882,7 @@ async fn handle_container_exec_with_params(
         }
         Err(CodexErr::Sandbox(error)) => {
             handle_sandbox_error(
+                tool_name,
                 turn_diff_tracker,
                 params,
                 exec_command_context,
@@ -2743,6 +2890,7 @@ async fn handle_container_exec_with_params(
                 sandbox_type,
                 sess,
                 turn_context,
+                &otel_event_manager,
             )
             .await
         }
@@ -2752,7 +2900,9 @@ async fn handle_container_exec_with_params(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_sandbox_error(
+    tool_name: &str,
     turn_diff_tracker: &mut TurnDiffTracker,
     params: ExecParams,
     exec_command_context: ExecCommandContext,
@@ -2760,6 +2910,7 @@ async fn handle_sandbox_error(
     sandbox_type: SandboxType,
     sess: &Session,
     turn_context: &TurnContext,
+    otel_event_manager: &OtelEventManager,
 ) -> Result<String, FunctionCallError> {
     let call_id = exec_command_context.call_id.clone();
     let sub_id = exec_command_context.sub_id.clone();
@@ -2814,6 +2965,13 @@ async fn handle_sandbox_error(
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
 
+            otel_event_manager.tool_decision(
+                tool_name,
+                call_id.as_str(),
+                decision,
+                ToolDecisionSource::User,
+            );
+
             // This is an escalated retry; the policy will not be
             // examined and the sandbox has been set to `None`.
             let retry_output_result = sess
@@ -2854,7 +3012,14 @@ async fn handle_sandbox_error(
                 ))),
             }
         }
-        ReviewDecision::Denied | ReviewDecision::Abort => {
+        decision @ (ReviewDecision::Denied | ReviewDecision::Abort) => {
+            otel_event_manager.tool_decision(
+                tool_name,
+                call_id.as_str(),
+                decision,
+                ToolDecisionSource::User,
+            );
+
             // Fall through to original failure handling.
             Err(FunctionCallError::RespondToModel(
                 "exec command rejected by user".to_string(),
@@ -3129,13 +3294,17 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+
     use crate::protocol::CompactedItem;
     use crate::protocol::InitialHistory;
     use crate::protocol::ResumedHistory;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
+    use codex_protocol::mcp_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
@@ -3370,6 +3539,18 @@ mod tests {
         })
     }
 
+    fn otel_event_manager(conversation_id: ConversationId, config: &Config) -> OtelEventManager {
+        OtelEventManager::new(
+            conversation_id,
+            config.model.as_str(),
+            config.model_family.slug.as_str(),
+            None,
+            Some(AuthMode::ChatGPT),
+            false,
+            "test".to_string(),
+        )
+    }
+
     pub(crate) fn make_session_and_context() -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
@@ -3381,9 +3562,11 @@ mod tests {
         .expect("load default test config");
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
+        let otel_event_manager = otel_event_manager(conversation_id, config.as_ref());
         let client = ModelClient::new(
             config.clone(),
             None,
+            otel_event_manager,
             config.model_provider.clone(),
             config.model_reasoning_effort,
             config.model_reasoning_summary,
@@ -3448,9 +3631,11 @@ mod tests {
         .expect("load default test config");
         let config = Arc::new(config);
         let conversation_id = ConversationId::default();
+        let otel_event_manager = otel_event_manager(conversation_id, config.as_ref());
         let client = ModelClient::new(
             config.clone(),
             None,
+            otel_event_manager,
             config.model_provider.clone(),
             config.model_reasoning_effort,
             config.model_reasoning_summary,
@@ -3741,10 +3926,12 @@ mod tests {
 
         let mut turn_diff_tracker = TurnDiffTracker::new();
 
+        let tool_name = "shell";
         let sub_id = "test-sub".to_string();
         let call_id = "test-call".to_string();
 
         let resp = handle_container_exec_with_params(
+            tool_name,
             params,
             &session,
             &turn_context,
@@ -3770,6 +3957,7 @@ mod tests {
         turn_context.sandbox_policy = SandboxPolicy::DangerFullAccess;
 
         let resp2 = handle_container_exec_with_params(
+            tool_name,
             params2,
             &session,
             &turn_context,

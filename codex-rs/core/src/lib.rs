@@ -104,3 +104,5 @@ pub use codex_protocol::models::LocalShellExecAction;
 pub use codex_protocol::models::LocalShellStatus;
 pub use codex_protocol::models::ReasoningItemContent;
 pub use codex_protocol::models::ResponseItem;
+
+pub mod otel_init;

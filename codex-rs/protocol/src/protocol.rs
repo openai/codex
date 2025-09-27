@@ -1206,7 +1206,7 @@ pub struct SessionConfiguredEvent {
 }
 
 /// User's decision in response to an ExecApprovalRequest.
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Display, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.

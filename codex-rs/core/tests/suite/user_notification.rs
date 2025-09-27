@@ -28,7 +28,7 @@ async fn summarize_context_three_requests_and_instructions() -> anyhow::Result<(
 
     let sse1 = sse(vec![ev_assistant_message("m1", "Done"), ev_completed("r1")]);
 
-    responses::mount_sse_once(&server, any(), sse1).await;
+    responses::mount_sse_once_match(&server, any(), sse1).await;
 
     let notify_dir = TempDir::new()?;
     // write a script to the notify that touches a file next to it
