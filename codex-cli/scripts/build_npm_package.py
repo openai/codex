@@ -102,8 +102,7 @@ def main() -> int:
         if release_version and resolved_head_sha:
             print(f"should `git checkout {resolved_head_sha}`")
 
-        if not workflow_url:
-            raise RuntimeError("Unable to determine workflow URL for native binaries.")
+        # workflow_url may be None if no workflow found, install_native_binaries handles it
 
         install_native_binaries(staging_dir, workflow_url)
 
