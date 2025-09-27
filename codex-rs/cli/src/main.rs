@@ -3,6 +3,7 @@ use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
 use clap_complete::generate;
+use codex_arg0::PreMainArgs;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
@@ -230,13 +231,18 @@ fn pre_main_hardening() {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
-        cli_main(codex_linux_sandbox_exe).await?;
+    arg0_dispatch_or_else(true, |pre_main_args| async move {
+        cli_main(pre_main_args).await?;
         Ok(())
     })
 }
 
-async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+async fn cli_main(pre_main_args: PreMainArgs) -> anyhow::Result<()> {
+    let PreMainArgs {
+        codex_linux_sandbox_exe,
+        openai_api_key: _,
+    } = pre_main_args;
+
     let MultitoolCli {
         config_overrides: root_config_overrides,
         mut interactive,

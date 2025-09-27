@@ -1,4 +1,5 @@
 use clap::Parser;
+use codex_arg0::PreMainArgs;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_common::CliConfigOverrides;
 use codex_tui::Cli;
@@ -14,7 +15,11 @@ struct TopCli {
 }
 
 fn main() -> anyhow::Result<()> {
-    arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
+    arg0_dispatch_or_else(false, |pre_main_args| async move {
+        let PreMainArgs {
+            codex_linux_sandbox_exe,
+            openai_api_key: _,
+        } = pre_main_args;
         let top_cli = TopCli::parse();
         let mut inner = top_cli.inner;
         inner
