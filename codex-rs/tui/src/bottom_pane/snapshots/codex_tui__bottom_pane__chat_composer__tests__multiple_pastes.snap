@@ -11,4 +11,4 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"  ? for shortcuts                                                                                   "
+"  ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit                                                     "

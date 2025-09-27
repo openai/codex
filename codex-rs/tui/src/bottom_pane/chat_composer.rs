@@ -1,3 +1,4 @@
+use codex_core::protocol::TokenUsageInfo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -18,14 +19,8 @@ use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
-use super::footer::FooterMode;
 use super::footer::FooterProps;
-use super::footer::esc_hint_mode;
-use super::footer::footer_height;
-use super::footer::prompt_mode;
 use super::footer::render_footer;
-use super::footer::reset_mode_after_activity;
-use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
@@ -79,6 +74,7 @@ pub(crate) struct ChatComposer {
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
+    token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
@@ -88,7 +84,6 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
-    footer_mode: FooterMode,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -98,7 +93,7 @@ enum ActivePopup {
     File(FileSearchPopup),
 }
 
-const FOOTER_SPACING_HEIGHT: u16 = 1;
+const FOOTER_HINT_HEIGHT: u16 = 1;
 
 impl ChatComposer {
     pub fn new(
@@ -122,6 +117,7 @@ impl ChatComposer {
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
+            token_usage_info: None,
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
@@ -129,7 +125,6 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
-            footer_mode: FooterMode::ShortcutPrompt,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -137,41 +132,26 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let footer_props = self.footer_props();
-        let footer_hint_height = footer_height(footer_props);
-        let footer_spacing = if footer_hint_height > 0 {
-            FOOTER_SPACING_HEIGHT
-        } else {
-            0
-        };
-        let footer_total_height = footer_hint_height + footer_spacing;
         self.textarea
             .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
             + 2
             + match &self.active_popup {
-                ActivePopup::None => footer_total_height,
+                ActivePopup::None => FOOTER_HINT_HEIGHT,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
-        let footer_props = self.footer_props();
-        let footer_hint_height = footer_height(footer_props);
-        let footer_spacing = if footer_hint_height > 0 {
-            FOOTER_SPACING_HEIGHT
-        } else {
-            0
-        };
-        let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
-            ActivePopup::None => Constraint::Max(footer_total_height),
+            ActivePopup::None => Constraint::Max(FOOTER_HINT_HEIGHT),
         };
         let mut area = area;
+        // Leave an empty row at the top, unless there isn't room.
         if area.height > 1 {
             area.height -= 1;
             area.y += 1;
@@ -193,6 +173,13 @@ impl ChatComposer {
     /// Returns true if the composer currently contains no user input.
     pub(crate) fn is_empty(&self) -> bool {
         self.textarea.is_empty()
+    }
+
+    /// Update the cached *context-left* percentage and refresh the placeholder
+    /// text. The UI relies on the placeholder to convey the remaining
+    /// context when the composer is empty.
+    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
+        self.token_usage_info = token_info;
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
@@ -332,11 +319,6 @@ impl ChatComposer {
 
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
-        if show {
-            self.footer_mode = prompt_mode();
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
         self.set_has_focus(has_focus);
     }
 
@@ -372,18 +354,6 @@ impl ChatComposer {
 
     /// Handle key event when the slash-command popup is visible.
     fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if self.handle_shortcut_overlay_key(&key_event) {
-            return (InputResult::None, true);
-        }
-        if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-            if next_mode != self.footer_mode {
-                self.footer_mode = next_mode;
-                return (InputResult::None, true);
-            }
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
         let ActivePopup::Command(popup) = &mut self.active_popup else {
             unreachable!();
         };
@@ -508,18 +478,6 @@ impl ChatComposer {
 
     /// Handle key events when file search popup is visible.
     fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if self.handle_shortcut_overlay_key(&key_event) {
-            return (InputResult::None, true);
-        }
-        if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-            if next_mode != self.footer_mode {
-                self.footer_mode = next_mode;
-                return (InputResult::None, true);
-            }
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
         let ActivePopup::File(popup) = &mut self.active_popup else {
             unreachable!();
         };
@@ -771,18 +729,6 @@ impl ChatComposer {
 
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
-        if self.handle_shortcut_overlay_key(&key_event) {
-            return (InputResult::None, true);
-        }
-        if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-            if next_mode != self.footer_mode {
-                self.footer_mode = next_mode;
-                return (InputResult::None, true);
-            }
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -925,10 +871,6 @@ impl ChatComposer {
         // elapsed since the last char, flush it before handling a new input.
         let now = Instant::now();
         self.handle_paste_burst_flush(now);
-
-        if !matches!(input.code, KeyCode::Esc) {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
         if matches!(input.code, KeyCode::Enter)
@@ -1203,39 +1145,6 @@ impl ChatComposer {
         false
     }
 
-    fn handle_shortcut_overlay_key(&mut self, key_event: &KeyEvent) -> bool {
-        if key_event.kind == KeyEventKind::Press
-            && key_event.modifiers.is_empty()
-            && matches!(key_event.code, KeyCode::Char('?'))
-        {
-            let next = toggle_shortcut_mode(self.footer_mode, self.ctrl_c_quit_hint);
-            let changed = next != self.footer_mode;
-            self.footer_mode = next;
-            changed
-        } else {
-            false
-        }
-    }
-
-    fn footer_props(&self) -> FooterProps {
-        FooterProps {
-            mode: self.footer_mode(),
-            esc_backtrack_hint: self.esc_backtrack_hint,
-            use_shift_enter_hint: self.use_shift_enter_hint,
-            is_task_running: self.is_task_running,
-        }
-    }
-
-    fn footer_mode(&self) -> FooterMode {
-        if matches!(self.footer_mode, FooterMode::EscHint) {
-            FooterMode::EscHint
-        } else if self.ctrl_c_quit_hint {
-            FooterMode::CtrlCReminder
-        } else {
-            self.footer_mode
-        }
-    }
-
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
@@ -1319,18 +1228,10 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
-        if running {
-            self.footer_mode = prompt_mode();
-        }
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
-        if show {
-            self.footer_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-        } else {
-            self.footer_mode = reset_mode_after_activity(self.footer_mode);
-        }
     }
 }
 
@@ -1351,26 +1252,20 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let footer_hint_height = footer_height(self.footer_props());
-                let footer_spacing = if footer_hint_height > 0 {
-                    FOOTER_SPACING_HEIGHT
-                } else {
-                    0
-                };
-                let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
-                    let [_, hint_rect] = Layout::vertical([
-                        Constraint::Length(footer_spacing),
-                        Constraint::Length(footer_hint_height),
-                    ])
-                    .areas(popup_rect);
-                    hint_rect
-                } else {
-                    popup_rect
-                };
-                let mut footer_rect = hint_rect;
-                footer_rect.x = footer_rect.x.saturating_add(2);
-                footer_rect.width = footer_rect.width.saturating_sub(2);
-                render_footer(footer_rect, buf, self.footer_props());
+                let mut hint_rect = popup_rect;
+                hint_rect.x += 2;
+                hint_rect.width = hint_rect.width.saturating_sub(2);
+                render_footer(
+                    hint_rect,
+                    buf,
+                    FooterProps {
+                        ctrl_c_quit_hint: self.ctrl_c_quit_hint,
+                        is_task_running: self.is_task_running,
+                        esc_backtrack_hint: self.esc_backtrack_hint,
+                        use_shift_enter_hint: self.use_shift_enter_hint,
+                        token_usage_info: self.token_usage_info.as_ref(),
+                    },
+                );
             }
         }
         let style = user_message_style(terminal_palette::default_bg());
@@ -1409,7 +1304,6 @@ mod tests {
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
-    use crate::bottom_pane::footer::footer_height;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -1440,7 +1334,7 @@ mod tests {
         let mut hint_row: Option<(u16, String)> = None;
         for y in 0..area.height {
             let row = row_to_string(y);
-            if row.contains("? for shortcuts") {
+            if row.contains(" send") {
                 hint_row = Some((y, row));
                 break;
             }
@@ -1464,81 +1358,6 @@ mod tests {
             spacing_row.trim(),
             "",
             "expected blank spacing row above hints but saw: {spacing_row:?}",
-        );
-    }
-
-    fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
-    where
-        F: FnOnce(&mut ChatComposer),
-    {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let width = 100;
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            true,
-            sender,
-            enhanced_keys_supported,
-            "Ask Codex to do anything".to_string(),
-            false,
-        );
-        setup(&mut composer);
-        let footer_lines = footer_height(composer.footer_props());
-        let height = footer_lines + 8;
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|f| f.render_widget_ref(composer, f.area()))
-            .unwrap();
-        insta::assert_snapshot!(name, terminal.backend());
-    }
-
-    #[test]
-    fn footer_mode_snapshots() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
-        snapshot_composer_state("footer_mode_shortcut_overlay", true, |composer| {
-            composer.set_esc_backtrack_hint(true);
-            let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
-        });
-
-        snapshot_composer_state("footer_mode_ctrl_c_quit", true, |composer| {
-            composer.set_ctrl_c_quit_hint(true, true);
-        });
-
-        snapshot_composer_state("footer_mode_ctrl_c_interrupt", true, |composer| {
-            composer.set_task_running(true);
-            composer.set_ctrl_c_quit_hint(true, true);
-        });
-
-        snapshot_composer_state("footer_mode_ctrl_c_then_esc_hint", true, |composer| {
-            composer.set_ctrl_c_quit_hint(true, true);
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        });
-
-        snapshot_composer_state("footer_mode_esc_hint_from_overlay", true, |composer| {
-            let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        });
-
-        snapshot_composer_state("footer_mode_esc_hint_backtrack", true, |composer| {
-            composer.set_esc_backtrack_hint(true);
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        });
-
-        snapshot_composer_state(
-            "footer_mode_overlay_then_external_esc_hint",
-            true,
-            |composer| {
-                let _ = composer
-                    .handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
-                composer.set_esc_backtrack_hint(true);
-            },
         );
     }
 
