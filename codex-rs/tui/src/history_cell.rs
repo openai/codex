@@ -376,8 +376,8 @@ pub(crate) fn new_session_info(
         session_id: _,
         history_log_id: _,
         history_entry_count: _,
-        initial_messages: _,
-        rollout_path: _,
+        initial_messages,
+        rollout_path,
     } = event;
     if is_first_event {
         // Header box rendered as history (so it appears at the very top)
@@ -421,12 +421,21 @@ pub(crate) fn new_session_info(
             ]),
         ];
 
-        CompositeHistoryCell {
-            parts: vec![
-                Box::new(header),
-                Box::new(PlainHistoryCell { lines: help_lines }),
-            ],
+        // If resuming, surface the rollout (resume) file path for quick discovery.
+        // We detect resume via presence of `initial_messages` in SessionConfiguredEvent.
+        let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
+        if initial_messages.is_some() {
+            let line: Line<'static> = vec![
+                // Keep label styling consistent with other summary lines (dim label).
+                Span::from("resume file: ").dim(),
+                Span::from(rollout_path.display().to_string()),
+            ]
+            .into();
+            parts.push(Box::new(PlainHistoryCell { lines: vec![line] }));
         }
+        parts.push(Box::new(PlainHistoryCell { lines: help_lines }));
+
+        CompositeHistoryCell { parts }
     } else if config.model == model {
         CompositeHistoryCell { parts: vec![] }
     } else {

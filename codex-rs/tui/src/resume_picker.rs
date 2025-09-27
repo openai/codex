@@ -19,6 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use std::env;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -30,6 +31,7 @@ use crate::tui::TuiEvent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 
 const PAGE_SIZE: usize = 25;
@@ -64,6 +66,41 @@ enum BackgroundEvent {
 /// search and pagination. Shows the first user input as the preview, relative
 /// time (e.g., "5 seconds ago"), and the absolute path.
 pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<ResumeSelection> {
+    // Plain, non-interactive verification mode: print rows and exit.
+    // Enables checking the '[project]' tag & preview without onboarding/TUI.
+    if env::var("CODEX_TUI_PLAIN").as_deref() == Ok("1") {
+        match RolloutRecorder::list_conversations(codex_home, PAGE_SIZE, None).await {
+            Ok(page) => {
+                let rows: Vec<Row> = page.items.iter().map(|it| head_to_row(it)).collect();
+                let no_color = env::var("NO_COLOR").is_ok();
+                let dumb = env::var("TERM").unwrap_or_default() == "dumb";
+                let use_color = !no_color && !dumb;
+                for (i, r) in rows.iter().enumerate() {
+                    let mark = if i == 0 { "> " } else { "  " };
+                    let ts =
+                        r.ts.as_ref()
+                            .map(|dt| human_time_ago(dt.clone()))
+                            .unwrap_or_else(|| "-".to_string());
+                    let tag = r.project.as_deref().unwrap_or("<cwd>");
+                    // Sanitize preview to a single line, limited length similar to TUI
+                    let mut pv = r.preview.replace('\n', " ");
+                    if pv.len() > 80 {
+                        pv.truncate(79);
+                        pv.push('…');
+                    }
+                    if use_color {
+                        println!("{mark}{ts:<12}  \x1b[36;1m[{tag}]\x1b[0m  {pv}");
+                    } else {
+                        println!("{mark}{ts:<12}  [{tag}]  {pv}");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to list conversations: {e}");
+            }
+        }
+        return Ok(ResumeSelection::StartFresh);
+    }
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
@@ -91,6 +128,12 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
         page_loader,
     );
     state.load_initial_page().await?;
+    if let Ok(q) = env::var("CODEX_TUI_FILTER") {
+        let q = q.trim();
+        if !q.is_empty() {
+            state.set_query(q.to_string());
+        }
+    }
     state.request_frame();
 
     let mut tui_events = alt.tui.event_stream().fuse();
@@ -219,6 +262,7 @@ struct Row {
     path: PathBuf,
     preview: String,
     ts: Option<DateTime<Utc>>,
+    project: Option<String>,
 }
 
 impl PickerState {
@@ -565,11 +609,25 @@ fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
 
 fn head_to_row(item: &ConversationItem) -> Row {
     let mut ts: Option<DateTime<Utc>> = None;
+    let mut project: Option<String> = None;
     if let Some(first) = item.head.first()
         && let Some(t) = first.get("timestamp").and_then(|v| v.as_str())
         && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(t)
     {
         ts = Some(parsed.with_timezone(&Utc));
+    }
+
+    // Attempt to derive the project tag from the SessionMeta line (cwd basename).
+    for value in &item.head {
+        if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
+            let cwd = meta_line.meta.cwd;
+            if let Some(name) = cwd.file_name().and_then(|s| s.to_str()) {
+                if !name.is_empty() {
+                    project = Some(name.to_string());
+                }
+            }
+            break;
+        }
     }
 
     let preview = preview_from_head(&item.head)
@@ -581,6 +639,7 @@ fn head_to_row(item: &ConversationItem) -> Row {
         path: item.path.clone(),
         preview,
         ts,
+        project,
     }
 }
 
@@ -696,10 +755,21 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
             .map(human_time_ago)
             .unwrap_or_else(|| "".to_string())
             .dim();
-        let max_cols = area.width.saturating_sub(6) as usize;
+        // Calculate remaining width for preview text after fixed columns.
+        let mut max_cols = area.width.saturating_sub(6) as usize;
+        if let Some(tag) = &row.project {
+            max_cols = max_cols.saturating_sub(tag.len() + 4);
+        }
         let preview = truncate_text(&row.preview, max_cols);
 
-        let line: Line = vec![marker, ts, "  ".into(), preview.into()].into();
+        // Build line: marker, time, optional [project], preview
+        let mut spans: Vec<Span<'static>> = vec![marker, ts, "  ".into()];
+        if let Some(tag) = &row.project {
+            spans.push(format!("[{}]", tag).cyan().bold());
+            spans.push("  ".into());
+        }
+        spans.push(preview.into());
+        let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
