@@ -9,7 +9,9 @@ use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 
+use mcp_types::JSONRPCErrorError;
 use mcp_types::JSONRPCMessage;
+use mcp_types::RequestId;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -31,6 +33,7 @@ mod outgoing_message;
 mod patch_approval;
 
 use crate::message_processor::MessageProcessor;
+use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 
@@ -46,6 +49,8 @@ pub use crate::patch_approval::PatchApprovalResponse;
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
 
+const CONFIG_ERROR_CODE: i32 = 3;
+
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
@@ -60,6 +65,7 @@ pub async fn run_main(
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
+    let mut stdout = tokio::io::stdout();
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({
@@ -86,16 +92,14 @@ pub async fn run_main(
 
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
-    let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
-        std::io::Error::new(
-            ErrorKind::InvalidInput,
-            format!("error parsing -c overrides: {e}"),
-        )
-    })?;
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
-        .map_err(|e| {
-            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
-        })?;
+    let config = match parse_config(cli_config_overrides) {
+        Ok(config) => config,
+        Err(e) => {
+            error!("Failed to parse config: {e}");
+            report_config_error(&mut stdout, e).await;
+            std::process::exit(CONFIG_ERROR_CODE);
+        }
+    };
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
@@ -121,22 +125,8 @@ pub async fn run_main(
 
     // Task: write outgoing messages to stdout.
     let stdout_writer_handle = tokio::spawn(async move {
-        let mut stdout = io::stdout();
         while let Some(outgoing_message) = outgoing_rx.recv().await {
-            let msg: JSONRPCMessage = outgoing_message.into();
-            match serde_json::to_string(&msg) {
-                Ok(json) => {
-                    if let Err(e) = stdout.write_all(json.as_bytes()).await {
-                        error!("Failed to write to stdout: {e}");
-                        break;
-                    }
-                    if let Err(e) = stdout.write_all(b"\n").await {
-                        error!("Failed to write newline to stdout: {e}");
-                        break;
-                    }
-                }
-                Err(e) => error!("Failed to serialize JSONRPCMessage: {e}"),
-            }
+            write_outgoing_message(&mut stdout, outgoing_message).await;
         }
 
         info!("stdout writer exited (channel closed)");
@@ -148,4 +138,49 @@ pub async fn run_main(
     let _ = tokio::join!(stdin_reader_handle, processor_handle, stdout_writer_handle);
 
     Ok(())
+}
+
+fn parse_config(cli_config_overrides: CliConfigOverrides) -> IoResult<Config> {
+    let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("error parsing -c overrides: {e}"),
+        )
+    })?;
+
+    Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default()).map_err(|e| {
+        std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+    })
+}
+
+async fn report_config_error<W: AsyncWriteExt + Unpin>(stdout: &mut W, e: std::io::Error) {
+    let err_msg = OutgoingMessage::Error(OutgoingError {
+        // user RequestId = 1 as the initialization response, since we're going to exit after this
+        id: RequestId::Integer(1),
+        error: JSONRPCErrorError {
+            code: CONFIG_ERROR_CODE as i64,
+            message: format!("Failed to parse config: {e}"),
+            data: None,
+        },
+    });
+    write_outgoing_message(stdout, err_msg).await;
+}
+
+async fn write_outgoing_message<W: AsyncWriteExt + Unpin>(
+    stdout: &mut W,
+    outgoing_message: OutgoingMessage,
+) {
+    let msg: JSONRPCMessage = outgoing_message.into();
+    match serde_json::to_string(&msg) {
+        Ok(json) => {
+            if let Err(e) = stdout.write_all(json.as_bytes()).await {
+                error!("Failed to write to stdout: {e}");
+                return;
+            }
+            if let Err(e) = stdout.write_all(b"\n").await {
+                error!("Failed to write newline to stdout: {e}");
+            }
+        }
+        Err(e) => error!("Failed to serialize JSONRPCMessage: {e}"),
+    }
 }
