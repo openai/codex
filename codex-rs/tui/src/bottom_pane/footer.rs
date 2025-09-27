@@ -179,13 +179,13 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
-    FilePaths,
     InsertNewline,
+    ChangeMode,
+    FilePaths,
     PasteImage,
+    EditPrevious,
     Quit,
     ShowTranscript,
-    ToggleOverlay,
-    EditPrevious,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -273,17 +273,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " for commands",
     },
     ShortcutDescriptor {
-        id: ShortcutId::FilePaths,
-        bindings: &[ShortcutBinding {
-            code: KeyCode::Char('@'),
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "@",
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " for file paths",
-    },
-    ShortcutDescriptor {
         id: ShortcutId::InsertNewline,
         bindings: &[
             ShortcutBinding {
@@ -303,6 +292,28 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " for newline",
     },
     ShortcutDescriptor {
+        id: ShortcutId::ChangeMode,
+        bindings: &[ShortcutBinding {
+            code: KeyCode::BackTab,
+            modifiers: KeyModifiers::SHIFT,
+            overlay_text: "shift + tab",
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to change mode",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::FilePaths,
+        bindings: &[ShortcutBinding {
+            code: KeyCode::Char('@'),
+            modifiers: KeyModifiers::NONE,
+            overlay_text: "@",
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " for file paths",
+    },
+    ShortcutDescriptor {
         id: ShortcutId::PasteImage,
         bindings: &[ShortcutBinding {
             code: KeyCode::Char('v'),
@@ -312,6 +323,17 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to paste images",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::EditPrevious,
+        bindings: &[ShortcutBinding {
+            code: KeyCode::Esc,
+            modifiers: KeyModifiers::NONE,
+            overlay_text: "esc",
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: "",
     },
     ShortcutDescriptor {
         id: ShortcutId::Quit,
@@ -334,28 +356,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to view transcript",
-    },
-    ShortcutDescriptor {
-        id: ShortcutId::ToggleOverlay,
-        bindings: &[ShortcutBinding {
-            code: KeyCode::Char('?'),
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "?",
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " to hide shortcuts",
-    },
-    ShortcutDescriptor {
-        id: ShortcutId::EditPrevious,
-        bindings: &[ShortcutBinding {
-            code: KeyCode::Esc,
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "esc",
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: "",
     },
 ];
 
