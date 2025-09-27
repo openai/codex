@@ -143,19 +143,17 @@ impl TurnItem {
 
     fn diff_text(&self) -> Option<String> {
         if self.kind == "output_diff" {
-            if let Some(diff) = &self.diff {
-                if !diff.is_empty() {
-                    return Some(diff.clone());
-                }
+            if let Some(diff) = &self.diff
+                && !diff.is_empty()
+            {
+                return Some(diff.clone());
             }
-        } else if self.kind == "pr" {
-            if let Some(payload) = &self.output_diff {
-                if let Some(diff) = &payload.diff {
-                    if !diff.is_empty() {
-                        return Some(diff.clone());
-                    }
-                }
-            }
+        } else if self.kind == "pr"
+            && let Some(payload) = &self.output_diff
+            && let Some(diff) = &payload.diff
+            && !diff.is_empty()
+        {
+            return Some(diff.clone());
         }
         None
     }

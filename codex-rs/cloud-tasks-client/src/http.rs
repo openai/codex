@@ -452,9 +452,9 @@ mod api {
 
     fn details_path(base_url: &str, id: &str) -> Option<String> {
         if base_url.contains("/backend-api") {
-            Some(format!("{}/wham/tasks/{}", base_url, id))
+            Some(format!("{base_url}/wham/tasks/{id}"))
         } else if base_url.contains("/api/codex") {
-            Some(format!("{}/tasks/{}", base_url, id))
+            Some(format!("{base_url}/tasks/{id}"))
         } else {
             None
         }
