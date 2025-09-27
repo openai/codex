@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use futures::FutureExt;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::InitializeRequestParams;
@@ -19,7 +20,9 @@ use rmcp::model::PaginatedRequestParam;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::service::{self};
+use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::child_process::TokioChildProcess;
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -35,9 +38,14 @@ use crate::utils::convert_to_rmcp;
 use crate::utils::create_env_for_mcp_server;
 use crate::utils::run_with_timeout;
 
+enum PendingTransport {
+    ChildProcess(TokioChildProcess),
+    StreamableHttp(StreamableHttpClientTransport<reqwest::Client>),
+}
+
 enum ClientState {
     Connecting {
-        transport: Option<TokioChildProcess>,
+        transport: Option<PendingTransport>,
     },
     Ready {
         service: Arc<RunningService<RoleClient, LoggingClientHandler>>,
@@ -90,7 +98,22 @@ impl RmcpClient {
 
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {
-                transport: Some(transport),
+                transport: Some(PendingTransport::ChildProcess(transport)),
+            }),
+        })
+    }
+
+    pub fn new_streamable_http_client(url: String, bearer_token: Option<String>) -> Result<Self> {
+        let mut config = StreamableHttpClientTransportConfig::with_uri(url);
+        if let Some(token) = bearer_token {
+            config = config.auth_header(format!("Bearer {token}"));
+        }
+
+        let transport = StreamableHttpClientTransport::from_config(config);
+
+        Ok(Self {
+            state: Mutex::new(ClientState::Connecting {
+                transport: Some(PendingTransport::StreamableHttp(transport)),
             }),
         })
     }
@@ -116,7 +139,14 @@ impl RmcpClient {
 
         let client_info = convert_to_rmcp::<_, InitializeRequestParam>(params.clone())?;
         let client_handler = LoggingClientHandler::new(client_info);
-        let service_future = service::serve_client(client_handler, transport);
+        let service_future = match transport {
+            PendingTransport::ChildProcess(transport) => {
+                service::serve_client(client_handler.clone(), transport).boxed()
+            }
+            PendingTransport::StreamableHttp(transport) => {
+                service::serve_client(client_handler, transport).boxed()
+            }
+        };
 
         let service = match timeout {
             Some(duration) => time::timeout(duration, service_future)
