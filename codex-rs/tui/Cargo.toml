@@ -37,6 +37,7 @@ codex-common = { path = "../common", features = [
 ] }
 codex-core = { path = "../core" }
 codex-file-search = { path = "../file-search" }
+codex-git-tooling = { path = "../git-tooling" }
 codex-login = { path = "../login" }
 codex-ollama = { path = "../ollama" }
 codex-protocol = { path = "../protocol" }
@@ -46,6 +47,7 @@ crossterm = { version = "0.28.1", features = [
     "event-stream",
 ] }
 diffy = "0.4.2"
+dirs = "6"
 image = { version = "^0.25.8", default-features = false, features = [
     "jpeg",
     "png",
