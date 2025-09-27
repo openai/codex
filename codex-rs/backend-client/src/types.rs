@@ -52,6 +52,7 @@ impl CodeTaskDetailsResponseExt for CodeTaskDetailsResponse {
         }
         None
     }
+
     fn assistant_text_messages(&self) -> Vec<String> {
         let mut out = Vec::new();
         let candidates: [&Option<std::collections::HashMap<String, Value>>; 2] =
