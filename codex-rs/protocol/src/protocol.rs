@@ -521,7 +521,7 @@ pub enum EventMsg {
     ExitedReviewMode(ExitedReviewModeEvent),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct ExitedReviewModeEvent {
     pub review_output: Option<ReviewOutputEvent>,
 }
@@ -543,7 +543,7 @@ pub struct TaskStartedEvent {
     pub model_context_window: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, TS)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
@@ -552,7 +552,7 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
@@ -589,7 +589,7 @@ impl TokenUsageInfo {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
     pub rate_limits: Option<RateLimitSnapshot>,
@@ -715,12 +715,12 @@ impl fmt::Display for FinalOutput {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct AgentMessageEvent {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum InputMessageKind {
     /// Plain user text (default)
@@ -731,7 +731,7 @@ pub enum InputMessageKind {
     EnvironmentContext,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct UserMessageEvent {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -788,12 +788,12 @@ pub struct AgentMessageDeltaEvent {
     pub delta: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct AgentReasoningEvent {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct AgentReasoningRawContentEvent {
     pub text: String,
 }
@@ -1250,7 +1250,7 @@ pub struct Chunk {
     pub inserted_lines: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct TurnAbortedEvent {
     pub reason: TurnAbortReason,
 }
@@ -1321,5 +1321,170 @@ mod tests {
         let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized)?;
         assert_eq!(deserialized, event);
         Ok(())
+    }
+
+    fn normalize_rollout_value(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(mut map) => {
+                let is_response_item = matches!(
+                    map.get("type"),
+                    Some(serde_json::Value::String(item_type)) if item_type == "response_item"
+                );
+
+                if let Some(serde_json::Value::Object(payload)) = map.get_mut("payload") {
+                    if let Some(serde_json::Value::String(item_type)) = payload.get("type") {
+                        let known_response_types = [
+                            "message",
+                            "reasoning",
+                            "local_shell_call",
+                            "function_call",
+                            "function_call_output",
+                            "custom_tool_call",
+                            "custom_tool_call_output",
+                            "web_search_call",
+                        ];
+                        if known_response_types.contains(&item_type.as_str()) {
+                            payload.remove("id");
+                        } else if is_response_item {
+                            payload.clear();
+                            payload.insert(
+                                "type".to_string(),
+                                serde_json::Value::String("other".to_string()),
+                            );
+                        }
+                    }
+                }
+
+                for value in map.values_mut() {
+                    let normalized = normalize_rollout_value(std::mem::take(value));
+                    *value = normalized;
+                }
+                serde_json::Value::Object(map)
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.into_iter().map(normalize_rollout_value).collect())
+            }
+            serde_json::Value::Number(num) => {
+                if num.as_i64().is_some() || num.as_u64().is_some() {
+                    serde_json::Value::Number(num)
+                } else if let Some(value) = num.as_f64() {
+                    let rounded = (value * 1_000_000.0).round() / 1_000_000.0;
+                    serde_json::Number::from_f64(rounded)
+                        .map(serde_json::Value::Number)
+                        .unwrap_or_else(|| serde_json::Value::Number(num))
+                } else {
+                    serde_json::Value::Number(num)
+                }
+            }
+            other => other,
+        }
+    }
+
+    fn assert_rollout_round_trip(case: &str, raw: &str) {
+        let expected: serde_json::Value =
+            serde_json::from_str(raw).unwrap_or_else(|err| panic!("failed to parse {case}: {err}"));
+        let parsed: RolloutLine =
+            serde_json::from_str(raw).unwrap_or_else(|err| panic!("failed to parse {case}: {err}"));
+        let serialized = serde_json::to_value(&parsed)
+            .unwrap_or_else(|err| panic!("failed to serialize {case}: {err}"));
+        assert_eq!(
+            normalize_rollout_value(serialized),
+            normalize_rollout_value(expected),
+            "case {case} failed round trip",
+        );
+    }
+
+    #[test]
+    fn deserialize_rollout_fixtures() {
+        let cases = [
+            (
+                "session_meta/with_git",
+                include_str!("../tests/fixtures/rollouts/session_meta/with_git.json"),
+            ),
+            (
+                "response_item/message",
+                include_str!("../tests/fixtures/rollouts/response_item/message.json"),
+            ),
+            (
+                "response_item/reasoning",
+                include_str!("../tests/fixtures/rollouts/response_item/reasoning.json"),
+            ),
+            (
+                "response_item/local_shell_call",
+                include_str!("../tests/fixtures/rollouts/response_item/local_shell_call.json"),
+            ),
+            (
+                "response_item/function_call",
+                include_str!("../tests/fixtures/rollouts/response_item/function_call.json"),
+            ),
+            (
+                "response_item/function_call_output",
+                include_str!("../tests/fixtures/rollouts/response_item/function_call_output.json"),
+            ),
+            (
+                "response_item/custom_tool_call",
+                include_str!("../tests/fixtures/rollouts/response_item/custom_tool_call.json"),
+            ),
+            (
+                "response_item/custom_tool_call_output",
+                include_str!(
+                    "../tests/fixtures/rollouts/response_item/custom_tool_call_output.json"
+                ),
+            ),
+            (
+                "response_item/web_search_call",
+                include_str!("../tests/fixtures/rollouts/response_item/web_search_call.json"),
+            ),
+            (
+                "response_item/other",
+                include_str!("../tests/fixtures/rollouts/response_item/other.json"),
+            ),
+            (
+                "event_msg/user_message",
+                include_str!("../tests/fixtures/rollouts/event_msg/user_message.json"),
+            ),
+            (
+                "event_msg/agent_message",
+                include_str!("../tests/fixtures/rollouts/event_msg/agent_message.json"),
+            ),
+            (
+                "event_msg/agent_reasoning",
+                include_str!("../tests/fixtures/rollouts/event_msg/agent_reasoning.json"),
+            ),
+            (
+                "event_msg/agent_reasoning_raw_content",
+                include_str!(
+                    "../tests/fixtures/rollouts/event_msg/agent_reasoning_raw_content.json"
+                ),
+            ),
+            (
+                "event_msg/token_count_info",
+                include_str!("../tests/fixtures/rollouts/event_msg/token_count_info.json"),
+            ),
+            (
+                "event_msg/entered_review_mode",
+                include_str!("../tests/fixtures/rollouts/event_msg/entered_review_mode.json"),
+            ),
+            (
+                "event_msg/exited_review_mode",
+                include_str!("../tests/fixtures/rollouts/event_msg/exited_review_mode.json"),
+            ),
+            (
+                "event_msg/turn_aborted",
+                include_str!("../tests/fixtures/rollouts/event_msg/turn_aborted.json"),
+            ),
+            (
+                "misc/compacted",
+                include_str!("../tests/fixtures/rollouts/misc/compacted.json"),
+            ),
+            (
+                "misc/turn_context_workspace",
+                include_str!("../tests/fixtures/rollouts/misc/turn_context_workspace.json"),
+            ),
+        ];
+
+        for (case, raw) in cases {
+            assert_rollout_round_trip(case, raw);
+        }
     }
 }

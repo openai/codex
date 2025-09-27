@@ -1,0 +1,9 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "response_item",
+  "payload": {
+    "type": "custom_tool_call_output",
+    "call_id": "tool-456",
+    "output": "tool finished"
+  }
+}

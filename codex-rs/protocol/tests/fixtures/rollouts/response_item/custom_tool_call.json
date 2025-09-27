@@ -1,0 +1,12 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "response_item",
+  "payload": {
+    "type": "custom_tool_call",
+    "id": "legacy-tool",
+    "status": "completed",
+    "call_id": "tool-456",
+    "name": "my_tool",
+    "input": "{\"foo\":1}"
+  }
+}

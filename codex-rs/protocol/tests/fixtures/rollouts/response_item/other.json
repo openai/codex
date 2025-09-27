@@ -1,0 +1,8 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "response_item",
+  "payload": {
+    "type": "new_future_item",
+    "foo": "bar"
+  }
+}

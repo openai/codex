@@ -1,0 +1,9 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "event_msg",
+  "payload": {
+    "type": "entered_review_mode",
+    "prompt": "Need review",
+    "user_facing_hint": "double-check work"
+  }
+}
