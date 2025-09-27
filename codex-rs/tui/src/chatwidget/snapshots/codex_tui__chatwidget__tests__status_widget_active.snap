@@ -9,5 +9,5 @@ expression: terminal.backend()
 "› Ask Codex to do anything                                                      "
 "                                                                                "
 "                                                                                "
-"  ? for shortcuts                                                               "
+"  shift+tab for shortcuts                                                       "
 "                                                                                "

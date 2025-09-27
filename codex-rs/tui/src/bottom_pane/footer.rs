@@ -75,7 +75,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 is_task_running: props.is_task_running,
             })]
         }
-        FooterMode::ShortcutPrompt => vec![Line::from(vec!["? for shortcuts".dim()])],
+        FooterMode::ShortcutPrompt => vec![Line::from(vec!["shift+tab for shortcuts".dim()])],
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
             use_shift_enter_hint: props.use_shift_enter_hint,
             esc_backtrack_hint: props.esc_backtrack_hint,

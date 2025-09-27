@@ -1209,7 +1209,6 @@ impl ChatComposer {
         }
 
         let toggles = match key_event.code {
-            KeyCode::Char('?') if key_event.modifiers.is_empty() => true,
             KeyCode::BackTab => true,
             KeyCode::Tab if key_event.modifiers.contains(KeyModifiers::SHIFT) => true,
             _ => false,
@@ -1448,7 +1447,7 @@ mod tests {
         let mut hint_row: Option<(u16, String)> = None;
         for y in 0..area.height {
             let row = row_to_string(y);
-            if row.contains("? for shortcuts") {
+            if row.contains("shift+tab for shortcuts") {
                 hint_row = Some((y, row));
                 break;
             }
@@ -1510,8 +1509,7 @@ mod tests {
 
         snapshot_composer_state("footer_mode_shortcut_overlay", true, |composer| {
             composer.set_esc_backtrack_hint(true);
-            let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
         });
 
         snapshot_composer_state("footer_mode_ctrl_c_quit", true, |composer| {
@@ -1529,8 +1527,7 @@ mod tests {
         });
 
         snapshot_composer_state("footer_mode_esc_hint_from_overlay", true, |composer| {
-            let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         });
 
@@ -1543,8 +1540,8 @@ mod tests {
             "footer_mode_overlay_then_external_esc_hint",
             true,
             |composer| {
-                let _ = composer
-                    .handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+                let _ =
+                    composer.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
                 composer.set_esc_backtrack_hint(true);
             },
         );
