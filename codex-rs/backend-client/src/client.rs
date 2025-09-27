@@ -12,7 +12,8 @@ use serde::de::DeserializeOwned;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathStyle {
-    CodexApi,   // /api/codex/...
+    /// /api/codex/…
+    CodexApi,
     ChatGptApi, // /wham/...
 }
 
