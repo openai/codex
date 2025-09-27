@@ -2158,7 +2158,6 @@ printf 'fenced within fenced\n'
             id: "t1".into(),
             msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
         });
-        chat.on_commit_tick();
     }
 
     // Send the final message

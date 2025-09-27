@@ -92,7 +92,6 @@ mod tests {
                 "Before".to_string(),
                 "".to_string(),
                 "    code 1".to_string(),
-                "    code 1".to_string(),
                 "".to_string(),
                 "After".to_string()
             ]

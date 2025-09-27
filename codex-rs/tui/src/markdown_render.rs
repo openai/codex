@@ -84,8 +84,13 @@ fn get_syntax_definition(language: Option<&str>) -> &'static syntect::parsing::S
 }
 
 #[cfg(feature = "syntax-highlighting")]
-fn syntect_to_ratatui_color(_color: SyntectColor) -> Option<Color> {
-    // Use ANSI colors instead of RGB for better terminal compatibility
+fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
+    if color.a == 0 {
+        // Transparent color, skip it
+        return None;
+    }
+
+    // Use ANSI colors instead of RGB
     None
 }
 
@@ -351,12 +356,13 @@ where
                     let ranges: Vec<(syntect::highlighting::Style, &str)> = highlighter
                         .highlight_line(line, &SYNTAX_SET)
                         .unwrap_or_else(|_| vec![(syntect::highlighting::Style::default(), line)]);
+
                     let spans: Vec<Span> = ranges
                         .into_iter()
                         .map(|(syn_style, text)| {
                             let fg = syn_style.foreground;
-                            let mut style = Style::default()
-                                .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
+                            let color = syntect_to_ratatui_color(fg);
+                            let mut style = Style::default().fg(color.unwrap_or(Color::Reset));
                             if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
                                 style = style.bg(bg_color);
                             } else {
@@ -367,10 +373,6 @@ where
                         .collect();
                     self.push_line(Line::from(spans));
                     highlighted = true;
-                }
-                if !highlighted {
-                    // No syntax highlighting, just push the line as is
-                    self.push_line(Line::from(line.to_string()));
                 }
                 if !highlighted {
                     // No syntax highlighting, just push the line as is
@@ -506,21 +508,19 @@ where
             self.current_code_lang = _lang.clone();
             if let Some(lang) = &_lang {
                 let syntax = get_syntax_definition(Some(lang));
-                let theme = match self
+                let theme = self
                     .syntax_highlight_theme
                     .as_ref()
                     .and_then(|t| THEME.themes.get(t))
                     .or_else(|| THEME.themes.get("base16-ocean.dark"))
                     .or_else(|| THEME.themes.get("InspiredGitHub"))
-                    .or_else(|| THEME.themes.values().next())
-                {
-                    Some(t) => t,
-                    None => {
-                        self.current_highlighter = None;
-                        return;
-                    }
-                };
-                self.current_highlighter = Some(HighlightLines::new(syntax, theme));
+                    .or_else(|| THEME.themes.values().next());
+
+                if let Some(t) = theme {
+                    self.current_highlighter = Some(HighlightLines::new(syntax, t));
+                } else {
+                    self.current_highlighter = None;
+                }
             } else {
                 self.current_highlighter = None;
             }
