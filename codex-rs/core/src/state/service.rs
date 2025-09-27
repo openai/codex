@@ -11,6 +11,7 @@ pub(crate) struct SessionServices {
     pub(crate) session_manager: ExecSessionManager,
     pub(crate) unified_exec_manager: UnifiedExecSessionManager,
     pub(crate) notifier: UserNotifier,
+    pub(crate) hooks: crate::user_notification::EventHooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) user_shell: crate::shell::Shell,
