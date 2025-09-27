@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sign into Codex</title>
+    <link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none" viewBox="0 0 32 32"%3E%3Cpath stroke="%23000" stroke-linecap="round" stroke-width="2.484" d="M22.356 19.797H17.17M9.662 12.29l1.979 3.576a.511.511 0 0 1-.005.504l-1.974 3.409M30.758 16c0 8.15-6.607 14.758-14.758 14.758-8.15 0-14.758-6.607-14.758-14.758C1.242 7.85 7.85 1.242 16 1.242c8.15 0 14.758 6.608 14.758 14.758Z"/%3E%3C/svg%3E' type="image/svg+xml">
+    <style>
+      .container {
+        margin: auto;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        background: white;
+
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      }
+      .inner-container {
+        width: 400px;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: center;
+        gap: 20px;
+        display: inline-flex;
+      }
+      .content {
+        align-self: stretch;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: center;
+        gap: 20px;
+        display: flex;
+        margin-top: 15vh;
+      }
+      .svg-wrapper {
+        position: relative;
+      }
+      .title {
+        text-align: center;
+        color: var(--text-primary, #0D0D0D);
+        font-size: 32px;
+        font-weight: 400;
+        line-height: 40px;
+        word-wrap: break-word;
+      }
+      .setup-box {
+        width: 600px;
+        padding: 16px 20px;
+        background: var(--bg-primary, white);
+        box-shadow: 0px 4px 16px rgba(0, 0, 0, 0.05);
+        border-radius: 16px;
+        outline: 1px var(--border-default, rgba(13, 13, 13, 0.10)) solid;
+        outline-offset: -1px;
+        justify-content: flex-start;
+        align-items: center;
+        gap: 16px;
+        display: inline-flex;
+      }
+      .setup-content {
+        flex: 1 1 0;
+        justify-content: flex-start;
+        align-items: center;
+        gap: 24px;
+        display: flex;
+      }
+      .setup-text {
+        flex: 1 1 0;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: flex-start;
+        gap: 4px;
+        display: inline-flex;
+      }
+      .setup-title {
+        align-self: stretch;
+        color: var(--text-primary, #0D0D0D);
+        font-size: 14px;
+        font-weight: 510;
+        line-height: 20px;
+        word-wrap: break-word;
+      }
+      .setup-description {
+        align-self: stretch;
+        color: var(--text-secondary, #5D5D5D);
+        font-size: 14px;
+        font-weight: 400;
+        line-height: 20px;
+        word-wrap: break-word;
+      }
+      .redirect-box {
+        justify-content: flex-start;
+        align-items: center;
+        gap: 8px;
+        display: flex;
+      }
+      .close-button,
+      .redirect-button {
+        height: 28px;
+        padding: 8px 16px;
+        background: var(--interactive-bg-primary-default, #0D0D0D);
+        border-radius: 999px;
+        justify-content: center;
+        align-items: center;
+        gap: 4px;
+        display: flex;
+      }
+      .close-button,
+      .redirect-text {
+        color: var(--interactive-label-primary-default, white);
+        font-size: 14px;
+        font-weight: 510;
+        line-height: 20px;
+        word-wrap: break-word;
+        text-decoration: none;
+      }
+      .logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 4rem;
+        height: 4rem;
+        border-radius: 16px;
+        border: .5px solid rgba(0, 0, 0, 0.1);
+        box-shadow: rgba(0, 0, 0, 0.1) 0px 4px 16px 0px;
+        box-sizing: border-box;
+        background-color: rgb(255, 255, 255);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="inner-container">
+        <div class="content">
+          <div class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none" viewBox="0 0 32 32"><path stroke="#000" stroke-linecap="round" stroke-width="2.484" d="M22.356 19.797H17.17M9.662 12.29l1.979 3.576a.511.511 0 0 1-.005.504l-1.974 3.409M30.758 16c0 8.15-6.607 14.758-14.758 14.758-8.15 0-14.758-6.607-14.758-14.758C1.242 7.85 7.85 1.242 16 1.242c8.15 0 14.758 6.608 14.758 14.758Z"></path></svg>
+          </div>
+          <div class="title">Signed in to Codex</div>
+        </div>
+        <div class="close-box" style="display: none;">
+          <div class="setup-description">You may now close this page</div>
+        </div>
+        <div class="setup-box" style="display: none;">
+          <div class="setup-content">
+            <div class="setup-text">
+              <div class="setup-title">Finish setting up your API organization</div>
+              <div class="setup-description">Add a payment method to use your organization.</div>
+            </div>
+            <div class="redirect-box">
+              <div data-hasendicon="false" data-hasstarticon="false" data-ishovered="false" data-isinactive="false" data-ispressed="false" data-size="large" data-type="primary" class="redirect-button">
+                <div class="redirect-text">Redirecting in 3s...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const needsSetup = params.get('needs_setup') === 'true';
+        const platformUrl = params.get('platform_url') || 'https://platform.openai.com';
+        const orgId = params.get('org_id');
+        const projectId = params.get('project_id');
+        const planType = params.get('plan_type');
+        const idToken = params.get('id_token');
+        // Show different message and optional redirect when setup is required
+        if (needsSetup) {
+          const setupBox = document.querySelector('.setup-box');
+          setupBox.style.display = 'flex';
+          const redirectUrlObj = new URL('/org-setup', platformUrl);
+          redirectUrlObj.searchParams.set('p', planType);
+          redirectUrlObj.searchParams.set('t', idToken);
+          redirectUrlObj.searchParams.set('with_org', orgId);
+          redirectUrlObj.searchParams.set('project_id', projectId);
+          const redirectUrl = redirectUrlObj.toString();
+          const message = document.querySelector('.redirect-text');
+          let countdown = 3;
+          function tick() {
+            message.textContent =
+              'Redirecting in ' + countdown + 's…';
+            if (countdown === 0) {
+              window.location.replace(redirectUrl);
+            } else {
+              countdown -= 1;
+              setTimeout(tick, 1000);
+            }
+          }
+          tick();
+        } else {
+          const closeBox = document.querySelector('.close-box');
+          closeBox.style.display = 'flex';
+        }
+      })();
+    </script>
+  </body>
+  </html>
+  

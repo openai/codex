@@ -1,0 +1,26 @@
+[package]
+edition = "2024"
+name = "mcp_test_support"
+version = { workspace = true }
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+assert_cmd = { workspace = true }
+codex-core = { workspace = true }
+codex-mcp-server = { workspace = true }
+codex-protocol = { workspace = true }
+mcp-types = { workspace = true }
+os_info = { workspace = true }
+pretty_assertions = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+] }
+wiremock = { workspace = true }

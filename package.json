@@ -1,0 +1,25 @@
+{
+  "name": "codex-monorepo",
+  "private": true,
+  "description": "Tools for repo-wide maintenance.",
+  "scripts": {
+    "format": "prettier --check *.json *.md .github/workflows/*.yml **/*.js",
+    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml **/*.js"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.3"
+  },
+  "resolutions": {
+    "braces": "^3.0.3",
+    "micromatch": "^4.0.8",
+    "semver": "^7.7.1"
+  },
+  "overrides": {
+    "punycode": "^2.3.1"
+  },
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@10.8.1"
+}

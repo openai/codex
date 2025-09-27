@@ -1,0 +1,96 @@
+[package]
+edition = "2024"
+name = "codex-core"
+version = { workspace = true }
+
+[lib]
+doctest = false
+name = "codex_core"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+askama = { workspace = true }
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+codex-apply-patch = { workspace = true }
+codex-file-search = { workspace = true }
+codex-mcp-client = { workspace = true }
+codex-rmcp-client = { workspace = true }
+codex-protocol = { workspace = true }
+dirs = { workspace = true }
+env-flags = { workspace = true }
+eventsource-stream = { workspace = true }
+futures = { workspace = true }
+indexmap = { workspace = true }
+libc = { workspace = true }
+mcp-types = { workspace = true }
+os_info = { workspace = true }
+portable-pty = { workspace = true }
+rand = { workspace = true }
+regex-lite = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha1 = { workspace = true }
+shlex = { workspace = true }
+similar = { workspace = true }
+strum_macros = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true, features = [
+    "formatting",
+    "parsing",
+    "local-offset",
+    "macros",
+] }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+tree-sitter = { workspace = true }
+tree-sitter-bash = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+which = { workspace = true }
+wildmatch = { workspace = true }
+
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = { workspace = true }
+seccompiler = { workspace = true }
+
+# Build OpenSSL from source for musl builds.
+[target.x86_64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+# Build OpenSSL from source for musl builds.
+[target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+core_test_support = { workspace = true }
+escargot = { workspace = true }
+maplit = { workspace = true }
+predicates = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+walkdir = { workspace = true }
+wiremock = { workspace = true }
+
+[package.metadata.cargo-shear]
+ignored = ["openssl-sys"]

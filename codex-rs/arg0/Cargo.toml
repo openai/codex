@@ -1,0 +1,20 @@
+[package]
+edition = "2024"
+name = "codex-arg0"
+version = { workspace = true }
+
+[lib]
+name = "codex_arg0"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-apply-patch = { workspace = true }
+codex-core = { workspace = true }
+codex-linux-sandbox = { workspace = true }
+dotenvy = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }

@@ -1,0 +1,40 @@
+[package]
+edition = "2024"
+name = "codex-protocol"
+version = { workspace = true }
+
+[lib]
+name = "codex_protocol"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+icu_decimal = { workspace = true }
+icu_locale_core = { workspace = true }
+mcp-types = { workspace = true }
+mime_guess = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_with = { workspace = true, features = ["macros", "base64"] }
+strum = { workspace = true }
+strum_macros = { workspace = true }
+sys-locale = { workspace = true }
+tracing = { workspace = true }
+ts-rs = { workspace = true, features = [
+    "uuid-impl",
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
+uuid = { workspace = true, features = ["serde", "v7"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+
+[package.metadata.cargo-shear]
+# Required because the not imported as strum_macros in non-nightly builds.
+ignored = ["strum"]

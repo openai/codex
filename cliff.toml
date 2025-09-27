@@ -1,0 +1,46 @@
+# https://git-cliff.org/docs/configuration
+
+[changelog]
+header = """
+# Changelog
+
+You can install any of these versions: `npm install -g codex@version`
+"""
+
+body = """
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{%- else %}
+## [unreleased]
+{% endif %}
+
+{%- for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+
+{% for commit in commits %}- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }}
+{% endfor %}
+
+{%- endfor -%}
+"""
+
+footer = """
+<!-- generated - do not edit -->
+"""
+
+trim = true
+postprocessors = []
+
+[git]
+conventional_commits = true
+
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->🚀 Features" },
+  { message = "^fix",  group = "<!-- 1 -->🪲 Bug Fixes" },
+  { message = "^bump", group = "<!-- 6 -->🛳️ Release" },
+  # Fallback – skip anything that didn't match the above rules.
+  { message = ".*",  group = "<!-- 10 -->💼 Other" },
+]
+
+filter_unconventional = false
+sort_commits = "oldest"
+topo_order = false

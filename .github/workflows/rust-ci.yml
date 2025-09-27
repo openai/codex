@@ -1,0 +1,231 @@
+name: rust-ci
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# CI builds in debug (dev) for faster signal.
+
+jobs:
+  # --- Detect what changed (always runs) -------------------------------------
+  changed:
+    name: Detect changed areas
+    runs-on: ubuntu-24.04
+    outputs:
+      codex: ${{ steps.detect.outputs.codex }}
+      workflows: ${{ steps.detect.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Detect changed paths (no external action)
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA='${{ github.event.pull_request.base.sha }}'
+            echo "Base SHA: $BASE_SHA"
+            # List files changed between base and current HEAD (merge-base aware)
+            mapfile -t files < <(git diff --name-only --no-renames "$BASE_SHA"...HEAD)
+          else
+            # On push / manual runs, default to running everything
+            files=("codex-rs/force" ".github/force")
+          fi
+
+          codex=false
+          workflows=false
+          for f in "${files[@]}"; do
+            [[ $f == codex-rs/* ]] && codex=true
+            [[ $f == .github/* ]] && workflows=true
+          done
+
+          echo "codex=$codex" >> "$GITHUB_OUTPUT"
+          echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
+
+  # --- CI that doesn't need specific targets ---------------------------------
+  general:
+    name: Format / etc
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          components: rustfmt
+      - name: cargo fmt
+        run: cargo fmt -- --config imports_granularity=Item --check
+      - name: Verify codegen for mcp-types
+        run: ./mcp-types/check_lib_rs.py
+
+  cargo_shear:
+    name: cargo shear
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.90
+      - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+        with:
+          tool: cargo-shear
+          version: 1.5.1
+      - name: cargo shear
+        run: cargo shear
+
+  # --- CI to validate on different os/targets --------------------------------
+  lint_build_test:
+    name: ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    needs: changed
+    # Keep job-level if to avoid spinning up runners when not needed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            profile: dev
+          - runner: macos-14
+            target: x86_64-apple-darwin
+            profile: dev
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            profile: dev
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            profile: dev
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            profile: dev
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            profile: dev
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            profile: dev
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            profile: dev
+
+          # Also run representative release builds on Mac and Linux because
+          # there could be release-only build errors we want to catch.
+          # Hopefully this also pre-populates the build cache to speed up
+          # releases.
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            profile: release
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            profile: release
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            profile: release
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            profile: release
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ${{ github.workspace }}/codex-rs/target/
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Install musl build tools
+        run: |
+          sudo apt install -y musl-tools pkg-config && sudo rm -rf /var/lib/apt/lists/*
+
+      - name: cargo clippy
+        id: clippy
+        run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} -- -D warnings
+
+      # Running `cargo build` from the workspace root builds the workspace using
+      # the union of all features from third-party crates. This can mask errors
+      # where individual crates have underspecified features. To avoid this, we
+      # run `cargo check` for each crate individually, though because this is
+      # slower, we only do this for the x86_64-unknown-linux-gnu target.
+      - name: cargo check individual crates
+        id: cargo_check_all_crates
+        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release' }}
+        continue-on-error: true
+        run: |
+          find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 \
+            | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo check --profile ${{ matrix.profile }}'
+
+      - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+        with:
+          tool: nextest
+          version: 0.9.103
+
+      - name: tests
+        id: test
+        # Tests take too long for release builds to run them on every PR.
+        if: ${{ matrix.profile != 'release' }}
+        continue-on-error: true
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }}
+        env:
+          RUST_BACKTRACE: 1
+
+      # Fail the job if any of the previous steps failed.
+      - name: verify all steps passed
+        if: |
+          steps.clippy.outcome == 'failure' ||
+          steps.cargo_check_all_crates.outcome == 'failure' ||
+          steps.test.outcome == 'failure'
+        run: |
+          echo "One or more checks failed (clippy, cargo_check_all_crates, or test). See logs for details."
+          exit 1
+
+  # --- Gatherer job that you mark as the ONLY required status -----------------
+  results:
+    name: CI results (required)
+    needs: [changed, general, cargo_shear, lint_build_test]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Summarize
+        shell: bash
+        run: |
+          echo "general: ${{ needs.general.result }}"
+          echo "shear  : ${{ needs.cargo_shear.result }}"
+          echo "matrix : ${{ needs.lint_build_test.result }}"
+
+          # If nothing relevant changed (PR touching only root README, etc.),
+          # declare success regardless of other jobs.
+          if [[ '${{ needs.changed.outputs.codex }}' != 'true' && '${{ needs.changed.outputs.workflows }}' != 'true' && '${{ github.event_name }}' != 'push' ]]; then
+            echo 'No relevant changes -> CI not required.'
+            exit 0
+          fi
+
+          # Otherwise require the jobs to have succeeded
+          [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
+          [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
+          [[ '${{ needs.lint_build_test.result }}' == 'success' ]] || { echo 'matrix failed'; exit 1; }
