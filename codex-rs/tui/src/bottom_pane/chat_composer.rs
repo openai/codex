@@ -218,6 +218,34 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn resume_arg_from_line(line: &str) -> Option<&str> {
+        line.trim_start()
+            .strip_prefix("/resume")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    pub(crate) fn handle_resume_with_arg(&mut self, arg: &str) -> (InputResult, bool) {
+        if self.is_task_running {
+            let msg = format!(
+                "'/{}' is disabled while a task is in progress.",
+                SlashCommand::Resume.command()
+            );
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                crate::history_cell::new_error_event(msg),
+            )));
+            return (InputResult::None, true);
+        }
+
+        if arg.eq_ignore_ascii_case("last") {
+            self.app_event_tx.send(AppEvent::ResumeLast);
+        } else {
+            self.app_event_tx
+                .send(AppEvent::ResumeById(arg.to_string()));
+        }
+        (InputResult::None, true)
+    }
+
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
@@ -450,6 +478,15 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
+                    // Capture the current first line before we clear the textarea
+                    let first_line = self
+                        .textarea
+                        .text()
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+
                     // Clear textarea so no residual text remains.
                     self.textarea.set_text("");
                     // Capture any needed data from popup before clearing it.
@@ -464,6 +501,11 @@ impl ChatComposer {
 
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            if cmd == SlashCommand::Resume {
+                                if let Some(arg) = Self::resume_arg_from_line(&first_line) {
+                                    return self.handle_resume_with_arg(arg);
+                                }
+                            }
                             return (InputResult::Command(cmd), true);
                         }
                         CommandItem::UserPrompt(_) => {

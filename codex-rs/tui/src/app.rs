@@ -5,14 +5,17 @@ use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
+use crate::resume_picker;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
+use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
+use codex_core::find_conversation_path_by_id_str;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -224,6 +227,76 @@ impl App {
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenResumePicker => {
+                // Reuse the same picker used at startup, but in-app.
+                // Esc -> StartFresh (start a new chat), Ctrl-C -> Exit (cancel).
+                match resume_picker::run_resume_picker(tui, &self.config.codex_home).await? {
+                    ResumeSelection::Resume(path) => {
+                        if let Err(e) = self.resume_from_path(tui, path).await {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                crate::history_cell::new_error_event(format!(
+                                    "Failed to resume session: {e}"
+                                )),
+                            )));
+                        }
+                    }
+                    ResumeSelection::StartFresh => {
+                        // Start a new blank session (same as /new).
+                        self.app_event_tx.send(AppEvent::NewSession);
+                    }
+                    ResumeSelection::Exit => {
+                        // No-op: user cancelled.
+                    }
+                }
+            }
+            AppEvent::ResumeLast => {
+                match RolloutRecorder::list_conversations(&self.config.codex_home, 1, None).await {
+                    Ok(page) => {
+                        if let Some(item) = page.items.first() {
+                            if let Err(e) = self.resume_from_path(tui, item.path.clone()).await {
+                                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                    crate::history_cell::new_error_event(format!(
+                                        "Failed to resume session: {e}"
+                                    )),
+                                )));
+                            }
+                        } else {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                crate::history_cell::new_error_event(
+                                    "No recorded sessions found".to_string(),
+                                ),
+                            )));
+                        }
+                    }
+                    Err(e) => {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            crate::history_cell::new_error_event(format!(
+                                "Failed to list sessions: {e}"
+                            )),
+                        )));
+                    }
+                }
+            }
+            AppEvent::ResumeById(id_str) => {
+                match find_conversation_path_by_id_str(&self.config.codex_home, &id_str).await? {
+                    Some(path) => {
+                        if let Err(e) = self.resume_from_path(tui, path).await {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                crate::history_cell::new_error_event(format!(
+                                    "Failed to resume session: {e}"
+                                )),
+                            )));
+                        }
+                    }
+                    None => {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            crate::history_cell::new_error_event(format!(
+                                "No session found for id: {id_str}"
+                            )),
+                        )));
+                    }
+                }
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -365,6 +438,32 @@ impl App {
             }
         }
         Ok(true)
+    }
+
+    async fn resume_from_path(&mut self, tui: &mut tui::Tui, path: PathBuf) -> Result<()> {
+        let resumed = self
+            .server
+            .resume_conversation_from_rollout(
+                self.config.clone(),
+                path.clone(),
+                self.auth_manager.clone(),
+            )
+            .await
+            .wrap_err_with(|| format!("Failed to resume session from {}", path.display()))?;
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: self.config.clone(),
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            initial_prompt: None,
+            initial_images: Vec::new(),
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+        };
+        self.chat_widget =
+            ChatWidget::new_from_existing(init, resumed.conversation, resumed.session_configured);
+        tui.frame_requester().schedule_frame();
+        Ok(())
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {

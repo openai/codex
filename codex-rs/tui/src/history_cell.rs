@@ -414,6 +414,11 @@ pub(crate) fn new_session_info(
                 "/model".into(),
                 " - choose what model and reasoning effort to use".dim(),
             ]),
+            Line::from(vec![
+                "  ".into(),
+                "/resume last".into(),
+                " - resume the most recent session".dim(),
+            ]),
         ];
 
         CompositeHistoryCell {
