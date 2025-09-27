@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::fmt::{self};
 use std::io::Write;
 use std::io::{self};
+use std::rc::Rc;
 
 use ratatui::prelude::CrosstermBackend;
 
@@ -11,6 +13,22 @@ use ratatui::buffer::Cell;
 use ratatui::layout::Position;
 use ratatui::layout::Size;
 
+/// A writer that feeds bytes to a vt100::Parser
+struct VT100Writer {
+    parser: Rc<RefCell<vt100::Parser>>,
+}
+
+impl Write for VT100Writer {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.parser.borrow_mut().process(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// This wraps a CrosstermBackend and a vt100::Parser to mock
 /// a "real" terminal.
 ///
@@ -19,35 +37,39 @@ use ratatui::layout::Size;
 /// - getting the terminal size
 /// - getting the cursor position
 pub struct VT100Backend {
-    crossterm_backend: CrosstermBackend<vt100::Parser>,
+    parser: Rc<RefCell<vt100::Parser>>,
+    backend: CrosstermBackend<VT100Writer>,
 }
 
 impl VT100Backend {
     /// Creates a new `TestBackend` with the specified width and height.
     pub fn new(width: u16, height: u16) -> Self {
-        Self {
-            crossterm_backend: CrosstermBackend::new(vt100::Parser::new(height, width, 0)),
-        }
+        let parser = Rc::new(RefCell::new(vt100::Parser::new(height, width, 0)));
+        let writer = VT100Writer {
+            parser: Rc::clone(&parser),
+        };
+        let backend = CrosstermBackend::new(writer);
+        Self { parser, backend }
     }
 
-    pub fn vt100(&self) -> &vt100::Parser {
-        self.crossterm_backend.writer()
+    pub fn vt100(&self) -> std::cell::Ref<'_, vt100::Parser> {
+        self.parser.borrow()
     }
 }
 
 impl Write for VT100Backend {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.crossterm_backend.writer_mut().write(buf)
+        self.backend.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.crossterm_backend.writer_mut().flush()
+        std::io::Write::flush(&mut self.backend)
     }
 }
 
 impl fmt::Display for VT100Backend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.crossterm_backend.writer().screen().contents())
+        write!(f, "{}", self.vt100().screen().contents())
     }
 }
 
@@ -56,17 +78,17 @@ impl Backend for VT100Backend {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        self.crossterm_backend.draw(content)?;
+        self.backend.draw(content)?;
         Ok(())
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
-        self.crossterm_backend.hide_cursor()?;
+        self.backend.hide_cursor()?;
         Ok(())
     }
 
     fn show_cursor(&mut self) -> io::Result<()> {
-        self.crossterm_backend.show_cursor()?;
+        self.backend.show_cursor()?;
         Ok(())
     }
 
@@ -75,19 +97,19 @@ impl Backend for VT100Backend {
     }
 
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
-        self.crossterm_backend.set_cursor_position(position)
+        self.backend.set_cursor_position(position)
     }
 
     fn clear(&mut self) -> io::Result<()> {
-        self.crossterm_backend.clear()
+        self.backend.clear()
     }
 
     fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
-        self.crossterm_backend.clear_region(clear_type)
+        self.backend.clear_region(clear_type)
     }
 
     fn append_lines(&mut self, line_count: u16) -> io::Result<()> {
-        self.crossterm_backend.append_lines(line_count)
+        self.backend.append_lines(line_count)
     }
 
     fn size(&self) -> io::Result<Size> {
@@ -106,11 +128,11 @@ impl Backend for VT100Backend {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.crossterm_backend.writer_mut().flush()
+        std::io::Write::flush(&mut self.backend)
     }
 
     fn scroll_region_up(&mut self, region: std::ops::Range<u16>, scroll_by: u16) -> io::Result<()> {
-        self.crossterm_backend.scroll_region_up(region, scroll_by)
+        self.backend.scroll_region_up(region, scroll_by)
     }
 
     fn scroll_region_down(
@@ -118,6 +140,6 @@ impl Backend for VT100Backend {
         region: std::ops::Range<u16>,
         scroll_by: u16,
     ) -> io::Result<()> {
-        self.crossterm_backend.scroll_region_down(region, scroll_by)
+        self.backend.scroll_region_down(region, scroll_by)
     }
 }

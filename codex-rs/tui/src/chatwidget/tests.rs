@@ -1105,7 +1105,8 @@ async fn binary_size_transcript_snapshot() {
 
     // Build the final VT100 visual by parsing the ANSI stream. Trim trailing spaces per line
     // and drop trailing empty lines so the shape matches the ideal fixture exactly.
-    let screen = terminal.backend().vt100().screen();
+    let vt100_ref = terminal.backend().vt100();
+    let screen = vt100_ref.screen();
     let mut lines: Vec<String> = Vec::with_capacity(height as usize);
     for row in 0..height {
         let mut s = String::with_capacity(width as usize);

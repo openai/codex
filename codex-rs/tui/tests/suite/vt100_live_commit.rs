@@ -28,7 +28,8 @@ fn live_001_commit_on_overflow() {
 
     codex_tui::insert_history::insert_history_lines(&mut term, lines);
 
-    let screen = term.backend().vt100().screen();
+    let vt100_ref = term.backend().vt100();
+    let screen = vt100_ref.screen();
 
     // The words "one" and "two" should appear above the viewport.
     let joined = screen.contents();

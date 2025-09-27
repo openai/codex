@@ -369,7 +369,8 @@ mod tests {
         insert_history_lines(&mut term, vec![line]);
 
         // Parse and inspect the final screen buffer.
-        let screen = term.backend().vt100().screen();
+        let vt100_ref = term.backend().vt100();
+        let screen = vt100_ref.screen();
 
         // Collect rows that are non-empty; these should correspond to our wrapped lines.
         let mut non_empty_rows: Vec<u16> = Vec::new();
@@ -430,7 +431,8 @@ mod tests {
 
         insert_history_lines(&mut term, vec![line]);
 
-        let screen = term.backend().vt100().screen();
+        let vt100_ref = term.backend().vt100();
+        let screen = vt100_ref.screen();
 
         // Find the first non-empty row; verify first three cells are colored, following cells default.
         'rows: for row in 0..height {
@@ -486,7 +488,8 @@ mod tests {
 
         insert_history_lines(&mut term, lines);
 
-        let screen = term.backend().vt100().screen();
+        let vt100_ref = term.backend().vt100();
+        let screen = vt100_ref.screen();
 
         // Reconstruct screen rows as strings to locate the 3rd level line.
         let rows: Vec<String> = screen.rows(0, width).collect();
