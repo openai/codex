@@ -7,6 +7,12 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
+use crate::color::blend;
+use crate::terminal_palette::default_fg;
+use crate::terminal_palette::terminal_palette;
+
+const FALLBACK_DARK_GRAY: (u8, u8, u8) = (103, 103, 103);
+
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
 fn elapsed_since_start() -> Duration {
@@ -32,6 +38,8 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let band_half_width = 3.0;
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(chars.len());
+    let default_fg = default_fg();
+    let palette_dark_gray = terminal_palette().map(|palette| palette[8]);
     for (i, ch) in chars.iter().enumerate() {
         let i_pos = i as isize + padding as isize;
         let pos = pos as isize;
@@ -43,31 +51,33 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
         } else {
             0.0
         };
-        let brightness = 0.4 + 0.6 * t;
-        let level = (brightness * 255.0).clamp(0.0, 255.0) as u8;
         let style = if has_true_color {
+            let base = palette_dark_gray
+                .or(default_fg)
+                .unwrap_or(FALLBACK_DARK_GRAY);
+            let highlight = t.clamp(0.0, 1.0);
+            let (r, g, b) = blend((255, 255, 255), base, highlight);
             // Allow custom RGB colors, as the implementation is thoughtfully
             // adjusting the level of the default foreground color.
             #[allow(clippy::disallowed_methods)]
             {
                 Style::default()
-                    .fg(Color::Rgb(level, level, level))
+                    .fg(Color::Rgb(r, g, b))
                     .add_modifier(Modifier::BOLD)
             }
         } else {
-            color_for_level(level)
+            color_for_level(t)
         };
         spans.push(Span::styled(ch.to_string(), style));
     }
     spans
 }
 
-fn color_for_level(level: u8) -> Style {
-    // Tune thresholds so the edges of the shimmer band appear dim
-    // in fallback mode (no true color support).
-    if level < 160 {
+fn color_for_level(intensity: f32) -> Style {
+    // Tune fallback styling so the shimmer band reads even without RGB support.
+    if intensity < 0.2 {
         Style::default().add_modifier(Modifier::DIM)
-    } else if level < 224 {
+    } else if intensity < 0.6 {
         Style::default()
     } else {
         Style::default().add_modifier(Modifier::BOLD)

@@ -2,6 +2,4 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-"⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit                                   "
-"                                                                                "
-"                                                                                "
+"? for shortcuts                                                                 "

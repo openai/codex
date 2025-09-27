@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
-use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -150,7 +149,9 @@ impl BottomPane {
                 let status_height = self
                     .status
                     .as_ref()
-                    .map_or(0, |status| status.desired_height(area.width));
+                    .map_or(0, |status| status.desired_height(area.width))
+                    .min(area.height.saturating_sub(1));
+
                 Layout::vertical([Constraint::Max(status_height), Constraint::Min(1)]).areas(area)
             }
         }
@@ -369,13 +370,6 @@ impl BottomPane {
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
-    }
-
-    /// Update the *context-window remaining* indicator in the composer. This
-    /// is forwarded directly to the underlying `ChatComposer`.
-    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
-        self.composer.set_token_usage(token_info);
-        self.request_redraw();
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
@@ -616,7 +610,7 @@ mod tests {
 
         // Composer placeholder should be visible somewhere below.
         let mut found_composer = false;
-        for y in 1..area.height.saturating_sub(2) {
+        for y in 1..area.height {
             let mut row = String::new();
             for x in 0..area.width {
                 row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
