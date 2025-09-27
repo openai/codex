@@ -9,9 +9,8 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
-pub(crate) use crate::status::RateLimitSnapshotDisplay;
-pub(crate) use crate::status::new_status_output;
-pub(crate) use crate::status::rate_limit_snapshot_display;
+use crate::style::user_message_style;
+use crate::terminal_palette::default_bg;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
@@ -19,6 +18,7 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_core::config::Config;
+use codex_core::config_types::McpServerTransportConfig;
 use codex_core::config_types::ReasoningSummaryFormat;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -97,17 +97,24 @@ impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        // Wrap the content first, then prefix each wrapped line with the marker.
+        // Use ratatui-aware word wrapping and prefixing to avoid lifetime issues.
         let wrap_width = width.saturating_sub(LIVE_PREFIX_COLS); // account for the ▌ prefix and trailing space
-        let wrapped = textwrap::wrap(
-            &self.message,
-            textwrap::Options::new(wrap_width as usize)
-                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit), // Match textarea wrap
+
+        let style = user_message_style(default_bg());
+
+        // Use our ratatui wrapping helpers for correct styling and lifetimes.
+        let wrapped = word_wrap_lines(
+            &self
+                .message
+                .lines()
+                .map(|l| Line::from(l).style(style))
+                .collect::<Vec<_>>(),
+            RtOptions::new(wrap_width as usize),
         );
 
-        for line in wrapped {
-            lines.push(vec!["▌ ".cyan().dim(), line.to_string().dim()].into());
-        }
+        lines.push(Line::from("").style(style));
+        lines.extend(prefix_lines(wrapped, "› ".bold().dim(), "  ".into()));
+        lines.push(Line::from("").style(style));
         lines
     }
 
@@ -139,7 +146,21 @@ impl HistoryCell for ReasoningSummaryCell {
         let summary_lines = self
             .content
             .iter()
-            .map(|l| l.clone().dim().italic())
+            .map(|line| {
+                Line::from(
+                    line.spans
+                        .iter()
+                        .map(|span| {
+                            Span::styled(
+                                span.content.clone().into_owned(),
+                                span.style
+                                    .add_modifier(Modifier::ITALIC)
+                                    .add_modifier(Modifier::DIM),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
             .collect::<Vec<_>>();
 
         word_wrap_lines(
@@ -179,7 +200,7 @@ impl HistoryCell for AgentMessageCell {
             &self.lines,
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
-                    "> ".into()
+                    "• ".into()
                 } else {
                     "  ".into()
                 })
@@ -848,10 +869,19 @@ pub(crate) fn new_mcp_tools_output(
 
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
 
-        if !cfg.command.is_empty() {
-            let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
-
-            lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+        match &cfg.transport {
+            McpServerTransportConfig::Stdio { command, args, .. } => {
+                let args_suffix = if args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", args.join(" "))
+                };
+                let cmd_display = format!("{command}{args_suffix}");
+                lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+            }
+            McpServerTransportConfig::StreamableHttp { url, .. } => {
+                lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
+            }
         }
 
         if names.is_empty() {
@@ -866,7 +896,7 @@ pub(crate) fn new_mcp_tools_output(
 }
 
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
-    let mut line = vec!["> ".into(), message.into()];
+    let mut line = vec!["• ".into(), message.into()];
     if let Some(hint) = hint {
         line.push(" ".into());
         line.push(hint.dark_gray());
