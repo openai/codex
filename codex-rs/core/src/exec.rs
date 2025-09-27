@@ -312,18 +312,22 @@ async fn consume_truncated_output(
     })?;
 
     let (agg_tx, agg_rx) = async_channel::unbounded::<Vec<u8>>();
+    let (stdout_tx, stdout_rx) = async_channel::unbounded::<Vec<u8>>();
+    let (stderr_tx, stderr_rx) = async_channel::unbounded::<Vec<u8>>();
 
     let stdout_handle = tokio::spawn(read_capped(
         BufReader::new(stdout_reader),
         stdout_stream.clone(),
         false,
         Some(agg_tx.clone()),
+        Some(stdout_tx.clone()),
     ));
     let stderr_handle = tokio::spawn(read_capped(
         BufReader::new(stderr_reader),
         stdout_stream.clone(),
         true,
         Some(agg_tx.clone()),
+        Some(stderr_tx.clone()),
     ));
 
     let (exit_status, timed_out) = tokio::select! {
@@ -347,15 +351,65 @@ async fn consume_truncated_output(
         }
     };
 
-    let stdout = stdout_handle.await??;
-    let stderr = stderr_handle.await??;
+    // After the child has exited (or been killed), drain available output
+    // for a short grace period to avoid hanging when descendants keep the
+    // stdio pipes open. Then abort readers if they are still blocked.
+    let drain_deadline = Instant::now() + Duration::from_millis(300);
 
     drop(agg_tx);
+    drop(stdout_tx);
+    drop(stderr_tx);
 
     let mut combined_buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
-    while let Ok(chunk) = agg_rx.recv().await {
-        append_all(&mut combined_buf, &chunk);
+    let mut stdout_buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY / 2);
+    let mut stderr_buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY / 2);
+
+    loop {
+        let now = Instant::now();
+        if now >= drain_deadline {
+            break;
+        }
+        let remaining = drain_deadline - now;
+        tokio::select! {
+            maybe_chunk = agg_rx.recv() => {
+                if let Ok(chunk) = maybe_chunk {
+                    append_all(&mut combined_buf, &chunk);
+                } else {
+                    // aggregate channel closed; keep draining others until deadline
+                }
+            }
+            maybe_chunk = stdout_rx.recv() => {
+                if let Ok(chunk) = maybe_chunk {
+                    append_all(&mut stdout_buf, &chunk);
+                } else {
+                    // stdout channel closed
+                }
+            }
+            maybe_chunk = stderr_rx.recv() => {
+                if let Ok(chunk) = maybe_chunk {
+                    append_all(&mut stderr_buf, &chunk);
+                } else {
+                    // stderr channel closed
+                }
+            }
+            _ = tokio::time::sleep(remaining) => {
+                break;
+            }
+        }
     }
+
+    // Abort readers to ensure no hang even if pipes remain open.
+    stdout_handle.abort();
+    stderr_handle.abort();
+
+    let stdout = StreamOutput {
+        text: stdout_buf,
+        truncated_after_lines: None,
+    };
+    let stderr = StreamOutput {
+        text: stderr_buf,
+        truncated_after_lines: None,
+    };
     let aggregated_output = StreamOutput {
         text: combined_buf,
         truncated_after_lines: None,
@@ -375,6 +429,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
     stream: Option<StdoutStream>,
     is_stderr: bool,
     aggregate_tx: Option<Sender<Vec<u8>>>,
+    stream_tx: Option<Sender<Vec<u8>>>,
 ) -> io::Result<StreamOutput<Vec<u8>>> {
     let mut buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
     let mut tmp = [0u8; READ_CHUNK_SIZE];
@@ -411,6 +466,9 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
         }
 
         if let Some(tx) = &aggregate_tx {
+            let _ = tx.send(tmp[..n].to_vec()).await;
+        }
+        if let Some(tx) = &stream_tx {
             let _ = tx.send(tmp[..n].to_vec()).await;
         }
 
