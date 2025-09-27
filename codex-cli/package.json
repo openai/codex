@@ -11,8 +11,29 @@
   },
   "files": [
     "bin",
-    "vendor"
+    "vendor",
+    "dist"
   ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "pretest": "npm run build",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.7",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openai/codex.git",

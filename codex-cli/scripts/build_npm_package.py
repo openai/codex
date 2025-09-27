@@ -76,6 +76,7 @@ def main() -> int:
     staging_dir, created_temp = prepare_staging_dir(args.staging_dir)
 
     try:
+        ensure_built_library()
         stage_sources(staging_dir, version)
 
         workflow_url = args.workflow_url
@@ -145,6 +146,12 @@ def stage_sources(staging_dir: Path, version: str) -> None:
     if rg_manifest.exists():
         shutil.copy2(rg_manifest, bin_dir / "rg")
 
+    # If a built library is present, include it in the package.
+    dist_src = CODEX_CLI_ROOT / "dist"
+    if dist_src.exists():
+        dist_dst = staging_dir / "dist"
+        shutil.copytree(dist_src, dist_dst)
+
     readme_src = REPO_ROOT / "README.md"
     if readme_src.exists():
         shutil.copy2(readme_src, staging_dir / "README.md")
@@ -156,6 +163,23 @@ def stage_sources(staging_dir: Path, version: str) -> None:
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
         json.dump(package_json, out, indent=2)
         out.write("\n")
+
+
+def ensure_built_library() -> None:
+    """Ensure the TypeScript library is built before staging.
+
+    Attempts a no-op when the dist/ directory already exists. Otherwise,
+    runs `npm ci` and `npm run build` in the codex-cli directory.
+    """
+    dist_dir = CODEX_CLI_ROOT / "dist"
+    if dist_dir.exists():
+        return
+    try:
+        subprocess.check_call(["npm", "ci"], cwd=CODEX_CLI_ROOT)
+    except Exception:
+        # Fallback to `npm install` for environments without a lockfile update.
+        subprocess.check_call(["npm", "install"], cwd=CODEX_CLI_ROOT)
+    subprocess.check_call(["npm", "run", "build"], cwd=CODEX_CLI_ROOT)
 
 
 def install_native_binaries(staging_dir: Path, workflow_url: str | None) -> None:

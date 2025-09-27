@@ -194,12 +194,31 @@ jobs:
         env:
           RUST_BACKTRACE: 1
 
+      # Run the Node-based codex-cli library tests on every platform in the matrix
+      - name: Setup Node.js for codex-cli tests
+        if: ${{ matrix.profile != 'release' }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: codex-cli library tests
+        id: node_tests
+        if: ${{ matrix.profile != 'release' }}
+        continue-on-error: true
+        run: |
+          BIN_PATH="${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/${{ matrix.profile }}/codex"
+
+          npm ci
+          npm test
+        working-directory: codex-cli
+
       # Fail the job if any of the previous steps failed.
       - name: verify all steps passed
         if: |
           steps.clippy.outcome == 'failure' ||
           steps.cargo_check_all_crates.outcome == 'failure' ||
-          steps.test.outcome == 'failure'
+          steps.test.outcome == 'failure' ||
+          steps.node_tests.outcome == 'failure'
         run: |
           echo "One or more checks failed (clippy, cargo_check_all_crates, or test). See logs for details."
           exit 1
