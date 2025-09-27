@@ -277,6 +277,9 @@ Run Codex head-less in pipelines. Example GitHub Action step:
 
 The Codex CLI can be configured to leverage MCP servers by defining an [`mcp_servers`](./codex-rs/config.md#mcp_servers) section in `~/.codex/config.toml`. It is intended to mirror how tools such as Claude and Cursor define `mcpServers` in their respective JSON config files, though the Codex format is slightly different since it uses TOML rather than JSON, e.g.:
 
+> [!TIP]
+> Looking to connect the Responses API to cloud services or third-party MCP endpoints? See the comprehensive [Connectors and MCP servers guide](./docs/connectors-and-mcp-servers.md) for examples, authentication details, and safety guidance.
+
 ```toml
 # IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
 [mcp_servers.server-name]
