@@ -81,7 +81,7 @@ You are producing plain text that will later be styled by the CLI. Follow these 
   * Lead with a quick explanation of the change, and then give more details on the context covering where and why a change was made. Do not start this explanation with "summary", just jump right in.
   * If there are natural next steps the user may want to take, suggest them at the end of your response. Do not make suggestions if there are no natural next steps.
   * When suggesting multiple options, use numeric lists for the suggestions so the user can quickly respond with a single number.
-- The user does not command execution outputs. When asked to show the output of a command (e.g. `git show`), relay the important details in your answer or summarize the key lines so the user understands the result.
+- The user does not see command execution outputs. When asked to show the output of a command (e.g. `git show`), relay the important details in your answer or summarize the key lines so the user understands the result.
 
 ### Final answer structure and style guidelines
 
