@@ -59,7 +59,7 @@ impl Shell {
                             ps.exe.clone(),
                             "-NoProfile".to_string(),
                             "-Command".to_string(),
-                            script,
+                            format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}", script),
                         ]),
                     };
                 }
@@ -79,13 +79,24 @@ impl Shell {
                             ps.exe.clone(),
                             "-NoProfile".to_string(),
                             "-Command".to_string(),
-                            arg,
+                            format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}", arg),
                         ]
                     });
                 }
 
                 // Model generated a PowerShell command. Run it.
-                Some(command)
+                // If it's already a PowerShell command, we need to ensure UTF-8 encoding is set.
+                // Find the -Command argument and modify the argument that follows it.
+                if let Some(command_index) = command.iter().position(|arg| arg == "-Command") {
+                    let mut modified_command = command.clone();
+                    if let Some(cmd_arg) = modified_command.get_mut(command_index + 1) {
+                        // Prepend UTF-8 encoding setup to the command
+                        *cmd_arg = format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}", cmd_arg);
+                    }
+                    Some(modified_command)
+                } else {
+                    Some(command)
+                }
             }
             Shell::Unknown => None,
         }
@@ -490,7 +501,7 @@ mod tests_windows {
                     bash_exe_fallback: None,
                 }),
                 vec!["bash", "-lc", "echo hello"],
-                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
+                vec!["pwsh.exe", "-NoProfile", "-Command", "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; echo hello"],
             ),
             (
                 Shell::PowerShell(PowerShellConfig {
@@ -498,7 +509,7 @@ mod tests_windows {
                     bash_exe_fallback: None,
                 }),
                 vec!["bash", "-lc", "echo hello"],
-                vec!["powershell.exe", "-NoProfile", "-Command", "echo hello"],
+                vec!["powershell.exe", "-NoProfile", "-Command", "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; echo hello"],
             ),
             (
                 Shell::PowerShell(PowerShellConfig {
@@ -530,7 +541,7 @@ mod tests_windows {
                     bash_exe_fallback: Some(PathBuf::from("bash.exe")),
                 }),
                 vec!["echo", "hello"],
-                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
+                vec!["pwsh.exe", "-NoProfile", "-Command", "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; echo hello"],
             ),
             (
                 Shell::PowerShell(PowerShellConfig {
@@ -538,7 +549,7 @@ mod tests_windows {
                     bash_exe_fallback: Some(PathBuf::from("bash.exe")),
                 }),
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
-                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
+                vec!["pwsh.exe", "-NoProfile", "-Command", "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; echo hello"],
             ),
             (
                 // TODO (CODEX_2900): Handle escaping newlines for powershell invocation.
@@ -567,5 +578,55 @@ mod tests_windows {
                 Some(expected_cmd.iter().map(|s| (*s).to_string()).collect())
             );
         }
+    }
+
+    #[test]
+    fn test_powershell_utf8_encoding_setup() {
+        let shell = Shell::PowerShell(PowerShellConfig {
+            exe: "pwsh.exe".to_string(),
+            bash_exe_fallback: None,
+        });
+
+        // Test 1: Simple command conversion gets UTF-8 encoding
+        let input = vec!["echo".to_string(), "Turkish: çğıİöşü".to_string()];
+        let actual = shell.format_default_shell_invocation(input);
+        
+        assert!(actual.is_some());
+        let cmd = actual.unwrap();
+        assert_eq!(cmd.len(), 4);
+        assert_eq!(cmd[0], "pwsh.exe");
+        assert_eq!(cmd[1], "-NoProfile");
+        assert_eq!(cmd[2], "-Command");
+        assert!(cmd[3].starts_with("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"));
+        assert!(cmd[3].contains("Turkish: çğıİöşü"));
+
+        // Test 2: Existing PowerShell command with -NoProfile -Command gets UTF-8 encoding
+        let input = vec![
+            "pwsh.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Get-Content response.md".to_string(),
+        ];
+        let actual = shell.format_default_shell_invocation(input);
+        
+        assert!(actual.is_some());
+        let cmd = actual.unwrap();
+        assert_eq!(cmd.len(), 4);
+        assert_eq!(cmd[0], "pwsh.exe");
+        assert_eq!(cmd[1], "-NoProfile");
+        assert_eq!(cmd[2], "-Command");
+        assert!(cmd[3].starts_with("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"));
+        assert!(cmd[3].contains("Get-Content response.md"));
+
+        // Test 3: PowerShell command without -Command flag should pass through unchanged
+        let input = vec![
+            "pwsh.exe".to_string(),
+            "-Version".to_string(),
+        ];
+        let actual = shell.format_default_shell_invocation(input);
+        
+        assert!(actual.is_some());
+        let cmd = actual.unwrap();
+        assert_eq!(cmd, input); // Should be unchanged
     }
 }
