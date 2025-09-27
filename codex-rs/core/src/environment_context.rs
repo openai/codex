@@ -125,19 +125,27 @@ impl EnvironmentContext {
     pub fn serialize_to_xml(self) -> String {
         let mut lines = vec![ENVIRONMENT_CONTEXT_OPEN_TAG.to_string()];
         if let Some(cwd) = self.cwd {
-            lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
+            lines.push(format!(
+                "  <cwd>{}</cwd>",
+                xml_escape(cwd.to_string_lossy())
+            ));
         }
         if let Some(approval_policy) = self.approval_policy {
             lines.push(format!(
-                "  <approval_policy>{approval_policy}</approval_policy>"
+                "  <approval_policy>{}</approval_policy>",
+                xml_escape(approval_policy.to_string())
             ));
         }
         if let Some(sandbox_mode) = self.sandbox_mode {
-            lines.push(format!("  <sandbox_mode>{sandbox_mode}</sandbox_mode>"));
+            lines.push(format!(
+                "  <sandbox_mode>{}</sandbox_mode>",
+                xml_escape(sandbox_mode.to_string())
+            ));
         }
         if let Some(network_access) = self.network_access {
             lines.push(format!(
-                "  <network_access>{network_access}</network_access>"
+                "  <network_access>{}</network_access>",
+                xml_escape(network_access.to_string())
             ));
         }
         if let Some(writable_roots) = self.writable_roots {
@@ -145,7 +153,7 @@ impl EnvironmentContext {
             for writable_root in writable_roots {
                 lines.push(format!(
                     "    <root>{}</root>",
-                    writable_root.to_string_lossy()
+                    xml_escape(writable_root.to_string_lossy())
                 ));
             }
             lines.push("  </writable_roots>".to_string());
@@ -153,11 +161,26 @@ impl EnvironmentContext {
         if let Some(shell) = self.shell
             && let Some(shell_name) = shell.name()
         {
-            lines.push(format!("  <shell>{shell_name}</shell>"));
+            lines.push(format!("  <shell>{}</shell>", xml_escape(shell_name)));
         }
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
         lines.join("\n")
     }
+}
+
+fn xml_escape<S: AsRef<str>>(input: S) -> String {
+    let mut escaped = String::with_capacity(input.as_ref().len());
+    for ch in input.as_ref().chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\'' => escaped.push_str("&apos;"),
+            '"' => escaped.push_str("&quot;"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 impl From<EnvironmentContext> for ResponseItem {
@@ -210,6 +233,30 @@ mod tests {
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn serialize_to_xml_escapes_ampersand() {
+        let context = EnvironmentContext::new(
+            Some(PathBuf::from("/tmp/Research & Development")),
+            None,
+            None,
+            None,
+        );
+
+        let serialized = context.serialize_to_xml();
+        assert!(serialized.contains("<cwd>"));
+        assert!(serialized.contains("</cwd>"));
+        // Proper XML should escape `&` as `&amp;`.
+        assert!(serialized.contains("Research &amp; Development"));
+        assert!(!serialized.contains("Research & Development"));
+    }
+
+    #[test]
+    fn xml_escape_replaces_reserved_characters() {
+        let escaped = super::xml_escape("<&>'\"");
+
+        assert_eq!(escaped, "&lt;&amp;&gt;&apos;&quot;");
     }
 
     #[test]
