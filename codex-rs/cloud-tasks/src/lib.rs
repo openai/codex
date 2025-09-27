@@ -1509,3 +1509,42 @@ fn pretty_lines_from_error(raw: &str) -> Vec<String> {
     }
     lines
 }
+
+#[cfg(test)]
+mod tests {
+    use codex_tui::ComposerAction;
+    use codex_tui::ComposerInput;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn composer_input_renders_typed_characters() {
+        let mut composer = ComposerInput::new();
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        match composer.input(key) {
+            ComposerAction::Submitted(_) => panic!("unexpected submission"),
+            ComposerAction::None => {}
+        }
+
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buf = Buffer::empty(area);
+        composer.render_ref(area, &mut buf);
+
+        let found = buf.content().iter().any(|cell| cell.symbol() == "a");
+        assert!(found, "typed character was not rendered: {buf:?}");
+
+        composer.set_hint_items(vec![("⌃O", "env"), ("⌃C", "quit")]);
+        composer.render_ref(area, &mut buf);
+        let footer = buf
+            .content()
+            .iter()
+            .skip((area.width as usize) * (area.height as usize - 1))
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(footer.contains("⌃O env"));
+    }
+}

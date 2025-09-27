@@ -200,7 +200,7 @@ impl ExecCell {
             if self.is_active() {
                 spinner(self.active_start_time())
             } else {
-                "•".bold()
+                "•".into()
             },
             " ".into(),
             if self.is_active() {

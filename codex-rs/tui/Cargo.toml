@@ -40,23 +40,20 @@ codex-login = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
 color-eyre = { workspace = true }
-crossterm = { workspace = true, features = [
-    "bracketed-paste",
-    "event-stream",
-] }
-dirs = { workspace = true }
+crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 diffy = { workspace = true }
-image = { workspace = true, features = [
-    "jpeg",
-    "png",
-] }
+dirs = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 mcp-types = { workspace = true }
 path-clean = { workspace = true }
+pathdiff = { workspace = true }
+pulldown-cmark = { workspace = true }
 rand = { workspace = true }
 ratatui = { workspace = true, features = [
     "scrolling-regions",
+    "unstable-backend-writer",
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
@@ -80,11 +77,9 @@ tokio-stream = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-pulldown-cmark = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
-pathdiff = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
