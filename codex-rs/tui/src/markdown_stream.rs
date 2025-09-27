@@ -229,10 +229,7 @@ mod tests {
             .spans
             .iter()
             .any(|s| s.style.fg == Some(ratatui::style::Color::LightBlue));
-        assert!(
-            !has_light_blue,
-            "expected no light blue fg on: {line:?}"
-        );
+        assert!(!has_light_blue, "expected no light blue fg on: {line:?}");
     }
 
     #[test]
@@ -481,8 +478,7 @@ mod tests {
         );
         let marker_span = &line.spans[0];
         assert_eq!(
-            marker_span.style.fg,
-            None,
+            marker_span.style.fg, None,
             "expected default color for 3rd-level ordered marker, got {:?}",
             marker_span.style.fg
         );
@@ -557,7 +553,8 @@ mod tests {
         let _rendered_all_strs = lines_to_plain_strings(&rendered_all);
 
         assert_eq!(
-            streamed_strs, vec!["- item.", "item.", "- "],
+            streamed_strs,
+            vec!["- item.", "item.", "- "],
             "streamed output for split dashes"
         );
     }

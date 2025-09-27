@@ -3,10 +3,6 @@ use codex_core::config_types::UriBasedFileOpener;
 use ratatui::text::Line;
 use std::path::Path;
 
-
-
-
-
 pub(crate) fn append_markdown(
     markdown_source: &str,
     lines: &mut Vec<Line<'static>>,
@@ -28,10 +24,6 @@ fn append_markdown_with_opener_and_cwd(
     );
     crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
 }
-
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -180,12 +172,7 @@ fn main() {
 
         // Process the markdown with the public API
         let mut lines = Vec::new();
-        append_markdown_with_opener_and_cwd(
-            markdown,
-            &mut lines,
-            UriBasedFileOpener::None,
-            cwd,
-        );
+        append_markdown_with_opener_and_cwd(markdown, &mut lines, UriBasedFileOpener::None, cwd);
 
         // Verify we have some lines of output
         assert!(!lines.is_empty(), "Should have generated some output lines");

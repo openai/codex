@@ -318,23 +318,29 @@ where
                 self.push_line(Line::default());
                 self.needs_newline = false;
             }
-            if i > 0 {
+            if i > 0 && !self.in_code_block {
                 self.push_line(Line::default());
             }
             if self.in_code_block {
                 #[cfg(feature = "syntax-highlighting")]
                 if let Some(highlighter) = &mut self.current_highlighter {
-                    let ranges: Vec<(syntect::highlighting::Style, &str)> = highlighter.highlight_line(line, &SYNTAX_SET).unwrap_or_else(|_| vec![(syntect::highlighting::Style::default(), line)]);
-                    let spans: Vec<Span> = ranges.into_iter().map(|(syn_style, text)| {
-                        let fg = syn_style.foreground;
-                        let mut style = Style::default().fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
-                        if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
-                            style = style.bg(bg_color);
-                        } else {
-                            style = style.bg(DEFAULT_CODE_BG);
-                        }
-                        Span::styled(text.to_string(), style)
-                    }).collect();
+                    let ranges: Vec<(syntect::highlighting::Style, &str)> = highlighter
+                        .highlight_line(line, &SYNTAX_SET)
+                        .unwrap_or_else(|_| vec![(syntect::highlighting::Style::default(), line)]);
+                    let spans: Vec<Span> = ranges
+                        .into_iter()
+                        .map(|(syn_style, text)| {
+                            let fg = syn_style.foreground;
+                            let mut style = Style::default()
+                                .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
+                            if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
+                                style = style.bg(bg_color);
+                            } else {
+                                style = style.bg(DEFAULT_CODE_BG);
+                            }
+                            Span::styled(text.to_string(), style)
+                        })
+                        .collect();
                     self.push_line(Line::from(spans));
                 } else {
                     let span = Span::styled(line.to_string(), Style::default().bg(DEFAULT_CODE_BG));
@@ -348,7 +354,8 @@ where
             } else {
                 let mut content = line.to_string();
                 if let (Some(scheme), Some(cwd)) = (&self.scheme, &self.cwd) {
-                    let cow = rewrite_file_citations_with_scheme(&content, Some(scheme.as_str()), cwd);
+                    let cow =
+                        rewrite_file_citations_with_scheme(&content, Some(scheme.as_str()), cwd);
                     if let std::borrow::Cow::Owned(s) = cow {
                         content = s;
                     }
@@ -449,7 +456,12 @@ where
             self.current_code_lang = lang.clone();
             if let Some(lang) = &lang {
                 let syntax = get_syntax_definition(Some(lang));
-                let theme = match THEME.themes.get("base16-ocean.dark").or_else(|| THEME.themes.get("InspiredGitHub")).or_else(|| THEME.themes.values().next()) {
+                let theme = match THEME
+                    .themes
+                    .get("base16-ocean.dark")
+                    .or_else(|| THEME.themes.get("InspiredGitHub"))
+                    .or_else(|| THEME.themes.values().next())
+                {
                     Some(t) => t,
                     None => {
                         self.current_highlighter = None;
