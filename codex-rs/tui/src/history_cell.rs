@@ -1095,15 +1095,15 @@ impl HistoryCell for FinalMessageSeparator {
             .elapsed_seconds
             .map(super::status_indicator_widget::fmt_elapsed_compact);
         if let Some(elapsed_seconds) = elapsed_seconds {
-            let worked_for = format!(" Worked for {elapsed_seconds} ");
+            let worked_for = format!("─ Worked for {elapsed_seconds} ─");
             let worked_for_width = worked_for.width();
-            vec![Line::from_iter([
-                "─".dim(),
-                worked_for.dim(),
-                "─"
-                    .repeat(width as usize - worked_for_width - "─".width())
-                    .dim(),
-            ])]
+            vec![
+                Line::from_iter([
+                    worked_for,
+                    "─".repeat((width as usize).saturating_sub(worked_for_width)),
+                ])
+                .dim(),
+            ]
         } else {
             vec![Line::from_iter(["─".repeat(width as usize).dim()])]
         }
