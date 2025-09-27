@@ -72,6 +72,25 @@ args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
 ```
 
+### Windows 11 Docker Desktop MCP Gateway
+
+When Docker Desktop and Docker MCP Gateway are installed and running in Windows and Codex is installed and running in Windows:
+
+```toml
+[mcp_servers.docker-mcp-gateway]
+args = ["mcp", "gateway", "run"]
+command = "docker.exe"
+```
+
+When Docker Desktop and Docker MCP Gateway are installed and running in Windows and Codex is installed and running in Windows Subsytem for Linux:
+
+```toml
+[mcp_servers.docker-gateway]
+command = "/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe"
+args = ["mcp", "gateway", "run"]
+```
+Note: Until all shell issues have been resolved with Windows you will most likely need to use this [https://github.com/openai/codex/issues/4180#issuecomment-3332020165](workaround) so PATH/PATHEX/ETC are properly exposed to Codex.
+
 ## Using Codex as an MCP Server
 
 The Codex CLI can also be run as an MCP _server_ via `codex mcp`. For example, you can use `codex mcp` to make Codex available as a tool inside of a multi-agent framework like the OpenAI [Agents SDK](https://platform.openai.com/docs/guides/agents).
