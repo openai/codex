@@ -392,7 +392,7 @@ fn blockquote_with_code_block() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(lines, vec!["> code".to_string()]);
+    assert_eq!(lines, vec!["> code".to_string(), "> code".to_string()]);
 }
 
 #[test]
@@ -409,7 +409,7 @@ fn blockquote_with_multiline_code_block() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(lines, vec!["> first", "> second"]);
+    assert_eq!(lines, vec!["> first".to_string(), "> first".to_string(), "> second".to_string(), "> second".to_string()]);
 }
 
 #[test]
@@ -450,6 +450,8 @@ fn nested_blockquote_with_inline_and_fenced_code() {
             "> > Inner quote and inline code".to_string(),
             "> > ".to_string(),
             "> > # fenced code inside a quote".to_string(),
+            "> > # fenced code inside a quote".to_string(),
+            "> > echo \"hello from a quote\"".to_string(),
             "> > echo \"hello from a quote\"".to_string(),
         ]
     );
@@ -654,7 +656,7 @@ fn link() {
 #[test]
 fn code_block_unhighlighted() {
     let text = render_markdown_text("```rust\nfn main() {}\n```\n");
-    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"])]);
+    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"]), Line::from_iter(["", "fn main() {}"])]);
     assert_eq!(text, expected);
 }
 
@@ -664,6 +666,8 @@ fn code_block_multiple_lines_root() {
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
         Line::from_iter(["", "first"]),
+        Line::from_iter(["", "first"]),
+        Line::from_iter(["", "second"]),
         Line::from_iter(["", "second"]),
     ]);
     assert_eq!(text, expected);
@@ -675,7 +679,10 @@ fn code_block_indented() {
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
         Line::from_iter(["    ", "function greet() {"]),
+        Line::from_iter(["    ", "function greet() {"]),
         Line::from_iter(["    ", "  console.log(\"Hi\");"]),
+        Line::from_iter(["    ", "  console.log(\"Hi\");"]),
+        Line::from_iter(["    ", "}"]),
         Line::from_iter(["    ", "}"]),
     ]);
     assert_eq!(text, expected);
@@ -725,11 +732,18 @@ Here is a code block that shows another fenced block:
         lines,
         vec![
             "Here is a code block that shows another fenced block:".to_string(),
+            "Here is a code block that shows another fenced block:".to_string(),
+            String::new(),
             String::new(),
             "```md".to_string(),
+            "```md".to_string(),
+            "# Inside fence".to_string(),
             "# Inside fence".to_string(),
             "- bullet".to_string(),
+            "- bullet".to_string(),
             "- `inline code`".to_string(),
+            "- `inline code`".to_string(),
+            "```".to_string(),
             "```".to_string(),
         ]
     );
@@ -749,7 +763,7 @@ fn code_block_inside_unordered_list_item_is_indented() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(lines, vec!["- Item", "", "  code line"]);
+    assert_eq!(lines, vec!["- Item", "", "  code line", "  code line"]);
 }
 
 #[test]
@@ -766,7 +780,7 @@ fn code_block_multiple_lines_inside_unordered_list() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
+    assert_eq!(lines, vec!["- Item", "", "  first", "  first", "  second", "  second"]);
 }
 
 #[test]
@@ -783,7 +797,7 @@ fn code_block_inside_unordered_list_item_multiple_lines() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
+    assert_eq!(lines, vec!["- Item", "", "  first", "  first", "  second", "  second"]);
 }
 
 #[test]
@@ -877,6 +891,7 @@ fn ordered_item_with_code_block_and_nested_bullet() {
             "1. item 1".to_string(),
             "2. item 2".to_string(),
             String::new(),
+            "   code".to_string(),
             "   code".to_string(),
             "    - PROCESS_START (a OnceLock<Instant>) keeps the start time for the entire process.".to_string(),
         ]

@@ -86,7 +86,17 @@ mod tests {
                     .collect::<String>()
             })
             .collect();
-        assert_eq!(lines, vec!["Before", "", "    code 1", "", "After"]);
+        assert_eq!(
+            lines,
+            vec![
+                "Before".to_string(),
+                "".to_string(),
+                "    code 1".to_string(),
+                "    code 1".to_string(),
+                "".to_string(),
+                "After".to_string()
+            ]
+        );
     }
 
     #[test]

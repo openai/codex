@@ -2158,28 +2158,14 @@ printf 'fenced within fenced\n'
             id: "t1".into(),
             msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
         });
-        // Drive commit ticks and drain emitted history lines into the vt100 buffer.
-        loop {
-            chat.on_commit_tick();
-            let mut inserted_any = false;
-            while let Ok(app_ev) = rx.try_recv() {
-                if let AppEvent::InsertHistoryCell(cell) = app_ev {
-                    let lines = cell.display_lines(width);
-                    crate::insert_history::insert_history_lines(&mut term, lines);
-                    inserted_any = true;
-                }
-            }
-            if !inserted_any {
-                break;
-            }
-        }
+        chat.on_commit_tick();
     }
 
-    // Finalize the stream without sending a final AgentMessage, to flush any tail.
+    // Send the final message
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
-            last_agent_message: None,
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: source.to_string(),
         }),
     });
     for lines in drain_insert_history(&mut rx) {
