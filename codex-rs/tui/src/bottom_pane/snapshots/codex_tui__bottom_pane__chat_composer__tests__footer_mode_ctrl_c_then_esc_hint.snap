@@ -10,5 +10,4 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"                                                                                                    "
-"  ? for shortcuts                                                                                   "
+"    esc esc to edit previous message                                                                "
