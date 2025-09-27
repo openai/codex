@@ -413,7 +413,7 @@ async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = codex_core::default_client::create_client();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -568,7 +568,7 @@ async fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Re
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::Client::new();
+    let client = codex_core::default_client::create_client();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
