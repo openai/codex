@@ -1185,48 +1185,35 @@ impl CodexMessageProcessor {
             cancellation_token,
         } = params;
 
-        // if there is a cancellation_token, cancel the request
-        if let Some(cancellation_token) = cancellation_token
-            && let Some(existing) = self
-                .pending_fuzzy_searches
-                .lock()
-                .await
-                .get(&cancellation_token)
-        {
-            existing.store(true, Ordering::Relaxed);
-        }
-
-        // if query is empty, return without searching
-        if query.is_empty() {
-            self.outgoing
-                .send_response(request_id, FuzzyFileSearchResponse { files: vec![] })
-                .await;
-            return;
-        }
-
-        // run fuzzy search
-        let request_key = match request_id.clone() {
-            RequestId::String(s) => s,
-            RequestId::Integer(i) => i.to_string(),
+        let cancel_flag = match cancellation_token.clone() {
+            Some(token) => {
+                let mut pending_fuzzy_searches = self.pending_fuzzy_searches.lock().await;
+                // if a cancellation_token is provided and a pending_request exists for
+                // that token, cancel it
+                if let Some(existing) = pending_fuzzy_searches.get(&token) {
+                    existing.store(true, Ordering::Relaxed);
+                }
+                let flag = Arc::new(AtomicBool::new(false));
+                pending_fuzzy_searches.insert(token.clone(), flag.clone());
+                flag
+            }
+            None => Arc::new(AtomicBool::new(false)),
         };
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        self.pending_fuzzy_searches
-            .lock()
-            .await
-            .insert(request_key.clone(), cancel_flag.clone());
 
-        let results = run_fuzzy_file_search(query, roots, cancel_flag.clone()).await;
+        let results = match query.as_str() {
+            "" => vec![],
+            _ => run_fuzzy_file_search(query, roots, cancel_flag.clone()).await,
+        };
 
-        {
+        if let Some(token) = cancellation_token {
             let mut pending_fuzzy_searches = self.pending_fuzzy_searches.lock().await;
-            if let Some(current_flag) = pending_fuzzy_searches.get(&request_key)
+            if let Some(current_flag) = pending_fuzzy_searches.get(&token)
                 && Arc::ptr_eq(current_flag, &cancel_flag)
             {
-                pending_fuzzy_searches.remove(&request_key);
+                pending_fuzzy_searches.remove(&token);
             }
         }
 
-        // close out the request
         let response = FuzzyFileSearchResponse { files: results };
         self.outgoing.send_response(request_id, response).await;
     }
