@@ -140,6 +140,7 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
 
     const COLUMNS: usize = 3;
     const MAX_PADDED_WIDTHS: [usize; COLUMNS - 1] = [24, 28];
+    const MIN_PADDED_WIDTHS: [usize; COLUMNS - 1] = [22, 0];
 
     let rows = entries.len().div_ceil(COLUMNS);
     let mut column_widths = [0usize; COLUMNS];
@@ -160,7 +161,8 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
             let entry = &entries[idx];
             if col < COLUMNS - 1 {
                 let max_width = MAX_PADDED_WIDTHS[col];
-                let target_width = column_widths[col].min(max_width);
+                let mut target_width = column_widths[col];
+                target_width = target_width.max(MIN_PADDED_WIDTHS[col]).min(max_width);
                 let pad_width = target_width + 2;
                 line.push_str(&format!("{entry:<pad_width$}"));
             } else {
@@ -179,13 +181,13 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
-    FilePaths,
     InsertNewline,
+    ChangeMode,
+    FilePaths,
     PasteImage,
+    EditPrevious,
     Quit,
     ShowTranscript,
-    ToggleOverlay,
-    EditPrevious,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -273,17 +275,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " for commands",
     },
     ShortcutDescriptor {
-        id: ShortcutId::FilePaths,
-        bindings: &[ShortcutBinding {
-            code: KeyCode::Char('@'),
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "@",
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " for file paths",
-    },
-    ShortcutDescriptor {
         id: ShortcutId::InsertNewline,
         bindings: &[
             ShortcutBinding {
@@ -303,6 +294,28 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " for newline",
     },
     ShortcutDescriptor {
+        id: ShortcutId::ChangeMode,
+        bindings: &[ShortcutBinding {
+            code: KeyCode::BackTab,
+            modifiers: KeyModifiers::SHIFT,
+            overlay_text: "shift + tab",
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " to change mode",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::FilePaths,
+        bindings: &[ShortcutBinding {
+            code: KeyCode::Char('@'),
+            modifiers: KeyModifiers::NONE,
+            overlay_text: "@",
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " for file paths",
+    },
+    ShortcutDescriptor {
         id: ShortcutId::PasteImage,
         bindings: &[ShortcutBinding {
             code: KeyCode::Char('v'),
@@ -312,6 +325,17 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to paste images",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::EditPrevious,
+        bindings: &[ShortcutBinding {
+            code: KeyCode::Esc,
+            modifiers: KeyModifiers::NONE,
+            overlay_text: "esc",
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: "",
     },
     ShortcutDescriptor {
         id: ShortcutId::Quit,
@@ -334,28 +358,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to view transcript",
-    },
-    ShortcutDescriptor {
-        id: ShortcutId::ToggleOverlay,
-        bindings: &[ShortcutBinding {
-            code: KeyCode::Char('?'),
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "?",
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " to hide shortcuts",
-    },
-    ShortcutDescriptor {
-        id: ShortcutId::EditPrevious,
-        bindings: &[ShortcutBinding {
-            code: KeyCode::Esc,
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "esc",
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: "",
     },
 ];
 

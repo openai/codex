@@ -29,7 +29,7 @@ const PRESETS: &[ModelPreset] = &[
         label: "gpt-5-codex medium",
         description: "",
         model: "gpt-5-codex",
-        effort: None,
+        effort: Some(ReasoningEffort::Medium),
     },
     ModelPreset {
         id: "gpt-5-codex-high",
