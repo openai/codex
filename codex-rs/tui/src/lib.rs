@@ -67,6 +67,7 @@ mod status_indicator_widget;
 mod streaming;
 mod style;
 mod terminal_palette;
+mod terminal_title;
 mod text_formatting;
 mod tui;
 mod ui_consts;
@@ -268,6 +269,7 @@ async fn run_ratatui_app(
     should_show_trust_screen: bool,
 ) -> color_eyre::Result<AppExitInfo> {
     let mut config = config;
+    let _title_guard = terminal_title::maybe_set_terminal_title(&config, active_profile.as_deref());
     color_eyre::install()?;
 
     // Forward panic reports through tracing so they appear in the UI status
