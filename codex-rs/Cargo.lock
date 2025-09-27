@@ -622,6 +622,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
+ "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",

@@ -37,15 +37,3 @@ codex-tui = { path = "../tui" }
 assert_cmd = "2"
 async-trait = "0.1"
 predicates = "3"
-
-[[bin]]
-name = "conncheck"
-path = "src/bin/conncheck.rs"
-
-[[bin]]
-name = "newtask"
-path = "src/bin/newtask.rs"
-
-[[bin]]
-name = "envcheck"
-path = "src/bin/envcheck.rs"

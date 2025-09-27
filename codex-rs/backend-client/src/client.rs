@@ -14,7 +14,8 @@ use serde::de::DeserializeOwned;
 pub enum PathStyle {
     /// /api/codex/…
     CodexApi,
-    ChatGptApi, // /wham/...
+    /// /wham/…
+    ChatGptApi,
 }
 
 impl PathStyle {

@@ -296,11 +296,11 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
     let (tx, mut rx) = unbounded_channel::<app::AppEvent>();
     // Kick off the initial load in background
     {
-        let backend2 = backend.clone();
-        let tx2 = tx.clone();
+        let backend = Arc::clone(&backend);
+        let tx = tx.clone();
         tokio::spawn(async move {
-            let res = app::load_tasks(&*backend2, None).await;
-            let _ = tx2.send(app::AppEvent::TasksLoaded {
+            let res = app::load_tasks(&*backend, None).await;
+            let _ = tx.send(app::AppEvent::TasksLoaded {
                 env: None,
                 result: res,
             });
@@ -308,7 +308,7 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
     }
     // Fetch environment list in parallel so the header can show friendly names quickly.
     {
-        let tx2 = tx.clone();
+        let tx = tx.clone();
         tokio::spawn(async move {
             let base_url = util::normalize_base_url(
                 &std::env::var("CODEX_CLOUD_TASKS_BASE_URL")
@@ -316,14 +316,14 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
             );
             let headers = util::build_chatgpt_headers().await;
             let res = crate::env_detect::list_environments(&base_url, &headers).await;
-            let _ = tx2.send(app::AppEvent::EnvironmentsLoaded(res));
+            let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
         });
     }
 
     // Try to auto-detect a likely environment id on startup and refresh if found.
     // Do this concurrently so the initial list shows quickly; on success we refetch with filter.
     {
-        let tx2 = tx.clone();
+        let tx = tx.clone();
         tokio::spawn(async move {
             let base_url = util::normalize_base_url(
                 &std::env::var("CODEX_CLOUD_TASKS_BASE_URL")
@@ -334,7 +334,7 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
 
             // Run autodetect. If it fails, we keep using "All".
             let res = crate::env_detect::autodetect_environment_id(&base_url, &headers, None).await;
-            let _ = tx2.send(app::AppEvent::EnvironmentAutodetected(res));
+            let _ = tx.send(app::AppEvent::EnvironmentAutodetected(res));
         });
     }
 
@@ -457,12 +457,12 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                     app.refresh_inflight = true;
                                     app.list_generation = app.list_generation.saturating_add(1);
                                     needs_redraw = true;
-                                    let backend2 = backend.clone();
-                                    let tx2 = tx.clone();
+                                    let backend = Arc::clone(&backend);
+                                    let tx = tx.clone();
                                     let env_sel = app.env_filter.clone();
                                     tokio::spawn(async move {
-                                        let res = app::load_tasks(&*backend2, env_sel.as_deref()).await;
-                                        let _ = tx2.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                        let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
+                                        let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
                                     });
                                     let _ = frame_tx.send(Instant::now());
                                 }
@@ -529,25 +529,29 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                     app.in_flight.clear();
                             // reset spinner state
                                     needs_redraw = true;
-                                    let backend2 = backend.clone();
-                                    let tx2 = tx.clone();
-                                    let env_sel = app.env_filter.clone();
-                                    tokio::spawn(async move {
-                                        let res = app::load_tasks(&*backend2, env_sel.as_deref()).await;
-                                        let _ = tx2.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
-                                    });
+                                    {
+                                        let backend = Arc::clone(&backend);
+                                        let tx = tx.clone();
+                                        let env_sel = app.env_filter.clone();
+                                        tokio::spawn(async move {
+                                            let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
+                                            let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                        });
+                                    }
                                     // Proactively fetch environments to resolve a friendly name for the header.
                                     app.env_loading = true;
-                                    let tx3 = tx.clone();
-                                    tokio::spawn(async move {
-                                        let base_url = crate::util::normalize_base_url(
-                                            &std::env::var("CODEX_CLOUD_TASKS_BASE_URL")
-                                                .unwrap_or_else(|_| "https://chatgpt.com/backend-api".to_string()),
-                                        );
-                                        let headers = crate::util::build_chatgpt_headers().await;
-                                        let res = crate::env_detect::list_environments(&base_url, &headers).await;
-                                        let _ = tx3.send(app::AppEvent::EnvironmentsLoaded(res));
-                                    });
+                                    {
+                                        let tx = tx.clone();
+                                        tokio::spawn(async move {
+                                            let base_url = crate::util::normalize_base_url(
+                                                &std::env::var("CODEX_CLOUD_TASKS_BASE_URL")
+                                                    .unwrap_or_else(|_| "https://chatgpt.com/backend-api".to_string()),
+                                            );
+                                            let headers = crate::util::build_chatgpt_headers().await;
+                                            let res = crate::env_detect::list_environments(&base_url, &headers).await;
+                                            let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
+                                        });
+                                    }
                                     let _ = frame_tx.send(Instant::now());
                                 }
                             }
@@ -618,19 +622,19 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                 ov.apply_selection_to_fields();
                                 if let (Some(turn_id), true) = (turn_id.clone(), !sibling_turn_ids.is_empty())
                                     && ov.attempts.len() == 1 {
-                                        let backend2 = backend.clone();
-                                        let tx2 = tx.clone();
+                                        let backend = Arc::clone(&backend);
+                                        let tx = tx.clone();
                                         let task_id = id.clone();
                                         tokio::spawn(async move {
                                             match codex_cloud_tasks_client::CloudBackend::list_sibling_attempts(
-                                                &*backend2,
+                                                &*backend,
                                                 task_id.clone(),
                                                 turn_id,
                                             )
                                             .await
                                             {
                                                 Ok(attempts) => {
-                                                    let _ = tx2.send(app::AppEvent::AttemptsLoaded { id: task_id, attempts });
+                                                    let _ = tx.send(app::AppEvent::AttemptsLoaded { id: task_id, attempts });
                                                 }
                                                 Err(e) => {
                                                     crate::util::append_error_log(format!(
@@ -755,12 +759,12 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                         app.apply_modal = None;
                                         app.diff_overlay = None;
                                         // Refresh tasks after successful apply
-                                        let backend2 = backend.clone();
-                                        let tx2 = tx.clone();
+                                        let backend = Arc::clone(&backend);
+                                        let tx = tx.clone();
                                         let env_sel = app.env_filter.clone();
                                         tokio::spawn(async move {
-                                            let res = app::load_tasks(&*backend2, env_sel.as_deref()).await;
-                                            let _ = tx2.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                            let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
+                                            let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
                                         });
                                     }
                                 }
@@ -846,12 +850,12 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                             }
                             needs_redraw = true;
                             if should_fetch {
-                                    let tx2 = tx.clone();
+                                    let tx = tx.clone();
                                     tokio::spawn(async move {
             let base_url = crate::util::normalize_base_url(&std::env::var("CODEX_CLOUD_TASKS_BASE_URL").unwrap_or_else(|_| "https://chatgpt.com/backend-api".to_string()));
             let headers = crate::util::build_chatgpt_headers().await;
                                         let res = crate::env_detect::list_environments(&base_url, &headers).await;
-                                        let _ = tx2.send(app::AppEvent::EnvironmentsLoaded(res));
+                                        let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
                                     });
                             }
                             // Render after opening env modal to show it instantly.
@@ -883,15 +887,15 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                                 ));
                                                 page.submitting = true;
                                                 app.status = "Submitting new task…".to_string();
-                                                let tx2 = tx.clone();
-                                                let backend2 = backend.clone();
+                                                let tx = tx.clone();
+                                                let backend = Arc::clone(&backend);
                                                 tokio::spawn(async move {
-                                                    let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend2, &env, &text, "main", false).await;
+                                                    let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, "main", false).await;
                                                     let evt = match result {
                                                         Ok(ok) => app::AppEvent::NewTaskSubmitted(Ok(ok)),
                                                         Err(e) => app::AppEvent::NewTaskSubmitted(Err(format!("{e}"))),
                                                     };
-                                                    let _ = tx2.send(evt);
+                                                    let _ = tx.send(evt);
                                                 });
                                             } else {
                                                 app.status = "No environment selected (press 'e' to choose)".to_string();
@@ -1024,7 +1028,7 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                     if app.environments.is_empty() { app.env_loading = true; app.env_error = None; }
                                     needs_redraw = true;
                                     if app.environments.is_empty() {
-                                        let tx2 = tx.clone();
+                                        let tx = tx.clone();
                                         tokio::spawn(async move {
                                             let base_url = crate::util::normalize_base_url(
                                                 &std::env::var("CODEX_CLOUD_TASKS_BASE_URL")
@@ -1032,7 +1036,7 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                             );
                                             let headers = crate::util::build_chatgpt_headers().await;
                                             let res = crate::env_detect::list_environments(&base_url, &headers).await;
-                                            let _ = tx2.send(app::AppEvent::EnvironmentsLoaded(res));
+                                            let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
                                         });
                                     }
                                 }
@@ -1096,12 +1100,12 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                     // Trigger refresh of environments
                                     app.env_loading = true; app.env_error = None; needs_redraw = true;
                                     let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
-                                    let tx2 = tx.clone();
+                                    let tx = tx.clone();
                                     tokio::spawn(async move {
             let base_url = crate::util::normalize_base_url(&std::env::var("CODEX_CLOUD_TASKS_BASE_URL").unwrap_or_else(|_| "https://chatgpt.com/backend-api".to_string()));
             let headers = crate::util::build_chatgpt_headers().await;
                                         let res = crate::env_detect::list_environments(&base_url, &headers).await;
-                                        let _ = tx2.send(app::AppEvent::EnvironmentsLoaded(res));
+                                        let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
                                     });
                                 }
                                 KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
@@ -1161,12 +1165,12 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                         app.in_flight.clear();
                                         // reset spinner state
                                         needs_redraw = true;
-                                        let backend2 = backend.clone();
-                                        let tx2 = tx.clone();
+                                        let backend = Arc::clone(&backend);
+                                        let tx = tx.clone();
                                         let env_sel = app.env_filter.clone();
                                         tokio::spawn(async move {
-                                            let res = app::load_tasks(&*backend2, env_sel.as_deref()).await;
-                                            let _ = tx2.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                            let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
+                                            let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
                                         });
                                     }
                                 }
@@ -1200,12 +1204,12 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                         // reset spinner state
                                     needs_redraw = true;
                                     // Spawn background refresh
-                                    let backend2 = backend.clone();
-                                    let tx2 = tx.clone();
+                                    let backend = Arc::clone(&backend);
+                                    let tx = tx.clone();
                                     let env_sel = app.env_filter.clone();
                                     tokio::spawn(async move {
-                                        let res = app::load_tasks(&*backend2, env_sel.as_deref()).await;
-                                        let _ = tx2.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
+                                        let res = app::load_tasks(&*backend, env_sel.as_deref()).await;
+                                        let _ = tx.send(app::AppEvent::TasksLoaded { env: env_sel, result: res });
                                     });
                                 }
                                 KeyCode::Char('o') | KeyCode::Char('O') => {
@@ -1215,12 +1219,12 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                     if should_fetch { app.env_loading = true; app.env_error = None; }
                                     needs_redraw = true;
                                     if should_fetch {
-                                    let tx2 = tx.clone();
+                                    let tx = tx.clone();
                                     tokio::spawn(async move {
                                         let base_url = crate::util::normalize_base_url(&std::env::var("CODEX_CLOUD_TASKS_BASE_URL").unwrap_or_else(|_| "https://chatgpt.com/backend-api".to_string()));
                                         let headers = crate::util::build_chatgpt_headers().await;
                                         let res = crate::env_detect::list_environments(&base_url, &headers).await;
-                                        let _ = tx2.send(app::AppEvent::EnvironmentsLoaded(res));
+                                        let _ = tx.send(app::AppEvent::EnvironmentsLoaded(res));
                                     });
                                     }
                                 }
@@ -1243,71 +1247,73 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                         app.diff_overlay = Some(overlay);
                                         needs_redraw = true;
                                         // Spawn background details load (diff first, then messages fallback)
-                                        let backend2 = backend.clone();
-                                        let tx2 = tx.clone();
-                                        let id1 = task.id.clone();
-                                        let title1 = task.title.clone();
-                                        let id2 = id1.clone();
-                                        let title2 = title1.clone();
-                                        tokio::spawn(async move {
-                                            match codex_cloud_tasks_client::CloudBackend::get_task_diff(&*backend2, id1.clone()).await {
-                                                Ok(Some(diff)) => {
-                                                    let _ = tx2.send(app::AppEvent::DetailsDiffLoaded { id: id1, title: title1, diff });
-                                                }
-                                                Ok(None) => {
-                                                    match codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend2, id1.clone()).await {
-                                                        Ok(text) => {
-                                                            let evt = app::AppEvent::DetailsMessagesLoaded {
-                                                                id: id1,
-                                                                title: title1,
-                                                                messages: text.messages,
-                                                                prompt: text.prompt,
-                                                                turn_id: text.turn_id,
-                                                                sibling_turn_ids: text.sibling_turn_ids,
-                                                                attempt_placement: text.attempt_placement,
-                                                                attempt_status: text.attempt_status,
-                                                            };
-                                                            let _ = tx2.send(evt);
+                                        let id = task.id.clone();
+                                        let title = task.title.clone();
+                                        {
+                                            let backend = Arc::clone(&backend);
+                                            let tx = tx.clone();
+                                            let diff_id = id.clone();
+                                            let diff_title = title.clone();
+                                            tokio::spawn(async move {
+                                                match codex_cloud_tasks_client::CloudBackend::get_task_diff(&*backend, diff_id.clone()).await {
+                                                    Ok(Some(diff)) => {
+                                                        let _ = tx.send(app::AppEvent::DetailsDiffLoaded { id: diff_id, title: diff_title, diff });
+                                                    }
+                                                    Ok(None) => {
+                                                        match codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend, diff_id.clone()).await {
+                                                            Ok(text) => {
+                                                                let evt = app::AppEvent::DetailsMessagesLoaded {
+                                                                    id: diff_id,
+                                                                    title: diff_title,
+                                                                    messages: text.messages,
+                                                                    prompt: text.prompt,
+                                                                    turn_id: text.turn_id,
+                                                                    sibling_turn_ids: text.sibling_turn_ids,
+                                                                    attempt_placement: text.attempt_placement,
+                                                                    attempt_status: text.attempt_status,
+                                                                };
+                                                                let _ = tx.send(evt);
+                                                            }
+                                                            Err(e2) => {
+                                                                let _ = tx.send(app::AppEvent::DetailsFailed { id: diff_id, title: diff_title, error: format!("{e2}") });
+                                                            }
                                                         }
-                                                        Err(e2) => {
-                                                            let _ = tx2.send(app::AppEvent::DetailsFailed { id: id1, title: title1, error: format!("{e2}") });
+                                                    }
+                                                    Err(e) => {
+                                                        append_error_log(format!("get_task_diff failed for {}: {e}", diff_id.0));
+                                                        match codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend, diff_id.clone()).await {
+                                                            Ok(text) => {
+                                                                let evt = app::AppEvent::DetailsMessagesLoaded {
+                                                                    id: diff_id,
+                                                                    title: diff_title,
+                                                                    messages: text.messages,
+                                                                    prompt: text.prompt,
+                                                                    turn_id: text.turn_id,
+                                                                    sibling_turn_ids: text.sibling_turn_ids,
+                                                                    attempt_placement: text.attempt_placement,
+                                                                    attempt_status: text.attempt_status,
+                                                                };
+                                                                let _ = tx.send(evt);
+                                                            }
+                                                            Err(e2) => {
+                                                                let _ = tx.send(app::AppEvent::DetailsFailed { id: diff_id, title: diff_title, error: format!("{e2}") });
+                                                            }
                                                         }
                                                     }
                                                 }
-                                                Err(e) => {
-                                                    append_error_log(format!("get_task_diff failed for {}: {e}", id1.0));
-                                                    match codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend2, id1.clone()).await {
-                                                        Ok(text) => {
-                                                            let evt = app::AppEvent::DetailsMessagesLoaded {
-                                                                id: id1,
-                                                                title: title1,
-                                                                messages: text.messages,
-                                                                prompt: text.prompt,
-                                                                turn_id: text.turn_id,
-                                                                sibling_turn_ids: text.sibling_turn_ids,
-                                                                attempt_placement: text.attempt_placement,
-                                                                attempt_status: text.attempt_status,
-                                                            };
-                                                            let _ = tx2.send(evt);
-                                                        }
-                                                        Err(e2) => {
-                                                            let _ = tx2.send(app::AppEvent::DetailsFailed { id: id1, title: title1, error: format!("{e2}") });
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        });
+                                            });
+                                        }
                                         // Also fetch conversation text even when diff exists
                                         {
-                                            let backend3 = backend.clone();
-                                            let tx3 = tx.clone();
-                                            let id3 = id2;
-                                            let title3 = title2;
+                                            let backend = Arc::clone(&backend);
+                                            let tx = tx.clone();
+                                            let msg_id = id;
+                                            let msg_title = title;
                                             tokio::spawn(async move {
-                                            if let Ok(text) = codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend3, id3.clone()).await {
+                                                if let Ok(text) = codex_cloud_tasks_client::CloudBackend::get_task_text(&*backend, msg_id.clone()).await {
                                                     let evt = app::AppEvent::DetailsMessagesLoaded {
-                                                        id: id3,
-                                                        title: title3,
+                                                        id: msg_id,
+                                                        title: msg_title,
                                                         messages: text.messages,
                                                         prompt: text.prompt,
                                                         turn_id: text.turn_id,
@@ -1315,7 +1321,7 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                                         attempt_placement: text.attempt_placement,
                                                         attempt_status: text.attempt_status,
                                                     };
-                                                    let _ = tx3.send(evt);
+                                                    let _ = tx.send(evt);
                                                 }
                                             });
                                         }

@@ -1,13 +1,258 @@
-pub use codex_backend_openapi_models::models::CodeTaskDetailsResponse;
 pub use codex_backend_openapi_models::models::PaginatedListTaskListItem;
 pub use codex_backend_openapi_models::models::TaskListItem;
 
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 
-/// Extension helpers on generated types.
+/// Hand-rolled models for the Cloud Tasks task-details response.
+/// The generated OpenAPI models are pretty bad. This is a half-step
+/// towards hand-rolling them.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CodeTaskDetailsResponse {
+    #[serde(default)]
+    pub current_user_turn: Option<Turn>,
+    #[serde(default)]
+    pub current_assistant_turn: Option<Turn>,
+    #[serde(default)]
+    pub current_diff_task_turn: Option<Turn>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Turn {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub attempt_placement: Option<i64>,
+    #[serde(default, rename = "turn_status")]
+    pub turn_status: Option<String>,
+    #[serde(default)]
+    pub sibling_turn_ids: Vec<String>,
+    #[serde(default)]
+    pub input_items: Vec<TurnItem>,
+    #[serde(default)]
+    pub output_items: Vec<TurnItem>,
+    #[serde(default)]
+    pub worklog: Option<Worklog>,
+    #[serde(default)]
+    pub error: Option<TurnError>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TurnItem {
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub content: Vec<ContentFragment>,
+    #[serde(default)]
+    pub diff: Option<String>,
+    #[serde(default)]
+    pub output_diff: Option<DiffPayload>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ContentFragment {
+    Structured(StructuredContent),
+    Text(String),
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct StructuredContent {
+    #[serde(rename = "content_type", default)]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct DiffPayload {
+    #[serde(default)]
+    pub diff: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Worklog {
+    #[serde(default)]
+    pub messages: Vec<WorklogMessage>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct WorklogMessage {
+    #[serde(default)]
+    pub author: Option<Author>,
+    #[serde(default)]
+    pub content: Option<WorklogContent>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Author {
+    #[serde(default)]
+    pub role: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct WorklogContent {
+    #[serde(default)]
+    pub parts: Vec<ContentFragment>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TurnError {
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+impl ContentFragment {
+    fn text(&self) -> Option<&str> {
+        match self {
+            ContentFragment::Structured(inner) => {
+                if inner
+                    .content_type
+                    .as_deref()
+                    .map(|ct| ct.eq_ignore_ascii_case("text"))
+                    .unwrap_or(false)
+                {
+                    inner.text.as_deref().filter(|s| !s.is_empty())
+                } else {
+                    None
+                }
+            }
+            ContentFragment::Text(raw) => {
+                if raw.trim().is_empty() {
+                    None
+                } else {
+                    Some(raw.as_str())
+                }
+            }
+        }
+    }
+}
+
+impl TurnItem {
+    fn text_values(&self) -> Vec<String> {
+        self.content
+            .iter()
+            .filter_map(|fragment| fragment.text().map(str::to_string))
+            .collect()
+    }
+
+    fn diff_text(&self) -> Option<String> {
+        if self.kind == "output_diff" {
+            if let Some(diff) = &self.diff {
+                if !diff.is_empty() {
+                    return Some(diff.clone());
+                }
+            }
+        } else if self.kind == "pr" {
+            if let Some(payload) = &self.output_diff {
+                if let Some(diff) = &payload.diff {
+                    if !diff.is_empty() {
+                        return Some(diff.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+impl Turn {
+    fn unified_diff(&self) -> Option<String> {
+        self.output_items.iter().find_map(TurnItem::diff_text)
+    }
+
+    fn message_texts(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .output_items
+            .iter()
+            .filter(|item| item.kind == "message")
+            .flat_map(TurnItem::text_values)
+            .collect();
+
+        if let Some(log) = &self.worklog {
+            for message in &log.messages {
+                if message.is_assistant() {
+                    out.extend(message.text_values());
+                }
+            }
+        }
+
+        out
+    }
+
+    fn user_prompt(&self) -> Option<String> {
+        let parts: Vec<String> = self
+            .input_items
+            .iter()
+            .filter(|item| item.kind == "message")
+            .filter(|item| {
+                item.role
+                    .as_deref()
+                    .map(|r| r.eq_ignore_ascii_case("user"))
+                    .unwrap_or(true)
+            })
+            .flat_map(TurnItem::text_values)
+            .collect();
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(
+                "
+
+",
+            ))
+        }
+    }
+
+    fn error_summary(&self) -> Option<String> {
+        self.error.as_ref().and_then(TurnError::summary)
+    }
+}
+
+impl WorklogMessage {
+    fn is_assistant(&self) -> bool {
+        self.author
+            .as_ref()
+            .and_then(|a| a.role.as_deref())
+            .map(|role| role.eq_ignore_ascii_case("assistant"))
+            .unwrap_or(false)
+    }
+
+    fn text_values(&self) -> Vec<String> {
+        self.content
+            .as_ref()
+            .map(|content| {
+                content
+                    .parts
+                    .iter()
+                    .filter_map(|fragment| fragment.text().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl TurnError {
+    fn summary(&self) -> Option<String> {
+        let code = self.code.as_deref().unwrap_or("");
+        let message = self.message.as_deref().unwrap_or("");
+        match (code.is_empty(), message.is_empty()) {
+            (true, true) => None,
+            (false, true) => Some(code.to_string()),
+            (true, false) => Some(message.to_string()),
+            (false, false) => Some(format!("{code}: {message}")),
+        }
+    }
+}
+
 pub trait CodeTaskDetailsResponseExt {
-    /// Attempt to extract a unified diff string from `current_diff_task_turn`.
+    /// Attempt to extract a unified diff string from the assistant or diff turn.
     fn unified_diff(&self) -> Option<String>;
     /// Extract assistant text output messages (no diff) from current turns.
     fn assistant_text_messages(&self) -> Vec<String>;
@@ -16,127 +261,102 @@ pub trait CodeTaskDetailsResponseExt {
     /// Extract an assistant error message (if the turn failed and provided one).
     fn assistant_error_message(&self) -> Option<String>;
 }
+
 impl CodeTaskDetailsResponseExt for CodeTaskDetailsResponse {
     fn unified_diff(&self) -> Option<String> {
-        // `current_diff_task_turn` is an object; look for `output_items`.
-        // Prefer explicit diff turn; fallback to assistant turn if needed.
-        let candidates: [&Option<std::collections::HashMap<String, Value>>; 2] =
-            [&self.current_diff_task_turn, &self.current_assistant_turn];
-
-        for map in candidates {
-            let items = map
-                .as_ref()
-                .and_then(|m| m.get("output_items"))
-                .and_then(|v| v.as_array());
-            if let Some(items) = items {
-                for item in items {
-                    match item.get("type").and_then(Value::as_str) {
-                        Some("output_diff") => {
-                            if let Some(s) = item.get("diff").and_then(Value::as_str) {
-                                return Some(s.to_string());
-                            }
-                        }
-                        Some("pr") => {
-                            if let Some(s) = item
-                                .get("output_diff")
-                                .and_then(|od| od.get("diff"))
-                                .and_then(Value::as_str)
-                            {
-                                return Some(s.to_string());
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        None
+        [
+            self.current_diff_task_turn.as_ref(),
+            self.current_assistant_turn.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(Turn::unified_diff)
     }
 
     fn assistant_text_messages(&self) -> Vec<String> {
         let mut out = Vec::new();
-        let candidates: [&Option<std::collections::HashMap<String, Value>>; 2] =
-            [&self.current_diff_task_turn, &self.current_assistant_turn];
-        for map in candidates {
-            let items = map
-                .as_ref()
-                .and_then(|m| m.get("output_items"))
-                .and_then(|v| v.as_array());
-            if let Some(items) = items {
-                for item in items {
-                    if item.get("type").and_then(Value::as_str) == Some("message")
-                        && let Some(content) = item.get("content").and_then(Value::as_array)
-                    {
-                        for part in content {
-                            if part.get("content_type").and_then(Value::as_str) == Some("text")
-                                && let Some(txt) = part.get("text").and_then(Value::as_str)
-                            {
-                                out.push(txt.to_string());
-                            }
-                        }
-                    }
-                }
-            }
+        for turn in [
+            self.current_diff_task_turn.as_ref(),
+            self.current_assistant_turn.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            out.extend(turn.message_texts());
         }
         out
     }
 
     fn user_text_prompt(&self) -> Option<String> {
-        use serde_json::Value;
-        let map = self.current_user_turn.as_ref()?;
-        let items = map.get("input_items").and_then(Value::as_array)?;
-        let mut parts: Vec<String> = Vec::new();
-        for item in items {
-            if item.get("type").and_then(Value::as_str) == Some("message") {
-                // optional role filter (prefer user)
-                let is_user = item
-                    .get("role")
-                    .and_then(Value::as_str)
-                    .map(|r| r.eq_ignore_ascii_case("user"))
-                    .unwrap_or(true);
-                if !is_user {
-                    continue;
-                }
-                if let Some(content) = item.get("content").and_then(Value::as_array) {
-                    for c in content {
-                        if c.get("content_type").and_then(Value::as_str) == Some("text")
-                            && let Some(txt) = c.get("text").and_then(Value::as_str)
-                        {
-                            parts.push(txt.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join("\n\n"))
-        }
+        self.current_user_turn.as_ref().and_then(Turn::user_prompt)
     }
 
     fn assistant_error_message(&self) -> Option<String> {
-        let map = self.current_assistant_turn.as_ref()?;
-        let err = map.get("error")?.as_object()?;
-        let message = err.get("message").and_then(Value::as_str).unwrap_or("");
-        let code = err.get("code").and_then(Value::as_str).unwrap_or("");
-        if message.is_empty() && code.is_empty() {
-            None
-        } else if message.is_empty() {
-            Some(code.to_string())
-        } else if code.is_empty() {
-            Some(message.to_string())
-        } else {
-            Some(format!("{code}: {message}"))
-        }
+        self.current_assistant_turn
+            .as_ref()
+            .and_then(Turn::error_summary)
     }
 }
-
-// Removed unused helpers `single_file_paths` and `extract_file_paths_list` to reduce
-// surface area; reintroduce as needed near call sites.
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct TurnAttemptsSiblingTurnsResponse {
     #[serde(default)]
-    pub sibling_turns: Vec<std::collections::HashMap<String, Value>>,
+    pub sibling_turns: Vec<HashMap<String, Value>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn fixture(name: &str) -> CodeTaskDetailsResponse {
+        let json = match name {
+            "diff" => include_str!("../tests/fixtures/task_details_with_diff.json"),
+            "error" => include_str!("../tests/fixtures/task_details_with_error.json"),
+            other => panic!("unknown fixture {other}"),
+        };
+        serde_json::from_str(json).expect("fixture should deserialize")
+    }
+
+    #[test]
+    fn unified_diff_prefers_current_diff_task_turn() {
+        let details = fixture("diff");
+        let diff = details.unified_diff().expect("diff present");
+        assert!(diff.contains("diff --git"));
+    }
+
+    #[test]
+    fn unified_diff_falls_back_to_pr_output_diff() {
+        let details = fixture("error");
+        let diff = details.unified_diff().expect("diff from pr output");
+        assert!(diff.contains("lib.rs"));
+    }
+
+    #[test]
+    fn assistant_text_messages_extracts_text_content() {
+        let details = fixture("diff");
+        let messages = details.assistant_text_messages();
+        assert_eq!(messages, vec!["Assistant response".to_string()]);
+    }
+
+    #[test]
+    fn user_text_prompt_joins_parts_with_spacing() {
+        let details = fixture("diff");
+        let prompt = details.user_text_prompt().expect("prompt present");
+        assert_eq!(
+            prompt,
+            "First line
+
+Second line"
+        );
+    }
+
+    #[test]
+    fn assistant_error_message_combines_code_and_message() {
+        let details = fixture("error");
+        let msg = details
+            .assistant_error_message()
+            .expect("error should be present");
+        assert_eq!(msg, "APPLY_FAILED: Patch could not be applied");
+    }
 }

@@ -90,7 +90,7 @@ enum Subcommand {
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
 
-    /// Browse and apply tasks from the cloud.
+    /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
 
