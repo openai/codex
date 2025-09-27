@@ -1217,16 +1217,16 @@ impl CodexMessageProcessor {
 
         let results = run_fuzzy_file_search(query, roots, cancel_flag.clone()).await;
 
-        // close out the request
-        if let Some(current_flag) = self.pending_fuzzy_searches.lock().await.get(&request_key)
-            && Arc::ptr_eq(current_flag, &cancel_flag)
         {
-            self.pending_fuzzy_searches
-                .lock()
-                .await
-                .remove(&request_key);
+            let mut pending_fuzzy_searches = self.pending_fuzzy_searches.lock().await;
+            if let Some(current_flag) = pending_fuzzy_searches.get(&request_key)
+                && Arc::ptr_eq(current_flag, &cancel_flag)
+            {
+                pending_fuzzy_searches.remove(&request_key);
+            }
         }
 
+        // close out the request
         let response = FuzzyFileSearchResponse { files: results };
         self.outgoing.send_response(request_id, response).await;
     }

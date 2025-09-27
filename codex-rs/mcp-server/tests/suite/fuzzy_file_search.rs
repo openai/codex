@@ -69,15 +69,23 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() {
         .expect("init failed");
 
     let root_path = root.path().to_string_lossy().to_string();
-    let token = "search-token";
     let request_id = mcp
-        .send_fuzzy_file_search_request("alp", vec![root_path.clone()], Some(token))
+        .send_fuzzy_file_search_request("alp", vec![root_path.clone()], None)
+        .await
+        .expect("send fuzzyFileSearch");
+
+    let request_id_2 = mcp
+        .send_fuzzy_file_search_request(
+            "alp",
+            vec![root_path.clone()],
+            Some(request_id.to_string()),
+        )
         .await
         .expect("send fuzzyFileSearch");
 
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id_2)),
     )
     .await
     .expect("fuzzyFileSearch timeout")

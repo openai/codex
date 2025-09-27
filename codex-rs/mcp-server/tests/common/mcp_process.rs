@@ -362,7 +362,7 @@ impl McpProcess {
         &mut self,
         query: &str,
         roots: Vec<String>,
-        cancellation_token: Option<&str>,
+        cancellation_token: Option<String>,
     ) -> anyhow::Result<i64> {
         let mut params = serde_json::json!({
             "query": query,
