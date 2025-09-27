@@ -19,7 +19,7 @@ GITHUB_REPO = "openai/codex"
 # The docs are not clear on what the expected value/format of
 # workflow/workflowName is:
 # https://cli.github.com/manual/gh_run_list
-WORKFLOW_NAME = ".github/workflows/rust-release.yml"
+WORKFLOW_NAME = "rust-release"
 
 
 def parse_args() -> argparse.Namespace:
