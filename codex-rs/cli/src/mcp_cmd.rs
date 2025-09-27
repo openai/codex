@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -204,14 +203,6 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
         let json_entries: Vec<_> = entries
             .into_iter()
             .map(|(name, cfg)| {
-                let env = match &cfg.transport {
-                    McpServerTransportConfig::Stdio { env, .. } => env.as_ref().map(|env| {
-                        env.iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect::<BTreeMap<_, _>>()
-                    }),
-                    McpServerTransportConfig::StreamableHttp { .. } => None,
-                };
                 let transport = match &cfg.transport {
                     McpServerTransportConfig::Stdio { command, args, env } => serde_json::json!({
                         "type": "stdio",
@@ -231,7 +222,6 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
                 serde_json::json!({
                     "name": name,
                     "transport": transport,
-                    "env": env,
                     "startup_timeout_sec": cfg
                         .startup_timeout_sec
                         .map(|timeout| timeout.as_secs_f64()),
@@ -371,14 +361,6 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     };
 
     if get_args.json {
-        let env = match &server.transport {
-            McpServerTransportConfig::Stdio { env, .. } => env.as_ref().map(|env| {
-                env.iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<BTreeMap<_, _>>()
-            }),
-            McpServerTransportConfig::StreamableHttp { .. } => None,
-        };
         let transport = match &server.transport {
             McpServerTransportConfig::Stdio { command, args, env } => serde_json::json!({
                 "type": "stdio",
@@ -395,7 +377,6 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
         let output = serde_json::to_string_pretty(&serde_json::json!({
             "name": get_args.name,
             "transport": transport,
-            "env": env,
             "startup_timeout_sec": server
                 .startup_timeout_sec
                 .map(|timeout| timeout.as_secs_f64()),

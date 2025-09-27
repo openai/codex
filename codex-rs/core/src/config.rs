@@ -1361,6 +1361,134 @@ startup_timeout_ms = 2500
         Ok(())
     }
 
+    #[test]
+    fn write_global_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: vec!["--verbose".to_string()],
+                    env: Some(HashMap::from([
+                        ("ZIG_VAR".to_string(), "3".to_string()),
+                        ("ALPHA_VAR".to_string(), "1".to_string()),
+                    ])),
+                },
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert_eq!(
+            serialized,
+            r#"[mcp_servers.docs]
+command = "docs-server"
+args = ["--verbose"]
+
+[mcp_servers.docs.env]
+ALPHA_VAR = "1"
+ZIG_VAR = "3"
+"#
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path())?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::Stdio { command, args, env } => {
+                assert_eq!(command, "docs-server");
+                assert_eq!(args, &vec!["--verbose".to_string()]);
+                let env = env
+                    .as_ref()
+                    .expect("env should be preserved for stdio transport");
+                assert_eq!(env.get("ALPHA_VAR"), Some(&"1".to_string()));
+                assert_eq!(env.get("ZIG_VAR"), Some(&"3".to_string()));
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn write_global_mcp_servers_serializes_streamable_http() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let mut servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com/mcp".to_string(),
+                    bearer_token: Some("secret-token".to_string()),
+                },
+                startup_timeout_sec: Some(Duration::from_secs(2)),
+                tool_timeout_sec: None,
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert_eq!(
+            serialized,
+            r#"[mcp_servers.docs]
+url = "https://example.com/mcp"
+bearer_token = "secret-token"
+startup_timeout_sec = 2.0
+"#
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path())?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                assert_eq!(url, "https://example.com/mcp");
+                assert_eq!(bearer_token.as_deref(), Some("secret-token"));
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+        assert_eq!(docs.startup_timeout_sec, Some(Duration::from_secs(2)));
+
+        servers.insert(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com/mcp".to_string(),
+                    bearer_token: None,
+                },
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+            },
+        );
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert_eq!(
+            serialized,
+            r#"[mcp_servers.docs]
+url = "https://example.com/mcp"
+"#
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path())?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                assert_eq!(url, "https://example.com/mcp");
+                assert!(bearer_token.is_none());
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn persist_model_selection_updates_defaults() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;

@@ -42,7 +42,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             #[serde(default)]
             args: Option<Vec<String>>,
             #[serde(default)]
-            env: Option<Option<HashMap<String, String>>>,
+            env: Option<HashMap<String, String>>,
 
             url: Option<String>,
             bearer_token: Option<String>,
@@ -92,7 +92,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 McpServerTransportConfig::Stdio {
                     command,
                     args: args.unwrap_or_default(),
-                    env: env.unwrap_or_default(),
+                    env,
                 }
             }
             RawMcpServerConfig {
@@ -133,6 +133,9 @@ pub enum McpServerTransportConfig {
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
         url: String,
+        /// A plain text bearer token to use for authentication.
+        /// This bearer token will be included in the HTTP request header as an `Authorization: Bearer <token>` header.
+        /// This should be used with caution because it lives on disk in clear text.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bearer_token: Option<String>,
     },

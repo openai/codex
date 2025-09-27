@@ -26,7 +26,7 @@ use tokio::time::Instant;
 use tokio::time::sleep;
 use wiremock::matchers::any;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn stdio_server_round_trip() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -163,7 +163,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -342,14 +342,27 @@ async fn wait_for_streamable_http_server(
             ));
         }
 
-        match TcpStream::connect(address).await {
-            Ok(_) => return Ok(()),
-            Err(error) => {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+
+        if remaining.is_zero() {
+            return Err(anyhow::anyhow!(
+                "timed out waiting for streamable HTTP server at {address}: deadline reached"
+            ));
+        }
+
+        match tokio::time::timeout(remaining, TcpStream::connect(address)).await {
+            Ok(Ok(_)) => return Ok(()),
+            Ok(Err(error)) => {
                 if Instant::now() >= deadline {
                     return Err(anyhow::anyhow!(
                         "timed out waiting for streamable HTTP server at {address}: {error}"
                     ));
                 }
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "timed out waiting for streamable HTTP server at {address}: connect call timed out"
+                ));
             }
         }
 
