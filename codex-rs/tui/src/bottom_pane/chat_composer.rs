@@ -1204,17 +1204,25 @@ impl ChatComposer {
     }
 
     fn handle_shortcut_overlay_key(&mut self, key_event: &KeyEvent) -> bool {
-        if key_event.kind == KeyEventKind::Press
-            && key_event.modifiers.is_empty()
-            && matches!(key_event.code, KeyCode::Char('?'))
-        {
-            let next = toggle_shortcut_mode(self.footer_mode, self.ctrl_c_quit_hint);
-            let changed = next != self.footer_mode;
-            self.footer_mode = next;
-            changed
-        } else {
-            false
+        if key_event.kind != KeyEventKind::Press {
+            return false;
         }
+
+        let toggles = match key_event.code {
+            KeyCode::Char('?') if key_event.modifiers.is_empty() => true,
+            KeyCode::BackTab => true,
+            KeyCode::Tab if key_event.modifiers.contains(KeyModifiers::SHIFT) => true,
+            _ => false,
+        };
+
+        if !toggles {
+            return false;
+        }
+
+        let next = toggle_shortcut_mode(self.footer_mode, self.ctrl_c_quit_hint);
+        let changed = next != self.footer_mode;
+        self.footer_mode = next;
+        changed
     }
 
     fn footer_props(&self) -> FooterProps {
