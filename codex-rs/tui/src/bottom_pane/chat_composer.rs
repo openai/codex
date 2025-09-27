@@ -1209,7 +1209,11 @@ impl ChatComposer {
         }
 
         let toggles = match key_event.code {
-            KeyCode::Char('?') if key_event.modifiers.is_empty() => true,
+            KeyCode::Char('?')
+                if key_event.modifiers.is_empty() && self.question_mark_shortcut_allowed() =>
+            {
+                true
+            }
             KeyCode::BackTab => true,
             KeyCode::Tab if key_event.modifiers.contains(KeyModifiers::SHIFT) => true,
             _ => false,
@@ -1223,6 +1227,10 @@ impl ChatComposer {
         let changed = next != self.footer_mode;
         self.footer_mode = next;
         changed
+    }
+
+    fn question_mark_shortcut_allowed(&self) -> bool {
+        self.textarea.text().trim().is_empty()
     }
 
     fn footer_props(&self) -> FooterProps {
