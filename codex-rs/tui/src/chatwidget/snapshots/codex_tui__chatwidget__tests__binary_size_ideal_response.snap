@@ -1,8 +1,15 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: visible_after
+expression: "lines[start_idx..].join(\"\\n\")"
 ---
-> I’m going to scan the workspace and Cargo manifests to see build profiles and
+• I need to check the codex-rs repository to explain why the project's binaries
+  are large. The user is likely seeking specifics about the setup: are Rust
+  builds static, what features are enabled, and is debug information included?
+  It could be due to static linking, included OpenSSL, or how panic handling
+  is set up. I should look into the Cargo.toml file to confirm features and
+  profiles without needing to edit any code. Let's get started on this!
+
+• I’m going to scan the workspace and Cargo manifests to see build profiles and
   dependencies that impact binary size. Then I’ll summarize the main causes.
 
 • Explored
@@ -103,7 +110,7 @@ expression: visible_after
   "Main Causes" and "Build-Mode Notes." I can also include brief suggestions for
   reducing size, but I want to stay focused on answering the user's question.
 
-> Here’s what’s driving size in this workspace’s binaries.
+• Here’s what’s driving size in this workspace’s binaries.
 
   Main Causes
 

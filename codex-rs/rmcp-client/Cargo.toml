@@ -16,6 +16,15 @@ rmcp = { version = "0.7.0", default-features = false, features = [
     "schemars",
     "server",
     "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-server",
+] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

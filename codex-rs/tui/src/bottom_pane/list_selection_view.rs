@@ -454,8 +454,8 @@ impl BottomPaneView for ListSelectionView {
                 &rows,
                 &self.state,
                 MAX_POPUP_ROWS,
-                true,
                 "no matches",
+                true,
             );
         }
 
