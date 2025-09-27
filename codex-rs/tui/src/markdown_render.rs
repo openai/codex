@@ -84,13 +84,9 @@ fn get_syntax_definition(language: Option<&str>) -> &'static syntect::parsing::S
 }
 
 #[cfg(feature = "syntax-highlighting")]
-#[allow(clippy::disallowed_methods)]
-fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
-    if color.a == 0 {
-        None
-    } else {
-        Some(Color::Rgb(color.r, color.g, color.b))
-    }
+fn syntect_to_ratatui_color(_color: SyntectColor) -> Option<Color> {
+    // Use ANSI colors instead of RGB for better terminal compatibility
+    None
 }
 
 #[allow(dead_code)]
