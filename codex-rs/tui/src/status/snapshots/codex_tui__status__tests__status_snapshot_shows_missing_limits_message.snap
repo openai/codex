@@ -13,6 +13,6 @@ expression: sanitized
 │  Sandbox:       read-only                                    │
 │  Agents.md:     <none>                                       │
 │                                                              │
-│  Token Usage:   750 total  (500 input + 250 output)          │
-│  Limits:        data not available yet                       │
+│  Token usage:   750 total  (500 input + 250 output)          │
+│  Limits:        send a message to load usage data            │
 ╰──────────────────────────────────────────────────────────────╯

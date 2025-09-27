@@ -331,7 +331,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
 
     // Run the loop until the task is complete.
+    // Track whether a fatal error was reported by the server so we can
+    // exit with a non-zero status for automation-friendly signaling.
+    let mut error_seen = false;
     while let Some(event) = rx.recv().await {
+        if matches!(event.msg, EventMsg::Error(_)) {
+            error_seen = true;
+        }
         let shutdown: CodexStatus = event_processor.process_event(event);
         match shutdown {
             CodexStatus::Running => continue,
@@ -342,6 +348,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 break;
             }
         }
+    }
+    if error_seen {
+        std::process::exit(1);
     }
 
     Ok(())

@@ -13,7 +13,7 @@ expression: sanitized
 │  Sandbox:       read-only                  │
 │  Agents.md:     <none>                     │
 │                                            │
-│  Token Usage:   1.9K total  (1K input + 90 │
+│  Token usage:   1.9K total  (1K input + 90 │
 │  5h limit:      [███████████████░░░░░] 72% │
-│                 · resets 03:14             │
+│                 (resets 03:14)             │
 ╰────────────────────────────────────────────╯

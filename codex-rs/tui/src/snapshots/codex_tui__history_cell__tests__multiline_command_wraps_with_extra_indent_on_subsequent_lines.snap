@@ -1,10 +1,7 @@
 ---
 source: tui/src/history_cell.rs
-assertion_line: 1797
 expression: rendered
 ---
-• Ran
-  └ set -o pipefail
-    cargo test
-        --all-features
-        --quiet
+• Ran set -o pipefail
+  │ cargo test
+  │ --all-features --quiet

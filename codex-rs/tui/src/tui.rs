@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
 use std::io::stdout;
@@ -123,6 +124,9 @@ pub fn restore() -> Result<()> {
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
 pub fn init() -> Result<Terminal> {
+    if !stdout().is_terminal() {
+        return Err(std::io::Error::other("stdout is not a terminal"));
+    }
     set_modes()?;
 
     set_panic_hook();
@@ -271,6 +275,10 @@ impl Tui {
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        // Cache this to avoid contention with the event reader.
+        supports_color::on_cached(supports_color::Stream::Stdout);
+        let _ = crate::terminal_palette::terminal_palette();
+        let _ = crate::terminal_palette::default_colors();
 
         Self {
             frame_schedule_tx,
