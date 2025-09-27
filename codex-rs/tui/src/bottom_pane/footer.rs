@@ -140,6 +140,7 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
 
     const COLUMNS: usize = 3;
     const MAX_PADDED_WIDTHS: [usize; COLUMNS - 1] = [24, 28];
+    const MIN_PADDED_WIDTHS: [usize; COLUMNS - 1] = [22, 0];
 
     let rows = entries.len().div_ceil(COLUMNS);
     let mut column_widths = [0usize; COLUMNS];
@@ -160,7 +161,8 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
             let entry = &entries[idx];
             if col < COLUMNS - 1 {
                 let max_width = MAX_PADDED_WIDTHS[col];
-                let target_width = column_widths[col].min(max_width);
+                let mut target_width = column_widths[col];
+                target_width = target_width.max(MIN_PADDED_WIDTHS[col]).min(max_width);
                 let pad_width = target_width + 2;
                 line.push_str(&format!("{entry:<pad_width$}"));
             } else {
