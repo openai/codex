@@ -34,7 +34,7 @@ pub(crate) struct StatusIndicatorWidget {
 
 // Format elapsed seconds into a compact human-friendly form used by the status line.
 // Examples: 0s, 59s, 1m 00s, 59m 59s, 1h 00m 00s, 2h 03m 09s
-fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
+pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     if elapsed_secs < 60 {
         return format!("{elapsed_secs}s");
     }
@@ -142,7 +142,7 @@ impl StatusIndicatorWidget {
         elapsed.as_secs()
     }
 
-    fn elapsed_seconds(&self) -> u64 {
+    pub fn elapsed_seconds(&self) -> u64 {
         self.elapsed_seconds_at(Instant::now())
     }
 }
