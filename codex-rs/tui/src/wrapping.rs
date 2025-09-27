@@ -17,7 +17,9 @@ where
                 let start = unsafe { slice.as_ptr().offset_from(text.as_ptr()) as usize };
                 let end = start + slice.len();
                 let trailing_spaces = text[end..].chars().take_while(|c| *c == ' ').count();
-                lines.push(start..end + trailing_spaces + 1);
+                // Ensure we don't go beyond text boundaries
+                let range_end = (end + trailing_spaces + 1).min(text.len());
+                lines.push(start..range_end);
             }
             std::borrow::Cow::Owned(_) => panic!("wrap_ranges: unexpected owned string"),
         }
@@ -554,5 +556,88 @@ enchanted plants, and travelers spoke
 of the kindness of the woman who tended
 them."#
         );
+    }
+
+    #[test]
+    fn wrap_ranges_handles_text_ending_with_spaces() {
+        // Test case that would trigger the out-of-bounds bug
+        let text = "hello world  ";
+        let ranges = wrap_ranges(text, 20);
+        assert_eq!(ranges.len(), 1);
+        // Verify the range doesn't exceed text boundaries
+        assert!(ranges[0].end <= text.len());
+        // Verify we can safely use the range to slice the text
+        let _ = &text[ranges[0].clone()];
+    }
+
+    #[test]
+    fn wrap_ranges_handles_multiple_trailing_spaces() {
+        let text = "hello     ";
+        let ranges = wrap_ranges(text, 10);
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].end <= text.len());
+        // This should not panic
+        let _ = &text[ranges[0].clone()];
+    }
+
+    #[test]
+    fn wrap_ranges_handles_empty_text() {
+        let text = "";
+        let ranges = wrap_ranges(text, 10);
+        // textwrap returns [""] for empty text, which gives us one range
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0], 0..0);
+    }
+
+    #[test]
+    fn wrap_ranges_handles_only_spaces() {
+        let text = "     ";
+        let ranges = wrap_ranges(text, 10);
+        for range in &ranges {
+            assert!(range.end <= text.len());
+            let _ = &text[range.clone()];
+        }
+    }
+
+    #[test]
+    fn wrap_ranges_handles_wrapped_lines_with_trailing_spaces() {
+        // Text that wraps into multiple lines with trailing spaces
+        let text = "hello world  \nfoo bar  ";
+        let ranges = wrap_ranges(text, 8);
+        for range in &ranges {
+            assert!(range.end <= text.len(), 
+                   "Range {:?} exceeds text length {}", range, text.len());
+            // This should not panic
+            let _ = &text[range.clone()];
+        }
+    }
+
+    #[test]
+    fn wrap_ranges_trim_excludes_trailing_spaces() {
+        let text = "hello world  ";
+        let ranges = wrap_ranges_trim(text, 20);
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].end <= text.len());
+        // wrap_ranges_trim should not include trailing spaces
+        assert_eq!(&text[ranges[0].clone()], "hello world");
+    }
+
+    #[test]
+    fn wrap_ranges_preserves_internal_spaces() {
+        let text = "hello  world";
+        let ranges = wrap_ranges(text, 20);
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].end <= text.len());
+        let _ = &text[ranges[0].clone()];
+    }
+
+    #[test]
+    fn wrap_ranges_handles_text_at_exact_boundary() {
+        // Text that ends exactly at a wrap boundary
+        let text = "hello";
+        let ranges = wrap_ranges(text, 5);
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].end <= text.len());
+        let _ = &text[ranges[0].clone()];
     }
 }
