@@ -82,7 +82,7 @@ def lint_utf8_ascii(filename: Path, fix: bool) -> bool:
         # Attempt to find line/column
         partial = raw[: e.start]
         line = partial.count(b"\n") + 1
-        col = e.start - (partial.rfind(b"\n") if b"\n" in partial else -1)
+        col = e.start - (partial.rfind(b"\n") + 1 if b"\n" in partial else 0) + 1
         print(f"  location: line {line}, column {col}")
         return True
 
