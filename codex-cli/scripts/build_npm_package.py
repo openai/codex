@@ -158,11 +158,8 @@ def stage_sources(staging_dir: Path, version: str) -> None:
         out.write("\n")
 
 
-def install_native_binaries(staging_dir: Path, workflow_url: str | None) -> None:
-    cmd = ["./scripts/install_native_deps.py"]
-    if workflow_url:
-        cmd.extend(["--workflow-url", workflow_url])
-    cmd.append(str(staging_dir))
+def install_native_binaries(staging_dir: Path, workflow_url: str) -> None:
+    cmd = ["./scripts/install_native_deps.py", "--workflow-url", workflow_url, str(staging_dir)]
     subprocess.check_call(cmd, cwd=CODEX_CLI_ROOT)
 
 
