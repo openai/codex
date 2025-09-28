@@ -282,7 +282,6 @@ async fn run_ratatui_app(
     // within the TUI scrollback. Building spans keeps styling consistent.
     #[cfg(not(debug_assertions))]
     if let Some(latest_version) = updates::get_upgrade_version(&config) {
-        let latest_version = "0.11.0";
         use crate::history_cell::padded_emoji;
         use crate::history_cell::with_border_with_inner_width;
         use ratatui::style::Stylize as _;
@@ -325,6 +324,12 @@ async fn run_ratatui_app(
                 "Run ".into(),
                 brew_cmd.cyan(),
                 " to update.".into(),
+            ]));
+        } else {
+            content_lines.push(Line::from(vec![
+                "See ".into(),
+                "https://github.com/openai/codex".cyan().underlined(),
+                " for installation options.".into(),
             ]));
         }
 
