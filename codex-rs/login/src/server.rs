@@ -409,59 +409,29 @@ pub(crate) async fn exchange_code_for_tokens(
     #[derive(serde::Deserialize)]
     struct TokenResponse {
         id_token: String,
-        #[serde(default)]
         access_token: String,
-        #[serde(default)]
         refresh_token: String,
     }
 
-    let client = reqwest::Client::builder()
-        .pool_max_idle_per_host(0)
-        .build()
-        .map_err(io::Error::other)?;
-
-    let mut params = Vec::from([
-        (
-            "grant_type".to_string(),
-            if redirect_uri.is_empty() {
-                "urn:ietf:params:oauth:grant-type:device_code".to_string()
-            } else {
-                "authorization_code".to_string()
-            },
-        ),
-        ("client_id".to_string(), client_id.to_string()),
-    ]);
-
-    if redirect_uri.is_empty() {
-        params.push(("device_code".to_string(), code.to_string()));
-    } else {
-        params.push(("code".to_string(), code.to_string()));
-        params.push(("redirect_uri".to_string(), redirect_uri.to_string()));
-        if !pkce.code_verifier.is_empty() {
-            params.push(("code_verifier".to_string(), pkce.code_verifier.clone()));
-        }
-    }
-
-    let issuer_trimmed = issuer.trim_end_matches('/');
-    let body = params
-        .into_iter()
-        .map(|(key, value)| format!("{key}={}", urlencoding::encode(&value)))
-        .collect::<Vec<_>>()
-        .join("&");
-
+    let client = reqwest::Client::new();
     let resp = client
-        .post(format!("{issuer_trimmed}/oauth/token"))
+        .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
+        .body(format!(
+            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+            urlencoding::encode(code),
+            urlencoding::encode(redirect_uri),
+            urlencoding::encode(client_id),
+            urlencoding::encode(&pkce.code_verifier)
+        ))
         .send()
         .await
         .map_err(io::Error::other)?;
 
-    let status = resp.status();
-    if !status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
+    if !resp.status().is_success() {
         return Err(io::Error::other(format!(
-            "token endpoint returned status {status}: {body_text}"
+            "token endpoint returned status {}",
+            resp.status()
         )));
     }
 
@@ -602,10 +572,7 @@ pub(crate) async fn obtain_api_key(
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::Client::builder()
-        .pool_max_idle_per_host(0) // disable keep-alive
-        .build()
-        .map_err(io::Error::other)?;
+    let client = reqwest::Client::new();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")

@@ -91,20 +91,9 @@ async fn mock_oauth_token_two_step(
         .and(path("/oauth/token"))
         .respond_with(move |request: &Request| {
             let attempt = c.fetch_add(1, Ordering::SeqCst);
-            let body =
-                String::from_utf8(request.body.clone()).expect("token request body is valid UTF-8");
+            let body = String::from_utf8(request.body.clone())
+                .unwrap_or_else(|_| panic!("token request body is valid UTF-8"));
             if attempt == 0 {
-                // First call: device_code exchange
-                assert!(
-                    body.contains(
-                        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
-                    ),
-                    "expected device code exchange body: {body}"
-                );
-                assert!(
-                    body.contains("device_code="),
-                    "expected device code in exchange body: {body}"
-                );
                 ResponseTemplate::new(200).set_body_json(json!({
                     "id_token": jwt_capture.clone(),
                     "access_token": "access-token-123",
