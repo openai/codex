@@ -1105,7 +1105,8 @@ async fn binary_size_transcript_snapshot() {
 
     // Build the final VT100 visual by parsing the ANSI stream. Trim trailing spaces per line
     // and drop trailing empty lines so the shape matches the ideal fixture exactly.
-    let screen = terminal.backend().vt100().screen();
+    let vt100_ref = terminal.backend().vt100();
+    let screen = vt100_ref.screen();
     let mut lines: Vec<String> = Vec::with_capacity(height as usize);
     for row in 0..height {
         let mut s = String::with_capacity(width as usize);
@@ -2157,28 +2158,13 @@ printf 'fenced within fenced\n'
             id: "t1".into(),
             msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
         });
-        // Drive commit ticks and drain emitted history lines into the vt100 buffer.
-        loop {
-            chat.on_commit_tick();
-            let mut inserted_any = false;
-            while let Ok(app_ev) = rx.try_recv() {
-                if let AppEvent::InsertHistoryCell(cell) = app_ev {
-                    let lines = cell.display_lines(width);
-                    crate::insert_history::insert_history_lines(&mut term, lines);
-                    inserted_any = true;
-                }
-            }
-            if !inserted_any {
-                break;
-            }
-        }
     }
 
-    // Finalize the stream without sending a final AgentMessage, to flush any tail.
+    // Send the final message
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
-            last_agent_message: None,
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: source.to_string(),
         }),
     });
     for lines in drain_insert_history(&mut rx) {

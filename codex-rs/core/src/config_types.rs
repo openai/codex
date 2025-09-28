@@ -239,6 +239,10 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Theme to use for syntax highlighting in code blocks.
+    /// Defaults to "base16-ocean.dark".
+    pub syntax_highlight_theme: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
