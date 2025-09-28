@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::collections::VecDeque;
 use std::io::{self};
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,6 +16,7 @@ use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
+use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 
@@ -193,12 +195,75 @@ async fn traverse_directories_for_paths(
     }
 
     let next = build_next_cursor(&items);
+
     Ok(ConversationsPage {
         items,
         next_cursor: next,
         num_scanned_files: scanned_files,
         reached_scan_cap: scanned_files >= MAX_SCAN_FILES,
     })
+}
+
+pub async fn find_rollout_by_conversation_id(
+    codex_home: &Path,
+    conversation_id: &ConversationId,
+) -> io::Result<Option<PathBuf>> {
+    let root = codex_home.join(SESSIONS_SUBDIR);
+    if !root.exists() {
+        return Ok(None);
+    }
+
+    let mut to_visit = VecDeque::new();
+    to_visit.push_back(root);
+    let mut matches = Vec::new();
+    let suffix = format!("-{conversation_id}.jsonl");
+
+    while let Some(dir) = to_visit.pop_front() {
+        let mut entries = tokio::fs::read_dir(&dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let file_type = entry.file_type().await?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                to_visit.push_back(path);
+            } else if file_type.is_file()
+                && entry
+                    .file_name()
+                    .to_str()
+                    .map(|name| name.starts_with("rollout-") && name.ends_with(&suffix))
+                    .unwrap_or(false)
+            {
+                matches.push(path);
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.pop()),
+        _ => {
+            let preview: Vec<String> = matches
+                .iter()
+                .take(3)
+                .map(|p| p.display().to_string())
+                .collect();
+            let preview_joined = preview.join(", ");
+            let suggestion = if matches.len() > preview.len() {
+                format!(
+                    "{} (showing {} of {} matches)",
+                    preview_joined,
+                    preview.len(),
+                    matches.len()
+                )
+            } else {
+                preview_joined
+            };
+            Err(io::Error::other(format!(
+                "found {} rollout files for conversation {conversation_id}; re-run with --resume-rollout <path> to choose one (examples: {})",
+                matches.len(),
+                suggestion
+            )))
+        }
+    }
 }
 
 /// Pagination cursor token format: "<file_ts>|<uuid>" where `file_ts` matches the

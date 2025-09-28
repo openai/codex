@@ -9,6 +9,7 @@ pub mod recorder;
 
 pub use codex_protocol::protocol::SessionMeta;
 pub use list::find_conversation_path_by_id_str;
+pub use list::find_rollout_by_conversation_id;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 

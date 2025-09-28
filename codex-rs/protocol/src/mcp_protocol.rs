@@ -343,7 +343,11 @@ pub struct ListConversationsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ResumeConversationParams {
     /// Absolute path to the rollout JSONL file.
-    pub path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    /// Conversation identifier previously returned via SessionConfigured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<ConversationId>,
     /// Optional overrides to apply when spawning the resumed session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overrides: Option<NewConversationParams>,

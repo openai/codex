@@ -104,7 +104,8 @@ async fn test_list_and_resume_conversations() {
     // Now resume one of the sessions and expect a SessionConfigured notification and response.
     let resume_req_id = mcp
         .send_resume_conversation_request(ResumeConversationParams {
-            path: items[0].path.clone(),
+            path: Some(items[0].path.clone()),
+            conversation_id: None,
             overrides: Some(NewConversationParams {
                 model: Some("o3".to_string()),
                 ..Default::default()
@@ -150,6 +151,46 @@ async fn test_list_and_resume_conversations() {
         .expect("deserialize resumeConversation response");
     // conversation id should be a valid UUID
     assert!(!conversation_id.to_string().is_empty());
+
+    // Resume again using only the conversation UUID.
+    let resume_by_id_req = mcp
+        .send_resume_conversation_request(ResumeConversationParams {
+            path: None,
+            conversation_id: Some(items[0].conversation_id.clone()),
+            overrides: None,
+        })
+        .await
+        .expect("send resumeConversation by id");
+
+    let notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event"),
+    )
+    .await
+    .expect("session_configured notification timeout")
+    .expect("session_configured notification");
+    let msg_type = notification
+        .params
+        .as_ref()
+        .and_then(|p| p.get("msg"))
+        .and_then(|m| m.get("type"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    assert_eq!(msg_type, "session_configured");
+
+    let resume_by_id_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_by_id_req)),
+    )
+    .await
+    .expect("resumeConversation by id timeout")
+    .expect("resumeConversation by id response");
+    let ResumeConversationResponse {
+        conversation_id: resumed_id,
+        ..
+    } = to_response::<ResumeConversationResponse>(resume_by_id_resp)
+        .expect("deserialize resumeConversation-by-id response");
+    assert_eq!(resumed_id, items[0].conversation_id);
 }
 
 fn create_fake_rollout(codex_home: &Path, filename_ts: &str, meta_rfc3339: &str, preview: &str) {

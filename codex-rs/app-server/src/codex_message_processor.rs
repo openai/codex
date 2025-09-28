@@ -24,6 +24,7 @@ use codex_core::config_edit::persist_overrides_and_clear_if_none;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
+use codex_core::find_rollout_by_conversation_id;
 use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
@@ -747,8 +748,14 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: ResumeConversationParams,
     ) {
+        let ResumeConversationParams {
+            path,
+            conversation_id,
+            overrides,
+        } = params;
+
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match params.overrides {
+        let config = match overrides {
             Some(overrides) => {
                 derive_config_from_params(overrides, self.codex_linux_sandbox_exe.clone())
             }
@@ -767,13 +774,40 @@ impl CodexMessageProcessor {
             }
         };
 
+        let resume_path = if let Some(path) = path {
+            Ok(path)
+        } else if let Some(conversation_id) = conversation_id {
+            match find_rollout_by_conversation_id(&config.codex_home, &conversation_id).await {
+                Ok(Some(path)) => Ok(path),
+                Ok(None) => Err(format!(
+                    "no rollout found for conversation {}",
+                    conversation_id
+                )),
+                Err(err) => Err(format!(
+                    "error searching for conversation {}: {err}",
+                    conversation_id
+                )),
+            }
+        } else {
+            Err("resumeConversation requires either path or conversationId".to_string())
+        };
+
+        let resume_path = match resume_path {
+            Ok(path) => path,
+            Err(message) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message,
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
         match self
             .conversation_manager
-            .resume_conversation_from_rollout(
-                config,
-                params.path.clone(),
-                self.auth_manager.clone(),
-            )
+            .resume_conversation_from_rollout(config, resume_path, self.auth_manager.clone())
             .await
         {
             Ok(NewConversation {
