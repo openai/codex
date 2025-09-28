@@ -695,7 +695,6 @@ dependencies = [
  "codex-process-hardening",
  "codex-protocol",
  "codex-protocol-ts",
- "codex-responses-api-proxy",
  "codex-tui",
  "ctor 0.5.0",
  "owo-colors",
@@ -996,13 +995,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
- "codex-arg0",
+ "codex-process-hardening",
+ "ctor 0.5.0",
  "libc",
  "reqwest",
  "serde",
  "serde_json",
  "tiny_http",
- "tokio",
  "zeroize",
 ]
 
