@@ -13,9 +13,44 @@ import crypto from 'crypto';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const BATCH_SIZE = 100;
 
+// Sentient Cents earning rules (matching worker.js)
+const SENTIENT_CENTS_RULES = {
+  keystroke: 0.01,    // 1 cent per keystroke
+  view: 0.05,         // 5 cents per page view
+  click: 0.02,        // 2 cents per click
+  scroll: 0.001,      // 0.1 cent per scroll event
+  submit: 0.10,       // 10 cents per form submission
+  deploy: 1.00,       // 100 cents per deployment
+  mint: 0.00,         // No earning for minting itself
+  validate: 0.25      // 25 cents per validation
+};
+
 /**
- * Generate a UUID v4
+ * Calculate Sentient Cents based on action and context
  */
+function calculateSentientCents(action, context = {}) {
+  const baseRate = SENTIENT_CENTS_RULES[action] || 0;
+  
+  // Apply multipliers based on context
+  let multiplier = 1;
+  
+  // Bonus for engagement quality
+  if (context.engagement_duration && context.engagement_duration > 10) {
+    multiplier += 0.1; // 10% bonus for sustained engagement
+  }
+  
+  // Bonus for content creation
+  if (context.content_length && context.content_length > 100) {
+    multiplier += 0.2; // 20% bonus for substantial content
+  }
+  
+  // Bonus for unique contributions
+  if (context.is_unique) {
+    multiplier += 0.5; // 50% bonus for unique content
+  }
+  
+  return Math.round(baseRate * multiplier * 100) / 100; // Round to 2 decimal places
+}
 function generateUUID() {
   return crypto.randomUUID();
 }
@@ -76,7 +111,7 @@ function normalizeAnalyticsEvent(event) {
     session_id: event.session_id || event.sessionId || generateUUID(),
     artifact_href: event.artifact_href || event.artifactHref || '',
     notes: event.notes || '',
-    sentient_cents_earned: parseFloat(event.sentient_cents_earned || event.sentientCentsEarned || 0)
+    sentient_cents_earned: event.sentient_cents_earned || calculateSentientCents(event.action, event.context || {})
   };
   
   // Validate required fields
