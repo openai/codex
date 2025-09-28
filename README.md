@@ -5,6 +5,60 @@
 
 This is the home of the **Codex CLI**, which is a coding agent from OpenAI that runs locally on your computer. If you are looking for the _cloud-based agent_ from OpenAI, **Codex [Web]**, see <https://chatgpt.com/codex>.
 
+## 🚀 DTG Project Infrastructure
+
+This repository now includes comprehensive infrastructure for the **DecryptTheGirl (DTG) Project** - an innovative data logging and value-sharing platform that implements **Sentient Cents** minting for user engagement.
+
+### Key Components
+
+- **🎯 Event Logging System**: Cloudflare Worker for real-time event capture and processing
+- **💰 Sentient Cents Minting**: Fair compensation for user engagement (keystrokes, clicks, content creation)
+- **📊 Automated Data Pipeline**: GitHub Actions for data ingestion and balance calculations
+- **🔒 Privacy-First Design**: Zero Loss, Zero Surprise principles with full transparency
+- **📈 Analytics Dashboard**: Real-time monitoring and proof ledger integrity
+
+### Quick Start - DTG System
+
+1. **Deploy the Cloudflare Worker**: 
+   ```bash
+   # Deploy api/worker.js to your Cloudflare Workers account
+   wrangler deploy api/worker.js
+   ```
+
+2. **Try the Demo**:
+   ```bash
+   # Open the interactive demo
+   open public/logger-demo.html
+   ```
+
+3. **Run Data Processing**:
+   ```bash
+   # Validate CSV headers
+   node scripts/csv_headers.mjs validate
+   
+   # Process event batches
+   node scripts/normalize_batch.mjs process events.json analytics
+   ```
+
+4. **View Privacy Policy**:
+   ```bash
+   # Review the Zero Loss, Zero Surprise framework
+   open public/zero-loss-zero-surprise.html
+   ```
+
+### Directory Structure
+
+```
+├── api/                    # Cloudflare Worker for event logging
+├── data/                   # CSV files and proof ledger
+├── schema/                 # JSON schemas for validation
+├── scripts/                # Data processing and normalization
+├── public/                 # Demo pages and documentation
+└── .github/workflows/      # Automated data processing
+```
+
+For detailed DTG project documentation, see the [project wiki](../../wiki) or explore the `public/` directory for interactive demos.
+
 <!-- ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif) -->
 
 ---

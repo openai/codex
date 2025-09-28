@@ -1,0 +1,4 @@
+ts_iso,event_id,reader_id,surface,action,node_id,version,session_id,artifact_href,notes,sentient_cents_earned
+2025-09-28T02:43:05.970Z,32888902-cb4a-41c9-82d9-effb0341b166,test-user-1,web,view,page-home,v1.0.0,90b19fe2-ff07-45b6-8b6a-d7c5280496de,,Homepage view,0.05
+2025-09-28T02:43:05.970Z,329d1037-ec71-4a1e-a857-af829792bac0,test-user-1,web,keystroke,input-field-1,v1.0.0,20fec729-65cd-448c-8316-aa10d351d205,,Typing in search box,0.01
+2025-09-28T02:43:05.970Z,d24b476e-26c7-4dbf-af3d-5cb3e2155b40,test-user-2,mobile,click,button-submit,v1.0.0,9c7b450c-302f-46a6-8c2a-fabc872749aa,,Submit button clicked,0.02

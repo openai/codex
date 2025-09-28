@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zero Loss, Zero Surprise - Privacy & Compliance | Codex Project</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f8f9fa;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 60px 20px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+        
+        .header .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            font-weight: 300;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        .principle {
+            background: white;
+            margin-bottom: 30px;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            border-left: 5px solid #3498db;
+        }
+        
+        .principle-zero-loss {
+            border-left-color: #27ae60;
+        }
+        
+        .principle-zero-surprise {
+            border-left-color: #e74c3c;
+        }
+        
+        .principle h2 {
+            color: #2c3e50;
+            font-size: 1.8rem;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .principle h3 {
+            color: #34495e;
+            font-size: 1.3rem;
+            margin: 25px 0 15px 0;
+            border-bottom: 2px solid #ecf0f1;
+            padding-bottom: 5px;
+        }
+        
+        .principle p {
+            margin-bottom: 15px;
+            font-size: 1.05rem;
+        }
+        
+        .principle ul {
+            margin-left: 20px;
+            margin-bottom: 15px;
+        }
+        
+        .principle li {
+            margin-bottom: 8px;
+        }
+        
+        .highlight {
+            background: #fff3cd;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #ffc107;
+            margin: 20px 0;
+        }
+        
+        .data-flow {
+            background: #e8f4f8;
+            padding: 25px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .data-flow h4 {
+            color: #0c5460;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+        
+        .flow-step {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+        }
+        
+        .flow-number {
+            background: #17a2b8;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 15px;
+            flex-shrink: 0;
+        }
+        
+        .code-block {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9rem;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+        
+        .contact-section {
+            background: #fff;
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            margin-top: 40px;
+        }
+        
+        .contact-section h2 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+        }
+        
+        .contact-button {
+            display: inline-block;
+            background: #3498db;
+            color: white;
+            padding: 12px 30px;
+            text-decoration: none;
+            border-radius: 25px;
+            font-weight: 500;
+            margin: 10px;
+            transition: all 0.3s ease;
+        }
+        
+        .contact-button:hover {
+            background: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 40px 20px;
+            color: #7f8c8d;
+            font-size: 0.9rem;
+        }
+        
+        .icon {
+            font-size: 1.5rem;
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .container {
+                padding: 20px 15px;
+            }
+            
+            .principle {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🛡️ Zero Loss, Zero Surprise</h1>
+        <p class="subtitle">Privacy & Compliance Framework for the Codex Project</p>
+    </div>
+    
+    <div class="container">
+        <div class="principle principle-zero-loss">
+            <h2><span class="icon">🔒</span> Zero Loss Principle</h2>
+            <p>
+                <strong>Your data, your control.</strong> The Codex project is built on the foundational principle that users should never lose ownership, access, or control over their data and digital assets.
+            </p>
+            
+            <h3>Data Ownership Guarantees</h3>
+            <ul>
+                <li><strong>You own your events:</strong> All logged events, analytics data, and earned Sentient Cents belong to you</li>
+                <li><strong>Portable data:</strong> Export your complete data history in standard formats (CSV, JSON) at any time</li>
+                <li><strong>Immutable ledger:</strong> Your contributions are recorded in cryptographically verifiable proof ledgers</li>
+                <li><strong>No vendor lock-in:</strong> All tools and schemas are open-source and interoperable</li>
+            </ul>
+            
+            <h3>Technical Safeguards</h3>
+            <div class="data-flow">
+                <h4>🔐 Data Protection Pipeline</h4>
+                <div class="flow-step">
+                    <div class="flow-number">1</div>
+                    <div>All events are cryptographically hashed (SHA-256) before storage</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-number">2</div>
+                    <div>Data is stored with redundancy across multiple systems</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-number">3</div>
+                    <div>Regular automated backups ensure no data loss</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-number">4</div>
+                    <div>Version control tracks all changes with full audit trail</div>
+                </div>
+            </div>
+            
+            <div class="highlight">
+                <strong>Zero Loss Guarantee:</strong> If any system fails, your data is preserved and recoverable. If you want to leave, you take everything with you.
+            </div>
+        </div>
+        
+        <div class="principle principle-zero-surprise">
+            <h2><span class="icon">👁️</span> Zero Surprise Principle</h2>
+            <p>
+                <strong>Radical transparency in everything we do.</strong> No hidden data collection, no unexpected changes, no surprise fees or terms. You know exactly what happens to your data and when.
+            </p>
+            
+            <h3>Transparency Commitments</h3>
+            <ul>
+                <li><strong>Open source everything:</strong> All code, schemas, and algorithms are publicly available</li>
+                <li><strong>Real-time visibility:</strong> Live dashboard shows exactly what data is collected and when</li>
+                <li><strong>Clear consent:</strong> Explicit opt-in for every type of data collection</li>
+                <li><strong>Plain English policies:</strong> No legal jargon - policies written in clear, simple language</li>
+            </ul>
+            
+            <h3>What Data We Collect</h3>
+            <div class="code-block">
+{
+  "event_types": {
+    "analytics": {
+      "purpose": "Track user engagement and calculate Sentient Cents",
+      "data": ["timestamps", "actions", "session_ids", "earned_amounts"],
+      "retention": "indefinite (user-controlled)",
+      "sharing": "never shared with third parties"
+    },
+    "deploys": {
+      "purpose": "Track code deployments and versions",
+      "data": ["version_info", "deployment_timestamps", "artifact_links"],
+      "retention": "permanent (for integrity)",
+      "sharing": "public (open source contributions)"
+    }
+  }
+}
+            </div>
+            
+            <h3>What We Never Do</h3>
+            <ul>
+                <li>❌ Collect personal information without explicit consent</li>
+                <li>❌ Share data with advertisers or data brokers</li>
+                <li>❌ Use hidden tracking pixels or cookies</li>
+                <li>❌ Change terms retroactively without clear notice</li>
+                <li>❌ Monetize your data without sharing profits (Sentient Cents)</li>
+            </ul>
+            
+            <div class="highlight">
+                <strong>Zero Surprise Promise:</strong> Every data collection event is logged and visible to you. No secret algorithms, no hidden agendas.
+            </div>
+        </div>
+        
+        <div class="principle">
+            <h2><span class="icon">⚖️</span> Compliance & Legal Framework</h2>
+            
+            <h3>Privacy Law Compliance</h3>
+            <ul>
+                <li><strong>GDPR (EU):</strong> Full right to portability, deletion, and correction</li>
+                <li><strong>CCPA (California):</strong> Complete transparency in data collection and use</li>
+                <li><strong>PIPEDA (Canada):</strong> Consent-based data processing only</li>
+                <li><strong>Global standards:</strong> Privacy-by-design architecture</li>
+            </ul>
+            
+            <h3>Data Subject Rights</h3>
+            <div class="data-flow">
+                <h4>🎯 Your Rights, Our Implementation</h4>
+                <div class="flow-step">
+                    <div class="flow-number">📥</div>
+                    <div><strong>Right to Access:</strong> Download all your data instantly via API or dashboard</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-number">✏️</div>
+                    <div><strong>Right to Rectification:</strong> Correct any errors in your data through self-service tools</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-number">🗑️</div>
+                    <div><strong>Right to Erasure:</strong> Delete your account and all associated data permanently</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-number">🚚</div>
+                    <div><strong>Right to Portability:</strong> Export data in machine-readable formats (JSON, CSV)</div>
+                </div>
+                <div class="flow-step">
+                    <div class="flow-number">🛑</div>
+                    <div><strong>Right to Object:</strong> Opt out of any data processing with immediate effect</div>
+                </div>
+            </div>
+            
+            <h3>Security Measures</h3>
+            <ul>
+                <li><strong>Encryption:</strong> Data encrypted at rest and in transit (AES-256, TLS 1.3)</li>
+                <li><strong>Access Control:</strong> Zero-trust architecture with role-based permissions</li>
+                <li><strong>Audit Logging:</strong> All system access logged and monitored</li>
+                <li><strong>Regular Audits:</strong> Quarterly security assessments by third parties</li>
+            </ul>
+        </div>
+        
+        <div class="principle">
+            <h2><span class="icon">💰</span> Sentient Cents & Value Sharing</h2>
+            <p>
+                The Codex project pioneered <strong>Sentient Cents</strong> - a fair value-sharing mechanism that compensates users for their data and engagement.
+            </p>
+            
+            <h3>How Sentient Cents Work</h3>
+            <div class="code-block">
+// Transparent earning rates (no hidden multipliers)
+const EARNING_RATES = {
+  "keystroke": 0.01,     // 1¢ per keystroke
+  "page_view": 0.05,     // 5¢ per page view  
+  "click": 0.02,         // 2¢ per click
+  "form_submit": 0.10,   // 10¢ per form submission
+  "validation": 0.25,    // 25¢ per data validation
+  "deploy": 1.00         // $1 per code deployment
+};
+            </div>
+            
+            <h3>Earning Principles</h3>
+            <ul>
+                <li><strong>Real value:</strong> Cents can be redeemed for real money or services</li>
+                <li><strong>Fair rates:</strong> Earning rates based on actual value generated</li>
+                <li><strong>Transparent calculation:</strong> All earning calculations are auditable</li>
+                <li><strong>Immediate credit:</strong> Earnings credited in real-time, not batched</li>
+            </ul>
+            
+            <div class="highlight">
+                <strong>Value Promise:</strong> If your data creates value, you share in that value. No exceptions.
+            </div>
+        </div>
+        
+        <div class="principle">
+            <h2><span class="icon">🔍</span> Audit & Verification</h2>
+            
+            <h3>Public Auditing</h3>
+            <ul>
+                <li><strong>Open ledgers:</strong> All transactions recorded in public, verifiable ledgers</li>
+                <li><strong>Source code:</strong> Complete codebase available for community review</li>
+                <li><strong>Test suites:</strong> Comprehensive test coverage with public results</li>
+                <li><strong>Documentation:</strong> Every API, schema, and process fully documented</li>
+            </ul>
+            
+            <h3>Community Oversight</h3>
+            <ul>
+                <li><strong>Public dashboards:</strong> Real-time system health and data flow monitoring</li>
+                <li><strong>Community governance:</strong> User voting on policy changes</li>
+                <li><strong>Bug bounties:</strong> Rewards for finding privacy or security issues</li>
+                <li><strong>Regular reports:</strong> Monthly transparency reports on data usage</li>
+            </ul>
+        </div>
+        
+        <div class="contact-section">
+            <h2>Questions or Concerns?</h2>
+            <p>We're committed to maintaining the highest standards of privacy and transparency.</p>
+            <a href="mailto:privacy@codex-project.org" class="contact-button">📧 Contact Privacy Team</a>
+            <a href="https://github.com/TheAVCfiles/codex/issues" class="contact-button">🐛 Report Issues</a>
+            <a href="#" class="contact-button">💬 Community Discord</a>
+        </div>
+    </div>
+    
+    <div class="footer">
+        <p>
+            <strong>Codex Project - Zero Loss, Zero Surprise</strong><br>
+            Last updated: <span id="lastUpdated"></span> | 
+            <a href="https://github.com/TheAVCfiles/codex" style="color: #3498db;">View on GitHub</a>
+        </p>
+    </div>
+    
+    <script>
+        // Set last updated date
+        document.getElementById('lastUpdated').textContent = new Date().toLocaleDateString();
+        
+        // Add smooth scrolling for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

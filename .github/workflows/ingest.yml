@@ -1,0 +1,304 @@
+name: DTG Data Ingestion and Processing
+
+on:
+  schedule:
+    # Run every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_full_refresh:
+        description: 'Force a full data refresh (ignore incremental)'
+        required: false
+        default: 'false'
+        type: boolean
+      date_range:
+        description: 'Specific date range to process (YYYY-MM-DD:YYYY-MM-DD)'
+        required: false
+        type: string
+
+env:
+  # Configuration
+  WORKER_URL: ${{ secrets.CLOUDFLARE_WORKER_URL }}
+  DATA_RETENTION_DAYS: 365
+  
+jobs:
+  fetch-and-normalize:
+    runs-on: ubuntu-latest
+    name: Fetch Events and Normalize Data
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: |
+          npm install -g zx
+          # Install any additional dependencies if needed
+          
+      - name: Configure git
+        run: |
+          git config --global user.name "DTG Ingest Bot"
+          git config --global user.email "ingest-bot@codex-project.org"
+          
+      - name: Determine date range for processing
+        id: date-range
+        run: |
+          if [[ "${{ github.event.inputs.date_range }}" != "" ]]; then
+            echo "Using manual date range: ${{ github.event.inputs.date_range }}"
+            IFS=':' read -r start_date end_date <<< "${{ github.event.inputs.date_range }}"
+            echo "start_date=$start_date" >> $GITHUB_OUTPUT
+            echo "end_date=$end_date" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.inputs.force_full_refresh }}" == "true" ]]; then
+            echo "Force full refresh - processing last 7 days"
+            start_date=$(date -d "7 days ago" +%Y-%m-%d)
+            end_date=$(date +%Y-%m-%d)
+            echo "start_date=$start_date" >> $GITHUB_OUTPUT
+            echo "end_date=$end_date" >> $GITHUB_OUTPUT
+          else
+            echo "Incremental processing - last 6 hours"
+            start_date=$(date -d "6 hours ago" +%Y-%m-%d)
+            end_date=$(date +%Y-%m-%d)
+            echo "start_date=$start_date" >> $GITHUB_OUTPUT
+            echo "end_date=$end_date" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Validate CSV headers
+        run: |
+          echo "🔍 Validating CSV headers..."
+          node scripts/csv_headers.mjs validate || {
+            echo "❌ CSV headers are invalid, attempting to fix..."
+            node scripts/csv_headers.mjs fix
+            
+            # Commit fixed headers if changes were made
+            if [[ $(git diff --name-only data/) ]]; then
+              git add data/*.csv
+              git commit -m "fix: normalize CSV headers [automated]"
+              echo "✅ CSV headers fixed and committed"
+            fi
+          }
+          
+      - name: Fetch event batches from Cloudflare Worker
+        id: fetch-events
+        run: |
+          echo "📥 Fetching event batches from ${{ env.WORKER_URL }}..."
+          
+          # Create temp directory for batch processing
+          mkdir -p tmp/batches
+          
+          # Process each date in the range
+          current_date="${{ steps.date-range.outputs.start_date }}"
+          end_date="${{ steps.date-range.outputs.end_date }}"
+          total_events=0
+          
+          while [[ "$current_date" <= "$end_date" ]]; do
+            echo "Processing date: $current_date"
+            
+            # Fetch batch for this date
+            response=$(curl -s -w "%{http_code}" \
+              -o "tmp/batches/batch_${current_date}.json" \
+              "${{ env.WORKER_URL }}/batch/${current_date}")
+            
+            if [[ "${response: -3}" == "200" ]]; then
+              event_count=$(jq '.events | length' "tmp/batches/batch_${current_date}.json" 2>/dev/null || echo "0")
+              echo "✅ Fetched $event_count events for $current_date"
+              total_events=$((total_events + event_count))
+            else
+              echo "⚠️ No data or error for $current_date (HTTP: ${response: -3})"
+              echo "[]" > "tmp/batches/batch_${current_date}.json"
+            fi
+            
+            # Move to next date
+            current_date=$(date -d "$current_date + 1 day" +%Y-%m-%d)
+          done
+          
+          echo "total_events=$total_events" >> $GITHUB_OUTPUT
+          echo "📊 Total events fetched: $total_events"
+          
+      - name: Normalize and categorize events
+        id: normalize
+        run: |
+          echo "🔄 Normalizing and categorizing events..."
+          
+          analytics_count=0
+          deploy_count=0  
+          ledger_count=0
+          
+          # Process each batch file
+          for batch_file in tmp/batches/batch_*.json; do
+            if [[ -f "$batch_file" ]]; then
+              echo "Processing $batch_file..."
+              
+              # Extract and categorize events by type
+              jq -r '.events[] | select(.action != null)' "$batch_file" > tmp/temp_events.json 2>/dev/null || continue
+              
+              # Separate different types of events
+              jq -r 'select(.action | test("view|click|scroll|keystroke|submit|validate"))' tmp/temp_events.json > tmp/analytics_events.json 2>/dev/null || echo "[]" > tmp/analytics_events.json
+              jq -r 'select(.action == "deploy")' tmp/temp_events.json > tmp/deploy_events.json 2>/dev/null || echo "[]" > tmp/deploy_events.json
+              
+              # Process analytics events
+              if [[ -s tmp/analytics_events.json ]]; then
+                # Convert single-event files to arrays for processing
+                echo "[" > tmp/analytics_batch.json
+                sed 's/$/,/' tmp/analytics_events.json | sed '$ s/,$//' >> tmp/analytics_batch.json
+                echo "]" >> tmp/analytics_batch.json
+                
+                node scripts/normalize_batch.mjs process tmp/analytics_batch.json analytics
+                analytics_count=$((analytics_count + $(jq length tmp/analytics_batch.json)))
+              fi
+              
+              # Process deploy events  
+              if [[ -s tmp/deploy_events.json ]]; then
+                echo "[" > tmp/deploy_batch.json
+                sed 's/$/,/' tmp/deploy_events.json | sed '$ s/,$//' >> tmp/deploy_batch.json
+                echo "]" >> tmp/deploy_batch.json
+                
+                node scripts/normalize_batch.mjs process tmp/deploy_batch.json deploy
+                deploy_count=$((deploy_count + $(jq length tmp/deploy_batch.json)))
+              fi
+              
+              # All events go to master ledger for proof
+              if [[ -s tmp/temp_events.json ]]; then
+                echo "[" > tmp/ledger_batch.json
+                sed 's/$/,/' tmp/temp_events.json | sed '$ s/,$//' >> tmp/ledger_batch.json
+                echo "]" >> tmp/ledger_batch.json
+                
+                node scripts/normalize_batch.mjs process tmp/ledger_batch.json ledger
+                ledger_count=$((ledger_count + $(jq length tmp/ledger_batch.json)))
+              fi
+            fi
+          done
+          
+          echo "analytics_count=$analytics_count" >> $GITHUB_OUTPUT
+          echo "deploy_count=$deploy_count" >> $GITHUB_OUTPUT
+          echo "ledger_count=$ledger_count" >> $GITHUB_OUTPUT
+          
+          echo "📊 Normalization complete:"
+          echo "   📈 Analytics events: $analytics_count"
+          echo "   🚀 Deploy events: $deploy_count"
+          echo "   📋 Ledger entries: $ledger_count"
+          
+      - name: Validate processed data
+        run: |
+          echo "✅ Validating processed data integrity..."
+          
+          # Check that CSV files have valid structure
+          for csv_file in data/*.csv; do
+            if [[ -f "$csv_file" ]]; then
+              line_count=$(wc -l < "$csv_file")
+              echo "📄 $(basename "$csv_file"): $line_count lines"
+              
+              # Basic validation - check for malformed CSV
+              if ! head -n 5 "$csv_file" | csvlint 2>/dev/null; then
+                echo "⚠️ Warning: $(basename "$csv_file") may have formatting issues"
+              fi
+            fi
+          done
+          
+          # Validate proof ledger JSON
+          if [[ -f "data/proof_ledger.json" ]]; then
+            if jq empty data/proof_ledger.json 2>/dev/null; then
+              entry_count=$(jq length data/proof_ledger.json)
+              echo "✅ Proof ledger valid: $entry_count entries"
+            else
+              echo "❌ Proof ledger has invalid JSON"
+              exit 1
+            fi
+          fi
+          
+      - name: Generate ingestion report
+        id: report
+        run: |
+          echo "📋 Generating ingestion report..."
+          
+          cat > tmp/ingestion_report.md << EOF
+          # Data Ingestion Report - $(date '+%Y-%m-%d %H:%M:%S UTC')
+          
+          ## Processing Summary
+          - **Date Range**: ${{ steps.date-range.outputs.start_date }} to ${{ steps.date-range.outputs.end_date }}
+          - **Total Events Fetched**: ${{ steps.fetch-events.outputs.total_events }}
+          - **Analytics Events**: ${{ steps.normalize.outputs.analytics_count }}
+          - **Deploy Events**: ${{ steps.normalize.outputs.deploy_count }}
+          - **Ledger Entries**: ${{ steps.normalize.outputs.ledger_count }}
+          
+          ## File Status
+          EOF
+          
+          # Add file status to report
+          for csv_file in data/*.csv; do
+            if [[ -f "$csv_file" ]]; then
+              line_count=$(wc -l < "$csv_file")
+              echo "- **$(basename "$csv_file")**: $line_count lines" >> tmp/ingestion_report.md
+            fi
+          done
+          
+          if [[ -f "data/proof_ledger.json" ]]; then
+            entry_count=$(jq length data/proof_ledger.json)
+            echo "- **proof_ledger.json**: $entry_count entries" >> tmp/ingestion_report.md
+          fi
+          
+          echo "" >> tmp/ingestion_report.md
+          echo "Generated by: \`${{ github.workflow }}\` workflow" >> tmp/ingestion_report.md
+          
+          echo "report_generated=true" >> $GITHUB_OUTPUT
+          
+      - name: Commit updated data files
+        id: commit
+        run: |
+          # Check if there are any changes to commit
+          if [[ $(git diff --name-only data/) ]]; then
+            echo "📝 Changes detected, committing updated data files..."
+            
+            git add data/
+            git add tmp/ingestion_report.md
+            
+            commit_msg="data: ingest events from ${{ steps.date-range.outputs.start_date }} to ${{ steps.date-range.outputs.end_date }}
+            
+            - Analytics: ${{ steps.normalize.outputs.analytics_count }} events
+            - Deploys: ${{ steps.normalize.outputs.deploy_count }} events  
+            - Ledger: ${{ steps.normalize.outputs.ledger_count }} entries
+            - Total processed: ${{ steps.fetch-events.outputs.total_events }} events
+            
+            [automated ingest]"
+            
+            git commit -m "$commit_msg"
+            git push origin ${{ github.ref_name }}
+            
+            echo "✅ Data committed and pushed successfully"
+            echo "changes_committed=true" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️ No changes to commit"
+            echo "changes_committed=false" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Clean up temporary files
+        if: always()
+        run: |
+          echo "🧹 Cleaning up temporary files..."
+          rm -rf tmp/
+          
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 🎉 Ingestion Workflow Complete"
+          echo ""
+          echo "**Results:**"
+          echo "- Events fetched: ${{ steps.fetch-events.outputs.total_events }}"
+          echo "- Analytics processed: ${{ steps.normalize.outputs.analytics_count }}"
+          echo "- Deploys processed: ${{ steps.normalize.outputs.deploy_count }}"
+          echo "- Ledger entries: ${{ steps.normalize.outputs.ledger_count }}"
+          echo "- Changes committed: ${{ steps.commit.outputs.changes_committed }}"
+          echo ""
+          if [[ "${{ steps.commit.outputs.changes_committed }}" == "true" ]]; then
+            echo "✅ Data successfully ingested and committed to repository"
+          else
+            echo "ℹ️ No new data to process"
+          fi
