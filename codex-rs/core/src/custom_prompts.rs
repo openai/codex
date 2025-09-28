@@ -32,11 +32,19 @@ pub async fn discover_prompts_in_excluding(
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        let is_file = entry
-            .file_type()
-            .await
-            .map(|ft| ft.is_file())
-            .unwrap_or(false);
+        // Accept regular files and symlinks that resolve to files.
+        let is_file = match entry.file_type().await {
+            Ok(ft) => {
+                ft.is_file()
+                    || (ft.is_symlink()
+                        && fs::metadata(&path)
+                            .await
+                            .ok()
+                            .map(|m| m.is_file())
+                            .unwrap_or(false))
+            }
+            Err(_) => false,
+        };
         if !is_file {
             continue;
         }
@@ -123,5 +131,23 @@ mod tests {
         let found = discover_prompts_in(dir).await;
         let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
         assert_eq!(names, vec!["good"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn follows_symlink_to_file() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempdir().expect("create TempDir");
+        let dir = tmp.path();
+
+        let target = dir.join("real.md");
+        fs::write(&target, b"hello").unwrap();
+
+        let link = dir.join("alias.md");
+        symlink(&target, &link).unwrap();
+
+        let found = discover_prompts_in(dir).await;
+        let names: Vec<_> = found.into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["alias", "real"]);
     }
 }
