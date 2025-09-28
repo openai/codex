@@ -32,17 +32,6 @@ pub fn assess_patch_safety(
         };
     }
 
-    match policy {
-        AskForApproval::OnFailure | AskForApproval::Never | AskForApproval::OnRequest => {
-            // Continue to see if this can be auto-approved.
-        }
-        // TODO(ragona): I'm not sure this is actually correct? I believe in this case
-        // we want to continue to the writable paths check before asking the user.
-        AskForApproval::UnlessTrusted => {
-            return SafetyCheck::AskUser;
-        }
-    }
-
     // Even though the patch *appears* to be constrained to writable paths, it
     // is possible that paths in the patch are hard links to files outside the
     // writable roots, so we should still run `apply_patch` in a sandbox in that
@@ -58,11 +47,24 @@ pub fn assess_patch_safety(
             None if sandbox_policy == &SandboxPolicy::DangerFullAccess => {
                 // If the user has explicitly requested DangerFullAccess, then
                 // we can auto-approve even without a sandbox.
-                SafetyCheck::AutoApprove {
-                    sandbox_type: SandboxType::None,
+                if policy == AskForApproval::UnlessTrusted {
+                    SafetyCheck::AskUser
+                } else {
+                    SafetyCheck::AutoApprove {
+                        sandbox_type: SandboxType::None,
+                    }
                 }
             }
-            None => SafetyCheck::AskUser,
+            None => {
+                if policy == AskForApproval::Never {
+                    SafetyCheck::Reject {
+                        reason: "auto-rejected: no sandbox available and user approval is 'Never'"
+                            .to_string(),
+                    }
+                } else {
+                    SafetyCheck::AskUser
+                }
+            }
         }
     } else if policy == AskForApproval::Never {
         SafetyCheck::Reject {
@@ -91,6 +93,14 @@ pub fn assess_command_safety(
     // unless the user has explicitly approved them, we should ask,
     // or reject if the approval_policy tells us not to ask.
     if command_might_be_dangerous(command) && !approved.contains(command) {
+        if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+            && approval_policy != AskForApproval::UnlessTrusted
+        {
+            return SafetyCheck::AutoApprove {
+                sandbox_type: SandboxType::None,
+            };
+        }
+
         if approval_policy == AskForApproval::Never {
             return SafetyCheck::Reject {
                 reason: "dangerous command detected; rejected by user approval settings"
@@ -393,6 +403,49 @@ mod tests {
     }
 
     #[test]
+    fn dangerous_command_auto_approved_with_danger_full_access() {
+        let command = vec!["git".to_string(), "reset".to_string(), "--hard".to_string()];
+        let approval_policy = AskForApproval::OnRequest;
+        let sandbox_policy = SandboxPolicy::DangerFullAccess;
+        let approved: HashSet<Vec<String>> = HashSet::new();
+        let request_escalated_privileges = false;
+
+        let safety_check = assess_command_safety(
+            &command,
+            approval_policy,
+            &sandbox_policy,
+            &approved,
+            request_escalated_privileges,
+        );
+
+        assert_eq!(
+            safety_check,
+            SafetyCheck::AutoApprove {
+                sandbox_type: SandboxType::None,
+            }
+        );
+    }
+
+    #[test]
+    fn dangerous_command_unless_trusted_with_danger_full_access_requires_approval() {
+        let command = vec!["git".to_string(), "reset".to_string(), "--hard".to_string()];
+        let approval_policy = AskForApproval::UnlessTrusted;
+        let sandbox_policy = SandboxPolicy::DangerFullAccess;
+        let approved: HashSet<Vec<String>> = HashSet::new();
+        let request_escalated_privileges = false;
+
+        let safety_check = assess_command_safety(
+            &command,
+            approval_policy,
+            &sandbox_policy,
+            &approved,
+            request_escalated_privileges,
+        );
+
+        assert_eq!(safety_check, SafetyCheck::AskUser);
+    }
+
+    #[test]
     fn test_request_escalated_privileges_no_sandbox_fallback() {
         let command = vec!["git".to_string(), "commit".to_string()];
         let approval_policy = AskForApproval::OnRequest;
@@ -411,6 +464,59 @@ mod tests {
         let expected = match get_platform_sandbox() {
             Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
             None => SafetyCheck::AskUser,
+        };
+        assert_eq!(safety_check, expected);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[test]
+    fn patch_constrained_never_no_sandbox_rejects() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let action = ApplyPatchAction::new_add_for_test(&cwd.join("safe.txt"), "".to_string());
+
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let safety_check =
+            assess_patch_safety(&action, AskForApproval::Never, &sandbox_policy, &cwd);
+
+        assert_eq!(
+            safety_check,
+            SafetyCheck::Reject {
+                reason: "auto-rejected: no sandbox available and user approval is 'Never'"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn patch_constrained_unless_trusted_with_sandbox_auto_approves() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let action = ApplyPatchAction::new_add_for_test(&cwd.join("safe.txt"), "".to_string());
+
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let safety_check = assess_patch_safety(
+            &action,
+            AskForApproval::UnlessTrusted,
+            &sandbox_policy,
+            &cwd,
+        );
+
+        let expected = SafetyCheck::AutoApprove {
+            sandbox_type: get_platform_sandbox().expect("platform sandbox"),
         };
         assert_eq!(safety_check, expected);
     }
