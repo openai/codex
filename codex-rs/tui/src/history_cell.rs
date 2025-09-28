@@ -417,7 +417,7 @@ pub(crate) fn new_session_info(
             Line::from(vec![
                 "  ".into(),
                 "/review".into(),
-                " - review my changes and find issues".dim(),
+                " - review any changes and find issues".dim(),
             ]),
         ];
 
