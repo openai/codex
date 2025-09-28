@@ -1168,13 +1168,33 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
     //    - Linux:   $XDG_CONFIG_HOME/codex (or ~/.config/codex)
     //    - macOS:   ~/Library/Application Support/codex
     //    - Windows: %AppData%\codex
-    let base = dirs::config_dir().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Could not resolve platform config directory",
-        )
-    })?;
-    Ok(base.join("codex"))
+    // Prefer the OS-reported configuration directory.
+    if let Some(base) = dirs::config_dir() {
+        return Ok(base.join("codex"));
+    }
+
+    // Fallbacks for environments where config_dir() may be unavailable
+    // (e.g., stripped env on CI or limited shells). Keep these conservative
+    // and platform-aware to avoid surprising locations.
+    #[cfg(windows)]
+    {
+        use std::env;
+        if let Ok(appdata) = env::var("APPDATA") {
+            return Ok(PathBuf::from(appdata).join("codex"));
+        }
+        if let Ok(local) = env::var("LOCALAPPDATA") {
+            return Ok(PathBuf::from(local).join("codex"));
+        }
+        if let Some(home) = home_dir() {
+            // Default Windows roaming path under the user profile.
+            return Ok(home.join("AppData").join("Roaming").join("codex"));
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "Could not resolve platform config directory",
+    ))
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
