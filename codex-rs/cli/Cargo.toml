@@ -37,4 +37,5 @@ tokio = { version = "1", features = [
 ] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
+uuid = { version = "1", features = ["v4"] }
 codex-protocol-ts = { path = "../protocol-ts" }

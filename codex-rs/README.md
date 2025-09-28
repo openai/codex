@@ -35,9 +35,21 @@ npx @modelcontextprotocol/inspector codex mcp
 
 You can enable notifications by configuring a script that is run whenever the agent finishes a turn. The [notify documentation](../docs/config.md#notify) includes a detailed example that explains how to get desktop notifications via [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS.
 
-### `codex exec` to run Codex programmatially/non-interactively
+### `codex exec` to run Codex programmatically/non-interactively
 
-To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
+Run `codex exec PROMPT` (you can also pipe the prompt via `stdin`) to let Codex work unattended until it decides it is done. Output is streamed directly to stdout/stderr; set `RUST_LOG=debug` if you want additional trace output.
+
+Each run prints a session banner with the conversation UUID and the rollout file path. You can resume that state later via:
+
+```shell
+# Resume by the UUID from the banner
+codex exec --session 7f7116f0-a04f-4a8b-b994-a4ce80ac2875 "continue deployment"
+
+# Resume from an explicit rollout JSONL path
+codex exec --resume-rollout ~/.codex/sessions/2025/09/27/rollout-2025-09-27T15-20-33-7f7116f0-a04f-4a8b-b994-a4ce80ac2875.jsonl "pick up the last turn"
+```
+
+Both flags populate the `experimental_resume` override automatically—setting it by hand should now be the exception rather than the norm.
 
 ### Use `@` for file search
 

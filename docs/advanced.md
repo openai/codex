@@ -39,4 +39,16 @@ env = { "API_KEY" = "value" }
 ```
 
 > [!TIP]
-> It is somewhat experimental, but the Codex CLI can also be run as an MCP _server_ via `codex mcp`. If you launch it with an MCP client such as `npx @modelcontextprotocol/inspector codex mcp` and send it a `tools/list` request, you will see that there is only one tool, `codex`, that accepts a grab-bag of inputs, including a catch-all `config` map for anything you might want to override. Feel free to play around with it and provide feedback via GitHub issues. 
+> It is somewhat experimental, but the Codex CLI can also be run as an MCP _server_ via `codex mcp`. If you launch it with an MCP client such as `npx @modelcontextprotocol/inspector codex mcp` and send it a `tools/list` request, you will see that there is only one tool, `codex`, that accepts a grab-bag of inputs, including a catch-all `config` map for anything you might want to override. Feel free to play around with it and provide feedback via GitHub issues.
+
+### Resuming automation runs
+
+When a headless run finishes, `codex exec` prints a banner with the session UUID and rollout file path. Resume later with either flag:
+
+```shell
+codex exec --session <UUID> "continue deployment"
+codex exec --resume-rollout ~/.codex/sessions/.../rollout-....jsonl "review the transcript"
+```
+
+Those flags populate the `experimental_resume` config override automatically.
+

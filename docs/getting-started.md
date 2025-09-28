@@ -10,19 +10,22 @@
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
-<!--
 Resume options:
 
 - `--resume`: open an interactive picker of recent sessions (shows a preview of the first real user message). Conflicts with `--continue`.
 - `--continue`: resume the most recent session without showing the picker (falls back to starting fresh if none exist). Conflicts with `--resume`.
-
-Examples:
+- `codex exec --session <UUID>`: resume a non-interactive run by its session banner UUID.
+- `codex exec --resume-rollout <FILE>`: resume from a specific rollout JSONL file (the banner prints the exact path).
 
 ```shell
+# Interactive TUI
 codex --resume
 codex --continue
+
+# Non-interactive exec
+codex exec --session 7f7116f0-a04f-4a8b-b994-a4ce80ac2875 "continue the deployment"
+codex exec --resume-rollout ~/.codex/sessions/.../rollout-...jsonl "review the last turn"
 ```
--->
 
 ### Running with a prompt as input
 

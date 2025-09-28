@@ -66,6 +66,7 @@ pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::RolloutRecorder;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
+pub use rollout::find_rollout_by_conversation_id;
 pub use rollout::list::ConversationItem;
 pub use rollout::list::ConversationsPage;
 pub use rollout::list::Cursor;

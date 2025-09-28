@@ -607,7 +607,7 @@ Options that are specific to the TUI.
 | `model_supports_reasoning_summaries` | boolean | Force‑enable reasoning summaries. |
 | `model_reasoning_summary_format` | `none` \| `experimental` | Force reasoning summary format. |
 | `chatgpt_base_url` | string | Base URL for ChatGPT auth flow. |
-| `experimental_resume` | string (path) | Resume JSONL path (internal/experimental). |
+| `experimental_resume` | string (path) | Rollout JSONL used to resume a session. Normally set automatically by `codex exec --session/--resume-rollout`; override manually only for advanced workflows. |
 | `experimental_instructions_file` | string (path) | Replace built‑in instructions (experimental). |
 | `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool. |
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |

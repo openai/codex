@@ -7,6 +7,7 @@ pub mod list;
 pub(crate) mod policy;
 pub mod recorder;
 
+pub use list::find_rollout_by_conversation_id;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use recorder::SessionMeta;

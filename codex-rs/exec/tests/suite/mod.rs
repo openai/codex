@@ -2,3 +2,4 @@
 mod apply_patch;
 mod common;
 mod sandbox;
+mod session;

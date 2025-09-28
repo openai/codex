@@ -523,7 +523,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     history_log_id: _,
                     history_entry_count: _,
                     initial_messages: _,
-                    rollout_path: _,
+                    rollout_path,
                 } = session_configured_event;
 
                 ts_println!(
@@ -534,6 +534,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
 
                 ts_println!(self, "model: {}", model);
+                ts_println!(self, "rollout: {}", rollout_path.display());
                 println!();
             }
             EventMsg::PlanUpdate(plan_update_event) => {

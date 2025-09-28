@@ -63,6 +63,23 @@ pub struct Cli {
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
 
+    /// Resume a previous session by conversation UUID.
+    #[arg(
+        long = "session",
+        value_name = "UUID",
+        conflicts_with = "resume_rollout",
+        help = "Resume a saved Codex session by its conversation UUID (shown in the session banner)."
+    )]
+    pub session: Option<String>,
+
+    /// Resume a previous session from a rollout file on disk.
+    #[arg(
+        long = "resume-rollout",
+        value_name = "FILE",
+        help = "Resume from an explicit rollout file, e.g. ~/.codex/sessions/.../rollout-2025-09-27T11-22-33-<uuid>.jsonl"
+    )]
+    pub resume_rollout: Option<PathBuf>,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT")]
