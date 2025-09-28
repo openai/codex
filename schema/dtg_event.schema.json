@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.theavcfiles.com/dtg_event.schema.json",
+  "title": "DTG Event Schema",
+  "description": "Schema for DecryptTheGirl event validation and logging",
+  "type": "object",
+  "properties": {
+    "ts_iso": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of the event"
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+      "description": "UUID of the event"
+    },
+    "reader_id": {
+      "type": "string",
+      "description": "Identifier for the reader/user"
+    },
+    "surface": {
+      "type": "string",
+      "enum": ["web", "mobile", "api", "cli", "worker"],
+      "description": "The surface where the event occurred"
+    },
+    "action": {
+      "type": "string",
+      "enum": ["view", "click", "scroll", "keystroke", "submit", "deploy", "mint", "validate"],
+      "description": "The action that triggered the event"
+    },
+    "node_id": {
+      "type": "string",
+      "description": "Identifier for the content node or element"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^v?\\d+\\.\\d+\\.\\d+",
+      "description": "Version identifier"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Session identifier for the user"
+    },
+    "artifact_href": {
+      "type": "string",
+      "format": "uri",
+      "description": "URI reference to related artifact"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Additional notes or metadata"
+    },
+    "sentient_cents_earned": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Amount of Sentient Cents earned from this event"
+    },
+    "hash_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA256 hash of the event data"
+    }
+  },
+  "required": ["ts_iso", "event_id", "action"],
+  "additionalProperties": false
+}

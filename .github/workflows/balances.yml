@@ -1,0 +1,514 @@
+name: Nightly Balance Materialization
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      calculation_date:
+        description: 'Specific date to calculate balances for (YYYY-MM-DD)'
+        required: false
+        type: string
+      recalculate_days:
+        description: 'Number of days back to recalculate (default: 1)'
+        required: false
+        default: '1'
+        type: string
+
+env:
+  # Configuration
+  BALANCE_PRECISION: 2
+  MIN_PAYOUT_THRESHOLD: 1.00
+  
+jobs:
+  calculate-balances:
+    runs-on: ubuntu-latest
+    name: Calculate and Update Sentient Cents Balances
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Configure git
+        run: |
+          git config --global user.name "Balance Calculator Bot"
+          git config --global user.email "balance-bot@codex-project.org"
+          
+      - name: Create balance calculation script
+        run: |
+          cat > calculate_balances.mjs << 'EOF'
+          #!/usr/bin/env node
+          
+          import fs from 'fs/promises';
+          import path from 'path';
+          
+          const DATA_DIR = './data';
+          const BALANCE_PRECISION = parseInt(process.env.BALANCE_PRECISION || '2');
+          
+          /**
+           * Read and parse CSV data
+           */
+          async function readCsvData(filePath) {
+            try {
+              const content = await fs.readFile(filePath, 'utf-8');
+              const lines = content.trim().split('\n');
+              
+              if (lines.length <= 1) return []; // No data rows
+              
+              const headers = lines[0].split(',').map(h => h.trim());
+              const data = [];
+              
+              for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+                const row = {};
+                headers.forEach((header, index) => {
+                  row[header] = values[index] || '';
+                });
+                data.push(row);
+              }
+              
+              return data;
+            } catch (error) {
+              console.error(`Error reading ${filePath}:`, error.message);
+              return [];
+            }
+          }
+          
+          /**
+           * Calculate balances from analytics data
+           */
+          function calculateBalances(analyticsData, targetDate = null) {
+            const balances = new Map();
+            const dailyStats = new Map();
+            
+            for (const row of analyticsData) {
+              // Filter by date if specified
+              if (targetDate) {
+                const eventDate = row.ts_iso?.split('T')[0];
+                if (eventDate !== targetDate) continue;
+              }
+              
+              const readerId = row.reader_id || 'unknown';
+              const earning = parseFloat(row.sentient_cents_earned || 0);
+              const eventDate = row.ts_iso?.split('T')[0] || 'unknown';
+              
+              // Update running balance
+              if (!balances.has(readerId)) {
+                balances.set(readerId, {
+                  total_earned: 0,
+                  total_events: 0,
+                  first_event: row.ts_iso,
+                  last_event: row.ts_iso,
+                  daily_breakdown: new Map()
+                });
+              }
+              
+              const balance = balances.get(readerId);
+              balance.total_earned += earning;
+              balance.total_events += 1;
+              balance.last_event = row.ts_iso;
+              
+              // Daily breakdown
+              if (!balance.daily_breakdown.has(eventDate)) {
+                balance.daily_breakdown.set(eventDate, {
+                  earned: 0,
+                  events: 0,
+                  actions: new Map()
+                });
+              }
+              
+              const daily = balance.daily_breakdown.get(eventDate);
+              daily.earned += earning;
+              daily.events += 1;
+              
+              // Track actions
+              const action = row.action || 'unknown';
+              daily.actions.set(action, (daily.actions.get(action) || 0) + 1);
+            }
+            
+            // Round balances to specified precision
+            for (const [readerId, balance] of balances) {
+              balance.total_earned = Math.round(balance.total_earned * Math.pow(10, BALANCE_PRECISION)) / Math.pow(10, BALANCE_PRECISION);
+              
+              for (const [date, daily] of balance.daily_breakdown) {
+                daily.earned = Math.round(daily.earned * Math.pow(10, BALANCE_PRECISION)) / Math.pow(10, BALANCE_PRECISION);
+              }
+            }
+            
+            return balances;
+          }
+          
+          /**
+           * Generate balance report
+           */
+          function generateBalanceReport(balances, targetDate) {
+            const report = {
+              calculation_date: targetDate || new Date().toISOString().split('T')[0],
+              calculation_timestamp: new Date().toISOString(),
+              total_readers: balances.size,
+              total_earnings: 0,
+              total_events: 0,
+              readers: []
+            };
+            
+            for (const [readerId, balance] of balances) {
+              const readerData = {
+                reader_id: readerId,
+                total_earned: balance.total_earned,
+                total_events: balance.total_events,
+                first_event: balance.first_event,
+                last_event: balance.last_event,
+                eligible_for_payout: balance.total_earned >= parseFloat(process.env.MIN_PAYOUT_THRESHOLD || '1.00'),
+                daily_summary: []
+              };
+              
+              // Convert daily breakdown
+              for (const [date, daily] of balance.daily_breakdown) {
+                const actions = {};
+                for (const [action, count] of daily.actions) {
+                  actions[action] = count;
+                }
+                
+                readerData.daily_summary.push({
+                  date,
+                  earned: daily.earned,
+                  events: daily.events,
+                  actions
+                });
+              }
+              
+              // Sort daily summary by date
+              readerData.daily_summary.sort((a, b) => a.date.localeCompare(b.date));
+              
+              report.readers.push(readerData);
+              report.total_earnings += balance.total_earned;
+              report.total_events += balance.total_events;
+            }
+            
+            // Sort readers by total earnings (descending)
+            report.readers.sort((a, b) => b.total_earned - a.total_earned);
+            
+            // Round totals
+            report.total_earnings = Math.round(report.total_earnings * Math.pow(10, BALANCE_PRECISION)) / Math.pow(10, BALANCE_PRECISION);
+            
+            return report;
+          }
+          
+          /**
+           * Save balance report
+           */
+          async function saveBalanceReport(report, outputPath) {
+            try {
+              await fs.writeFile(outputPath, JSON.stringify(report, null, 2));
+              console.log(`✅ Balance report saved to ${outputPath}`);
+              return true;
+            } catch (error) {
+              console.error(`❌ Failed to save balance report:`, error.message);
+              return false;
+            }
+          }
+          
+          /**
+           * Generate CSV summary for easy viewing
+           */
+          async function generateCsvSummary(report, outputPath) {
+            const headers = [
+              'reader_id',
+              'total_earned',
+              'total_events', 
+              'first_event',
+              'last_event',
+              'eligible_for_payout'
+            ];
+            
+            let csvContent = headers.join(',') + '\n';
+            
+            for (const reader of report.readers) {
+              const row = [
+                reader.reader_id,
+                reader.total_earned,
+                reader.total_events,
+                reader.first_event,
+                reader.last_event,
+                reader.eligible_for_payout
+              ];
+              csvContent += row.join(',') + '\n';
+            }
+            
+            try {
+              await fs.writeFile(outputPath, csvContent);
+              console.log(`✅ CSV summary saved to ${outputPath}`);
+              return true;
+            } catch (error) {
+              console.error(`❌ Failed to save CSV summary:`, error.message);
+              return false;
+            }
+          }
+          
+          /**
+           * Main calculation function
+           */
+          async function main() {
+            const targetDate = process.argv[2] || null;
+            
+            console.log('💰 Starting balance calculation...');
+            if (targetDate) {
+              console.log(`📅 Target date: ${targetDate}`);
+            } else {
+              console.log('📅 Calculating all-time balances');
+            }
+            
+            // Read analytics data
+            const analyticsPath = path.join(DATA_DIR, 'DecryptTheGirl_Analytics.csv');
+            console.log('📊 Reading analytics data...');
+            const analyticsData = await readCsvData(analyticsPath);
+            
+            if (analyticsData.length === 0) {
+              console.log('⚠️ No analytics data found');
+              return;
+            }
+            
+            console.log(`📈 Processing ${analyticsData.length} analytics events...`);
+            
+            // Calculate balances
+            const balances = calculateBalances(analyticsData, targetDate);
+            console.log(`👥 Found ${balances.size} unique readers`);
+            
+            // Generate report
+            const report = generateBalanceReport(balances, targetDate);
+            console.log(`💸 Total earnings across all readers: ${report.total_earnings}¢`);
+            
+            // Create data/balances directory if it doesn't exist
+            const balancesDir = path.join(DATA_DIR, 'balances');
+            try {
+              await fs.mkdir(balancesDir, { recursive: true });
+            } catch {}
+            
+            // Save reports
+            const dateStr = targetDate || new Date().toISOString().split('T')[0];
+            const jsonPath = path.join(balancesDir, `balances_${dateStr}.json`);
+            const csvPath = path.join(balancesDir, `balances_${dateStr}.csv`);
+            
+            await saveBalanceReport(report, jsonPath);
+            await generateCsvSummary(report, csvPath);
+            
+            // Also save as latest
+            await saveBalanceReport(report, path.join(balancesDir, 'balances_latest.json'));
+            await generateCsvSummary(report, path.join(balancesDir, 'balances_latest.csv'));
+            
+            console.log('🎉 Balance calculation complete!');
+            
+            // Output summary for GitHub Actions
+            console.log(`::set-output name=total_readers::${report.total_readers}`);
+            console.log(`::set-output name=total_earnings::${report.total_earnings}`);
+            console.log(`::set-output name=total_events::${report.total_events}`);
+            console.log(`::set-output name=calculation_date::${report.calculation_date}`);
+          }
+          
+          main().catch(error => {
+            console.error('💥 Balance calculation failed:', error.message);
+            process.exit(1);
+          });
+          EOF
+          
+      - name: Determine calculation parameters
+        id: params
+        run: |
+          if [[ "${{ github.event.inputs.calculation_date }}" != "" ]]; then
+            calc_date="${{ github.event.inputs.calculation_date }}"
+            echo "Using manual calculation date: $calc_date"
+          else
+            calc_date=$(date -d "yesterday" +%Y-%m-%d)
+            echo "Using yesterday's date: $calc_date"
+          fi
+          
+          recalc_days="${{ github.event.inputs.recalculate_days }}"
+          if [[ "$recalc_days" == "" ]]; then
+            recalc_days="1"
+          fi
+          
+          echo "calculation_date=$calc_date" >> $GITHUB_OUTPUT
+          echo "recalculate_days=$recalc_days" >> $GITHUB_OUTPUT
+          
+      - name: Validate input data
+        run: |
+          echo "🔍 Validating analytics data..."
+          
+          if [[ ! -f "data/DecryptTheGirl_Analytics.csv" ]]; then
+            echo "❌ Analytics CSV file not found"
+            exit 1
+          fi
+          
+          # Check if file has data beyond headers
+          line_count=$(wc -l < data/DecryptTheGirl_Analytics.csv)
+          if [[ $line_count -le 1 ]]; then
+            echo "⚠️ Analytics file has no data rows"
+            exit 0
+          fi
+          
+          echo "✅ Found $line_count lines in analytics data"
+          
+      - name: Calculate balances for specific date
+        id: calculate
+        run: |
+          echo "💰 Calculating balances for ${{ steps.params.outputs.calculation_date }}..."
+          
+          node calculate_balances.mjs "${{ steps.params.outputs.calculation_date }}"
+          
+      - name: Calculate all-time balances
+        run: |
+          echo "💰 Calculating all-time balances..."
+          node calculate_balances.mjs
+          
+      - name: Generate balance summary report
+        id: summary
+        run: |
+          echo "📊 Generating balance summary..."
+          
+          if [[ -f "data/balances/balances_latest.json" ]]; then
+            total_readers=$(jq '.total_readers' data/balances/balances_latest.json)
+            total_earnings=$(jq '.total_earnings' data/balances/balances_latest.json)
+            total_events=$(jq '.total_events' data/balances/balances_latest.json)
+            
+            echo "total_readers=$total_readers" >> $GITHUB_OUTPUT
+            echo "total_earnings=$total_earnings" >> $GITHUB_OUTPUT
+            echo "total_events=$total_events" >> $GITHUB_OUTPUT
+            
+            # Generate markdown summary
+            cat > tmp/balance_summary.md << EOF
+          # Balance Calculation Report - $(date '+%Y-%m-%d %H:%M:%S UTC')
+          
+          ## Summary
+          - **Calculation Date**: ${{ steps.params.outputs.calculation_date }}
+          - **Total Readers**: $total_readers
+          - **Total Earnings**: ${total_earnings}¢
+          - **Total Events**: $total_events
+          
+          ## Top Earners (Last 24h)
+          EOF
+          
+          # Add top 10 earners
+          jq -r '.readers[0:10] | .[] | "- **\(.reader_id)**: \(.total_earned)¢ (\(.total_events) events)"' \
+            data/balances/balances_latest.json >> tmp/balance_summary.md
+          
+          echo "" >> tmp/balance_summary.md
+          echo "Generated by: \`${{ github.workflow }}\` workflow" >> tmp/balance_summary.md
+          
+          fi
+          
+      - name: Check for payout eligibility
+        id: payouts
+        run: |
+          echo "💸 Checking payout eligibility..."
+          
+          if [[ -f "data/balances/balances_latest.json" ]]; then
+            eligible_count=$(jq '[.readers[] | select(.eligible_for_payout == true)] | length' data/balances/balances_latest.json)
+            eligible_total=$(jq '[.readers[] | select(.eligible_for_payout == true) | .total_earned] | add // 0' data/balances/balances_latest.json)
+            
+            echo "eligible_readers=$eligible_count" >> $GITHUB_OUTPUT  
+            echo "eligible_total=$eligible_total" >> $GITHUB_OUTPUT
+            
+            echo "💰 $eligible_count readers eligible for payout (${eligible_total}¢ total)"
+            
+            if [[ $eligible_count -gt 0 ]]; then
+              # Generate payout list
+              jq -r '.readers[] | select(.eligible_for_payout == true) | "\(.reader_id),\(.total_earned)"' \
+                data/balances/balances_latest.json > data/balances/payout_eligible.csv
+              
+              echo "📝 Payout eligibility list generated"
+            fi
+          fi
+          
+      - name: Update historical balance tracking
+        run: |
+          echo "📈 Updating historical balance tracking..."
+          
+          # Create or update balance history file
+          history_file="data/balances/balance_history.json"
+          
+          if [[ ! -f "$history_file" ]]; then
+            echo "[]" > "$history_file"
+          fi
+          
+          # Add today's summary to history
+          if [[ -f "data/balances/balances_latest.json" ]]; then
+            current_summary=$(jq '{
+              date: .calculation_date,
+              timestamp: .calculation_timestamp,
+              total_readers: .total_readers,
+              total_earnings: .total_earnings,
+              total_events: .total_events
+            }' data/balances/balances_latest.json)
+            
+            # Add to history (keep only last 90 days)
+            jq --argjson new "$current_summary" '. + [$new] | sort_by(.date) | .[-90:]' \
+              "$history_file" > tmp/balance_history_updated.json
+            
+            mv tmp/balance_history_updated.json "$history_file"
+            echo "✅ Balance history updated"
+          fi
+          
+      - name: Commit balance calculations
+        id: commit
+        run: |
+          # Check if there are changes to commit
+          if [[ $(git diff --name-only data/balances/) ]]; then
+            echo "📝 Committing balance calculations..."
+            
+            git add data/balances/
+            git add tmp/balance_summary.md
+            
+            commit_msg="balances: calculate Sentient Cents for ${{ steps.params.outputs.calculation_date }}
+            
+            - Total readers: ${{ steps.summary.outputs.total_readers }}
+            - Total earnings: ${{ steps.summary.outputs.total_earnings }}¢
+            - Total events: ${{ steps.summary.outputs.total_events }}
+            - Eligible for payout: ${{ steps.payouts.outputs.eligible_readers }} readers
+            
+            [automated calculation]"
+            
+            git commit -m "$commit_msg"
+            git push origin ${{ github.ref_name }}
+            
+            echo "✅ Balance calculations committed and pushed"
+            echo "changes_committed=true" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️ No balance changes to commit"
+            echo "changes_committed=false" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Clean up temporary files
+        if: always()
+        run: |
+          echo "🧹 Cleaning up..."
+          rm -f calculate_balances.mjs
+          rm -rf tmp/
+          
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 💰 Balance Calculation Complete"
+          echo ""
+          echo "**Results:**"
+          echo "- Calculation date: ${{ steps.params.outputs.calculation_date }}"
+          echo "- Total readers: ${{ steps.summary.outputs.total_readers }}"
+          echo "- Total earnings: ${{ steps.summary.outputs.total_earnings }}¢"
+          echo "- Total events: ${{ steps.summary.outputs.total_events }}"
+          echo "- Eligible for payout: ${{ steps.payouts.outputs.eligible_readers }} readers"
+          echo "- Changes committed: ${{ steps.commit.outputs.changes_committed }}"
+          echo ""
+          if [[ "${{ steps.commit.outputs.changes_committed }}" == "true" ]]; then
+            echo "✅ Balances successfully calculated and committed"
+          else
+            echo "ℹ️ No balance changes detected"
+          fi
