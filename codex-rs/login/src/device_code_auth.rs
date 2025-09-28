@@ -20,6 +20,11 @@ struct UserCodeResp {
 }
 
 #[derive(Serialize)]
+struct UserCodeReq<'a> {
+    client_id: &'a str,
+}
+
+#[derive(Serialize)]
 struct TokenPollReq<'a> {
     client_id: &'a str,
     user_code: &'a str,
@@ -45,12 +50,14 @@ struct CodeSuccessResp {
 async fn request_user_code(
     client: &reqwest::Client,
     auth_base_url: &str,
+    client_id: &str,
 ) -> std::io::Result<UserCodeResp> {
     let url = format!("{auth_base_url}/deviceauth/usercode");
+    let body = serde_json::to_string(&UserCodeReq { client_id }).map_err(std::io::Error::other)?;
     let resp = client
         .post(url)
         .header("Content-Type", "application/json")
-        .body("{}")
+        .body(body)
         .send()
         .await
         .map_err(std::io::Error::other)?;
@@ -135,7 +142,7 @@ fn print_colored_warning_device_code() {
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let client = reqwest::Client::new();
     let auth_base_url = opts.issuer.trim_end_matches('/').to_owned();
-    let uc = request_user_code(&client, &auth_base_url).await?;
+    let uc = request_user_code(&client, &auth_base_url, &opts.client_id).await?;
 
     print_colored_warning_device_code();
     println!("⏳ Generating a new 9-digit device code for authentication...\n");
