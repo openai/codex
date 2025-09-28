@@ -18,6 +18,7 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_core::config::Config;
+use codex_core::config_types::McpServerTransportConfig;
 use codex_core::config_types::ReasoningSummaryFormat;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -868,10 +869,19 @@ pub(crate) fn new_mcp_tools_output(
 
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
 
-        if !cfg.command.is_empty() {
-            let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
-
-            lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+        match &cfg.transport {
+            McpServerTransportConfig::Stdio { command, args, .. } => {
+                let args_suffix = if args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", args.join(" "))
+                };
+                let cmd_display = format!("{command}{args_suffix}");
+                lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+            }
+            McpServerTransportConfig::StreamableHttp { url, .. } => {
+                lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
+            }
         }
 
         if names.is_empty() {
@@ -1078,6 +1088,40 @@ pub(crate) fn new_reasoning_summary_block(
         }
     }
     Box::new(new_reasoning_block(full_reasoning_buffer, config))
+}
+
+#[derive(Debug)]
+pub struct FinalMessageSeparator {
+    elapsed_seconds: Option<u64>,
+}
+impl FinalMessageSeparator {
+    pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
+        Self { elapsed_seconds }
+    }
+}
+impl HistoryCell for FinalMessageSeparator {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let elapsed_seconds = self
+            .elapsed_seconds
+            .map(super::status_indicator_widget::fmt_elapsed_compact);
+        if let Some(elapsed_seconds) = elapsed_seconds {
+            let worked_for = format!("─ Worked for {elapsed_seconds} ─");
+            let worked_for_width = worked_for.width();
+            vec![
+                Line::from_iter([
+                    worked_for,
+                    "─".repeat((width as usize).saturating_sub(worked_for_width)),
+                ])
+                .dim(),
+            ]
+        } else {
+            vec![Line::from_iter(["─".repeat(width as usize).dim()])]
+        }
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        vec![]
+    }
 }
 
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
