@@ -1149,22 +1149,32 @@ fn default_review_model() -> String {
 /// - If `CODEX_HOME` is not set, this function does not verify that the
 ///   directory exists.
 pub fn find_codex_home() -> std::io::Result<PathBuf> {
-    // Honor the `CODEX_HOME` environment variable when it is set to allow users
-    // (and tests) to override the default location.
+    // 1) Highest precedence: explicit override via CODEX_HOME
     if let Ok(val) = std::env::var("CODEX_HOME")
         && !val.is_empty()
     {
         return PathBuf::from(val).canonicalize();
     }
 
-    let mut p = home_dir().ok_or_else(|| {
+    // 2) Backwards-compat: if legacy ~/.codex exists, keep using it
+    if let Some(home) = home_dir() {
+        let legacy = home.join(".codex");
+        if legacy.exists() {
+            return Ok(legacy);
+        }
+    }
+
+    // 3) Modern default: platform config directory /codex
+    //    - Linux:   $XDG_CONFIG_HOME/codex (or ~/.config/codex)
+    //    - macOS:   ~/Library/Application Support/codex
+    //    - Windows: %AppData%\codex
+    let base = dirs::config_dir().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            "Could not find home directory",
+            "Could not resolve platform config directory",
         )
     })?;
-    p.push(".codex");
-    Ok(p)
+    Ok(base.join("codex"))
 }
 
 /// Returns the path to the folder where Codex logs are stored. Does not verify
@@ -1183,8 +1193,179 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    use std::env;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
     use std::time::Duration;
     use tempfile::TempDir;
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> &'static Mutex<()> {
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn set_opt_var(key: &str, val: Option<&str>) {
+        unsafe {
+            match val {
+                Some(v) => env::set_var(key, v),
+                None => env::remove_var(key),
+            }
+        }
+    }
+
+    #[test]
+    fn find_codex_home_prefers_env() -> anyhow::Result<()> {
+        let _g = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let prev = env::var("CODEX_HOME").ok();
+        let tmp = TempDir::new()?;
+        unsafe {
+            env::set_var("CODEX_HOME", tmp.path());
+        }
+
+        let got = find_codex_home()?;
+        assert_eq!(got, tmp.path().canonicalize()?);
+
+        set_opt_var("CODEX_HOME", prev.as_deref());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_codex_home_legacy_unix() -> anyhow::Result<()> {
+        let _g = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let prev_code = env::var("CODEX_HOME").ok();
+        let prev_home = env::var("HOME").ok();
+        let prev_xdg = env::var("XDG_CONFIG_HOME").ok();
+
+        unsafe {
+            env::remove_var("CODEX_HOME");
+        }
+
+        let tmp = TempDir::new()?;
+        let legacy = tmp.path().join(".codex");
+        std::fs::create_dir_all(&legacy)?;
+        unsafe {
+            env::set_var("HOME", tmp.path());
+            env::set_var("XDG_CONFIG_HOME", tmp.path().join("xdg"));
+        }
+
+        let got = find_codex_home()?;
+        assert_eq!(got, legacy);
+
+        set_opt_var("CODEX_HOME", prev_code.as_deref());
+        set_opt_var("HOME", prev_home.as_deref());
+        set_opt_var("XDG_CONFIG_HOME", prev_xdg.as_deref());
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn find_codex_home_defaults_to_config_dir_on_unix() -> anyhow::Result<()> {
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+
+        let prev_code = env::var("CODEX_HOME").ok();
+        let prev_home = env::var("HOME").ok();
+        let prev_xdg = env::var("XDG_CONFIG_HOME").ok();
+
+        unsafe {
+            env::remove_var("CODEX_HOME");
+        }
+
+        // Use a temporary HOME without ~/.codex
+        let tmp = TempDir::new()?;
+        unsafe {
+            env::set_var("HOME", tmp.path());
+        }
+
+        // Force XDG config dir to a temp location
+        let xdg = tmp.path().join("xdg-config");
+        std::fs::create_dir_all(&xdg)?;
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", &xdg);
+        }
+
+        let got = find_codex_home()?;
+        let expected_base = dirs::config_dir().expect("config_dir must exist");
+        assert_eq!(got, expected_base.join("codex"));
+
+        set_opt_var("CODEX_HOME", prev_code.as_deref());
+        set_opt_var("HOME", prev_home.as_deref());
+        set_opt_var("XDG_CONFIG_HOME", prev_xdg.as_deref());
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn find_codex_home_defaults_to_appdata_on_windows() -> anyhow::Result<()> {
+        use std::path::PathBuf;
+        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+
+        let prev_code = env::var("CODEX_HOME").ok();
+        let prev_app = env::var("APPDATA").ok();
+        let prev_user = env::var("USERPROFILE").ok();
+
+        unsafe {
+            env::remove_var("CODEX_HOME");
+        }
+
+        // Create an isolated APPDATA and USERPROFILE
+        let tmp = TempDir::new()?;
+        let appdata = tmp.path().join("appdata");
+        std::fs::create_dir_all(&appdata)?;
+        unsafe {
+            env::set_var("APPDATA", &appdata);
+            env::set_var("USERPROFILE", tmp.path());
+        }
+
+        // Ensure legacy %USERPROFILE%\.codex does not exist
+        let legacy = PathBuf::from(env::var("USERPROFILE")?).join(".codex");
+        if legacy.exists() {
+            std::fs::remove_dir_all(&legacy)?;
+        }
+
+        let got = find_codex_home()?;
+        assert_eq!(got, PathBuf::from(env::var("APPDATA")?).join("codex"));
+
+        set_opt_var("CODEX_HOME", prev_code.as_deref());
+        set_opt_var("APPDATA", prev_app.as_deref());
+        set_opt_var("USERPROFILE", prev_user.as_deref());
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn find_codex_home_defaults_to_config_dir_on_macos() -> anyhow::Result<()> {
+        let _g = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let prev_code = env::var("CODEX_HOME").ok();
+        let prev_home = env::var("HOME").ok();
+
+        unsafe {
+            env::remove_var("CODEX_HOME");
+        }
+
+        let tmp = TempDir::new()?;
+        unsafe {
+            env::set_var("HOME", tmp.path());
+        }
+
+        let got = find_codex_home()?;
+        let expected_base = dirs::config_dir().expect("config_dir must exist");
+        assert_eq!(got, expected_base.join("codex"));
+
+        set_opt_var("CODEX_HOME", prev_code.as_deref());
+        set_opt_var("HOME", prev_home.as_deref());
+        Ok(())
+    }
 
     #[test]
     fn test_toml_parsing() {

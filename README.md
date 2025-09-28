@@ -62,12 +62,12 @@ You can also use Codex with an API key, but this requires [additional setup](./d
 
 ### Model Context Protocol (MCP)
 
-Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
+Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `$CODEX_HOME/config.toml` (see docs/config.md for the default location).
 
 
 ### Configuration
 
-Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
+Codex CLI supports a rich set of configuration options, with preferences stored in `$CODEX_HOME/config.toml`. For full configuration options and default path, see [Configuration](./docs/config.md).
 
 ---
 

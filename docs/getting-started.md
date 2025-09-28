@@ -14,7 +14,7 @@ Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
 - Run `codex resume` to display the session picker UI
 - Resume most recent: `codex resume --last`
-- Resume by id: `codex resume <SESSION_ID>` (You can get session ids from /status or `~/.codex/sessions/`)
+- Resume by id: `codex resume <SESSION_ID>` (You can get session ids from /status or `$CODEX_HOME/sessions/`)
 
 Examples:
 
@@ -63,7 +63,7 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 
 You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
 
-1. `~/.codex/AGENTS.md` - personal global guidance
+1. `$CODEX_HOME/AGENTS.md` - personal global guidance (see docs/config.md for default location)
 2. `AGENTS.md` at repo root - shared project notes
 3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
 
