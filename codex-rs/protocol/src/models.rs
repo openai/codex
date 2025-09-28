@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use base64::Engine;
 use mcp_types::CallToolResult;
+use mcp_types::ContentBlock;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -139,19 +140,18 @@ impl From<ResponseInputItem> for ResponseItem {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
             }
-            ResponseInputItem::McpToolCallOutput { call_id, result } => Self::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    success: Some(result.is_ok()),
-                    content: result.map_or_else(
-                        |tool_call_err| format!("err: {tool_call_err:?}"),
-                        |result| {
-                            serde_json::to_string(&result)
-                                .unwrap_or_else(|e| format!("JSON serialization error: {e}"))
-                        },
-                    ),
-                },
-            },
+            ResponseInputItem::McpToolCallOutput { call_id, result } => {
+                let output = match result {
+                    Ok(result) => FunctionCallOutputPayload::from_call_tool_result(&result),
+                    Err(tool_call_err) => FunctionCallOutputPayload {
+                        content: format!("err: {tool_call_err:?}"),
+                        content_items: None,
+                        success: Some(false),
+                    },
+                };
+
+                Self::FunctionCallOutput { call_id, output }
+            }
             ResponseInputItem::CustomToolCallOutput { call_id, output } => {
                 Self::CustomToolCallOutput { call_id, output }
             }
@@ -256,9 +256,17 @@ pub struct ShellToolCallParams {
     pub justification: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FunctionCallOutputContentItem {
+    InputText { text: String },
+    InputImage { image_url: String },
+}
+
 #[derive(Debug, Clone, PartialEq, TS)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
+    pub content_items: Option<Vec<FunctionCallOutputContentItem>>,
     pub success: Option<bool>,
 }
 
@@ -273,13 +281,15 @@ impl Serialize for FunctionCallOutputPayload {
     where
         S: Serializer,
     {
-        // The upstream TypeScript CLI always serializes `output` as a *plain string* regardless
-        // of whether the function call succeeded or failed. The boolean is purely informational
-        // for local bookkeeping and is NOT sent to the OpenAI endpoint. Sending the nested object
-        // form `{ content, success:false }` triggers the 400 we are still seeing. Mirror the JS CLI
-        // exactly: always emit a bare string.
-
-        serializer.serialize_str(&self.content)
+        if let Some(items) = &self.content_items {
+            items.serialize(serializer)
+        } else {
+            // The upstream TypeScript CLI historically serialized `output` as a plain string.
+            // Preserve that behavior for text-only payloads so we do not regress existing
+            // integrations. When images are present we instead emit the array form introduced by
+            // the Responses API so the model receives a renderable image instead of raw base64.
+            serializer.serialize_str(&self.content)
+        }
     }
 }
 
@@ -288,12 +298,113 @@ impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        Ok(FunctionCallOutputPayload {
-            content: s,
-            success: None,
-        })
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(s) => Ok(FunctionCallOutputPayload {
+                content: s,
+                content_items: None,
+                success: None,
+            }),
+            serde_json::Value::Array(values) => {
+                let mut items = Vec::with_capacity(values.len());
+                for value in values {
+                    let item: FunctionCallOutputContentItem =
+                        serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                    items.push(item);
+                }
+
+                let content = serde_json::to_string(&items)
+                    .map_err(|err| serde::de::Error::custom(err.to_string()))?;
+
+                Ok(FunctionCallOutputPayload {
+                    content,
+                    content_items: Some(items),
+                    success: None,
+                })
+            }
+            other => Err(serde::de::Error::custom(format!(
+                "expected string or array for function call output payload, got {other}"
+            ))),
+        }
     }
+}
+
+impl FunctionCallOutputPayload {
+    pub fn from_call_tool_result(call_tool_result: &CallToolResult) -> Self {
+        let CallToolResult {
+            content,
+            is_error,
+            structured_content,
+        } = call_tool_result;
+
+        let is_success = is_error != &Some(true);
+
+        if let Some(structured_content) = structured_content
+            && structured_content != &serde_json::Value::Null
+        {
+            match serde_json::to_string(structured_content) {
+                Ok(serialized_structured_content) => {
+                    return FunctionCallOutputPayload {
+                        content: serialized_structured_content,
+                        content_items: None,
+                        success: Some(is_success),
+                    };
+                }
+                Err(err) => {
+                    return FunctionCallOutputPayload {
+                        content: err.to_string(),
+                        content_items: None,
+                        success: Some(false),
+                    };
+                }
+            }
+        }
+
+        let serialized_content = match serde_json::to_string(content) {
+            Ok(serialized_content) => serialized_content,
+            Err(err) => {
+                return FunctionCallOutputPayload {
+                    content: err.to_string(),
+                    content_items: None,
+                    success: Some(false),
+                };
+            }
+        };
+
+        let content_items = convert_content_blocks_to_items(content);
+
+        FunctionCallOutputPayload {
+            content: serialized_content,
+            content_items,
+            success: Some(is_success),
+        }
+    }
+}
+
+fn convert_content_blocks_to_items(
+    blocks: &[ContentBlock],
+) -> Option<Vec<FunctionCallOutputContentItem>> {
+    let mut saw_image = false;
+    let mut items = Vec::with_capacity(blocks.len());
+
+    for block in blocks {
+        match block {
+            ContentBlock::TextContent(text) => {
+                items.push(FunctionCallOutputContentItem::InputText {
+                    text: text.text.clone(),
+                });
+            }
+            ContentBlock::ImageContent(image) => {
+                saw_image = true;
+                items.push(FunctionCallOutputContentItem::InputImage {
+                    image_url: format!("data:{};base64,{}", image.mime_type, image.data),
+                });
+            }
+            _ => return None,
+        }
+    }
+
+    if saw_image { Some(items) } else { None }
 }
 
 // Implement Display so callers can treat the payload like a plain string when logging or doing
@@ -319,6 +430,8 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use mcp_types::ImageContent;
+    use mcp_types::TextContent;
 
     #[test]
     fn serializes_success_as_plain_string() -> Result<()> {
@@ -326,6 +439,7 @@ mod tests {
             call_id: "call1".into(),
             output: FunctionCallOutputPayload {
                 content: "ok".into(),
+                content_items: None,
                 success: None,
             },
         };
@@ -344,6 +458,7 @@ mod tests {
             call_id: "call1".into(),
             output: FunctionCallOutputPayload {
                 content: "bad".into(),
+                content_items: None,
                 success: Some(false),
             },
         };
@@ -352,6 +467,81 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json)?;
 
         assert_eq!(v.get("output").unwrap().as_str().unwrap(), "bad");
+        Ok(())
+    }
+
+    #[test]
+    fn serializes_image_outputs_as_array() -> Result<()> {
+        let call_tool_result = CallToolResult {
+            content: vec![
+                ContentBlock::TextContent(TextContent {
+                    annotations: None,
+                    text: "caption".into(),
+                    r#type: "text".into(),
+                }),
+                ContentBlock::ImageContent(ImageContent {
+                    annotations: None,
+                    data: "BASE64".into(),
+                    mime_type: "image/png".into(),
+                    r#type: "image".into(),
+                }),
+            ],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let payload = FunctionCallOutputPayload::from_call_tool_result(&call_tool_result);
+        assert_eq!(payload.success, Some(true));
+        let items = payload.content_items.clone().expect("content items");
+        assert_eq!(
+            items,
+            vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "caption".into(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,BASE64".into(),
+                },
+            ]
+        );
+
+        let item = ResponseInputItem::FunctionCallOutput {
+            call_id: "call1".into(),
+            output: payload,
+        };
+
+        let json = serde_json::to_string(&item)?;
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+
+        let output = v.get("output").expect("output field");
+        assert!(output.is_array(), "expected array output");
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_array_payload_into_items() -> Result<()> {
+        let json = r#"[
+            {"type": "input_text", "text": "note"},
+            {"type": "input_image", "image_url": "data:image/png;base64,XYZ"}
+        ]"#;
+
+        let payload: FunctionCallOutputPayload = serde_json::from_str(json)?;
+
+        assert_eq!(payload.success, None);
+        let expected_items = vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "note".into(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,XYZ".into(),
+            },
+        ];
+        assert_eq!(payload.content_items, Some(expected_items.clone()));
+
+        let expected_content = serde_json::to_string(&expected_items)?;
+        assert_eq!(payload.content, expected_content);
+
         Ok(())
     }
 

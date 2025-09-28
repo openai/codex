@@ -1688,12 +1688,13 @@ pub(crate) async fn run_task(
                             items_to_record_in_conversation_history.push(item);
                             let output = match result {
                                 Ok(call_tool_result) => {
-                                    convert_call_tool_result_to_function_call_output_payload(
+                                    FunctionCallOutputPayload::from_call_tool_result(
                                         call_tool_result,
                                     )
                                 }
                                 Err(err) => FunctionCallOutputPayload {
                                     content: err.clone(),
+                                    content_items: None,
                                     success: Some(false),
                                 },
                             };
@@ -2154,10 +2155,12 @@ async fn handle_response_item(
                 let output = match result {
                     Ok(content) => FunctionCallOutputPayload {
                         content,
+                        content_items: None,
                         success: Some(true),
                     },
                     Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
                         content: msg,
+                        content_items: None,
                         success: Some(false),
                     },
                 };
@@ -2188,6 +2191,7 @@ async fn handle_response_item(
                         call_id: "".to_string(),
                         output: FunctionCallOutputPayload {
                             content: "LocalShellCall without call_id or id".to_string(),
+                            content_items: None,
                             success: None,
                         },
                     }));
@@ -2209,10 +2213,12 @@ async fn handle_response_item(
                 let output = match result {
                     Ok(content) => FunctionCallOutputPayload {
                         content,
+                        content_items: None,
                         success: Some(true),
                     },
                     Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
                         content: msg,
+                        content_items: None,
                         success: Some(false),
                     },
                 };
@@ -3031,41 +3037,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     })
 }
-fn convert_call_tool_result_to_function_call_output_payload(
-    call_tool_result: &CallToolResult,
-) -> FunctionCallOutputPayload {
-    let CallToolResult {
-        content,
-        is_error,
-        structured_content,
-    } = call_tool_result;
-
-    // In terms of what to send back to the model, we prefer structured_content,
-    // if available, and fallback to content, otherwise.
-    let mut is_success = is_error != &Some(true);
-    let content = if let Some(structured_content) = structured_content
-        && structured_content != &serde_json::Value::Null
-        && let Ok(serialized_structured_content) = serde_json::to_string(&structured_content)
-    {
-        serialized_structured_content
-    } else {
-        match serde_json::to_string(&content) {
-            Ok(serialized_content) => serialized_content,
-            Err(err) => {
-                // If we could not serialize either content or structured_content to
-                // JSON, flag this as an error.
-                is_success = false;
-                err.to_string()
-            }
-        }
-    };
-
-    FunctionCallOutputPayload {
-        content,
-        success: Some(is_success),
-    }
-}
-
 /// Emits an ExitedReviewMode Event with optional ReviewOutput,
 /// and records a developer message with the review output.
 pub(crate) async fn exit_review_mode(
@@ -3200,13 +3171,14 @@ mod tests {
             })),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from_call_tool_result(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({
                 "ok": true,
                 "value": 42
             }))
             .unwrap(),
+            content_items: None,
             success: Some(true),
         };
 
@@ -3318,10 +3290,11 @@ mod tests {
             structured_content: Some(serde_json::Value::Null),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from_call_tool_result(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
                 .unwrap(),
+            content_items: None,
             success: Some(true),
         };
 
@@ -3336,9 +3309,10 @@ mod tests {
             structured_content: Some(json!({ "message": "bad" })),
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from_call_tool_result(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
+            content_items: None,
             success: Some(false),
         };
 
@@ -3353,9 +3327,10 @@ mod tests {
             structured_content: None,
         };
 
-        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let got = FunctionCallOutputPayload::from_call_tool_result(&ctr);
         let expected = FunctionCallOutputPayload {
             content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
+            content_items: None,
             success: Some(true),
         };
 
