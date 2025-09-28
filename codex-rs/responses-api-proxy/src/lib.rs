@@ -6,6 +6,7 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -62,6 +63,8 @@ pub fn run_main(args: Args) -> Result<()> {
         .map_err(|err| anyhow!("creating HTTP server: {err}"))?;
     let client = Arc::new(
         Client::builder()
+            // Disable reqwest's 30s default so long-lived response streams keep flowing.
+            .timeout(None::<Duration>)
             .build()
             .context("building reqwest client")?,
     );
