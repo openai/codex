@@ -1,4 +1,3 @@
-use anyhow::Context;
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
@@ -15,7 +14,6 @@ use codex_cli::login::run_logout;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
-use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use owo_colors::OwoColorize;
@@ -87,10 +85,6 @@ enum Subcommand {
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
-
-    /// Internal: run the responses API proxy.
-    #[clap(hide = true)]
-    ResponsesApiProxy(ResponsesApiProxyArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -338,11 +332,6 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
-        }
-        Some(Subcommand::ResponsesApiProxy(args)) => {
-            tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
-                .await
-                .context("responses-api-proxy blocking task panicked")??;
         }
     }
 

@@ -53,7 +53,6 @@ codex-ollama = { path = "ollama" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
-codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-tui = { path = "tui" }
 codex-utils-readiness = { path = "utils/readiness" }
