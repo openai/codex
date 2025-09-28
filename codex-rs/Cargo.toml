@@ -16,6 +16,7 @@ members = [
     "mcp-server",
     "mcp-types",
     "ollama",
+    "process-hardening",
     "protocol",
     "protocol-ts",
     "rmcp-client",
@@ -49,10 +50,11 @@ codex-login = { path = "login" }
 codex-mcp-client = { path = "mcp-client" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
+codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
-codex-rmcp-client = { path = "rmcp-client" }
 codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
+codex-rmcp-client = { path = "rmcp-client" }
 codex-tui = { path = "tui" }
 codex-utils-readiness = { path = "utils/readiness" }
 core_test_support = { path = "core/tests/common" }
@@ -83,8 +85,8 @@ dirs = "6"
 dotenvy = "0.15.7"
 env-flags = "0.1.1"
 env_logger = "0.11.5"
-eventsource-stream = "0.2.3"
 escargot = "0.5"
+eventsource-stream = "0.2.3"
 futures = "0.3"
 icu_decimal = "2.0.0"
 icu_locale_core = "2.0.0"

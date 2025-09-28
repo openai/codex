@@ -25,6 +25,7 @@ codex-core = { workspace = true }
 codex-exec = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
+codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
 codex-protocol-ts = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
@@ -42,15 +43,6 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-libc = { workspace = true }
-
-[target.'cfg(target_os = "android")'.dependencies]
-libc = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

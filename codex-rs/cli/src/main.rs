@@ -23,7 +23,6 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
-mod pre_main_hardening;
 
 use crate::mcp_cmd::McpCli;
 use crate::proto::ProtoCli;
@@ -213,14 +212,7 @@ fn pre_main_hardening() {
     };
 
     if secure_mode == "1" {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        crate::pre_main_hardening::pre_main_hardening_linux();
-
-        #[cfg(target_os = "macos")]
-        crate::pre_main_hardening::pre_main_hardening_macos();
-
-        #[cfg(windows)]
-        crate::pre_main_hardening::pre_main_hardening_windows();
+        codex_process_hardening::pre_main_hardening();
     }
 
     // Always clear this env var so child processes don't inherit it.
