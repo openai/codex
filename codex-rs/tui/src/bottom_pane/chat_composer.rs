@@ -8,15 +8,10 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
@@ -30,6 +25,8 @@ use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::slash_command::SlashCommand;
+use crate::style::user_message_style;
+use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::app_event::AppEvent;
@@ -97,8 +94,6 @@ enum ActivePopup {
 }
 
 const FOOTER_HINT_HEIGHT: u16 = 1;
-const FOOTER_SPACING_HEIGHT: u16 = 1;
-const FOOTER_HEIGHT_WITH_HINT: u16 = FOOTER_HINT_HEIGHT + FOOTER_SPACING_HEIGHT;
 
 impl ChatComposer {
     pub fn new(
@@ -137,30 +132,40 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // Leave 1 column for the left border and 1 column for left padding
         self.textarea
             .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
+            + 2
             + match &self.active_popup {
-                ActivePopup::None => FOOTER_HEIGHT_WITH_HINT,
+                ActivePopup::None => FOOTER_HINT_HEIGHT,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
 
-    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+    fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
-            ActivePopup::None => Constraint::Max(FOOTER_HEIGHT_WITH_HINT),
+            ActivePopup::None => Constraint::Max(FOOTER_HINT_HEIGHT),
         };
-        let [textarea_rect, _] =
+        let mut area = area;
+        // Leave an empty row at the top, unless there isn't room.
+        if area.height > 1 {
+            area.height -= 1;
+            area.y += 1;
+        }
+        let [composer_rect, popup_rect] =
             Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
-        let mut textarea_rect = textarea_rect;
-        // Leave 1 for border and 1 for padding
+        let mut textarea_rect = composer_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
         textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
+        [composer_rect, textarea_rect, popup_rect]
+    }
+
+    pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        let [_, textarea_rect, _] = self.layout_areas(area);
         let state = *self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
@@ -1232,19 +1237,13 @@ impl ChatComposer {
 
 impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let (popup_constraint, hint_spacing) = match &self.active_popup {
-            ActivePopup::Command(popup) => (
-                Constraint::Max(popup.calculate_required_height(area.width)),
-                0,
-            ),
-            ActivePopup::File(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
-            ActivePopup::None => (
-                Constraint::Length(FOOTER_HEIGHT_WITH_HINT),
-                FOOTER_SPACING_HEIGHT,
-            ),
-        };
-        let [textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
+        let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
+        if !matches!(self.active_popup, ActivePopup::None) {
+            buf.set_style(
+                popup_rect,
+                user_message_style(terminal_palette::default_bg()),
+            );
+        }
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -1253,16 +1252,9 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let hint_rect = if hint_spacing > 0 {
-                    let [_, hint_rect] = Layout::vertical([
-                        Constraint::Length(hint_spacing),
-                        Constraint::Length(FOOTER_HINT_HEIGHT),
-                    ])
-                    .areas(popup_rect);
-                    hint_rect
-                } else {
-                    popup_rect
-                };
+                let mut hint_rect = popup_rect;
+                hint_rect.x += 2;
+                hint_rect.width = hint_rect.width.saturating_sub(2);
                 render_footer(
                     hint_rect,
                     buf,
@@ -1276,23 +1268,17 @@ impl WidgetRef for ChatComposer {
                 );
             }
         }
-        let border_style = if self.has_focus {
-            Style::default().fg(Color::Cyan)
-        } else {
-            Style::default().add_modifier(Modifier::DIM)
-        };
-        Block::default()
-            .borders(Borders::LEFT)
-            .border_type(BorderType::QuadrantOutside)
-            .border_style(border_style)
-            .render_ref(
-                Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
-                buf,
-            );
-        let mut textarea_rect = textarea_rect;
-        // Leave 1 for border and 1 for padding
-        textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
-        textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
+        let style = user_message_style(terminal_palette::default_bg());
+        let mut block_rect = composer_rect;
+        block_rect.y = composer_rect.y.saturating_sub(1);
+        block_rect.height = composer_rect.height.saturating_add(1);
+        Block::default().style(style).render_ref(block_rect, buf);
+        buf.set_span(
+            composer_rect.x,
+            composer_rect.y,
+            &"›".bold(),
+            composer_rect.width,
+        );
 
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);

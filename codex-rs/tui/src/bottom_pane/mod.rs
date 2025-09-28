@@ -103,6 +103,10 @@ impl BottomPane {
         }
     }
 
+    pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
+        self.status.as_ref()
+    }
+
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
         self.view_stack.last().map(std::convert::AsRef::as_ref)
     }
@@ -150,7 +154,9 @@ impl BottomPane {
                 let status_height = self
                     .status
                     .as_ref()
-                    .map_or(0, |status| status.desired_height(area.width));
+                    .map_or(0, |status| status.desired_height(area.width))
+                    .min(area.height.saturating_sub(1));
+
                 Layout::vertical([Constraint::Max(status_height), Constraint::Min(1)]).areas(area)
             }
         }
@@ -616,7 +622,7 @@ mod tests {
 
         // Composer placeholder should be visible somewhere below.
         let mut found_composer = false;
-        for y in 1..area.height.saturating_sub(2) {
+        for y in 1..area.height {
             let mut row = String::new();
             for x in 0..area.width {
                 row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
