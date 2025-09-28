@@ -333,7 +333,7 @@ print(resp.output_text)
 
 ### Step 2: Calling tools
 
-Once the model has access to these tool definitions, it may choose to call them depending on what's in the model's context. When the model decides to call an MCP tool, the API will make an request to the remote MCP server to call the tool and put its output into the model's context. This creates an `mcp_call` item which looks like this:
+Once the model has access to these tool definitions, it may choose to call them depending on what's in the model's context. When the model decides to call an MCP tool, the API will make a request to the remote MCP server to call the tool and put its output into the model's context. This creates an `mcp_call` item which looks like this:
 
 ```json
 {
@@ -449,7 +449,7 @@ resp = client.responses.create(
 print(resp.output_text)
 ```
 
-Here we're using the `previous_response_id` parameter to chain this new Response, with the previous Response that generated the approval request. But you can also pass back the [outputs from one response, as inputs into another](https://platform.openai.com/docs/guides/conversation-state#manually-manage-conversation-state) for maximum control over what enter's the model's context.
+Here we're using the `previous_response_id` parameter to chain this new Response, with the previous Response that generated the approval request. But you can also pass back the [outputs from one response, as inputs into another](https://platform.openai.com/docs/guides/conversation-state#manually-manage-conversation-state) for maximum control over what enters the model's context.
 
 If and when you feel comfortable trusting a remote MCP server, you can choose to skip the approvals for reduced latency. To do this, you can set the `require_approval` parameter of the MCP tool to an object listing just the tools you'd like to skip approvals for like shown below, or set it to the value `'never'` to skip approvals for all tools in that remote MCP server.
 
@@ -820,7 +820,7 @@ It can be dangerous to request URLs or embed image URLs provided by tool call ou
 
 ### Connecting to trusted servers
 
-Pick official servers hosted by the service providers themselves (e.g. we recommend connecting to the Stripe server hosted by Stripe themselves on mcp.stripe.com, instead of a Stripe MCP server hosted by a third party). Because there aren't too many official remote MCP servers today, you may be tempted to use a MCP server hosted by an organization that doesn't operate that server and simply proxies request to that service via your API. If you must do this, be extra careful in doing your due diligence on these "aggregators", and carefully review how they use your data.
+Pick official servers hosted by the service providers themselves (e.g. we recommend connecting to the Stripe server hosted by Stripe themselves on mcp.stripe.com, instead of a Stripe MCP server hosted by a third party). Because there aren't too many official remote MCP servers today, you may be tempted to use an MCP server hosted by an organization that doesn't operate that server and simply proxies requests to that service via your API. If you must do this, be extra careful in doing your due diligence on these "aggregators", and carefully review how they use your data.
 
 ### Log and review data being shared with third party MCP servers.
 
