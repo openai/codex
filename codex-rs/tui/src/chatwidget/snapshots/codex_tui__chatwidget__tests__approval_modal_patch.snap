@@ -1,13 +1,16 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 763
 expression: terminal.backend()
 ---
-"The model wants to apply changes                                                "
 "                                                                                "
-"This will grant write access to /tmp for the remainder of this session.         "
+"▌ The model wants to apply changes                                              "
+"▌                                                                               "
+"▌ Grant write access to /tmp for the remainder of this session.                 "
+"▌                                                                               "
+"▌ Apply changes?                                                                "
+"▌                                                                               "
+"▌ > 1. Approve  (Y) Apply the proposed changes                                  "
+"▌   2. Cancel   (N) Do not apply the changes                                    "
 "                                                                                "
-"▌Apply changes?                                                                 "
-"▌ Yes   No, provide feedback                                                    "
-"▌ Approve and apply the changes                                                 "
+"Press Enter to confirm or Esc to cancel                                         "
 "                                                                                "

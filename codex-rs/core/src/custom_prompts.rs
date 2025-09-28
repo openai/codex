@@ -52,7 +52,7 @@ pub async fn discover_prompts_in_excluding(
         let Some(name) = path
             .file_stem()
             .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
+            .map(str::to_string)
         else {
             continue;
         };

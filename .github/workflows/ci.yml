@@ -14,40 +14,39 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.8.1
           run_install: false
 
-      - name: Get pnpm store directory
-        id: pnpm-cache
-        shell: bash
-        run: |
-          echo "store_path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
         with:
-          path: ${{ steps.pnpm-cache.outputs.store_path }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          node-version: 22
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
-      # Run all tasks using workspace filters
+      # build_npm_package.py requires DotSlash when staging releases.
+      - uses: facebook/install-dotslash@v2
 
-      - name: Ensure staging a release works.
+      - name: Stage npm package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./codex-cli/scripts/stage_release.sh
+        run: |
+          set -euo pipefail
+          CODEX_VERSION=0.40.0
+          PACK_OUTPUT="${RUNNER_TEMP}/codex-npm.tgz"
+          python3 ./codex-cli/scripts/build_npm_package.py \
+            --release-version "$CODEX_VERSION" \
+            --pack-output "$PACK_OUTPUT"
+          echo "PACK_OUTPUT=$PACK_OUTPUT" >> "$GITHUB_ENV"
+
+      - name: Upload staged npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-npm-staging
+          path: ${{ env.PACK_OUTPUT }}
 
       - name: Ensure root README.md contains only ASCII and certain Unicode code points
         run: ./scripts/asciicheck.py README.md

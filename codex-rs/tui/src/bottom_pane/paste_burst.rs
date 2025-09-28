@@ -35,6 +35,12 @@ pub(crate) struct RetroGrab {
     pub grabbed: String,
 }
 
+pub(crate) enum FlushResult {
+    Paste(String),
+    Typed(char),
+    None,
+}
+
 impl PasteBurst {
     /// Recommended delay to wait between simulated keypresses (or before
     /// scheduling a UI tick) so that a pending fast keystroke is flushed
@@ -95,24 +101,24 @@ impl PasteBurst {
     ///   now emit that char as normal typed input.
     ///
     /// Returns None if the timeout has not elapsed or there is nothing to flush.
-    pub fn flush_if_due(&mut self, now: Instant) -> Option<String> {
+    pub fn flush_if_due(&mut self, now: Instant) -> FlushResult {
         let timed_out = self
             .last_plain_char_time
             .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
         if timed_out && self.is_active_internal() {
             self.active = false;
             let out = std::mem::take(&mut self.buffer);
-            Some(out)
+            FlushResult::Paste(out)
         } else if timed_out {
             // If we were saving a single fast char and no burst followed,
             // flush it as normal typed input.
             if let Some((ch, _at)) = self.pending_first_char.take() {
-                Some(ch.to_string())
+                FlushResult::Typed(ch)
             } else {
-                None
+                FlushResult::None
             }
         } else {
-            None
+            FlushResult::None
         }
     }
 
@@ -177,7 +183,7 @@ impl PasteBurst {
         let start_byte = retro_start_index(before, retro_chars);
         let grabbed = before[start_byte..].to_string();
         let looks_pastey =
-            grabbed.chars().any(|c| c.is_whitespace()) || grabbed.chars().count() >= 16;
+            grabbed.chars().any(char::is_whitespace) || grabbed.chars().count() >= 16;
         if looks_pastey {
             // Note: caller is responsible for removing this slice from UI text.
             self.begin_with_retro_grabbed(grabbed.clone(), now);

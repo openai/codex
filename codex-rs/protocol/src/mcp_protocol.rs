@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::PathBuf;
 
-use crate::config_types::ConfigProfile;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SandboxMode;
+use crate::config_types::Verbosity;
 use crate::protocol::AskForApproval;
+use crate::protocol::EventMsg;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
@@ -18,13 +19,55 @@ use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TS, Hash)]
 #[ts(type = "string")]
-pub struct ConversationId(pub Uuid);
+pub struct ConversationId {
+    uuid: Uuid,
+}
+
+impl ConversationId {
+    pub fn new() -> Self {
+        Self {
+            uuid: Uuid::now_v7(),
+        }
+    }
+
+    pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
+        Ok(Self {
+            uuid: Uuid::parse_str(s)?,
+        })
+    }
+}
+
+impl Default for ConversationId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.uuid)
+    }
+}
+
+impl Serialize for ConversationId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&self.uuid)
+    }
+}
+
+impl<'de> Deserialize<'de> for ConversationId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let uuid = Uuid::parse_str(&value).map_err(serde::de::Error::custom)?;
+        Ok(Self { uuid })
     }
 }
 
@@ -53,6 +96,23 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
         params: NewConversationParams,
+    },
+    /// List recorded Codex conversations (rollouts) with optional pagination and search.
+    ListConversations {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ListConversationsParams,
+    },
+    /// Resume a recorded Codex conversation from a rollout file.
+    ResumeConversation {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ResumeConversationParams,
+    },
+    ArchiveConversation {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ArchiveConversationParams,
     },
     SendUserMessage {
         #[serde(rename = "id")]
@@ -84,6 +144,11 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: GitDiffToRemoteParams,
     },
+    LoginApiKey {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: LoginApiKeyParams,
+    },
     LoginChatGpt {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -102,9 +167,28 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: GetAuthStatusParams,
     },
-    GetConfigToml {
+    GetUserSavedConfig {
         #[serde(rename = "id")]
         request_id: RequestId,
+    },
+    SetDefaultModel {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: SetDefaultModelParams,
+    },
+    GetUserAgent {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    UserInfo {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    /// Execute a command (argv vector) under the server's sandbox.
+    ExecOneOffCommand {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ExecOneOffCommandParams,
     },
 }
 
@@ -156,6 +240,61 @@ pub struct NewConversationParams {
 pub struct NewConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
+    /// Note this could be ignored by the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub rollout_path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeConversationResponse {
+    pub conversation_id: ConversationId,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_messages: Option<Vec<EventMsg>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ListConversationsParams {
+    /// Optional page size; defaults to a reasonable server-side value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<usize>,
+    /// Opaque pagination cursor returned by a previous call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSummary {
+    pub conversation_id: ConversationId,
+    pub path: PathBuf,
+    pub preview: String,
+    /// RFC3339 timestamp string for the session start, if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ListConversationsResponse {
+    pub items: Vec<ConversationSummary>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// if None, there are no more items to return.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeConversationParams {
+    /// Absolute path to the rollout JSONL file.
+    pub path: PathBuf,
+    /// Optional overrides to apply when spawning the resumed session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<NewConversationParams>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -164,9 +303,31 @@ pub struct AddConversationSubscriptionResponse {
     pub subscription_id: Uuid,
 }
 
+/// The [`ConversationId`] must match the `rollout_path`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveConversationParams {
+    pub conversation_id: ConversationId,
+    pub rollout_path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveConversationResponse {}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveConversationSubscriptionResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginApiKeyParams {
+    pub api_key: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginApiKeyResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
@@ -220,32 +381,152 @@ pub struct GetAuthStatusParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct GetAuthStatusResponse {
+pub struct ExecOneOffCommandParams {
+    /// Command argv to execute.
+    pub command: Vec<String>,
+    /// Timeout of the command in milliseconds.
+    /// If not specified, a sensible default is used server-side.
+    pub timeout_ms: Option<u64>,
+    /// Optional working directory for the process. Defaults to server config cwd.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auth_method: Option<AuthMode>,
-    pub preferred_auth_method: AuthMode,
+    pub cwd: Option<PathBuf>,
+    /// Optional explicit sandbox policy overriding the server default.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auth_token: Option<String>,
+    pub sandbox_policy: Option<SandboxPolicy>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct GetConfigTomlResponse {
+pub struct ExecArbitraryCommandResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAuthStatusResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<AuthMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
+
+    // Indicates that auth method must be valid to use the server.
+    // This can be false if using a custom provider that is configured
+    // with requires_openai_auth == false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_openai_auth: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUserAgentResponse {
+    pub user_agent: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInfoResponse {
+    /// Note: `alleged_user_email` is not currently verified. We read it from
+    /// the local auth.json, which the user could theoretically modify. In the
+    /// future, we may add logic to verify the email against the server before
+    /// returning it.
+    pub alleged_user_email: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUserSavedConfigResponse {
+    pub config: UserSavedConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDefaultModelParams {
+    /// If set to None, this means `model` should be cleared in config.toml.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// If set to None, this means `model_reasoning_effort` should be cleared
+    /// in config.toml.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDefaultModelResponse {}
+
+/// UserSavedConfig contains a subset of the config. It is meant to expose mcp
+/// client-configurable settings that can be specified in the NewConversation
+/// and SendUserTurn requests.
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSavedConfig {
     /// Approvals
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<AskForApproval>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_mode: Option<SandboxMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_settings: Option<SandboxSettings>,
 
-    /// Relevant model configuration
+    /// Model-specific configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_verbosity: Option<Verbosity>,
+
+    /// Tools
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Tools>,
 
     /// Profiles
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    #[serde(default)]
+    pub profiles: HashMap<String, Profile>,
+}
+
+/// MCP representation of a [`codex_core::config_profile::ConfigProfile`].
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    pub model: Option<String>,
+    /// The key in the `model_providers` map identifying the
+    /// [`ModelProviderInfo`] to use.
+    pub model_provider: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub model_verbosity: Option<Verbosity>,
+    pub chatgpt_base_url: Option<String>,
+}
+/// MCP representation of a [`codex_core::config::ToolsToml`].
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Tools {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub profiles: Option<HashMap<String, ConfigProfile>>,
+    pub web_search: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_image: Option<bool>,
+}
+
+/// MCP representation of a [`codex_core::config_types::SandboxWorkspaceWrite`].
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxSettings {
+    #[serde(default)]
+    pub writable_roots: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_access: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude_tmpdir_env_var: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude_slash_tmp: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -264,7 +545,8 @@ pub struct SendUserTurnParams {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub model: String,
-    pub effort: ReasoningEffort,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
 }
 
@@ -398,8 +680,8 @@ pub struct AuthStatusChangeNotification {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS, Display)]
-#[serde(tag = "type", content = "data", rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
+#[serde(tag = "method", content = "params", rename_all = "camelCase")]
+#[strum(serialize_all = "camelCase")]
 pub enum ServerNotification {
     /// Authentication status changed
     AuthStatusChange(AuthStatusChangeNotification),
@@ -408,18 +690,28 @@ pub enum ServerNotification {
     LoginChatGptComplete(LoginChatGptCompleteNotification),
 }
 
+impl ServerNotification {
+    pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
+            ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     #[test]
-    fn serialize_new_conversation() {
+    fn serialize_new_conversation() -> Result<()> {
         let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: NewConversationParams {
-                model: Some("gpt-5".to_string()),
+                model: Some("gpt-5-codex".to_string()),
                 profile: None,
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
@@ -435,11 +727,41 @@ mod tests {
                 "method": "newConversation",
                 "id": 42,
                 "params": {
-                    "model": "gpt-5",
+                    "model": "gpt-5-codex",
                     "approvalPolicy": "on-request"
                 }
             }),
-            serde_json::to_value(&request).unwrap(),
+            serde_json::to_value(&request)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_conversation_id_default_is_not_zeroes() {
+        let id = ConversationId::default();
+        assert_ne!(id.uuid, Uuid::nil());
+    }
+
+    #[test]
+    fn conversation_id_serializes_as_plain_string() -> Result<()> {
+        let id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+
+        assert_eq!(
+            json!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
+            serde_json::to_value(id)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn conversation_id_deserializes_from_plain_string() -> Result<()> {
+        let id: ConversationId =
+            serde_json::from_value(json!("67e55044-10b1-426f-9247-bb680e5fe0c8"))?;
+
+        assert_eq!(
+            ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?,
+            id,
+        );
+        Ok(())
     }
 }

@@ -115,7 +115,7 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
     // Build chain from cwd upwards and detect git root.
     let mut chain: Vec<PathBuf> = vec![dir.clone()];
     let mut git_root: Option<PathBuf> = None;
-    let mut cursor = dir.clone();
+    let mut cursor = dir;
     while let Some(parent) = cursor.parent() {
         let git_marker = cursor.join(".git");
         let git_exists = match std::fs::metadata(&git_marker) {

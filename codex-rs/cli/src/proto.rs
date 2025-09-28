@@ -2,6 +2,7 @@ use std::io::IsTerminal;
 
 use clap::Parser;
 use codex_common::CliConfigOverrides;
+use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
@@ -9,7 +10,6 @@ use codex_core::config::ConfigOverrides;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Submission;
-use codex_login::AuthManager;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tracing::error;
@@ -37,10 +37,8 @@ pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
 
     let config = Config::load_with_cli_overrides(overrides_vec, ConfigOverrides::default())?;
     // Use conversation_manager API to start a conversation
-    let conversation_manager = ConversationManager::new(AuthManager::shared(
-        config.codex_home.clone(),
-        config.preferred_auth_method,
-    ));
+    let conversation_manager =
+        ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
     let NewConversation {
         conversation_id: _,
         conversation,

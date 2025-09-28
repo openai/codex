@@ -15,36 +15,44 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-anyhow = "1"
-chrono = "0.4.40"
-clap = { version = "4", features = ["derive"] }
-codex-arg0 = { path = "../arg0" }
-codex-common = { path = "../common", features = [
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-arg0 = { workspace = true }
+codex-common = { workspace = true, features = [
     "cli",
     "elapsed",
     "sandbox_summary",
 ] }
-codex-core = { path = "../core" }
-codex-login = { path = "../login" }
-codex-ollama = { path = "../ollama" }
-codex-protocol = { path = "../protocol" }
-owo-colors = "4.2.0"
-serde_json = "1"
-shlex = "1.3.0"
-tokio = { version = "1", features = [
+codex-core = { workspace = true }
+codex-ollama = { workspace = true }
+codex-protocol = { workspace = true }
+owo-colors = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+tokio = { workspace = true, features = [
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
 ] }
-tracing = { version = "0.1.41", features = ["log"] }
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+ts-rs = { workspace = true, features = [
+    "uuid-impl",
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
 
 [dev-dependencies]
-assert_cmd = "2"
-core_test_support = { path = "../core/tests/common" }
-libc = "0.2"
-predicates = "3"
-tempfile = "3.13.0"
-wiremock = "0.6"
+assert_cmd = { workspace = true }
+core_test_support = { workspace = true }
+libc = { workspace = true }
+predicates = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+walkdir = { workspace = true }
+wiremock = { workspace = true }
