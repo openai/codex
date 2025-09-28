@@ -1268,7 +1268,9 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn find_codex_home_defaults_to_config_dir_on_unix() -> anyhow::Result<()> {
-        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _g = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let prev_code = env::var("CODEX_HOME").ok();
         let prev_home = env::var("HOME").ok();
@@ -1305,7 +1307,9 @@ mod tests {
     #[test]
     fn find_codex_home_defaults_to_appdata_on_windows() -> anyhow::Result<()> {
         use std::path::PathBuf;
-        let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _g = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let prev_code = env::var("CODEX_HOME").ok();
         let prev_app = env::var("APPDATA").ok();
