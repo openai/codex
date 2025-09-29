@@ -804,6 +804,7 @@ mod tests {
         ConversationItem {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
+            tail: Vec::new(),
         }
     }
 
@@ -863,10 +864,12 @@ mod tests {
         let a = ConversationItem {
             path: PathBuf::from("/tmp/a.jsonl"),
             head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
+            tail: Vec::new(),
         };
         let b = ConversationItem {
             path: PathBuf::from("/tmp/b.jsonl"),
             head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
+            tail: Vec::new(),
         };
         let rows = rows_from_items(vec![a, b]);
         assert_eq!(rows.len(), 2);
