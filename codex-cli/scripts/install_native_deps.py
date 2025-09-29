@@ -9,6 +9,7 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -20,7 +21,7 @@ CODEX_CLI_ROOT = SCRIPT_DIR.parent
 DEFAULT_WORKFLOW_URL = "https://github.com/openai/codex/actions/runs/17952349351"  # rust-v0.40.0
 VENDOR_DIR_NAME = "vendor"
 RG_MANIFEST = CODEX_CLI_ROOT / "bin" / "rg"
-CODEX_TARGETS = (
+BINARY_TARGETS = (
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
     "x86_64-apple-darwin",
@@ -28,6 +29,27 @@ CODEX_TARGETS = (
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
 )
+
+
+@dataclass(frozen=True)
+class BinaryComponent:
+    artifact_prefix: str  # matches the artifact filename prefix (e.g. codex-<target>.zst)
+    dest_dir: str  # directory under vendor/<target>/ where the binary is installed
+    binary_basename: str  # executable name inside dest_dir (before optional .exe)
+
+
+BINARY_COMPONENTS = {
+    "codex": BinaryComponent(
+        artifact_prefix="codex",
+        dest_dir="codex",
+        binary_basename="codex",
+    ),
+    "codex-responses-api-proxy": BinaryComponent(
+        artifact_prefix="codex-responses-api-proxy",
+        dest_dir="codex-responses-api-proxy",
+        binary_basename="codex-responses-api-proxy",
+    ),
+}
 
 RG_TARGET_PLATFORM_PAIRS: list[tuple[str, str]] = [
     ("x86_64-unknown-linux-musl", "linux-x86_64"),
@@ -51,6 +73,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--component",
+        dest="components",
+        action="append",
+        choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
+        help=(
+            "Limit installation to the specified components."
+            " May be repeated. Defaults to 'codex' and 'rg'."
+        ),
+    )
+    parser.add_argument(
         "root",
         nargs="?",
         type=Path,
@@ -69,18 +101,28 @@ def main() -> int:
     vendor_dir = codex_cli_root / VENDOR_DIR_NAME
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
+    components = args.components or ["codex", "rg"]
+
     workflow_url = (args.workflow_url or DEFAULT_WORKFLOW_URL).strip()
     if not workflow_url:
         workflow_url = DEFAULT_WORKFLOW_URL
 
     workflow_id = workflow_url.rstrip("/").split("/")[-1]
+    print(f"Downloading native artifacts from workflow {workflow_id}...")
 
     with tempfile.TemporaryDirectory(prefix="codex-native-artifacts-") as artifacts_dir_str:
         artifacts_dir = Path(artifacts_dir_str)
         _download_artifacts(workflow_id, artifacts_dir)
-        install_codex_binaries(artifacts_dir, vendor_dir, CODEX_TARGETS)
+        install_binary_components(
+            artifacts_dir,
+            vendor_dir,
+            BINARY_TARGETS,
+            [name for name in components if name in BINARY_COMPONENTS],
+        )
 
-    fetch_rg(vendor_dir, DEFAULT_RG_TARGETS, manifest_path=RG_MANIFEST)
+    if "rg" in components:
+        print("Fetching ripgrep binaries...")
+        fetch_rg(vendor_dir, DEFAULT_RG_TARGETS, manifest_path=RG_MANIFEST)
 
     print(f"Installed native dependencies into {vendor_dir}")
     return 0
@@ -124,6 +166,8 @@ def fetch_rg(
     results: dict[str, Path] = {}
     max_workers = min(len(task_configs), max(1, (os.cpu_count() or 1)))
 
+    print("Installing ripgrep binaries for targets: " + ", ".join(targets))
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
             executor.submit(
@@ -140,6 +184,7 @@ def fetch_rg(
         for future in as_completed(future_map):
             target = future_map[future]
             results[target] = future.result()
+            print(f"  installed ripgrep for {target}")
 
     return [results[target] for target in targets]
 
@@ -158,40 +203,60 @@ def _download_artifacts(workflow_id: str, dest_dir: Path) -> None:
     subprocess.check_call(cmd)
 
 
-def install_codex_binaries(
-    artifacts_dir: Path, vendor_dir: Path, targets: Iterable[str]
-) -> list[Path]:
+def install_binary_components(
+    artifacts_dir: Path,
+    vendor_dir: Path,
+    targets: Iterable[str],
+    component_names: Sequence[str],
+) -> None:
+    selected_components = [BINARY_COMPONENTS[name] for name in component_names if name in BINARY_COMPONENTS]
+    if not selected_components:
+        return
+
     targets = list(targets)
     if not targets:
-        return []
+        return
 
-    results: dict[str, Path] = {}
-    max_workers = min(len(targets), max(1, (os.cpu_count() or 1)))
+    for component in selected_components:
+        print(
+            f"Installing {component.binary_basename} binaries for targets: "
+            + ", ".join(targets)
+        )
+        max_workers = min(len(targets), max(1, (os.cpu_count() or 1)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _install_single_binary,
+                    artifacts_dir,
+                    vendor_dir,
+                    target,
+                    component,
+                ): target
+                for target in targets
+            }
+            for future in as_completed(futures):
+                installed_path = future.result()
+                print(f"  installed {installed_path}")
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_map = {
-            executor.submit(_install_single_codex_binary, artifacts_dir, vendor_dir, target): target
-            for target in targets
-        }
 
-        for future in as_completed(future_map):
-            target = future_map[future]
-            results[target] = future.result()
-
-    return [results[target] for target in targets]
-
-
-def _install_single_codex_binary(artifacts_dir: Path, vendor_dir: Path, target: str) -> Path:
+def _install_single_binary(
+    artifacts_dir: Path,
+    vendor_dir: Path,
+    target: str,
+    component: BinaryComponent,
+) -> Path:
     artifact_subdir = artifacts_dir / target
-    archive_name = _archive_name_for_target(target)
+    archive_name = _archive_name_for_target(component.artifact_prefix, target)
     archive_path = artifact_subdir / archive_name
     if not archive_path.exists():
         raise FileNotFoundError(f"Expected artifact not found: {archive_path}")
 
-    dest_dir = vendor_dir / target / "codex"
+    dest_dir = vendor_dir / target / component.dest_dir
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    binary_name = "codex.exe" if "windows" in target else "codex"
+    binary_name = (
+        f"{component.binary_basename}.exe" if "windows" in target else component.binary_basename
+    )
     dest = dest_dir / binary_name
     dest.unlink(missing_ok=True)
     extract_archive(archive_path, "zst", None, dest)
@@ -200,10 +265,10 @@ def _install_single_codex_binary(artifacts_dir: Path, vendor_dir: Path, target: 
     return dest
 
 
-def _archive_name_for_target(target: str) -> str:
+def _archive_name_for_target(artifact_prefix: str, target: str) -> str:
     if "windows" in target:
-        return f"codex-{target}.exe.zst"
-    return f"codex-{target}.zst"
+        return f"{artifact_prefix}-{target}.exe.zst"
+    return f"{artifact_prefix}-{target}.zst"
 
 
 def _fetch_single_rg(
