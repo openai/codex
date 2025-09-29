@@ -737,7 +737,6 @@ name = "codex-cloud-tasks"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "async-trait",
  "base64",
  "chrono",
@@ -749,7 +748,6 @@ dependencies = [
  "codex-login",
  "codex-tui",
  "crossterm",
- "predicates",
  "ratatui",
  "reqwest",
  "serde",

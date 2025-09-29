@@ -34,6 +34,4 @@ unicode-width = "0.1"
 codex-tui = { path = "../tui" }
 
 [dev-dependencies]
-assert_cmd = "2"
 async-trait = "0.1"
-predicates = "3"
