@@ -63,9 +63,13 @@ export class Conversation {
     const items: ConversationItem[] = [];
     let finalResponse: string = '';
     for await (const item of generator) {
-      const parsed = JSON.parse(item);
-      finalResponse = getFinalResponse(parsed) ?? finalResponse;
-      items.push(parsed);
+      const parsed = JSON.parse(item) as ConversationEvent;
+      if (parsed.type === "item.completed"){
+        if (parsed.item.item_type === "assistant_message") {
+          finalResponse = parsed.item.text;
+        }
+        items.push(parsed.item);
+      }
     }
     return {
       items,
@@ -74,9 +78,3 @@ export class Conversation {
   }
 }
 
-const getFinalResponse = (event: ConversationEvent): string | null => {
-  if (event.type === "item.completed" && event.item.item_type === "assistant_message") {
-    return event.item.text;
-  }
-  return null;
-}

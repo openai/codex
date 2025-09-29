@@ -26,27 +26,9 @@ describe("Codex", () => {
     
     const expectedItems = [
       {
-        type: "session.created",
-        session_id: expect.any(String),
-      },
-      {
-        type: "turn.started",
-      },
-      {
-        type: "item.completed",
-        item: {
-          id: expect.any(String),
-          item_type: "assistant_message",
-          text: "Hi!",
-        },
-      },
-      {
-        type: "turn.completed",
-        usage: {
-          cached_input_tokens: 0,
-          input_tokens: 0,
-          output_tokens: 0,
-        },
+        id: expect.any(String),
+        item_type: "assistant_message",
+        text: "Hi!",
       },
     ];
     expect(result.items).toEqual(expectedItems);

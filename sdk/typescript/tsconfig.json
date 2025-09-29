@@ -15,6 +15,7 @@
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true,
+    "noImplicitAny": true,
     "outDir": "dist"
   },
   "include": ["src", "tests", "tsup.config.ts"],
