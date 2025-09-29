@@ -29,7 +29,6 @@ mod exec_command;
 pub mod exec_env;
 mod flags;
 pub mod git_info;
-pub mod internal_storage;
 pub mod landlock;
 mod mcp_connection_manager;
 mod mcp_tool_call;
@@ -104,3 +103,5 @@ pub use codex_protocol::models::LocalShellExecAction;
 pub use codex_protocol::models::LocalShellStatus;
 pub use codex_protocol::models::ReasoningItemContent;
 pub use codex_protocol::models::ResponseItem;
+
+pub mod otel_init;
