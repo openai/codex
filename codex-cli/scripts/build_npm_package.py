@@ -13,6 +13,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = CODEX_CLI_ROOT.parent
+RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
 GITHUB_REPO = "openai/codex"
 
 # The docs are not clear on what the expected value/format of
@@ -23,6 +24,12 @@ WORKFLOW_NAME = ".github/workflows/rust-release.yml"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
+    parser.add_argument(
+        "--package",
+        choices=("codex", "codex-responses-api-proxy"),
+        default="codex",
+        help="Which npm package to stage (default: codex).",
+    )
     parser.add_argument(
         "--version",
         help="Version number to write to package.json inside the staged package.",
@@ -63,6 +70,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
+    package = args.package
     version = args.version
     release_version = args.release_version
     if release_version:
@@ -76,7 +84,7 @@ def main() -> int:
     staging_dir, created_temp = prepare_staging_dir(args.staging_dir)
 
     try:
-        stage_sources(staging_dir, version)
+        stage_sources(staging_dir, version, package)
 
         workflow_url = args.workflow_url
         resolved_head_sha: str | None = None
@@ -100,16 +108,23 @@ def main() -> int:
         if not workflow_url:
             raise RuntimeError("Unable to determine workflow URL for native binaries.")
 
-        install_native_binaries(staging_dir, workflow_url)
+        install_native_binaries(staging_dir, workflow_url, package)
 
         if release_version:
             staging_dir_str = str(staging_dir)
-            print(
-                f"Staged version {version} for release in {staging_dir_str}\n\n"
-                "Verify the CLI:\n"
-                f"    node {staging_dir_str}/bin/codex.js --version\n"
-                f"    node {staging_dir_str}/bin/codex.js --help\n\n"
-            )
+            if package == "codex":
+                print(
+                    f"Staged version {version} for release in {staging_dir_str}\n\n"
+                    "Verify the CLI:\n"
+                    f"    node {staging_dir_str}/bin/codex.js --version\n"
+                    f"    node {staging_dir_str}/bin/codex.js --help\n\n"
+                )
+            else:
+                print(
+                    f"Staged version {version} for release in {staging_dir_str}\n\n"
+                    "Verify the responses API proxy:\n"
+                    f"    node {staging_dir_str}/bin/codex-responses-api-proxy.js --help\n\n"
+                )
         else:
             print(f"Staged package in {staging_dir}")
 
@@ -136,20 +151,34 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
     return temp_dir, True
 
 
-def stage_sources(staging_dir: Path, version: str) -> None:
+def stage_sources(staging_dir: Path, version: str, package: str) -> None:
     bin_dir = staging_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
 
-    shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
-    rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
-    if rg_manifest.exists():
-        shutil.copy2(rg_manifest, bin_dir / "rg")
+    if package == "codex":
+        shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
+        rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
+        if rg_manifest.exists():
+            shutil.copy2(rg_manifest, bin_dir / "rg")
 
-    readme_src = REPO_ROOT / "README.md"
-    if readme_src.exists():
-        shutil.copy2(readme_src, staging_dir / "README.md")
+        readme_src = REPO_ROOT / "README.md"
+        if readme_src.exists():
+            shutil.copy2(readme_src, staging_dir / "README.md")
 
-    with open(CODEX_CLI_ROOT / "package.json", "r", encoding="utf-8") as fh:
+        package_json_path = CODEX_CLI_ROOT / "package.json"
+    elif package == "codex-responses-api-proxy":
+        launcher_src = RESPONSES_API_PROXY_NPM_ROOT / "bin" / "codex-responses-api-proxy.js"
+        shutil.copy2(launcher_src, bin_dir / "codex-responses-api-proxy.js")
+
+        readme_src = RESPONSES_API_PROXY_NPM_ROOT / "README.md"
+        if readme_src.exists():
+            shutil.copy2(readme_src, staging_dir / "README.md")
+
+        package_json_path = RESPONSES_API_PROXY_NPM_ROOT / "package.json"
+    else:
+        raise RuntimeError(f"Unknown package '{package}'.")
+
+    with open(package_json_path, "r", encoding="utf-8") as fh:
         package_json = json.load(fh)
     package_json["version"] = version
 
@@ -158,8 +187,20 @@ def stage_sources(staging_dir: Path, version: str) -> None:
         out.write("\n")
 
 
-def install_native_binaries(staging_dir: Path, workflow_url: str) -> None:
-    cmd = ["./scripts/install_native_deps.py", "--workflow-url", workflow_url, str(staging_dir)]
+def install_native_binaries(staging_dir: Path, workflow_url: str, package: str) -> None:
+    package_components = {
+        "codex": ["codex", "rg"],
+        "codex-responses-api-proxy": ["codex-responses-api-proxy"],
+    }
+
+    components = package_components.get(package)
+    if components is None:
+        raise RuntimeError(f"Unknown package '{package}'.")
+
+    cmd = ["./scripts/install_native_deps.py", "--workflow-url", workflow_url]
+    for component in components:
+        cmd.extend(["--component", component])
+    cmd.append(str(staging_dir))
     subprocess.check_call(cmd, cwd=CODEX_CLI_ROOT)
 
 
