@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::DateTime;
+use chrono::Duration;
 use chrono::Utc;
 use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
@@ -876,7 +877,9 @@ mod tests {
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
+    use insta::assert_snapshot;
     use serde_json::json;
+    use std::path::PathBuf;
     use std::future::Future;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -1011,6 +1014,64 @@ mod tests {
 
         assert_eq!(row.created_at, Some(expected_created));
         assert_eq!(row.updated_at, Some(expected_updated));
+    }
+
+    #[test]
+    fn resume_table_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+        use ratatui::layout::{Constraint, Layout};
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state =
+            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+
+        let now = Utc::now();
+        let rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                preview: String::from("Fix resume picker timestamps"),
+                created_at: Some(now - Duration::minutes(16)),
+                updated_at: Some(now - Duration::seconds(42)),
+            },
+            Row {
+                path: PathBuf::from("/tmp/b.jsonl"),
+                preview: String::from("Investigate lazy pagination cap"),
+                created_at: Some(now - Duration::hours(1)),
+                updated_at: Some(now - Duration::minutes(35)),
+            },
+            Row {
+                path: PathBuf::from("/tmp/c.jsonl"),
+                preview: String::from("Explain the codebase"),
+                created_at: Some(now - Duration::hours(2)),
+                updated_at: Some(now - Duration::hours(2)),
+            },
+        ];
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+        state.view_rows = Some(3);
+        state.selected = 1;
+        state.scroll_top = 0;
+        state.update_view_rows(3);
+
+        let metrics = calculate_column_metrics(&state.filtered_rows);
+
+        let width: u16 = 80;
+        let height: u16 = 6;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        let mut frame = terminal.get_frame();
+        let area = frame.area();
+        let segments = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+        render_column_headers(&mut frame, segments[0], &metrics);
+        render_list(&mut frame, segments[1], &state, &metrics);
+        drop(frame);
+        terminal.flush().expect("flush");
+
+        let snapshot = terminal.backend().to_string();
+        assert_snapshot!("resume_picker_table", snapshot);
     }
 
     #[test]

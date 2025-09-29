@@ -46,6 +46,16 @@ pub struct ConversationItem {
     pub updated_at: Option<String>,
 }
 
+#[derive(Default)]
+struct HeadTailSummary {
+    head: Vec<serde_json::Value>,
+    tail: Vec<serde_json::Value>,
+    saw_session_meta: bool,
+    saw_user_event: bool,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
 /// Hard cap to bound worst‑case work per request.
 const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
@@ -183,13 +193,19 @@ async fn traverse_directories_for_paths(
                     }
                     // Read head and simultaneously detect message events within the same
                     // first N JSONL records to avoid a second file read.
-                    let (head, tail, saw_session_meta, saw_user_event, created_at, updated_at) =
-                        read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
-                            .await
-                            .unwrap_or((Vec::new(), Vec::new(), false, false, None, None));
+                    let summary = read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
+                        .await
+                        .unwrap_or_default();
                     // Apply filters: must have session meta and at least one user message event
-                    if saw_session_meta && saw_user_event {
-                        let updated_at = updated_at.or_else(|| created_at.clone());
+                    if summary.saw_session_meta && summary.saw_user_event {
+                        let HeadTailSummary {
+                            head,
+                            tail,
+                            created_at,
+                            mut updated_at,
+                            ..
+                        } = summary;
+                        updated_at = updated_at.or_else(|| created_at.clone());
                         items.push(ConversationItem {
                             path,
                             head,
@@ -304,25 +320,15 @@ async fn read_head_and_tail(
     path: &Path,
     head_limit: usize,
     tail_limit: usize,
-) -> io::Result<(
-    Vec<serde_json::Value>,
-    Vec<serde_json::Value>,
-    bool,
-    bool,
-    Option<String>,
-    Option<String>,
-)> {
+) -> io::Result<HeadTailSummary> {
     use tokio::io::AsyncBufReadExt;
 
     let file = tokio::fs::File::open(path).await?;
     let reader = tokio::io::BufReader::new(file);
     let mut lines = reader.lines();
-    let mut head: Vec<serde_json::Value> = Vec::new();
-    let mut saw_session_meta = false;
-    let mut saw_user_event = false;
-    let mut created_at: Option<String> = None;
+    let mut summary = HeadTailSummary::default();
 
-    while head.len() < head_limit {
+    while summary.head.len() < head_limit {
         let line_opt = lines.next_line().await?;
         let Some(line) = line_opt else { break };
         let trimmed = line.trim();
@@ -335,16 +341,22 @@ async fn read_head_and_tail(
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
-                created_at = created_at.or_else(|| Some(rollout_line.timestamp.clone()));
+                summary.created_at = summary
+                    .created_at
+                    .clone()
+                    .or_else(|| Some(rollout_line.timestamp.clone()));
                 if let Ok(val) = serde_json::to_value(session_meta_line) {
-                    head.push(val);
-                    saw_session_meta = true;
+                    summary.head.push(val);
+                    summary.saw_session_meta = true;
                 }
             }
             RolloutItem::ResponseItem(item) => {
-                created_at = created_at.or_else(|| Some(rollout_line.timestamp.clone()));
+                summary.created_at = summary
+                    .created_at
+                    .clone()
+                    .or_else(|| Some(rollout_line.timestamp.clone()));
                 if let Ok(val) = serde_json::to_value(item) {
-                    head.push(val);
+                    summary.head.push(val);
                 }
             }
             RolloutItem::TurnContext(_) => {
@@ -355,26 +367,18 @@ async fn read_head_and_tail(
             }
             RolloutItem::EventMsg(ev) => {
                 if matches!(ev, EventMsg::UserMessage(_)) {
-                    saw_user_event = true;
+                    summary.saw_user_event = true;
                 }
             }
         }
     }
 
-    let (tail, updated_at) = if tail_limit == 0 {
-        (Vec::new(), None)
-    } else {
-        read_tail_records(path, tail_limit).await?
-    };
-
-    Ok((
-        head,
-        tail,
-        saw_session_meta,
-        saw_user_event,
-        created_at,
-        updated_at,
-    ))
+    if tail_limit != 0 {
+        let (tail, updated_at) = read_tail_records(path, tail_limit).await?;
+        summary.tail = tail;
+        summary.updated_at = updated_at;
+    }
+    Ok(summary)
 }
 
 async fn read_tail_records(
