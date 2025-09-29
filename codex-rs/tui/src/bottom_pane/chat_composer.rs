@@ -1238,12 +1238,6 @@ impl ChatComposer {
 impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
-        if !matches!(self.active_popup, ActivePopup::None) {
-            buf.set_style(
-                popup_rect,
-                user_message_style(terminal_palette::default_bg()),
-            );
-        }
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
