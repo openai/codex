@@ -81,7 +81,7 @@ impl GitSha {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
     ApiKey,
@@ -183,6 +183,11 @@ pub enum ClientRequest {
     UserInfo {
         #[serde(rename = "id")]
         request_id: RequestId,
+    },
+    FuzzyFileSearch {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: FuzzyFileSearchParams,
     },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
@@ -660,6 +665,32 @@ pub struct ExecCommandApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct ApplyPatchApprovalResponse {
     pub decision: ReviewDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchParams {
+    pub query: String,
+    pub roots: Vec<String>,
+    // if provided, will cancel any previous request that used the same value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancellation_token: Option<String>,
+}
+
+/// Superset of [`codex_file_search::FileMatch`]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+pub struct FuzzyFileSearchResult {
+    pub root: String,
+    pub path: String,
+    pub score: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indices: Option<Vec<u32>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+pub struct FuzzyFileSearchResponse {
+    pub files: Vec<FuzzyFileSearchResult>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
