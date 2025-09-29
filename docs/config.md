@@ -368,6 +368,7 @@ url = "http://127.0.0.1:3845/mcp"
 # Use this with caution because the token is in plaintext.
 bearer_token = "<token>"
 ```
+
 ### Other configuration options
 
 ```toml
@@ -376,8 +377,6 @@ startup_timeout_sec = 20
 # Optional: override the default 60s per-tool timeout
 tool_timeout_sec = 30
 ```
-
-**Note:** Codex may cache the list of tools and resources from an MCP server so that Codex can include this information in context at startup without spawning all the servers. This is designed to save resources by loading MCP servers lazily.
 
 ### Experimental RMCP client
 
@@ -389,7 +388,7 @@ Please try and report issues with the new client. To enable it, add this to the 
 experimental_use_rmcp_client = true
 ```
 
-### Cli commands
+### MCP CLI commands
 
 ```shell
 # Add a server (env can be repeated; `--` separates the launcher command)
