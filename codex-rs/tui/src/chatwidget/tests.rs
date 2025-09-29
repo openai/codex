@@ -341,6 +341,7 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots: Vec::new(),
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
+        last_rendered_width: std::cell::Cell::new(None),
     };
     (widget, rx, op_rx)
 }
