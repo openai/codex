@@ -136,15 +136,16 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         }
     }
 
-    let mut ordered = Vec::with_capacity(8);
-    ordered.push(commands);
-    ordered.push(newline);
-    ordered.push(file_paths);
-    ordered.push(paste_image);
-    ordered.push(edit_previous);
-    ordered.push(quit);
-    ordered.push(String::new());
-    ordered.push(show_transcript);
+    let ordered = vec![
+        commands,
+        newline,
+        file_paths,
+        paste_image,
+        edit_previous,
+        quit,
+        String::new(),
+        show_transcript,
+    ];
 
     build_columns(ordered)
 }
