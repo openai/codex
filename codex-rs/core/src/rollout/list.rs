@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
+use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use uuid::Uuid;
 
@@ -40,6 +41,10 @@ pub struct ConversationItem {
     pub head: Vec<serde_json::Value>,
     /// Last up to `TAIL_RECORD_LIMIT` JSONL response records parsed as JSON.
     pub tail: Vec<serde_json::Value>,
+    /// RFC3339 timestamp string for when the session was created, if available.
+    pub created_at: Option<String>,
+    /// RFC3339 timestamp string for the most recent response in the tail, if available.
+    pub updated_at: Option<String>,
 }
 
 /// Hard cap to bound worst‑case work per request.
@@ -179,13 +184,22 @@ async fn traverse_directories_for_paths(
                     }
                     // Read head and simultaneously detect message events within the same
                     // first N JSONL records to avoid a second file read.
-                    let (head, tail, saw_session_meta, saw_user_event) =
+                    let (head, tail, saw_session_meta, saw_user_event, updated_at) =
                         read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
                             .await
-                            .unwrap_or((Vec::new(), Vec::new(), false, false));
+                            .unwrap_or((Vec::new(), Vec::new(), false, false, None));
                     // Apply filters: must have session meta and at least one user message event
                     if saw_session_meta && saw_user_event {
-                        items.push(ConversationItem { path, head, tail });
+                        let created_at = extract_created_timestamp(&head)
+                            .or_else(|| timestamp_from_filename(&path));
+                        let updated_at = updated_at.or_else(|| created_at.clone());
+                        items.push(ConversationItem {
+                            path,
+                            head,
+                            tail,
+                            created_at,
+                            updated_at,
+                        });
                     }
                 }
             }
@@ -293,7 +307,13 @@ async fn read_head_and_tail(
     path: &Path,
     head_limit: usize,
     tail_limit: usize,
-) -> io::Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, bool, bool)> {
+) -> io::Result<(
+    Vec<serde_json::Value>,
+    Vec<serde_json::Value>,
+    bool,
+    bool,
+    Option<String>,
+)> {
     use tokio::io::AsyncBufReadExt;
 
     let file = tokio::fs::File::open(path).await?;
@@ -340,22 +360,25 @@ async fn read_head_and_tail(
         }
     }
 
-    let tail = if tail_limit == 0 {
-        Vec::new()
+    let (tail, updated_at) = if tail_limit == 0 {
+        (Vec::new(), None)
     } else {
         read_tail_records(path, tail_limit).await?
     };
 
-    Ok((head, tail, saw_session_meta, saw_user_event))
+    Ok((head, tail, saw_session_meta, saw_user_event, updated_at))
 }
 
-async fn read_tail_records(path: &Path, max_records: usize) -> io::Result<Vec<serde_json::Value>> {
+async fn read_tail_records(
+    path: &Path,
+    max_records: usize,
+) -> io::Result<(Vec<serde_json::Value>, Option<String>)> {
     use std::io::SeekFrom;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncSeekExt;
 
     if max_records == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
 
     const CHUNK_SIZE: usize = 8192;
@@ -363,24 +386,28 @@ async fn read_tail_records(path: &Path, max_records: usize) -> io::Result<Vec<se
     let mut file = tokio::fs::File::open(path).await?;
     let mut pos = file.seek(SeekFrom::End(0)).await?;
     if pos == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
 
     let mut buffer: Vec<u8> = Vec::new();
+    let mut latest_timestamp: Option<String> = None;
 
     loop {
         let slice_start = match (pos > 0, buffer.iter().position(|&b| b == b'\n')) {
             (true, Some(idx)) => idx + 1,
             _ => 0,
         };
-        let tail = collect_last_response_values(&buffer[slice_start..], max_records);
+        let (tail, newest_ts) = collect_last_response_values(&buffer[slice_start..], max_records);
+        if latest_timestamp.is_none() {
+            latest_timestamp = newest_ts.clone();
+        }
         if tail.len() >= max_records || pos == 0 {
-            return Ok(tail);
+            return Ok((tail, latest_timestamp.or(newest_ts)));
         }
 
         let read_size = CHUNK_SIZE.min(pos as usize);
         if read_size == 0 {
-            return Ok(tail);
+            return Ok((tail, latest_timestamp.or(newest_ts)));
         }
         pos -= read_size as u64;
         file.seek(SeekFrom::Start(pos)).await?;
@@ -391,15 +418,19 @@ async fn read_tail_records(path: &Path, max_records: usize) -> io::Result<Vec<se
     }
 }
 
-fn collect_last_response_values(buffer: &[u8], max_records: usize) -> Vec<serde_json::Value> {
+fn collect_last_response_values(
+    buffer: &[u8],
+    max_records: usize,
+) -> (Vec<serde_json::Value>, Option<String>) {
     use std::borrow::Cow;
 
     if buffer.is_empty() || max_records == 0 {
-        return Vec::new();
+        return (Vec::new(), None);
     }
 
     let text: Cow<'_, str> = String::from_utf8_lossy(buffer);
     let mut collected_rev: Vec<serde_json::Value> = Vec::new();
+    let mut latest_timestamp: Option<String> = None;
     for line in text.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -408,29 +439,32 @@ fn collect_last_response_values(buffer: &[u8], max_records: usize) -> Vec<serde_
         let parsed: serde_json::Result<RolloutLine> = serde_json::from_str(trimmed);
         let Ok(rollout_line) = parsed else { continue };
         let RolloutLine { timestamp, item } = rollout_line;
-        if let RolloutItem::ResponseItem(item) = item {
-            if let Ok(val) = serde_json::to_value(&item) {
-                let with_timestamp = match val {
-                    serde_json::Value::Object(mut map) => {
-                        map.insert("timestamp".into(), serde_json::Value::String(timestamp));
-                        serde_json::Value::Object(map)
-                    }
-                    other => {
-                        let mut map = serde_json::Map::new();
-                        map.insert("timestamp".into(), serde_json::Value::String(timestamp));
-                        map.insert("value".into(), other);
-                        serde_json::Value::Object(map)
-                    }
-                };
-                collected_rev.push(with_timestamp);
-                if collected_rev.len() == max_records {
-                    break;
-                }
+        if let RolloutItem::ResponseItem(item) = item
+            && let Ok(val) = serde_json::to_value(&item)
+        {
+            if latest_timestamp.is_none() {
+                latest_timestamp = Some(timestamp.clone());
+            }
+            collected_rev.push(val);
+            if collected_rev.len() == max_records {
+                break;
             }
         }
     }
     collected_rev.reverse();
-    collected_rev
+    (collected_rev, latest_timestamp)
+}
+
+fn extract_created_timestamp(head: &[serde_json::Value]) -> Option<String> {
+    head.iter()
+        .find_map(|value| value.get("timestamp").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+}
+
+fn timestamp_from_filename(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_string_lossy();
+    let (ts, _) = parse_timestamp_uuid_from_filename(&file_name)?;
+    ts.format(&Rfc3339).ok()
 }
 
 /// Locate a recorded conversation rollout file by its UUID string using the existing

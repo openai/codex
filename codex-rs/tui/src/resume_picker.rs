@@ -566,8 +566,16 @@ fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
 }
 
 fn head_to_row(item: &ConversationItem) -> Row {
-    let created_at = item.head.first().and_then(extract_timestamp);
-    let updated_at = item.tail.iter().rev().filter_map(extract_timestamp).next();
+    let created_at = item
+        .created_at
+        .as_deref()
+        .and_then(parse_timestamp_str)
+        .or_else(|| item.head.first().and_then(extract_timestamp));
+    let updated_at = item
+        .updated_at
+        .as_deref()
+        .and_then(parse_timestamp_str)
+        .or_else(|| created_at.clone());
 
     let preview = preview_from_head(&item.head)
         .map(|s| s.trim().to_string())
@@ -580,6 +588,12 @@ fn head_to_row(item: &ConversationItem) -> Row {
         created_at,
         updated_at,
     }
+}
+
+fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .map(|dt| dt.with_timezone(&Utc))
+        .ok()
 }
 
 fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
@@ -886,6 +900,8 @@ mod tests {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
             tail: Vec::new(),
+            created_at: Some(ts.to_string()),
+            updated_at: Some(ts.to_string()),
         }
     }
 
@@ -946,11 +962,15 @@ mod tests {
             path: PathBuf::from("/tmp/a.jsonl"),
             head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
             tail: Vec::new(),
+            created_at: Some("2025-01-01T00:00:00Z".into()),
+            updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
         let b = ConversationItem {
             path: PathBuf::from("/tmp/b.jsonl"),
             head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
             tail: Vec::new(),
+            created_at: Some("2025-01-02T00:00:00Z".into()),
+            updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
         let rows = rows_from_items(vec![a, b]);
         assert_eq!(rows.len(), 2);
@@ -977,6 +997,8 @@ mod tests {
             path: PathBuf::from("/tmp/a.jsonl"),
             head,
             tail,
+            created_at: Some("2025-01-01T00:00:00Z".into()),
+            updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
 
         let row = head_to_row(&item);
