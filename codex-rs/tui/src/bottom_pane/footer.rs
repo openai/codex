@@ -1,3 +1,4 @@
+use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
@@ -5,6 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::WidgetRef;
+use std::iter;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
@@ -70,12 +72,10 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     match props.mode {
-        FooterMode::CtrlCReminder => {
-            vec![ctrl_c_reminder_line(CtrlCReminderState {
-                is_task_running: props.is_task_running,
-            })]
-        }
-        FooterMode::ShortcutPrompt => vec!["? for shortcuts".dim().into()],
+        FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
+            is_task_running: props.is_task_running,
+        })],
+        FooterMode::ShortcutPrompt => vec![dim_line(indent_text("? for shortcuts"))],
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
             use_shift_enter_hint: props.use_shift_enter_hint,
             esc_backtrack_hint: props.esc_backtrack_hint,
@@ -102,7 +102,8 @@ fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
     } else {
         "quit"
     };
-    format!("ctrl + c again to {action}").dim().into()
+    let text = format!("ctrl + c again to {action}");
+    dim_line(indent_text(&text))
 }
 
 fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
@@ -111,7 +112,7 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
     } else {
         "esc esc to edit previous message"
     };
-    text.dim().into()
+    dim_line(indent_text(text))
 }
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
@@ -193,9 +194,21 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
                     line.push_str(&" ".repeat(padding));
                 }
             }
-            Line::from(line).dim()
+            let indented = indent_text(&line);
+            dim_line(indented)
         })
         .collect()
+}
+
+fn indent_text(text: &str) -> String {
+    let mut indented = String::with_capacity(FOOTER_INDENT_COLS + text.len());
+    indented.extend(iter::repeat(' ').take(FOOTER_INDENT_COLS));
+    indented.push_str(text);
+    indented
+}
+
+fn dim_line(text: String) -> Line<'static> {
+    Line::from(text).dim()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
