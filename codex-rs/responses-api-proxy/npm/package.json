@@ -1,9 +1,9 @@
 {
-  "name": "@openai/codex",
+  "name": "@openai/codex-responses-api-proxy",
   "version": "0.0.0-dev",
   "license": "Apache-2.0",
   "bin": {
-    "codex": "bin/codex.js"
+    "codex-responses-api-proxy": "bin/codex-responses-api-proxy.js"
   },
   "type": "module",
   "engines": {
@@ -16,6 +16,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openai/codex.git",
-    "directory": "codex-cli"
+    "directory": "codex-rs/responses-api-proxy/npm"
   }
 }
