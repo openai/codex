@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::DateTime;
-use chrono::Duration;
 use chrono::Utc;
 use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
@@ -879,6 +878,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use serde_json::json;
+    use chrono::Duration;
     use std::path::PathBuf;
     use std::future::Future;
     use std::sync::Arc;
