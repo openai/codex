@@ -57,6 +57,8 @@ impl Shell {
                         // should give a clue to the model to fix upon retry that it's running under PowerShell.
                         None => Some(vec![
                             ps.exe.clone(),
+                            "-ExecutionPolicy".to_string(),
+                            "Bypass".to_string(),
                             "-NoProfile".to_string(),
                             "-Command".to_string(),
                             script,
@@ -77,6 +79,8 @@ impl Shell {
                     return joined.map(|arg| {
                         vec![
                             ps.exe.clone(),
+                            "-ExecutionPolicy".to_string(),
+                            "Bypass".to_string(),
                             "-NoProfile".to_string(),
                             "-Command".to_string(),
                             arg,
@@ -498,7 +502,7 @@ mod tests_windows {
                     bash_exe_fallback: None,
                 }),
                 vec!["bash", "-lc", "echo hello"],
-                vec!["powershell.exe", "-NoProfile", "-Command", "echo hello"],
+                vec!["powershell.exe", "-ExecutionPolicy", "Bypass", "-NoProfile", "-Command", "echo hello"],
             ),
             (
                 Shell::PowerShell(PowerShellConfig {
@@ -569,3 +573,5 @@ mod tests_windows {
         }
     }
 }
+
+
