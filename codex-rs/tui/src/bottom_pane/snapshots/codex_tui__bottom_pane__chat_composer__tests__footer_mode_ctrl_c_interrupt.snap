@@ -10,4 +10,5 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"    ctrl + c again to interrupt                                                                     "
+"                                                                                                    "
+"ctrl + c again to interrupt                                                                         "
