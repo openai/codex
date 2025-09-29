@@ -24,6 +24,10 @@ use super::footer::render_footer;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
+use crate::bottom_pane::prompt_args::expand_custom_prompt;
+use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
+use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
 use crate::terminal_palette;
@@ -387,6 +391,7 @@ impl ChatComposer {
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
                 if let Some(sel) = popup.selected_item() {
+                    let mut cursor_target: Option<usize> = None;
                     match sel {
                         CommandItem::Builtin(cmd) => {
                             let starts_with_cmd = first_line
@@ -395,21 +400,27 @@ impl ChatComposer {
                             if !starts_with_cmd {
                                 self.textarea.set_text(&format!("/{} ", cmd.command()));
                             }
+                            if !self.textarea.text().is_empty() {
+                                cursor_target = Some(self.textarea.text().len());
+                            }
                         }
                         CommandItem::UserPrompt(idx) => {
-                            if let Some(name) = popup.prompt_name(idx) {
-                                let starts_with_cmd =
-                                    first_line.trim_start().starts_with(&format!("/{name}"));
+                            if let Some(prompt) = popup.prompt(idx) {
+                                let name = prompt.name.clone();
+                                let starts_with_cmd = first_line
+                                    .trim_start()
+                                    .starts_with(format!("/{name}").as_str());
                                 if !starts_with_cmd {
-                                    self.textarea.set_text(&format!("/{name} "));
+                                    self.textarea.set_text(format!("/{name} ").as_str());
+                                }
+                                if !self.textarea.text().is_empty() {
+                                    cursor_target = Some(self.textarea.text().len());
                                 }
                             }
                         }
                     }
-                    // After completing the command, move cursor to the end.
-                    if !self.textarea.text().is_empty() {
-                        let end = self.textarea.text().len();
-                        self.textarea.set_cursor(end);
+                    if let Some(pos) = cursor_target {
+                        self.textarea.set_cursor(pos);
                     }
                 }
                 (InputResult::None, true)
@@ -419,26 +430,49 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                if let Some(sel) = popup.selected_item() {
-                    // Clear textarea so no residual text remains.
+                // If the current line starts with a custom prompt name and includes
+                // positional args for a numeric-style template, expand and submit
+                // immediately regardless of the popup selection.
+                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                if let Some((name, _rest)) = parse_slash_name(first_line)
+                    && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == name)
+                    && let Some(expanded) =
+                        expand_if_numeric_with_positional_args(prompt, first_line)
+                {
                     self.textarea.set_text("");
-                    // Capture any needed data from popup before clearing it.
-                    let prompt_content = match sel {
-                        CommandItem::UserPrompt(idx) => {
-                            popup.prompt_content(idx).map(str::to_string)
-                        }
-                        _ => None,
-                    };
-                    // Hide popup since an action has been dispatched.
-                    self.active_popup = ActivePopup::None;
+                    return (InputResult::Submitted(expanded), true);
+                }
 
+                if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            self.textarea.set_text("");
                             return (InputResult::Command(cmd), true);
                         }
-                        CommandItem::UserPrompt(_) => {
-                            if let Some(contents) = prompt_content {
-                                return (InputResult::Submitted(contents), true);
+                        CommandItem::UserPrompt(idx) => {
+                            if let Some(prompt) = popup.prompt(idx) {
+                                let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
+
+                                if !has_numeric {
+                                    // No placeholders at all: auto-submit the literal content
+                                    self.textarea.set_text("");
+                                    return (InputResult::Submitted(prompt.content.clone()), true);
+                                }
+                                // Numeric placeholders present.
+                                // If the user already typed positional args on the first line,
+                                // expand immediately and submit; otherwise insert "/name " so
+                                // they can type args.
+                                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                                if let Some(expanded) =
+                                    expand_if_numeric_with_positional_args(prompt, first_line)
+                                {
+                                    self.textarea.set_text("");
+                                    return (InputResult::Submitted(expanded), true);
+                                } else {
+                                    let text = format!("/{} ", prompt.name);
+                                    self.textarea.set_text(&text);
+                                    self.textarea.set_cursor(self.textarea.text().len());
+                                }
                             }
                             return (InputResult::None, true);
                         }
@@ -450,6 +484,7 @@ impl ChatComposer {
             input => self.handle_input_basic(input),
         }
     }
+
     #[inline]
     fn clamp_to_char_boundary(text: &str, pos: usize) -> usize {
         let mut p = pos.min(text.len());
@@ -714,16 +749,26 @@ impl ChatComposer {
             .unwrap_or(after_cursor.len());
         let end_idx = safe_cursor + end_rel_idx;
 
+        // If the path contains whitespace, wrap it in double quotes so the
+        // local prompt arg parser treats it as a single argument. Avoid adding
+        // quotes when the path already contains one to keep behavior simple.
+        let needs_quotes = path.chars().any(char::is_whitespace);
+        let inserted = if needs_quotes && !path.contains('"') {
+            format!("\"{path}\"")
+        } else {
+            path.to_string()
+        };
+
         // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
         let mut new_text =
-            String::with_capacity(text.len() - (end_idx - start_idx) + path.len() + 1);
+            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
         new_text.push_str(&text[..start_idx]);
-        new_text.push_str(path);
+        new_text.push_str(&inserted);
         new_text.push(' ');
         new_text.push_str(&text[end_idx..]);
 
         self.textarea.set_text(&new_text);
-        let new_cursor = start_idx.saturating_add(path.len()).saturating_add(1);
+        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
     }
 
@@ -809,6 +854,7 @@ impl ChatComposer {
                 if self
                     .paste_burst
                     .newline_should_insert_instead_of_submit(now)
+                    && !in_slash_context
                 {
                     self.textarea.insert_str("\n");
                     self.paste_burst.extend_window(now);
@@ -828,6 +874,13 @@ impl ChatComposer {
                 // If there is neither text nor attachments, suppress submission entirely.
                 let has_attachments = !self.attached_images.is_empty();
                 text = text.trim().to_string();
+
+                if let Some(expanded) =
+                    expand_custom_prompt(&text, &self.custom_prompts).unwrap_or_default()
+                {
+                    text = expanded;
+                }
+
                 if text.is_empty() && !has_attachments {
                     return (InputResult::None, true);
                 }
@@ -1149,18 +1202,43 @@ impl ChatComposer {
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
     fn sync_command_popup(&mut self) {
-        let first_line = self.textarea.text().lines().next().unwrap_or("");
-        let input_starts_with_slash = first_line.starts_with('/');
+        // Determine whether the caret is inside the initial '/name' token on the first line.
+        let text = self.textarea.text();
+        let first_line_end = text.find('\n').unwrap_or(text.len());
+        let first_line = &text[..first_line_end];
+        let cursor = self.textarea.cursor();
+        let caret_on_first_line = cursor <= first_line_end;
+
+        let is_editing_slash_command_name = if first_line.starts_with('/') && caret_on_first_line {
+            // Compute the end of the initial '/name' token (name may be empty yet).
+            let token_end = first_line
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(i, _)| i)
+                .unwrap_or(first_line.len());
+            cursor <= token_end
+        } else {
+            false
+        };
+        // If the cursor is currently positioned within an `@token`, prefer the
+        // file-search popup over the slash popup so users can insert a file path
+        // as an argument to the command (e.g., "/review @docs/...").
+        if Self::current_at_token(&self.textarea).is_some() {
+            if matches!(self.active_popup, ActivePopup::Command(_)) {
+                self.active_popup = ActivePopup::None;
+            }
+            return;
+        }
         match &mut self.active_popup {
             ActivePopup::Command(popup) => {
-                if input_starts_with_slash {
+                if is_editing_slash_command_name {
                     popup.on_composer_text_change(first_line.to_string());
                 } else {
                     self.active_popup = ActivePopup::None;
                 }
             }
             _ => {
-                if input_starts_with_slash {
+                if is_editing_slash_command_name {
                     let mut command_popup = CommandPopup::new(self.custom_prompts.clone());
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
@@ -1298,6 +1376,7 @@ mod tests {
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
+    use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -1788,6 +1867,18 @@ mod tests {
     }
 
     #[test]
+    fn extract_args_supports_quoted_paths_single_arg() {
+        let args = extract_positional_args_for_prompt_line("/review \"docs/My File.md\"", "review");
+        assert_eq!(args, vec!["docs/My File.md".to_string()]);
+    }
+
+    #[test]
+    fn extract_args_supports_mixed_quoted_and_unquoted() {
+        let args = extract_positional_args_for_prompt_line("/cmd \"with spaces\" simple", "cmd");
+        assert_eq!(args, vec!["with spaces".to_string(), "simple".to_string()]);
+    }
+
+    #[test]
     fn slash_tab_completion_moves_cursor_to_end() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -2234,7 +2325,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_custom_prompt_submits_file_contents() {
+    fn selecting_custom_prompt_without_args_submits_content() {
         let prompt_text = "Hello from saved prompt";
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
@@ -2265,6 +2356,145 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(InputResult::Submitted(prompt_text.to_string()), result);
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn selecting_custom_prompt_with_args_expands_placeholders() {
+        // Support $1..$9 and $ARGUMENTS in prompt content.
+        let prompt_text = "Header: $1\nArgs: $ARGUMENTS\nNinth: $9\n";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        // Type the slash command with two args and hit Enter to submit.
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'm', 'y', '-', 'p', 'r', 'o', 'm', 'p', 't', ' ', 'f', 'o', 'o', ' ', 'b',
+                'a', 'r',
+            ],
+        );
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let expected = "Header: foo\nArgs: foo bar\nNinth: \n".to_string();
+        assert_eq!(InputResult::Submitted(expected), result);
+    }
+
+    #[test]
+    fn selecting_custom_prompt_with_no_args_inserts_template() {
+        let prompt_text = "X:$1 Y:$2 All:[$ARGUMENTS]";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "p".to_string(),
+            path: "/tmp/p.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        type_chars_humanlike(&mut composer, &['/', 'p']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        // With no args typed, selecting the prompt inserts the command template
+        // and does not submit immediately.
+        assert_eq!(InputResult::None, result);
+        assert_eq!("/p ", composer.textarea.text());
+    }
+
+    #[test]
+    fn selecting_custom_prompt_preserves_literal_dollar_dollar() {
+        // '$$' should remain untouched.
+        let prompt_text = "Cost: $$ and first: $1";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "price".to_string(),
+            path: "/tmp/price.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        type_chars_humanlike(&mut composer, &['/', 'p', 'r', 'i', 'c', 'e', ' ', 'x']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            InputResult::Submitted("Cost: $$ and first: x".to_string()),
+            result
+        );
+    }
+
+    #[test]
+    fn selecting_custom_prompt_reuses_cached_arguments_join() {
+        let prompt_text = "First: $ARGUMENTS\nSecond: $ARGUMENTS";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "repeat".to_string(),
+            path: "/tmp/repeat.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'r', 'e', 'p', 'e', 'a', 't', ' ', 'o', 'n', 'e', ' ', 't', 'w', 'o',
+            ],
+        );
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let expected = "First: one two\nSecond: one two".to_string();
+        assert_eq!(InputResult::Submitted(expected), result);
     }
 
     #[test]
