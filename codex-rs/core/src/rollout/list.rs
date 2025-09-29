@@ -10,7 +10,6 @@ use std::sync::atomic::AtomicBool;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
-use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use uuid::Uuid;
 
@@ -184,13 +183,12 @@ async fn traverse_directories_for_paths(
                     }
                     // Read head and simultaneously detect message events within the same
                     // first N JSONL records to avoid a second file read.
-                    let (head, tail, saw_session_meta, saw_user_event, updated_at) =
+                    let (head, tail, saw_session_meta, saw_user_event, created_at, updated_at) =
                         read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
                             .await
-                            .unwrap_or((Vec::new(), Vec::new(), false, false, None));
+                            .unwrap_or((Vec::new(), Vec::new(), false, false, None, None));
                     // Apply filters: must have session meta and at least one user message event
                     if saw_session_meta && saw_user_event {
-                        let created_at = extract_created_timestamp(&head);
                         let updated_at = updated_at.or_else(|| created_at.clone());
                         items.push(ConversationItem {
                             path,
@@ -312,6 +310,7 @@ async fn read_head_and_tail(
     bool,
     bool,
     Option<String>,
+    Option<String>,
 )> {
     use tokio::io::AsyncBufReadExt;
 
@@ -321,6 +320,7 @@ async fn read_head_and_tail(
     let mut head: Vec<serde_json::Value> = Vec::new();
     let mut saw_session_meta = false;
     let mut saw_user_event = false;
+    let mut created_at: Option<String> = None;
 
     while head.len() < head_limit {
         let line_opt = lines.next_line().await?;
@@ -335,12 +335,14 @@ async fn read_head_and_tail(
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
+                created_at = created_at.or_else(|| Some(rollout_line.timestamp.clone()));
                 if let Ok(val) = serde_json::to_value(session_meta_line) {
                     head.push(val);
                     saw_session_meta = true;
                 }
             }
             RolloutItem::ResponseItem(item) => {
+                created_at = created_at.or_else(|| Some(rollout_line.timestamp.clone()));
                 if let Ok(val) = serde_json::to_value(item) {
                     head.push(val);
                 }
@@ -365,7 +367,14 @@ async fn read_head_and_tail(
         read_tail_records(path, tail_limit).await?
     };
 
-    Ok((head, tail, saw_session_meta, saw_user_event, updated_at))
+    Ok((
+        head,
+        tail,
+        saw_session_meta,
+        saw_user_event,
+        created_at,
+        updated_at,
+    ))
 }
 
 async fn read_tail_records(
@@ -452,12 +461,6 @@ fn collect_last_response_values(
     }
     collected_rev.reverse();
     (collected_rev, latest_timestamp)
-}
-
-fn extract_created_timestamp(head: &[serde_json::Value]) -> Option<String> {
-    head.iter()
-        .find_map(|value| value.get("timestamp").and_then(|v| v.as_str()))
-        .map(|s| s.to_string())
 }
 
 /// Locate a recorded conversation rollout file by its UUID string using the existing
