@@ -615,6 +615,92 @@ fn empty_enter_during_task_does_not_queue() {
     assert!(chat.queued_user_messages.is_empty());
 }
 
+/// While an assistant message is streaming, a user submission should be queued
+/// and not injected into the running turn or transcript until the task
+/// completes. This test captures that expected behavior so it fails against the
+/// current buggy implementation (which incorrectly flips the running state
+/// during streaming commit ticks and injects the message immediately).
+#[test]
+fn user_input_mid_stream_is_queued_until_task_complete() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    // Begin a running task (sets is_task_running = true)
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    // Stream an answer delta containing a newline so that a commit tick will
+    // produce a history cell (this is when the bug flips running=false).
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "First line\nSecond line".into(),
+        }),
+    });
+    chat.on_commit_tick();
+
+    // Simulate the user typing a follow‑up and pressing Enter during streaming.
+    chat.set_composer_text("follow-up question".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Expected behavior: message is queued (not sent, not rendered yet).
+    // These assertions intentionally fail with the current code to lock in the
+    // desired contract.
+    assert_eq!(
+        chat.queued_user_messages.len(),
+        1,
+        "submitted input during streaming should be queued"
+    );
+
+    // No Op::UserInput should have been forwarded yet.
+    let mut saw_user_input = false;
+    while let Ok(op) = op_rx.try_recv() {
+        if let Op::UserInput { .. } = op {
+            saw_user_input = true;
+            break;
+        }
+    }
+    assert!(
+        !saw_user_input,
+        "no UserInput op should be sent until the current task completes"
+    );
+
+    // The user message should not appear in history yet.
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        !combined.contains("follow-up question"),
+        "user prompt should not render mid-stream"
+    );
+
+    // Now complete the task; the queued input should be injected and rendered.
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    // Expect the queued message to be sent as Op::UserInput now.
+    let mut sent_after_complete = false;
+    while let Ok(op) = op_rx.try_recv() {
+        if let Op::UserInput { .. } = op {
+            sent_after_complete = true;
+            break;
+        }
+    }
+    assert!(
+        sent_after_complete,
+        "queued input should be sent after TaskComplete"
+    );
+}
+
 #[test]
 fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();

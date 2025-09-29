@@ -605,7 +605,6 @@ impl ChatWidget {
         if let Some(controller) = self.stream_controller.as_mut() {
             let (cell, is_idle) = controller.on_commit_tick();
             if let Some(cell) = cell {
-                self.bottom_pane.set_task_running(false);
                 self.add_boxed_history(cell);
             }
             if is_idle {
