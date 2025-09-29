@@ -1,6 +1,6 @@
 {
   "name": "@openai/codex-sdk",
-  "version": "0.1.0",
+  "version": "0.0.0-dev",
   "description": "TypeScript SDK for Codex APIs.",
   "keywords": [
     "openai",
@@ -9,18 +9,16 @@
     "typescript",
     "api"
   ],
-  "license": "Apache",
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=18"
   },
-  "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
       "types": "./dist/index.d.ts"
     }
   },
@@ -33,26 +31,26 @@
     "build": "tsup",
     "build:watch": "tsup --watch",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "lint:fix": "npm run lint -- --fix",
+    "lint:fix": "pnpm run lint -- --fix",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "coverage": "vitest run --coverage",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
-    "prepare": "npm run build"
+    "prepare": "pnpm run build"
   },
   "devDependencies": {
-    "@types/node": "^20.14.9",
-    "@typescript-eslint/eslint-plugin": "^7.9.0",
-    "@typescript-eslint/parser": "^7.9.0",
-    "@vitest/coverage-v8": "^1.6.0",
-    "eslint": "^8.57.0",
-    "eslint-config-prettier": "^9.1.0",
-    "eslint-import-resolver-typescript": "^3.6.1",
-    "eslint-plugin-import": "^2.29.1",
-    "prettier": "^3.3.2",
-    "tsup": "^7.2.0",
-    "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "@types/node": "^20.19.18",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vitest/coverage-v8": "^1.6.1",
+    "eslint": "^9.36.0",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-import-resolver-typescript": "^3.10.1",
+    "eslint-plugin-import": "^2.32.0",
+    "prettier": "^3.6.2",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^1.6.1"
   }
 }
