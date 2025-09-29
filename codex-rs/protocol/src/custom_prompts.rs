@@ -8,4 +8,6 @@ pub struct CustomPrompt {
     pub name: String,
     pub path: PathBuf,
     pub content: String,
+    pub description: Option<String>,
+    pub argument_hint: Option<String>,
 }
