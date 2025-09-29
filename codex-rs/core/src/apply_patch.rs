@@ -45,12 +45,13 @@ pub(crate) async fn apply_patch(
         &turn_context.sandbox_policy,
         &turn_context.cwd,
     ) {
-        SafetyCheck::AutoApprove { .. } => {
-            InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
-                action,
-                user_explicitly_approved_this_action: false,
-            })
-        }
+        SafetyCheck::AutoApprove {
+            user_explicitly_approved,
+            ..
+        } => InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
+            action,
+            user_explicitly_approved_this_action: user_explicitly_approved,
+        }),
         SafetyCheck::AskUser => {
             // Compute a readable summary of path changes to include in the
             // approval request so the user can make an informed decision.
