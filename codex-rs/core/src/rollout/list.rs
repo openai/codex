@@ -407,12 +407,12 @@ fn collect_last_response_values(buffer: &[u8], max_records: usize) -> Vec<serde_
         }
         let parsed: serde_json::Result<RolloutLine> = serde_json::from_str(trimmed);
         let Ok(rollout_line) = parsed else { continue };
-        if let RolloutItem::ResponseItem(item) = rollout_line.item {
-            if let Ok(val) = serde_json::to_value(item) {
-                collected_rev.push(val);
-                if collected_rev.len() == max_records {
-                    break;
-                }
+        if let RolloutItem::ResponseItem(item) = rollout_line.item
+            && let Ok(val) = serde_json::to_value(item)
+        {
+            collected_rev.push(val);
+            if collected_rev.len() == max_records {
+                break;
             }
         }
     }
