@@ -60,9 +60,13 @@ pub async fn run_login_with_api_key(
 pub async fn run_login_with_device_code(
     cli_config_overrides: CliConfigOverrides,
     issuer_base_url: Option<String>,
+    client_id: Option<String>,
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
-    let mut opts = ServerOptions::new(config.codex_home, CLIENT_ID.to_string());
+    let mut opts = ServerOptions::new(
+        config.codex_home,
+        client_id.unwrap_or(CLIENT_ID.to_string()),
+    );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }

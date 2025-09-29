@@ -13,6 +13,7 @@ use std::io::{self};
 
 #[derive(Deserialize)]
 struct UserCodeResp {
+    device_auth_id: String,
     #[serde(alias = "user_code", alias = "usercode")]
     user_code: String,
     #[serde(default, deserialize_with = "deserialize_interval")]
@@ -26,7 +27,7 @@ struct UserCodeReq {
 
 #[derive(Serialize)]
 struct TokenPollReq {
-    client_id: String,
+    device_auth_id: String,
     user_code: String,
 }
 
@@ -43,6 +44,8 @@ where
 #[derive(Deserialize)]
 struct CodeSuccessResp {
     authorization_code: String,
+    code_challenge: String,
+    code_verifier: String,
 }
 
 /// Request the user code and polling interval.
@@ -52,7 +55,10 @@ async fn request_user_code(
     client_id: &str,
 ) -> std::io::Result<UserCodeResp> {
     let url = format!("{auth_base_url}/deviceauth/usercode");
-    let body = serde_json::to_string(&UserCodeReq { client_id }).map_err(std::io::Error::other)?;
+    let body = serde_json::to_string(&UserCodeReq {
+        client_id: client_id.to_string(),
+    })
+    .map_err(std::io::Error::other)?;
     let resp = client
         .post(url)
         .header("Content-Type", "application/json")
@@ -76,7 +82,7 @@ async fn request_user_code(
 async fn poll_for_token(
     client: &reqwest::Client,
     auth_base_url: &str,
-    client_id: &str,
+    device_auth_id: &str,
     user_code: &str,
     interval: u64,
 ) -> std::io::Result<CodeSuccessResp> {
@@ -86,8 +92,8 @@ async fn poll_for_token(
 
     loop {
         let body = serde_json::to_string(&TokenPollReq {
-            client_id,
-            user_code,
+            device_auth_id: device_auth_id.to_string(),
+            user_code: user_code.to_string(),
         })
         .map_err(std::io::Error::other)?;
         let resp = client
@@ -98,11 +104,13 @@ async fn poll_for_token(
             .await
             .map_err(std::io::Error::other)?;
 
-        if resp.status().is_success() {
+        let status = resp.status();
+
+        if status.is_success() {
             return resp.json().await.map_err(std::io::Error::other);
         }
 
-        if resp.status() == StatusCode::NOT_FOUND {
+        if status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND {
             if start.elapsed() >= max_wait {
                 return Err(std::io::Error::other(
                     "device auth timed out after 15 minutes",
@@ -154,23 +162,25 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let code_resp = poll_for_token(
         &client,
         &auth_base_url,
-        &opts.client_id,
+        &uc.device_auth_id,
         &uc.user_code,
         uc.interval,
     )
     .await?;
 
-    let empty_pkce = PkceCodes {
-        code_verifier: String::new(),
-        code_challenge: String::new(),
+    let pkce = PkceCodes {
+        code_verifier: code_resp.code_verifier,
+        code_challenge: code_resp.code_challenge,
     };
+    println!("authorization code received");
+    let redirect_uri = format!("{}/deviceauth/callback", opts.issuer.trim_end_matches('/'));
 
     let tokens = crate::server::exchange_code_for_tokens(
         &opts.issuer,
         &opts.client_id,
-        "",
-        &empty_pkce,
-        &code_resp.code,
+        &redirect_uri,
+        &pkce,
+        &code_resp.authorization_code,
     )
     .await
     .map_err(|err| std::io::Error::other(format!("device code exchange failed: {err}")))?;

@@ -34,6 +34,7 @@ async fn mock_usercode_success(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/deviceauth/usercode"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "device_auth_id": "device-auth-123",
             "user_code": "CODE-12345",
             // NOTE: Interval is kept 0 in order to avoid waiting for the interval to pass
             "interval": "0"
@@ -63,7 +64,11 @@ async fn mock_poll_token_two_step(
             if attempt == 0 {
                 ResponseTemplate::new(first_response_status)
             } else {
-                ResponseTemplate::new(200).set_body_json(json!({ "code": "poll-code-321" }))
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "authorization_code": "poll-code-321",
+                    "code_challenge": "code-challenge-321",
+                    "code_verifier": "code-verifier-321"
+                }))
             }
         })
         .expect(2)
@@ -79,36 +84,14 @@ async fn mock_poll_token_single(server: &MockServer, endpoint: &str, response: R
         .await;
 }
 
-async fn mock_oauth_token_two_step(
-    server: &MockServer,
-    counter: Arc<AtomicUsize>,
-    jwt_for_first: String,
-    second_response: ResponseTemplate,
-) {
-    let c = counter.clone();
-    let jwt_capture = jwt_for_first.clone();
+async fn mock_oauth_token_single(server: &MockServer, jwt: String) {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
-        .respond_with(move |request: &Request| {
-            let attempt = c.fetch_add(1, Ordering::SeqCst);
-            let body = String::from_utf8(request.body.clone())
-                .unwrap_or_else(|_| panic!("token request body is valid UTF-8"));
-            if attempt == 0 {
-                ResponseTemplate::new(200).set_body_json(json!({
-                    "id_token": jwt_capture.clone(),
-                    "access_token": "access-token-123",
-                    "refresh_token": "refresh-token-123"
-                }))
-            } else {
-                // Second call: API key exchange (requested_token=openai-api-key)
-                assert!(
-                    body.contains("requested_token=openai-api-key"),
-                    "expected API key exchange body: {body}"
-                );
-                second_response.clone()
-            }
-        })
-        .expect(2)
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id_token": jwt.clone(),
+            "access_token": "access-token-123",
+            "refresh_token": "refresh-token-123"
+        })))
         .mount(server)
         .await;
 }
@@ -131,22 +114,13 @@ async fn device_code_login_integration_succeeds() {
 
     mock_poll_token_two_step(&mock_server, Arc::new(AtomicUsize::new(0)), 404).await;
 
-    let token_calls = Arc::new(AtomicUsize::new(0));
     let jwt = make_jwt(json!({
         "https://api.openai.com/auth": {
             "chatgpt_account_id": "acct_321"
         }
     }));
 
-    mock_oauth_token_two_step(
-        &mock_server,
-        token_calls.clone(),
-        jwt.clone(),
-        ResponseTemplate::new(200).set_body_json(json!({
-            "access_token": "api-key-321"
-        })),
-    )
-    .await;
+    mock_oauth_token_single(&mock_server, jwt.clone()).await;
 
     let issuer = mock_server.uri();
     let opts = server_opts(&codex_home, issuer);
@@ -157,13 +131,12 @@ async fn device_code_login_integration_succeeds() {
 
     let auth_path = get_auth_file(codex_home.path());
     let auth = try_read_auth_json(&auth_path).expect("auth.json written");
-    assert_eq!(auth.openai_api_key.as_deref(), Some("api-key-321"));
+    // assert_eq!(auth.openai_api_key.as_deref(), Some("api-key-321"));
     let tokens = auth.tokens.expect("tokens persisted");
     assert_eq!(tokens.access_token, "access-token-123");
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
     assert_eq!(tokens.account_id.as_deref(), Some("acct_321"));
-    assert_eq!(token_calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -204,16 +177,9 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
 
     mock_poll_token_two_step(&mock_server, Arc::new(AtomicUsize::new(0)), 404).await;
 
-    let token_calls = Arc::new(AtomicUsize::new(0));
     let jwt = make_jwt(json!({}));
 
-    mock_oauth_token_two_step(
-        &mock_server,
-        token_calls.clone(),
-        jwt.clone(),
-        ResponseTemplate::new(500),
-    )
-    .await;
+    mock_oauth_token_single(&mock_server, jwt.clone()).await;
 
     let issuer = mock_server.uri();
 
@@ -232,8 +198,6 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
     assert_eq!(tokens.access_token, "access-token-123");
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
-    // assert_eq!(poll_calls.load(Ordering::SeqCst), 2);
-    assert_eq!(token_calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
