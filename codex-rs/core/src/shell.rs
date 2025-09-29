@@ -195,6 +195,7 @@ pub async fn default_user_shell() -> Shell {
         Ok(path) => {
             let ok = Command::new(&path)
                 .arg("--version")
+                .stdin(std::process::Stdio::null())
                 .output()
                 .await
                 .ok()
