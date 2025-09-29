@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
-use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -376,13 +375,6 @@ impl BottomPane {
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
-    }
-
-    /// Update the *context-window remaining* indicator in the composer. This
-    /// is forwarded directly to the underlying `ChatComposer`.
-    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
-        self.composer.set_token_usage(token_info);
-        self.request_redraw();
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
