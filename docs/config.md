@@ -692,6 +692,34 @@ This is analogous to `model_context_window`, but for the maximum number of outpu
 
 Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.
 
+## tools
+
+Configure which agent tools are enabled.
+
+```toml
+[tools]
+web_search = true  # default: false
+view_image = true  # default: false
+```
+
+### tools.web_search
+
+Enable the web search tool (also aliased as `web_search_request`). When enabled, the agent can search the web for information. Defaults to `false`.
+
+### tools.view_image
+
+Enable the `view_image` tool that lets the agent attach local image paths to provide extra visual context. When enabled, the agent can reference images from your filesystem. Defaults to `false`.
+
+## disable_paste_burst
+
+When set to `true`, disables burst-paste detection for typed input entirely in the TUI. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts. Defaults to `false`.
+
+```toml
+disable_paste_burst = true  # default: false
+```
+
+This setting is useful if you experience issues with pasted content being modified or if you want to disable the paste detection feature.
+
 ## tui
 
 Options that are specific to the TUI.
@@ -767,3 +795,5 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
 | `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |
+| `tools.view_image` | boolean | Enable view_image tool for attaching local images (default: false). |
+| `disable_paste_burst` | boolean | Disable burst-paste detection in TUI (default: false). |
