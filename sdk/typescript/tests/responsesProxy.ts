@@ -1,7 +1,7 @@
-import http from 'node:http';
+import http from "node:http";
 
-const DEFAULT_RESPONSE_ID = 'resp_mock';
-const DEFAULT_MESSAGE_ID = 'msg_mock';
+const DEFAULT_RESPONSE_ID = "resp_mock";
+const DEFAULT_MESSAGE_ID = "msg_mock";
 
 type SseEvent = {
   type: string;
@@ -9,7 +9,7 @@ type SseEvent = {
 };
 
 type SseResponseBody = {
-  kind: 'sse';
+  kind: "sse";
   events: SseEvent[];
 };
 
@@ -31,33 +31,33 @@ export async function startResponsesTestProxy(
   options: ResponsesProxyOptions,
 ): Promise<ResponsesProxy> {
   const server = http.createServer((req, res) => {
-    if (req.method === 'POST' && req.url === '/responses') {
+    if (req.method === "POST" && req.url === "/responses") {
       const status = options.statusCode ?? 200;
       res.statusCode = status;
-      res.setHeader('content-type', 'text/event-stream');
+      res.setHeader("content-type", "text/event-stream");
       for (const event of options.responseBody.events) {
         res.write(formatSseEvent(event));
       }
       res.end();
       return;
     }
- 
+
     res.statusCode = 404;
     res.end();
   });
 
   const url = await new Promise<string>((resolve, reject) => {
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(0, "127.0.0.1", () => {
       const address = server.address();
-      if (!address || typeof address === 'string') {
-        reject(new Error('Unable to determine proxy address'));
+      if (!address || typeof address === "string") {
+        reject(new Error("Unable to determine proxy address"));
         return;
       }
-      server.off('error', reject);
+      server.off("error", reject);
       const info = address;
       resolve(`http://${info.address}:${info.port}`);
     });
-    server.once('error', reject);
+    server.once("error", reject);
   });
 
   const close = async () => {
@@ -75,26 +75,26 @@ export async function startResponsesTestProxy(
 }
 
 export const sse = (...events: SseEvent[]): SseResponseBody => ({
-  kind: 'sse',
+  kind: "sse",
   events,
 });
 
 export const responseStarted = (responseId: string = DEFAULT_RESPONSE_ID): SseEvent => ({
-  type: 'response.created',
+  type: "response.created",
   response: {
     id: responseId,
   },
 });
 
 export const assistantMessage = (text: string, itemId: string = DEFAULT_MESSAGE_ID): SseEvent => ({
-  type: 'response.output_item.done',
+  type: "response.output_item.done",
   item: {
-    type: 'message',
-    role: 'assistant',
+    type: "message",
+    role: "assistant",
     id: itemId,
     content: [
       {
-        type: 'output_text',
+        type: "output_text",
         text,
       },
     ],
@@ -102,7 +102,7 @@ export const assistantMessage = (text: string, itemId: string = DEFAULT_MESSAGE_
 });
 
 export const responseCompleted = (responseId: string = DEFAULT_RESPONSE_ID): SseEvent => ({
-  type: 'response.completed',
+  type: "response.completed",
   response: {
     id: responseId,
     usage: {
