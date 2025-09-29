@@ -692,12 +692,11 @@ dependencies = [
  "codex-exec",
  "codex-login",
  "codex-mcp-server",
+ "codex-process-hardening",
  "codex-protocol",
  "codex-protocol-ts",
- "codex-responses-api-proxy",
  "codex-tui",
  "ctor 0.5.0",
- "libc",
  "owo-colors",
  "predicates",
  "pretty_assertions",
@@ -950,6 +949,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-process-hardening"
+version = "0.0.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
@@ -989,13 +995,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
- "codex-arg0",
+ "codex-process-hardening",
+ "ctor 0.5.0",
  "libc",
  "reqwest",
  "serde",
  "serde_json",
  "tiny_http",
- "tokio",
  "zeroize",
 ]
 
