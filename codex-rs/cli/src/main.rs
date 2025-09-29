@@ -181,7 +181,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         } else {
             resume_cmd
         };
-        lines.push(format!("To continue this session, run {command}."));
+        lines.push(format!("To continue this session, run {command}"));
     }
 
     lines
