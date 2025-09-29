@@ -29,6 +29,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::config_types::McpServerConfig;
+use crate::config_types::McpServerTransportConfig;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -107,7 +108,7 @@ impl McpClientAdapter {
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
     ) -> Result<Self> {
-        tracing::error!(
+        info!(
             "new_stdio_client use_rmcp_client: {use_rmcp_client} program: {program:?} args: {args:?} env: {env:?} params: {params:?} startup_timeout: {startup_timeout:?}"
         );
         if use_rmcp_client {
@@ -119,6 +120,17 @@ impl McpClientAdapter {
             client.initialize(params, Some(startup_timeout)).await?;
             Ok(McpClientAdapter::Legacy(client))
         }
+    }
+
+    async fn new_streamable_http_client(
+        url: String,
+        bearer_token: Option<String>,
+        params: mcp_types::InitializeRequestParams,
+        startup_timeout: Duration,
+    ) -> Result<Self> {
+        let client = Arc::new(RmcpClient::new_streamable_http_client(url, bearer_token)?);
+        client.initialize(params, Some(startup_timeout)).await?;
+        Ok(McpClientAdapter::Rmcp(client))
     }
 
     async fn list_tools(
@@ -176,8 +188,6 @@ impl McpConnectionManager {
             return Ok((Self::default(), ClientStartErrors::default()));
         }
 
-        tracing::error!("new mcp_servers: {mcp_servers:?} use_rmcp_client: {use_rmcp_client}");
-
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
         let mut errors = ClientStartErrors::new();
@@ -192,16 +202,24 @@ impl McpConnectionManager {
                 continue;
             }
 
+            if matches!(
+                cfg.transport,
+                McpServerTransportConfig::StreamableHttp { .. }
+            ) && !use_rmcp_client
+            {
+                info!(
+                    "skipping MCP server `{}` configured with url because rmcp client is disabled",
+                    server_name
+                );
+                continue;
+            }
+
             let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
             let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
 
             let use_rmcp_client_flag = use_rmcp_client;
             join_set.spawn(async move {
-                let McpServerConfig {
-                    command, args, env, ..
-                } = cfg;
-                let command_os: OsString = command.into();
-                let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
+                let McpServerConfig { transport, .. } = cfg;
                 let params = mcp_types::InitializeRequestParams {
                     capabilities: ClientCapabilities {
                         experimental: None,
@@ -223,15 +241,30 @@ impl McpConnectionManager {
                     protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                 };
 
-                let client = McpClientAdapter::new_stdio_client(
-                    use_rmcp_client_flag,
-                    command_os,
-                    args_os,
-                    env,
-                    params,
-                    startup_timeout,
-                )
-                .await
+                let client = match transport {
+                    McpServerTransportConfig::Stdio { command, args, env } => {
+                        let command_os: OsString = command.into();
+                        let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
+                        McpClientAdapter::new_stdio_client(
+                            use_rmcp_client_flag,
+                            command_os,
+                            args_os,
+                            env,
+                            params.clone(),
+                            startup_timeout,
+                        )
+                        .await
+                    }
+                    McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                        McpClientAdapter::new_streamable_http_client(
+                            url,
+                            bearer_token,
+                            params,
+                            startup_timeout,
+                        )
+                        .await
+                    }
+                }
                 .map(|c| (c, startup_timeout));
 
                 ((server_name, tool_timeout), client)
