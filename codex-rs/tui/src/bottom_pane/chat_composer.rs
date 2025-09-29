@@ -2258,6 +2258,8 @@ mod tests {
             name: "my-prompt".to_string(),
             path: "/tmp/my-prompt.md".to_string().into(),
             content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
         }]);
 
         type_chars_humanlike(
