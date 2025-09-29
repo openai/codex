@@ -28,16 +28,17 @@ pub enum ComposerAction {
 pub struct ComposerInput {
     inner: ChatComposer,
     _tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 }
 
 impl ComposerInput {
     /// Create a new composer input with a neutral placeholder.
     pub fn new() -> Self {
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = AppEventSender::new(tx.clone());
         // `enhanced_keys_supported=true` enables Shift+Enter newline hint/behavior.
         let inner = ChatComposer::new(true, sender, true, "Compose new task".to_string(), false);
-        Self { inner, _tx: tx }
+        Self { inner, _tx: tx, rx }
     }
 
     /// Returns true if the input is empty.
@@ -52,14 +53,18 @@ impl ComposerInput {
 
     /// Feed a key event into the composer and return a high-level action.
     pub fn input(&mut self, key: KeyEvent) -> ComposerAction {
-        match self.inner.handle_key_event(key).0 {
+        let action = match self.inner.handle_key_event(key).0 {
             InputResult::Submitted(text) => ComposerAction::Submitted(text),
             _ => ComposerAction::None,
-        }
+        };
+        self.drain_app_events();
+        action
     }
 
     pub fn handle_paste(&mut self, pasted: String) -> bool {
-        self.inner.handle_paste(pasted)
+        let handled = self.inner.handle_paste(pasted);
+        self.drain_app_events();
+        handled
     }
 
     /// Override the footer hint items displayed under the composer.
@@ -100,13 +105,19 @@ impl ComposerInput {
     /// Flush a pending paste-burst if the inter-key timeout has elapsed.
     /// Returns true if text changed and a redraw is warranted.
     pub fn flush_paste_burst_if_due(&mut self) -> bool {
-        self.inner.flush_paste_burst_if_due()
+        let flushed = self.inner.flush_paste_burst_if_due();
+        self.drain_app_events();
+        flushed
     }
 
     /// Recommended delay to schedule the next micro-flush frame while a
     /// paste-burst is active.
     pub fn recommended_flush_delay() -> Duration {
         crate::bottom_pane::ChatComposer::recommended_paste_flush_delay()
+    }
+
+    fn drain_app_events(&mut self) {
+        while self.rx.try_recv().is_ok() {}
     }
 }
 
