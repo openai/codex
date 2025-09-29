@@ -142,7 +142,7 @@ struct LoginCommand {
     /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
     /// Override the OAuth issuer base URL (advanced)
     #[arg(long = "experimental_issuer", value_name = "URL", hide = true)]
-    issuer: Option<String>,
+    issuer_base_url: Option<String>,
 
     #[command(subcommand)]
     action: Option<LoginSubcommand>,

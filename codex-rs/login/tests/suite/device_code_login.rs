@@ -173,11 +173,6 @@ async fn device_code_login_integration_handles_usercode_http_failure() {
     let codex_home = tempdir().unwrap();
     let mock_server = MockServer::start().await;
 
-    // Mock::given(method("POST"))
-    //     .and(path("/devicecode/usercode"))
-    //     .respond_with(ResponseTemplate::new(503))
-    //     .mount(&mock_server)
-    //     .await;
     mock_usercode_failure(&mock_server, 503).await;
 
     let issuer = mock_server.uri();

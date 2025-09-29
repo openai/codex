@@ -59,11 +59,11 @@ pub async fn run_login_with_api_key(
 /// Login using the OAuth device code flow.
 pub async fn run_login_with_device_code(
     cli_config_overrides: CliConfigOverrides,
-    issuer: Option<String>,
+    issuer_base_url: Option<String>,
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
     let mut opts = ServerOptions::new(config.codex_home, CLIENT_ID.to_string());
-    if let Some(iss) = issuer {
+    if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }
     match run_device_code_login(opts).await {

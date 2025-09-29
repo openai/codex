@@ -20,14 +20,14 @@ struct UserCodeResp {
 }
 
 #[derive(Serialize)]
-struct UserCodeReq<'a> {
-    client_id: &'a str,
+struct UserCodeReq {
+    client_id: String,
 }
 
 #[derive(Serialize)]
-struct TokenPollReq<'a> {
-    client_id: &'a str,
-    user_code: &'a str,
+struct TokenPollReq {
+    client_id: String,
+    user_code: String,
 }
 
 fn deserialize_interval<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -42,8 +42,7 @@ where
 
 #[derive(Deserialize)]
 struct CodeSuccessResp {
-    #[serde(alias = "device_code")]
-    code: String,
+    authorization_code: String,
 }
 
 /// Request the user code and polling interval.
@@ -142,10 +141,10 @@ fn print_colored_warning_device_code() {
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let client = reqwest::Client::new();
     let auth_base_url = opts.issuer.trim_end_matches('/').to_owned();
-    let uc = request_user_code(&client, &auth_base_url, &opts.client_id).await?;
-
     print_colored_warning_device_code();
     println!("⏳ Generating a new 9-digit device code for authentication...\n");
+    let uc = request_user_code(&client, &auth_base_url, &opts.client_id).await?;
+
     println!(
         "To authenticate, visit: {}/deviceauth/authorize and enter code: {}",
         opts.issuer.trim_end_matches('/'),
@@ -176,14 +175,9 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     .await
     .map_err(|err| std::io::Error::other(format!("device code exchange failed: {err}")))?;
 
-    // Try to exchange for an API key (optional)
-    let api_key = crate::server::obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
-        .await
-        .ok();
-
     crate::server::persist_tokens_async(
         &opts.codex_home,
-        api_key,
+        None,
         tokens.id_token,
         tokens.access_token,
         tokens.refresh_token,
