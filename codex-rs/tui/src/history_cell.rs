@@ -414,6 +414,11 @@ pub(crate) fn new_session_info(
                 "/model".into(),
                 " - choose what model and reasoning effort to use".dim(),
             ]),
+            Line::from(vec![
+                "  ".into(),
+                "/review".into(),
+                " - review any changes and find issues".dim(),
+            ]),
         ];
 
         CompositeHistoryCell {
