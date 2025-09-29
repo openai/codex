@@ -101,7 +101,7 @@ enum ActivePopup {
     File(FileSearchPopup),
 }
 
-const FOOTER_SPACING_HEIGHT: u16 = 1;
+const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 impl ChatComposer {
     pub fn new(
@@ -142,7 +142,7 @@ impl ChatComposer {
     pub fn desired_height(&self, width: u16) -> u16 {
         let footer_props = self.footer_props();
         let footer_hint_height = footer_height(footer_props);
-        let footer_spacing = Self::footer_spacing(footer_props.mode, footer_hint_height);
+        let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         self.textarea
             .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
@@ -157,7 +157,7 @@ impl ChatComposer {
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
         let footer_hint_height = footer_height(footer_props);
-        let footer_spacing = Self::footer_spacing(footer_props.mode, footer_hint_height);
+        let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => {
@@ -179,8 +179,8 @@ impl ChatComposer {
         [composer_rect, textarea_rect, popup_rect]
     }
 
-    fn footer_spacing(mode: FooterMode, footer_hint_height: u16) -> u16 {
-        if footer_hint_height == 0 || matches!(mode, FooterMode::ShortcutPrompt) {
+    fn footer_spacing(footer_hint_height: u16) -> u16 {
+        if footer_hint_height == 0 {
             0
         } else {
             FOOTER_SPACING_HEIGHT
@@ -1432,7 +1432,7 @@ impl WidgetRef for ChatComposer {
             ActivePopup::None => {
                 let footer_props = self.footer_props();
                 let footer_hint_height = footer_height(footer_props);
-                let footer_spacing = Self::footer_spacing(footer_props.mode, footer_hint_height);
+                let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([
                         Constraint::Length(footer_spacing),
@@ -1560,7 +1560,7 @@ mod tests {
         setup(&mut composer);
         let footer_props = composer.footer_props();
         let footer_lines = footer_height(footer_props);
-        let footer_spacing = ChatComposer::footer_spacing(footer_props.mode, footer_lines);
+        let footer_spacing = ChatComposer::footer_spacing(footer_lines);
         let height = footer_lines + footer_spacing + 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
