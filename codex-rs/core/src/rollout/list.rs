@@ -190,8 +190,7 @@ async fn traverse_directories_for_paths(
                             .unwrap_or((Vec::new(), Vec::new(), false, false, None));
                     // Apply filters: must have session meta and at least one user message event
                     if saw_session_meta && saw_user_event {
-                        let created_at = extract_created_timestamp(&head)
-                            .or_else(|| timestamp_from_filename(&path));
+                        let created_at = extract_created_timestamp(&head);
                         let updated_at = updated_at.or_else(|| created_at.clone());
                         items.push(ConversationItem {
                             path,
@@ -459,12 +458,6 @@ fn extract_created_timestamp(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
         .find_map(|value| value.get("timestamp").and_then(|v| v.as_str()))
         .map(|s| s.to_string())
-}
-
-fn timestamp_from_filename(path: &Path) -> Option<String> {
-    let file_name = path.file_name()?.to_string_lossy();
-    let (ts, _) = parse_timestamp_uuid_from_filename(&file_name)?;
-    ts.format(&Rfc3339).ok()
 }
 
 /// Locate a recorded conversation rollout file by its UUID string using the existing
