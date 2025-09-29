@@ -21,6 +21,7 @@ members = [
     "protocol-ts",
     "rmcp-client",
     "responses-api-proxy",
+    "otel",
     "tui",
     "utils/readiness",
 ]
@@ -55,6 +56,7 @@ codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-tui = { path = "tui" }
+codex-otel = { path = "otel" }
 codex-utils-readiness = { path = "utils/readiness" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
@@ -103,6 +105,11 @@ mime_guess = "2.0.5"
 multimap = "0.10.0"
 nucleo-matcher = "0.3.1"
 openssl-sys = "*"
+opentelemetry = "0.30.0"
+opentelemetry_sdk = "0.30.0"
+opentelemetry-otlp = "0.30.0"
+opentelemetry-appender-tracing = "0.30.0"
+opentelemetry-semantic-conventions = "0.30.0"
 os_info = "3.12.0"
 owo-colors = "4.2.0"
 path-absolutize = "3.1.1"
@@ -144,9 +151,11 @@ toml_edit = "0.23.4"
 tracing = "0.1.41"
 tracing-appender = "0.2.3"
 tracing-subscriber = "0.3.20"
+tracing-test = "0.2.5"
 tree-sitter = "0.25.9"
 tree-sitter-bash = "0.25.0"
 ts-rs = "11"
+tonic = "0.13.1"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
 url = "2"

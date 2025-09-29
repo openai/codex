@@ -276,11 +276,15 @@ mod tests {
                 name: "foo".to_string(),
                 path: "/tmp/foo.md".to_string().into(),
                 content: "hello from foo".to_string(),
+                description: None,
+                argument_hint: None,
             },
             CustomPrompt {
                 name: "bar".to_string(),
                 path: "/tmp/bar.md".to_string().into(),
                 content: "hello from bar".to_string(),
+                description: None,
+                argument_hint: None,
             },
         ];
         let popup = CommandPopup::new(prompts);
@@ -303,6 +307,8 @@ mod tests {
             name: "init".to_string(),
             path: "/tmp/init.md".to_string().into(),
             content: "should be ignored".to_string(),
+            description: None,
+            argument_hint: None,
         }]);
         let items = popup.filtered_items();
         let has_collision_prompt = items.into_iter().any(|it| match it {
