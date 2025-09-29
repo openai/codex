@@ -97,6 +97,9 @@ pub struct Config {
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
+    /// Resolved path whose contents are appended to user instructions.
+    pub append_user_instructions_file: Option<PathBuf>,
+
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -706,6 +709,9 @@ pub struct ConfigToml {
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
 
+    /// Path to a file whose contents are appended to user instructions.
+    pub append_user_instructions_file: Option<PathBuf>,
+
     pub experimental_use_exec_command_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
@@ -869,7 +875,7 @@ impl Config {
         overrides: ConfigOverrides,
         codex_home: PathBuf,
     ) -> std::io::Result<Self> {
-        let user_instructions = Self::load_instructions(Some(&codex_home));
+        let mut user_instructions = Self::load_instructions(Some(&codex_home));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -1001,6 +1007,32 @@ impl Config {
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
 
+        // Load additional user instructions from a file (if any) and append
+        // them after existing AGENTS.md content. This mirrors the behavior of
+        // experimental_instructions_file but targets the user instructions
+        // stream instead of the base system instructions.
+        let append_user_instructions_file = config_profile
+            .append_user_instructions_file
+            .clone()
+            .or(cfg.append_user_instructions_file.clone());
+        let append_user_instructions_file = append_user_instructions_file.map(|p| {
+            if p.is_absolute() {
+                p
+            } else {
+                resolved_cwd.join(p)
+            }
+        });
+        if let Some(file) = append_user_instructions_file.as_ref() {
+            if let Some(extra_instructions) =
+                Self::get_base_instructions(Some(file), &resolved_cwd)?
+            {
+                user_instructions = Some(match user_instructions {
+                    Some(existing) => format!("{}\n\n{}", existing, extra_instructions),
+                    None => extra_instructions,
+                });
+            }
+        }
+
         // Default review model when not set in config; allow CLI override to take precedence.
         let review_model = override_review_model
             .or(cfg.review_model)
@@ -1025,6 +1057,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
+            append_user_instructions_file,
             mcp_servers: cfg.mcp_servers,
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
@@ -1799,6 +1832,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                append_user_instructions_file: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
@@ -1858,6 +1892,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            append_user_instructions_file: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -1932,6 +1967,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            append_user_instructions_file: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -1992,6 +2028,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            append_user_instructions_file: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,

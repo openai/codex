@@ -177,6 +177,90 @@ async fn exec_cli_applies_experimental_instructions_file() {
     );
 }
 
+/// Verify that passing `-c append_user_instructions_file=...` appends the
+/// provided file contents to the `<user_instructions>` message sent to the
+/// backend.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_cli_appends_user_instructions_file() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(sse, "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let custom = TempDir::new().unwrap();
+    let marker = "cli-append-user-instructions-marker";
+    let custom_path = custom.path().join("append.md");
+    std::fs::write(&custom_path, marker).unwrap();
+    let custom_path_str = custom_path.to_string_lossy().replace('\\', "/");
+
+    let provider_override = format!(
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        server.uri()
+    );
+
+    let home = TempDir::new().unwrap();
+    let mut cmd = AssertCommand::new("cargo");
+    cmd.arg("run")
+        .arg("-p")
+        .arg("codex-cli")
+        .arg("--quiet")
+        .arg("--")
+        .arg("exec")
+        .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg(&provider_override)
+        .arg("-c")
+        .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg(format!(
+            "append_user_instructions_file=\"{custom_path_str}\""
+        ))
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg("hello?\n");
+    cmd.env("CODEX_HOME", home.path())
+        .env("OPENAI_API_KEY", "dummy")
+        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
+
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let request = &server.received_requests().await.unwrap()[0];
+    let body = request.body_json::<serde_json::Value>().unwrap();
+    let user_instructions = body
+        .get("input")
+        .and_then(|v| v.as_array())
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("content"))
+        .and_then(|content| content.as_array())
+        .and_then(|content| content.first())
+        .and_then(|span| span.get("text"))
+        .and_then(|text| text.as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        user_instructions.contains("<user_instructions>"),
+        "expected user instructions tag; got: {user_instructions}"
+    );
+    assert!(
+        user_instructions.contains(marker),
+        "user instructions did not contain custom marker; got: {user_instructions}"
+    );
+}
+
 /// Tests streaming responses through the CLI using a local SSE fixture file.
 /// This test:
 /// 1. Uses a pre-recorded SSE response fixture instead of a live server
