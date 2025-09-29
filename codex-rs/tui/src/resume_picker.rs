@@ -22,6 +22,7 @@ use ratatui::text::Span;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use unicode_width::UnicodeWidthStr;
 
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
@@ -110,7 +111,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
                     }
                     TuiEvent::Draw => {
                         if let Ok(size) = alt.tui.terminal.size() {
-                            let list_height = size.height.saturating_sub(3) as usize;
+                            let list_height = size.height.saturating_sub(4) as usize;
                             state.update_view_rows(list_height);
                             state.ensure_minimum_rows_for_view(list_height);
                         }
@@ -218,7 +219,8 @@ impl SearchState {
 struct Row {
     path: PathBuf,
     preview: String,
-    ts: Option<DateTime<Utc>>,
+    created_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
 }
 
 impl PickerState {
@@ -564,13 +566,8 @@ fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
 }
 
 fn head_to_row(item: &ConversationItem) -> Row {
-    let mut ts: Option<DateTime<Utc>> = None;
-    if let Some(first) = item.head.first()
-        && let Some(t) = first.get("timestamp").and_then(|v| v.as_str())
-        && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(t)
-    {
-        ts = Some(parsed.with_timezone(&Utc));
-    }
+    let created_at = item.head.first().and_then(extract_timestamp);
+    let updated_at = item.tail.iter().rev().filter_map(extract_timestamp).next();
 
     let preview = preview_from_head(&item.head)
         .map(|s| s.trim().to_string())
@@ -580,8 +577,17 @@ fn head_to_row(item: &ConversationItem) -> Row {
     Row {
         path: item.path.clone(),
         preview,
-        ts,
+        created_at,
+        updated_at,
     }
+}
+
+fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
+    value
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
@@ -627,10 +633,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     let height = tui.terminal.size()?.height;
     tui.draw(height, |frame| {
         let area = frame.area();
-        let [header, search, list, hint] = Layout::vertical([
+        let [header, search, columns, list, hint] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Min(area.height.saturating_sub(3)),
+            Constraint::Length(1),
+            Constraint::Min(area.height.saturating_sub(4)),
             Constraint::Length(1),
         ])
         .areas(area);
@@ -649,8 +656,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         };
         frame.render_widget_ref(Line::from(q), search);
 
-        // List
-        render_list(frame, list, state);
+        let metrics = calculate_column_metrics(&state.filtered_rows);
+
+        // Column headers and list
+        render_column_headers(frame, columns, &metrics);
+        render_list(frame, list, state, &metrics);
 
         // Hint line
         let hint_line: Line = vec![
@@ -671,7 +681,12 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     })
 }
 
-fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &PickerState) {
+fn render_list(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    state: &PickerState,
+    metrics: &ColumnMetrics,
+) {
     if area.height == 0 {
         return;
     }
@@ -686,20 +701,72 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
     let capacity = area.height as usize;
     let start = state.scroll_top.min(rows.len().saturating_sub(1));
     let end = rows.len().min(start + capacity);
+    let labels = &metrics.labels;
     let mut y = area.y;
 
-    for (idx, row) in rows[start..end].iter().enumerate() {
+    let max_created_width = metrics.max_created_width;
+    let max_updated_width = metrics.max_updated_width;
+
+    for (idx, (row, (created_label, updated_label))) in rows[start..end]
+        .iter()
+        .zip(labels[start..end].iter())
+        .enumerate()
+    {
         let is_sel = start + idx == state.selected;
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
-        let ts = row
-            .ts
-            .map(human_time_ago)
-            .unwrap_or_else(|| "".to_string())
-            .dim();
-        let max_cols = area.width.saturating_sub(6) as usize;
-        let preview = truncate_text(&row.preview, max_cols);
+        let marker_width = 2usize;
+        let created_span = if max_created_width == 0 {
+            None
+        } else {
+            Some(
+                Span::from(format!(
+                    "{:<width$}",
+                    created_label,
+                    width = max_created_width
+                ))
+                .dim(),
+            )
+        };
+        let updated_span = if max_updated_width == 0 {
+            None
+        } else {
+            Some(
+                Span::from(format!(
+                    "{:<width$}",
+                    updated_label,
+                    width = max_updated_width
+                ))
+                .dim(),
+            )
+        };
+        let mut preview_width = area.width as usize;
+        preview_width = preview_width.saturating_sub(marker_width);
+        if max_created_width > 0 {
+            preview_width = preview_width.saturating_sub(max_created_width + 2);
+        }
+        if max_updated_width > 0 {
+            preview_width = preview_width.saturating_sub(max_updated_width + 2);
+        }
+        let add_leading_gap = max_created_width == 0 && max_updated_width == 0;
+        if add_leading_gap {
+            preview_width = preview_width.saturating_sub(2);
+        }
+        let preview = truncate_text(&row.preview, preview_width);
+        let mut spans: Vec<Span> = vec![marker];
+        if let Some(created) = created_span {
+            spans.push(created);
+            spans.push("  ".into());
+        }
+        if let Some(updated) = updated_span {
+            spans.push(updated);
+            spans.push("  ".into());
+        }
+        if add_leading_gap {
+            spans.push("  ".into());
+        }
+        spans.push(preview.into());
 
-        let line: Line = vec![marker, ts, "  ".into(), preview.into()].into();
+        let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
@@ -772,6 +839,20 @@ fn human_time_ago(ts: DateTime<Utc>) -> String {
         } else {
             format!("{d} days ago")
         }
+    }
+}
+
+fn format_created_label(row: &Row) -> String {
+    row.created_at
+        .map(human_time_ago)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_updated_label(row: &Row) -> String {
+    match (row.updated_at, row.created_at) {
+        (Some(updated), _) => human_time_ago(updated),
+        (None, Some(created)) => human_time_ago(created),
+        (None, None) => "-".to_string(),
     }
 }
 
@@ -876,6 +957,38 @@ mod tests {
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
         assert!(rows[0].preview.contains('A'));
         assert!(rows[1].preview.contains('B'));
+    }
+
+    #[test]
+    fn row_uses_tail_timestamp_for_updated_at() {
+        let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
+        let tail = vec![json!({
+            "timestamp": "2025-01-01T01:00:00Z",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "hi",
+                }
+            ],
+        })];
+        let item = ConversationItem {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            head,
+            tail,
+        };
+
+        let row = head_to_row(&item);
+        let expected_created = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let expected_updated = chrono::DateTime::parse_from_rfc3339("2025-01-01T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(row.created_at, Some(expected_created));
+        assert_eq!(row.updated_at, Some(expected_updated));
     }
 
     #[test]
@@ -1149,5 +1262,54 @@ mod tests {
         assert!(state.filtered_rows.is_empty());
         assert!(!state.search_state.is_active());
         assert!(state.pagination.reached_scan_cap);
+    }
+}
+fn render_column_headers(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    metrics: &ColumnMetrics,
+) {
+    if area.height == 0 {
+        return;
+    }
+
+    let mut spans: Vec<Span> = vec!["  ".into()];
+    if metrics.max_created_width > 0 {
+        let label = format!("{:<width$}", "Created", width = metrics.max_created_width);
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
+    if metrics.max_updated_width > 0 {
+        let label = format!("{:<width$}", "Updated", width = metrics.max_updated_width);
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
+    spans.push("Conversation".bold().into());
+    frame.render_widget_ref(Line::from(spans), area);
+}
+
+struct ColumnMetrics {
+    max_created_width: usize,
+    max_updated_width: usize,
+    labels: Vec<(String, String)>,
+}
+
+fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
+    let mut labels: Vec<(String, String)> = Vec::with_capacity(rows.len());
+    let mut max_created_width = UnicodeWidthStr::width("Created");
+    let mut max_updated_width = UnicodeWidthStr::width("Updated");
+
+    for row in rows {
+        let created = format_created_label(row);
+        let updated = format_updated_label(row);
+        max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
+        max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
+        labels.push((created, updated));
+    }
+
+    ColumnMetrics {
+        max_created_width,
+        max_updated_width,
+        labels,
     }
 }

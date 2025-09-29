@@ -449,14 +449,17 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
 
     let expected: Vec<serde_json::Value> = (total_messages - tail_len..total_messages)
         .map(|idx| {
-            serde_json::to_value(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("reply-{idx}"),
-                }],
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": format!("reply-{idx}"),
+                    }
+                ],
+                "timestamp": format!("{ts}-{idx:02}"),
             })
-            .expect("serialize response item")
         })
         .collect();
 
@@ -526,14 +529,17 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
 
     let expected: Vec<serde_json::Value> = (0..3)
         .map(|idx| {
-            serde_json::to_value(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("short-{idx}"),
-                }],
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": format!("short-{idx}"),
+                    }
+                ],
+                "timestamp": format!("{ts}-{idx:02}"),
             })
-            .expect("serialize response item")
         })
         .collect();
 
@@ -615,14 +621,17 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
 
     let expected: Vec<serde_json::Value> = (0..4)
         .map(|idx| {
-            serde_json::to_value(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("response-{idx}"),
-                }],
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": format!("response-{idx}"),
+                    }
+                ],
+                "timestamp": format!("{ts}-{idx:02}"),
             })
-            .expect("serialize response item")
         })
         .collect();
 

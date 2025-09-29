@@ -43,7 +43,7 @@ pub struct ConversationItem {
 }
 
 /// Hard cap to bound worst‑case work per request.
-const MAX_SCAN_FILES: usize = 100;
+const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
 const TAIL_RECORD_LIMIT: usize = 10;
 
@@ -407,12 +407,25 @@ fn collect_last_response_values(buffer: &[u8], max_records: usize) -> Vec<serde_
         }
         let parsed: serde_json::Result<RolloutLine> = serde_json::from_str(trimmed);
         let Ok(rollout_line) = parsed else { continue };
-        if let RolloutItem::ResponseItem(item) = rollout_line.item
-            && let Ok(val) = serde_json::to_value(item)
-        {
-            collected_rev.push(val);
-            if collected_rev.len() == max_records {
-                break;
+        let RolloutLine { timestamp, item } = rollout_line;
+        if let RolloutItem::ResponseItem(item) = item {
+            if let Ok(val) = serde_json::to_value(&item) {
+                let with_timestamp = match val {
+                    serde_json::Value::Object(mut map) => {
+                        map.insert("timestamp".into(), serde_json::Value::String(timestamp));
+                        serde_json::Value::Object(map)
+                    }
+                    other => {
+                        let mut map = serde_json::Map::new();
+                        map.insert("timestamp".into(), serde_json::Value::String(timestamp));
+                        map.insert("value".into(), other);
+                        serde_json::Value::Object(map)
+                    }
+                };
+                collected_rev.push(with_timestamp);
+                if collected_rev.len() == max_records {
+                    break;
+                }
             }
         }
     }
