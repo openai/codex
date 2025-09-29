@@ -130,7 +130,10 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
         return false;
     }
 
-    let command = words[0].to_ascii_lowercase();
+    let command = words[0]
+        .trim_matches(|c| c == '(' || c == ')')
+        .trim_start_matches('-')
+        .to_ascii_lowercase();
     match command.as_str() {
         "echo" | "write-output" | "write-host" => true, // (no redirection allowed)
         "dir" | "ls" | "get-childitem" | "gci" => true,
@@ -140,11 +143,10 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
         "get-location" | "gl" | "pwd" => true,
         "test-path" | "tp" => true,
         "resolve-path" | "rvpa" => true,
+        "select-object" | "select" => true,
+        "get-item" => true,
 
-        "git" => match words.get(1).map(|w| w.to_ascii_lowercase()) {
-            Some(sub) => matches!(sub.as_str(), "status" | "log" | "show" | "diff"),
-            None => false,
-        },
+        "git" => is_safe_git_command(words),
 
         "rg" => is_safe_ripgrep(words),
 
@@ -167,6 +169,45 @@ fn is_safe_ripgrep(words: &[String]) -> bool {
                 .iter()
                 .any(|opt| arg_lc == *opt || arg_lc.starts_with(&format!("{opt}=")))
     })
+}
+
+fn is_safe_git_command(words: &[String]) -> bool {
+    const SAFE_SUBCOMMANDS: &[&str] = &["status", "log", "show", "diff", "cat-file"];
+
+    let mut iter = words.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        let arg_lc = arg.to_ascii_lowercase();
+
+        if arg.starts_with('-') {
+            if arg.eq_ignore_ascii_case("-c") || arg.eq_ignore_ascii_case("--config") {
+                if iter.next().is_none() {
+                    return false;
+                }
+                continue;
+            }
+
+            if arg_lc.starts_with("-c=")
+                || arg_lc.starts_with("--config=")
+                || arg_lc.starts_with("--git-dir=")
+                || arg_lc.starts_with("--work-tree=")
+            {
+                continue;
+            }
+
+            if arg.eq_ignore_ascii_case("--git-dir") || arg.eq_ignore_ascii_case("--work-tree") {
+                if iter.next().is_none() {
+                    return false;
+                }
+                continue;
+            }
+
+            continue;
+        }
+
+        return SAFE_SUBCOMMANDS.contains(&arg_lc.as_str());
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -206,6 +247,51 @@ mod tests {
             "-NoProfile",
             "-Command",
             "Get-ChildItem",
+        ])));
+    }
+
+    #[test]
+    fn allows_read_only_pipelines_and_git_usage() {
+        assert!(is_safe_command_windows(&vec_str(&[
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "rg --files-with-matches foo | Measure-Object | Select-Object -ExpandProperty Count",
+        ])));
+
+        assert!(is_safe_command_windows(&vec_str(&[
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "Get-Content foo.rs | Select-Object -Skip 200",
+        ])));
+
+        assert!(is_safe_command_windows(&vec_str(&[
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "git -c core.pager=cat show HEAD:foo.rs",
+        ])));
+
+        assert!(is_safe_command_windows(&vec_str(&[
+            "pwsh",
+            "-Command",
+            "-git cat-file -p HEAD:foo.rs",
+        ])));
+
+        assert!(is_safe_command_windows(&vec_str(&[
+            "pwsh",
+            "-Command",
+            "(Get-Content foo.rs -Raw)",
+        ])));
+
+        assert!(is_safe_command_windows(&vec_str(&[
+            "pwsh",
+            "-Command",
+            "Get-Item foo.rs | Select-Object Length",
         ])));
     }
 
