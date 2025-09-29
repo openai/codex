@@ -430,13 +430,11 @@ impl ChatComposer {
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 if let Some((name, _rest)) = parse_slash_name(first_line)
                     && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == name)
-                {
-                    if let Some(expanded) =
+                    && let Some(expanded) =
                         prompt_args::expand_if_numeric_with_positional_args(prompt, first_line)
-                    {
-                        self.textarea.set_text("");
-                        return (InputResult::Submitted(expanded), true);
-                    }
+                {
+                    self.textarea.set_text("");
+                    return (InputResult::Submitted(expanded), true);
                 }
 
                 if let Some(sel) = popup.selected_item() {
@@ -452,7 +450,7 @@ impl ChatComposer {
                                 let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
 
                                 if named_args.is_empty() && !has_numeric {
-                                    // No placeholders at all: auto-submit the literal content (legacy behavior).
+                                    // No placeholders at all: auto-submit the literal content
                                     self.textarea.set_text("");
                                     return (InputResult::Submitted(prompt.content.clone()), true);
                                 }
@@ -472,7 +470,7 @@ impl ChatComposer {
                                         self.textarea.text().lines().next().unwrap_or("");
                                     if let Some(expanded) =
                                         prompt_args::expand_if_numeric_with_positional_args(
-                                            &prompt, first_line,
+                                            prompt, first_line,
                                         )
                                     {
                                         self.textarea.set_text("");

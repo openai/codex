@@ -262,7 +262,7 @@ pub fn expand_numeric_placeholders(content: &str, args: &[String]) -> String {
                 _ => {}
             }
         }
-        if rest.len() >= 1 + "ARGUMENTS".len() && rest[1..].starts_with("ARGUMENTS") {
+        if rest.len() > "ARGUMENTS".len() && rest[1..].starts_with("ARGUMENTS") {
             if !args.is_empty() {
                 let joined = cached_joined_args.get_or_insert_with(|| args.join(" "));
                 out.push_str(joined);
