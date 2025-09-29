@@ -275,6 +275,13 @@ export type MarkdownProps = TerminalRendererOptions & {
   cwd?: string;
 };
 
+type MarkdownToken = {
+  type?: string;
+  text?: string;
+  raw?: string;
+  tokens?: Array<MarkdownToken>;
+};
+
 export function Markdown({
   children,
   fileOpener,
@@ -286,10 +293,81 @@ export function Markdown({
   const rendered = React.useMemo(() => {
     const linkifiedMarkdown = rewriteFileCitations(children, fileOpener, cwd);
 
+    const renderer = new TerminalRenderer({ ...options, width: size.columns });
+
+    const originalText = renderer.text.bind(renderer);
+    renderer.text = function patchedText(token: unknown) {
+      if (typeof token === "object" && token) {
+        const tokenObj = token as {
+          text?: string;
+          tokens?: Array<MarkdownToken>;
+        };
+        if (Array.isArray(tokenObj.tokens) && this.parser?.parseInline) {
+          const parsedInline = this.parser.parseInline(tokenObj.tokens);
+          return this.o.text(parsedInline);
+        }
+        return this.o.text(tokenObj.text ?? "");
+      }
+
+      return originalText(token as string);
+    };
+
+    renderer.listitem = function patchedListItem(token: unknown) {
+      let text = token as string;
+
+      if (typeof token === "object" && token) {
+        const item = token as {
+          task?: boolean;
+          checked?: boolean;
+          loose?: boolean;
+          tokens: Array<MarkdownToken>;
+        };
+        let assembled = "";
+
+        if (item.task) {
+          const checkbox = this.checkbox({ checked: !!item.checked });
+          if (item.loose) {
+            if (item.tokens.length > 0 && item.tokens[0]?.type === "paragraph") {
+              item.tokens[0].text = `${checkbox} ${item.tokens[0].text}`;
+              if (
+                item.tokens[0].tokens &&
+                item.tokens[0].tokens.length > 0 &&
+                item.tokens[0].tokens[0]?.type === "text"
+              ) {
+                item.tokens[0].tokens[0].text =
+                  checkbox + " " + item.tokens[0].tokens[0].text;
+              }
+            } else {
+              item.tokens.unshift({
+                type: "text",
+                raw: `${checkbox} `,
+                text: `${checkbox} `,
+              });
+            }
+          } else {
+            assembled += `${checkbox} `;
+          }
+        }
+
+        const parsed = this.parser?.parse?.(item.tokens, !!item.loose) ?? "";
+        text = assembled + parsed;
+      }
+
+      if (typeof text !== "string") {
+        text = text == null ? "" : String(text);
+      }
+
+      const transform = (value: string) => this.o.listitem(this.transform(value));
+      const isNested = text.includes("\n");
+      const formatted = isNested ? text : transform(text);
+
+      return "\n* " + formatted;
+    };
+
     // Configure marked for this specific render
     setOptions({
       // @ts-expect-error missing parser, space props
-      renderer: new TerminalRenderer({ ...options, width: size.columns }),
+      renderer,
     });
     const parsed = parse(linkifiedMarkdown, { async: false }).trim();
 
