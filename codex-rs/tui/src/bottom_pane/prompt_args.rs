@@ -89,6 +89,9 @@ pub fn prompt_argument_names(content: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut names = Vec::new();
     for m in PROMPT_ARG_REGEX.find_iter(content) {
+        if m.start() > 0 && content.as_bytes()[m.start() - 1] == b'$' {
+            continue;
+        }
         let name = &content[m.start() + 1..m.end()];
         // Exclude special positional aggregate token from named args.
         if name == "ARGUMENTS" {
@@ -159,15 +162,21 @@ pub fn expand_custom_prompt(
                 missing,
             });
         }
-        let replaced =
-            PROMPT_ARG_REGEX.replace_all(&prompt.content, |caps: &regex_lite::Captures<'_>| {
-                let whole = caps.get(0).map(|m| m.as_str()).unwrap_or("");
-                let key = &whole[1..];
-                inputs
-                    .get(key)
-                    .cloned()
-                    .unwrap_or_else(|| whole.to_string())
-            });
+        let content = &prompt.content;
+        let replaced = PROMPT_ARG_REGEX.replace_all(content, |caps: &regex_lite::Captures<'_>| {
+            let matched = caps
+                .get(0)
+                .expect("prompt arg regex should provide whole match");
+            if matched.start() > 0 && content.as_bytes()[matched.start() - 1] == b'$' {
+                return matched.as_str().to_string();
+            }
+            let whole = matched.as_str();
+            let key = &whole[1..];
+            inputs
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| whole.to_string())
+        });
         return Ok(Some(replaced.into_owned()));
     }
 
@@ -339,5 +348,31 @@ mod tests {
             .user_message();
         assert!(err.to_lowercase().contains("missing required args"));
         assert!(err.contains("BRANCH"));
+    }
+
+    #[test]
+    fn escaped_placeholder_is_ignored() {
+        assert_eq!(
+            prompt_argument_names("literal $$USER"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            prompt_argument_names("literal $$USER and $REAL"),
+            vec!["REAL".to_string()]
+        );
+    }
+
+    #[test]
+    fn escaped_placeholder_remains_literal() {
+        let prompts = vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "literal $$USER".to_string(),
+            description: None,
+            argument_hint: None,
+        }];
+
+        let out = expand_custom_prompt("/my-prompt", &prompts).unwrap();
+        assert_eq!(out, Some("literal $$USER".to_string()));
     }
 }
