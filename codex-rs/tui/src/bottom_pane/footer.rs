@@ -23,7 +23,11 @@ pub(crate) enum FooterMode {
     Empty,
 }
 
-pub(crate) fn toggle_shortcut_mode(current: FooterMode, _ctrl_c_hint: bool) -> FooterMode {
+pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
+    if ctrl_c_hint && matches!(current, FooterMode::CtrlCReminder) {
+        return current;
+    }
+
     match current {
         FooterMode::ShortcutOverlay | FooterMode::CtrlCReminder => FooterMode::ShortcutPrompt,
         _ => FooterMode::ShortcutOverlay,
@@ -40,15 +44,12 @@ pub(crate) fn esc_hint_mode(current: FooterMode, is_task_running: bool) -> Foote
 
 pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     match current {
-        FooterMode::EscHint | FooterMode::ShortcutOverlay | FooterMode::Empty => {
-            FooterMode::ShortcutPrompt
-        }
+        FooterMode::EscHint
+        | FooterMode::ShortcutOverlay
+        | FooterMode::CtrlCReminder
+        | FooterMode::Empty => FooterMode::ShortcutPrompt,
         other => other,
     }
-}
-
-pub(crate) fn prompt_mode() -> FooterMode {
-    FooterMode::ShortcutPrompt
 }
 
 pub(crate) fn footer_height(props: FooterProps) -> u16 {

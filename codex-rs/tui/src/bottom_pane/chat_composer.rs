@@ -22,7 +22,6 @@ use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
-use super::footer::prompt_mode;
 use super::footer::render_footer;
 use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
@@ -337,7 +336,7 @@ impl ChatComposer {
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
         if show {
-            self.footer_mode = prompt_mode();
+            self.footer_mode = FooterMode::CtrlCReminder;
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
@@ -1293,7 +1292,8 @@ impl ChatComposer {
         match self.footer_mode {
             FooterMode::EscHint => FooterMode::EscHint,
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
-            _ if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
+            FooterMode::CtrlCReminder => FooterMode::CtrlCReminder,
+            FooterMode::ShortcutPrompt if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
             FooterMode::ShortcutPrompt if !self.is_empty() => FooterMode::Empty,
             other => other,
         }
