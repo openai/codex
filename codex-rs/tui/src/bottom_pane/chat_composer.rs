@@ -32,6 +32,7 @@ use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
 use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -409,9 +410,11 @@ impl ChatComposer {
                                 let name = prompt.name.clone();
                                 let starts_with_cmd = first_line
                                     .trim_start()
-                                    .starts_with(format!("/{name}").as_str());
+                                    .starts_with(format!("/{PROMPTS_CMD_PREFIX}:{name}").as_str());
                                 if !starts_with_cmd {
-                                    self.textarea.set_text(format!("/{name} ").as_str());
+                                    self.textarea.set_text(
+                                        format!("/{PROMPTS_CMD_PREFIX}:{name} ").as_str(),
+                                    );
                                 }
                                 if !self.textarea.text().is_empty() {
                                     cursor_target = Some(self.textarea.text().len());
@@ -435,7 +438,8 @@ impl ChatComposer {
                 // immediately regardless of the popup selection.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 if let Some((name, _rest)) = parse_slash_name(first_line)
-                    && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == name)
+                    && let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
+                    && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name)
                     && let Some(expanded) =
                         expand_if_numeric_with_positional_args(prompt, first_line)
                 {
@@ -469,7 +473,8 @@ impl ChatComposer {
                                     self.textarea.set_text("");
                                     return (InputResult::Submitted(expanded), true);
                                 } else {
-                                    let text = format!("/{} ", prompt.name);
+                                    let name = prompt.name.clone();
+                                    let text = format!("/{PROMPTS_CMD_PREFIX}:{name} ");
                                     self.textarea.set_text(&text);
                                     self.textarea.set_cursor(self.textarea.text().len());
                                 }
@@ -1868,13 +1873,17 @@ mod tests {
 
     #[test]
     fn extract_args_supports_quoted_paths_single_arg() {
-        let args = extract_positional_args_for_prompt_line("/review \"docs/My File.md\"", "review");
+        let args = extract_positional_args_for_prompt_line(
+            "/prompts:review \"docs/My File.md\"",
+            "review",
+        );
         assert_eq!(args, vec!["docs/My File.md".to_string()]);
     }
 
     #[test]
     fn extract_args_supports_mixed_quoted_and_unquoted() {
-        let args = extract_positional_args_for_prompt_line("/cmd \"with spaces\" simple", "cmd");
+        let args =
+            extract_positional_args_for_prompt_line("/prompts:cmd \"with spaces\" simple", "cmd");
         assert_eq!(args, vec!["with spaces".to_string(), "simple".to_string()]);
     }
 
@@ -2349,7 +2358,10 @@ mod tests {
 
         type_chars_humanlike(
             &mut composer,
-            &['/', 'm', 'y', '-', 'p', 'r', 'o', 'm', 'p', 't'],
+            &[
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'm', 'y', '-', 'p', 'r', 'o', 'm',
+                'p', 't',
+            ],
         );
 
         let (result, _needs_redraw) =
@@ -2386,8 +2398,8 @@ mod tests {
         type_chars_humanlike(
             &mut composer,
             &[
-                '/', 'm', 'y', '-', 'p', 'r', 'o', 'm', 'p', 't', ' ', 'f', 'o', 'o', ' ', 'b',
-                'a', 'r',
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'm', 'y', '-', 'p', 'r', 'o', 'm',
+                'p', 't', ' ', 'f', 'o', 'o', ' ', 'b', 'a', 'r',
             ],
         );
         let (result, _needs_redraw) =
@@ -2419,14 +2431,17 @@ mod tests {
             argument_hint: None,
         }]);
 
-        type_chars_humanlike(&mut composer, &['/', 'p']);
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'p'],
+        );
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         // With no args typed, selecting the prompt inserts the command template
         // and does not submit immediately.
         assert_eq!(InputResult::None, result);
-        assert_eq!("/p ", composer.textarea.text());
+        assert_eq!("/prompts:p ", composer.textarea.text());
     }
 
     #[test]
@@ -2452,7 +2467,12 @@ mod tests {
             argument_hint: None,
         }]);
 
-        type_chars_humanlike(&mut composer, &['/', 'p', 'r', 'i', 'c', 'e', ' ', 'x']);
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'p', 'r', 'i', 'c', 'e', ' ', 'x',
+            ],
+        );
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -2487,7 +2507,8 @@ mod tests {
         type_chars_humanlike(
             &mut composer,
             &[
-                '/', 'r', 'e', 'p', 'e', 'a', 't', ' ', 'o', 'n', 'e', ' ', 't', 'w', 'o',
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'r', 'e', 'p', 'e', 'a', 't', ' ',
+                'o', 'n', 'e', ' ', 't', 'w', 'o',
             ],
         );
         let (result, _needs_redraw) =
