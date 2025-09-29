@@ -697,6 +697,7 @@ dependencies = [
  "codex-responses-api-proxy",
  "codex-tui",
  "ctor 0.5.0",
+ "dirs",
  "libc",
  "owo-colors",
  "predicates",
