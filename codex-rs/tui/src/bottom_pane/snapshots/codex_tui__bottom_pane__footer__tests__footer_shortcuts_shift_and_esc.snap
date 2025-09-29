@@ -2,6 +2,7 @@
 source: tui/src/bottom_pane/footer.rs
 expression: terminal.backend()
 ---
-"/ for commands        shift + enter for newline               ctrl + v to paste "
-"@ for file paths      esc again to edit previous message      ctrl + c to exit  "
-"                                                              ctrl + t to view t"
+"/ for commands                            shift + enter for newline             "
+"@ for file paths                          ctrl + v to paste images              "
+"esc again to edit previous message        ctrl + c to exit                      "
+"                                          ctrl + t to view transcript           "

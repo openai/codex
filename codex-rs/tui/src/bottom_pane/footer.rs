@@ -74,7 +74,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 is_task_running: props.is_task_running,
             })]
         }
-        FooterMode::ShortcutPrompt => vec![Line::default(), "? for shortcuts".dim().into()],
+        FooterMode::ShortcutPrompt => vec![Line::from(""), "? for shortcuts".dim().into()],
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
             use_shift_enter_hint: props.use_shift_enter_hint,
             esc_backtrack_hint: props.esc_backtrack_hint,
@@ -136,14 +136,15 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         }
     }
 
-    let mut ordered = vec![String::new(); 9];
-    ordered[0] = commands;
-    ordered[1] = newline;
-    ordered[2] = paste_image;
-    ordered[3] = file_paths;
-    ordered[4] = edit_previous;
-    ordered[5] = quit;
-    ordered[8] = show_transcript;
+    let mut ordered = Vec::with_capacity(8);
+    ordered.push(commands);
+    ordered.push(newline);
+    ordered.push(file_paths);
+    ordered.push(paste_image);
+    ordered.push(edit_previous);
+    ordered.push(quit);
+    ordered.push(String::new());
+    ordered.push(show_transcript);
 
     build_columns(ordered)
 }
@@ -153,15 +154,18 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
         return Vec::new();
     }
 
-    const COLUMNS: usize = 3;
-    const COLUMN_PADDING: [usize; COLUMNS] = [4, 4, 4];
-    const COLUMN_GAP: usize = 2;
+    const COLUMNS: usize = 2;
+    const COLUMN_PADDING: [usize; COLUMNS] = [4, 4];
+    const COLUMN_GAP: usize = 4;
 
     let rows = entries.len().div_ceil(COLUMNS);
     let target_len = rows * COLUMNS;
     let mut entries = entries;
     if entries.len() < target_len {
-        entries.extend(std::iter::repeat(String::new()).take(target_len - entries.len()));
+        entries.extend(std::iter::repeat_n(
+            String::new(),
+            target_len - entries.len(),
+        ));
     }
 
     let mut column_widths = [0usize; COLUMNS];
@@ -175,26 +179,21 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
         *width += COLUMN_PADDING[idx];
     }
 
-    let mut lines = Vec::new();
-    for row in 0..rows {
-        let mut line = String::new();
-        for col in 0..COLUMNS {
-            let idx = row * COLUMNS + col;
-            if idx >= entries.len() {
-                continue;
+    entries
+        .chunks(COLUMNS)
+        .map(|chunk| {
+            let mut line = String::new();
+            for (col, entry) in chunk.iter().enumerate() {
+                line.push_str(entry);
+                if col < COLUMNS - 1 {
+                    let target_width = column_widths[col];
+                    let padding = target_width.saturating_sub(entry.len()) + COLUMN_GAP;
+                    line.push_str(&" ".repeat(padding));
+                }
             }
-            let entry = &entries[idx];
-            line.push_str(entry);
-            if col < COLUMNS - 1 {
-                let target_width = column_widths[col];
-                let padding = target_width.saturating_sub(entry.len()) + COLUMN_GAP;
-                line.push_str(&" ".repeat(padding));
-            }
-        }
-        lines.push(Line::from(line).dim());
-    }
-
-    lines
+            Line::from(line).dim()
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
