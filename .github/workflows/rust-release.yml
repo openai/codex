@@ -218,16 +218,29 @@ jobs:
 
       # build_npm_package.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@v2
-      - name: Stage npm package
+      - name: Stage codex CLI npm package
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TMP_DIR="${RUNNER_TEMP}/npm-stage"
           ./codex-cli/scripts/build_npm_package.py \
+            --package codex \
             --release-version "${{ steps.release_name.outputs.name }}" \
             --staging-dir "${TMP_DIR}" \
             --pack-output "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
+
+      - name: Stage responses API proxy npm package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TMP_DIR="${RUNNER_TEMP}/npm-stage-responses"
+          ./codex-cli/scripts/build_npm_package.py \
+            --package codex-responses-api-proxy \
+            --release-version "${{ steps.release_name.outputs.name }}" \
+            --staging-dir "${TMP_DIR}" \
+            --pack-output "${GITHUB_WORKSPACE}/dist/npm/codex-responses-api-proxy-npm-${{ steps.release_name.outputs.name }}.tgz"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -271,7 +284,7 @@ jobs:
       - name: Update npm
         run: npm install -g npm@latest
 
-      - name: Download npm tarball from release
+      - name: Download npm tarballs from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -282,6 +295,10 @@ jobs:
           gh release download "$tag" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern "codex-npm-${version}.tgz" \
+            --dir dist/npm
+          gh release download "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "codex-responses-api-proxy-npm-${version}.tgz" \
             --dir dist/npm
 
       # No NODE_AUTH_TOKEN needed because we use OIDC.
@@ -296,7 +313,14 @@ jobs:
             tag_args+=(--tag "${NPM_TAG}")
           fi
 
-          npm publish "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${VERSION}.tgz" "${tag_args[@]}"
+          tarballs=(
+            "codex-npm-${VERSION}.tgz"
+            "codex-responses-api-proxy-npm-${VERSION}.tgz"
+          )
+
+          for tarball in "${tarballs[@]}"; do
+            npm publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
+          done
 
   update-branch:
     name: Update latest-alpha-cli branch
