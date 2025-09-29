@@ -363,7 +363,7 @@ env = { "API_KEY" = "value" }
 # Streamable HTTP requires the experimental rmcp client
 experimental_use_rmcp_client = true
 [mcp_servers.figma]
-url = "url = "http://127.0.0.1:3845/mcp""
+url = "http://127.0.0.1:3845/mcp"
 # Optional bearer token to be passed into an `Authorization: Bearer <token>` header
 # Use this with caution because the token is in plaintext.
 bearer_token = "<token>"
