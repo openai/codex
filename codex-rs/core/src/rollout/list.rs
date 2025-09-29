@@ -36,13 +36,16 @@ pub struct ConversationsPage {
 pub struct ConversationItem {
     /// Absolute path to the rollout file.
     pub path: PathBuf,
-    /// First up to 5 JSONL records parsed as JSON (includes meta line).
+    /// First up to `HEAD_RECORD_LIMIT` JSONL records parsed as JSON (includes meta line).
     pub head: Vec<serde_json::Value>,
+    /// Last up to `TAIL_RECORD_LIMIT` JSONL response records parsed as JSON.
+    pub tail: Vec<serde_json::Value>,
 }
 
 /// Hard cap to bound worst‑case work per request.
 const MAX_SCAN_FILES: usize = 100;
 const HEAD_RECORD_LIMIT: usize = 10;
+const TAIL_RECORD_LIMIT: usize = 10;
 
 /// Pagination cursor identifying a file by timestamp and UUID.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,13 +179,13 @@ async fn traverse_directories_for_paths(
                     }
                     // Read head and simultaneously detect message events within the same
                     // first N JSONL records to avoid a second file read.
-                    let (head, saw_session_meta, saw_user_event) =
-                        read_head_and_flags(&path, HEAD_RECORD_LIMIT)
+                    let (head, tail, saw_session_meta, saw_user_event) =
+                        read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
                             .await
-                            .unwrap_or((Vec::new(), false, false));
+                            .unwrap_or((Vec::new(), Vec::new(), false, false));
                     // Apply filters: must have session meta and at least one user message event
                     if saw_session_meta && saw_user_event {
-                        items.push(ConversationItem { path, head });
+                        items.push(ConversationItem { path, head, tail });
                     }
                 }
             }
@@ -286,10 +289,11 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
     Some((ts, uuid))
 }
 
-async fn read_head_and_flags(
+async fn read_head_and_tail(
     path: &Path,
-    max_records: usize,
-) -> io::Result<(Vec<serde_json::Value>, bool, bool)> {
+    head_limit: usize,
+    tail_limit: usize,
+) -> io::Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, bool, bool)> {
     use tokio::io::AsyncBufReadExt;
 
     let file = tokio::fs::File::open(path).await?;
@@ -299,7 +303,7 @@ async fn read_head_and_flags(
     let mut saw_session_meta = false;
     let mut saw_user_event = false;
 
-    while head.len() < max_records {
+    while head.len() < head_limit {
         let line_opt = lines.next_line().await?;
         let Some(line) = line_opt else { break };
         let trimmed = line.trim();
@@ -336,7 +340,84 @@ async fn read_head_and_flags(
         }
     }
 
-    Ok((head, saw_session_meta, saw_user_event))
+    let tail = if tail_limit == 0 {
+        Vec::new()
+    } else {
+        read_tail_records(path, tail_limit).await?
+    };
+
+    Ok((head, tail, saw_session_meta, saw_user_event))
+}
+
+async fn read_tail_records(path: &Path, max_records: usize) -> io::Result<Vec<serde_json::Value>> {
+    use std::io::SeekFrom;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncSeekExt;
+
+    if max_records == 0 {
+        return Ok(Vec::new());
+    }
+
+    const CHUNK_SIZE: usize = 8192;
+
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut pos = file.seek(SeekFrom::End(0)).await?;
+    if pos == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut buffer: Vec<u8> = Vec::new();
+
+    loop {
+        let slice_start = match (pos > 0, buffer.iter().position(|&b| b == b'\n')) {
+            (true, Some(idx)) => idx + 1,
+            _ => 0,
+        };
+        let tail = collect_last_response_values(&buffer[slice_start..], max_records);
+        if tail.len() >= max_records || pos == 0 {
+            return Ok(tail);
+        }
+
+        let read_size = CHUNK_SIZE.min(pos as usize);
+        if read_size == 0 {
+            return Ok(tail);
+        }
+        pos -= read_size as u64;
+        file.seek(SeekFrom::Start(pos)).await?;
+        let mut chunk = vec![0; read_size];
+        file.read_exact(&mut chunk).await?;
+        chunk.extend_from_slice(&buffer);
+        buffer = chunk;
+    }
+}
+
+fn collect_last_response_values(buffer: &[u8], max_records: usize) -> Vec<serde_json::Value> {
+    use std::borrow::Cow;
+
+    if buffer.is_empty() || max_records == 0 {
+        return Vec::new();
+    }
+
+    let text: Cow<'_, str> = String::from_utf8_lossy(buffer);
+    let mut collected_rev: Vec<serde_json::Value> = Vec::new();
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Result<RolloutLine> = serde_json::from_str(trimmed);
+        let Ok(rollout_line) = parsed else { continue };
+        if let RolloutItem::ResponseItem(item) = rollout_line.item
+            && let Ok(val) = serde_json::to_value(item)
+        {
+            collected_rev.push(val);
+            if collected_rev.len() == max_records {
+                break;
+            }
+        }
+    }
+    collected_rev.reverse();
+    collected_rev
 }
 
 /// Locate a recorded conversation rollout file by its UUID string using the existing
