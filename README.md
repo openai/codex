@@ -69,6 +69,18 @@ Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp).
 
 Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
 
+### Guardrails (Optional)
+
+Codex can optionally preload Markdown guardrails from a `.guardrails/` directory in your project. Enable guardrails with the CLI flag or environment variable:
+
+```bash
+codex --guardrails
+# or
+CODEX_GUARDRAILS=1 codex
+```
+
+When guardrails are enabled, the Markdown files are concatenated and prepended to your initial prompt, ensuring Codex receives important project guidelines up front.
+
 ---
 
 ### Docs & FAQ

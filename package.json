@@ -4,7 +4,8 @@
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
     "format": "prettier --check *.json *.md .github/workflows/*.yml **/*.js",
-    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml **/*.js"
+    "format:fix": "prettier --write *.json *.md .github/workflows/*.yml **/*.js",
+    "test": "node --loader ./ts-loader.mjs --test __tests__/guardrails.test.ts"
   },
   "devDependencies": {
     "prettier": "^3.5.3"
