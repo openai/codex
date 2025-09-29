@@ -575,7 +575,7 @@ fn head_to_row(item: &ConversationItem) -> Row {
         .updated_at
         .as_deref()
         .and_then(parse_timestamp_str)
-        .or_else(|| created_at.clone());
+        .or(created_at);
 
     let preview = preview_from_head(&item.head)
         .map(|s| s.trim().to_string())
@@ -732,26 +732,12 @@ fn render_list(
         let created_span = if max_created_width == 0 {
             None
         } else {
-            Some(
-                Span::from(format!(
-                    "{:<width$}",
-                    created_label,
-                    width = max_created_width
-                ))
-                .dim(),
-            )
+            Some(Span::from(format!("{created_label:<max_created_width$}")).dim())
         };
         let updated_span = if max_updated_width == 0 {
             None
         } else {
-            Some(
-                Span::from(format!(
-                    "{:<width$}",
-                    updated_label,
-                    width = max_updated_width
-                ))
-                .dim(),
-            )
+            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
         };
         let mut preview_width = area.width as usize;
         preview_width = preview_width.saturating_sub(marker_width);
@@ -870,17 +856,75 @@ fn format_updated_label(row: &Row) -> String {
     }
 }
 
+fn render_column_headers(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    metrics: &ColumnMetrics,
+) {
+    if area.height == 0 {
+        return;
+    }
+
+    let mut spans: Vec<Span> = vec!["  ".into()];
+    if metrics.max_created_width > 0 {
+        let label = format!(
+            "{text:<width$}",
+            text = "Created",
+            width = metrics.max_created_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
+    if metrics.max_updated_width > 0 {
+        let label = format!(
+            "{text:<width$}",
+            text = "Updated",
+            width = metrics.max_updated_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
+    spans.push("Conversation".bold());
+    frame.render_widget_ref(Line::from(spans), area);
+}
+
+struct ColumnMetrics {
+    max_created_width: usize,
+    max_updated_width: usize,
+    labels: Vec<(String, String)>,
+}
+
+fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
+    let mut labels: Vec<(String, String)> = Vec::with_capacity(rows.len());
+    let mut max_created_width = UnicodeWidthStr::width("Created");
+    let mut max_updated_width = UnicodeWidthStr::width("Updated");
+
+    for row in rows {
+        let created = format_created_label(row);
+        let updated = format_updated_label(row);
+        max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
+        max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
+        labels.push((created, updated));
+    }
+
+    ColumnMetrics {
+        max_created_width,
+        max_updated_width,
+        labels,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use serde_json::json;
-    use chrono::Duration;
-    use std::path::PathBuf;
     use std::future::Future;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
 
@@ -1020,7 +1064,8 @@ mod tests {
     fn resume_table_snapshot() {
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
-        use ratatui::layout::{Constraint, Layout};
+        use ratatui::layout::Constraint;
+        use ratatui::layout::Layout;
 
         let loader: PageLoader = Arc::new(|_| {});
         let mut state =
@@ -1062,12 +1107,14 @@ mod tests {
         let mut terminal = Terminal::with_options(backend).expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, width, height));
 
-        let mut frame = terminal.get_frame();
-        let area = frame.area();
-        let segments = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-        render_column_headers(&mut frame, segments[0], &metrics);
-        render_list(&mut frame, segments[1], &state, &metrics);
-        drop(frame);
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let segments =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+            render_column_headers(&mut frame, segments[0], &metrics);
+            render_list(&mut frame, segments[1], &state, &metrics);
+        }
         terminal.flush().expect("flush");
 
         let snapshot = terminal.backend().to_string();
@@ -1345,54 +1392,5 @@ mod tests {
         assert!(state.filtered_rows.is_empty());
         assert!(!state.search_state.is_active());
         assert!(state.pagination.reached_scan_cap);
-    }
-}
-fn render_column_headers(
-    frame: &mut crate::custom_terminal::Frame,
-    area: Rect,
-    metrics: &ColumnMetrics,
-) {
-    if area.height == 0 {
-        return;
-    }
-
-    let mut spans: Vec<Span> = vec!["  ".into()];
-    if metrics.max_created_width > 0 {
-        let label = format!("{:<width$}", "Created", width = metrics.max_created_width);
-        spans.push(Span::from(label).bold());
-        spans.push("  ".into());
-    }
-    if metrics.max_updated_width > 0 {
-        let label = format!("{:<width$}", "Updated", width = metrics.max_updated_width);
-        spans.push(Span::from(label).bold());
-        spans.push("  ".into());
-    }
-    spans.push("Conversation".bold().into());
-    frame.render_widget_ref(Line::from(spans), area);
-}
-
-struct ColumnMetrics {
-    max_created_width: usize,
-    max_updated_width: usize,
-    labels: Vec<(String, String)>,
-}
-
-fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
-    let mut labels: Vec<(String, String)> = Vec::with_capacity(rows.len());
-    let mut max_created_width = UnicodeWidthStr::width("Created");
-    let mut max_updated_width = UnicodeWidthStr::width("Updated");
-
-    for row in rows {
-        let created = format_created_label(row);
-        let updated = format_updated_label(row);
-        max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
-        max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
-        labels.push((created, updated));
-    }
-
-    ColumnMetrics {
-        max_created_width,
-        max_updated_width,
-        labels,
     }
 }
