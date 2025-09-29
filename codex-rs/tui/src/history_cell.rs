@@ -166,7 +166,7 @@ impl HistoryCell for ReasoningSummaryCell {
         word_wrap_lines(
             &summary_lines,
             RtOptions::new(width as usize)
-                .initial_indent("• ".into())
+                .initial_indent("• ".dim().into())
                 .subsequent_indent("  ".into()),
         )
     }
@@ -200,7 +200,7 @@ impl HistoryCell for AgentMessageCell {
             &self.lines,
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
-                    "• ".into()
+                    "• ".dim().into()
                 } else {
                     "  ".into()
                 })
@@ -901,7 +901,7 @@ pub(crate) fn new_mcp_tools_output(
 }
 
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
-    let mut line = vec!["• ".into(), message.into()];
+    let mut line = vec!["• ".dim(), message.into()];
     if let Some(hint) = hint {
         line.push(" ".into());
         line.push(hint.dark_gray());
@@ -964,7 +964,7 @@ impl HistoryCell for PlanUpdateCell {
         };
 
         let mut lines: Vec<Line<'static>> = vec![];
-        lines.push(vec!["• ".into(), "Updated Plan".bold()].into());
+        lines.push(vec!["• ".dim(), "Updated Plan".bold()].into());
 
         let mut indented_lines = vec![];
         let note = self
@@ -1036,7 +1036,7 @@ pub(crate) fn new_proposed_command(command: &[String]) -> PlainHistoryCell {
     let cmd = strip_bash_lc_and_escape(command);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(vec!["• ".into(), "Proposed Command".bold()]));
+    lines.push(Line::from(vec!["• ".dim(), "Proposed Command".bold()]));
 
     let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd);
     let initial_prefix: Span<'static> = "  └ ".dim();
