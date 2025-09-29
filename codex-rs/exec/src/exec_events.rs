@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+/// Top-level events emitted on the Codex Exec conversation stream.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "type")]
 pub enum ConversationEvent {
