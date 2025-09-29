@@ -108,7 +108,7 @@ impl McpClientAdapter {
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
     ) -> Result<Self> {
-        tracing::error!(
+        info!(
             "new_stdio_client use_rmcp_client: {use_rmcp_client} program: {program:?} args: {args:?} env: {env:?} params: {params:?} startup_timeout: {startup_timeout:?}"
         );
         if use_rmcp_client {
