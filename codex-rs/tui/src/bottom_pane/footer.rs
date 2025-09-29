@@ -202,7 +202,7 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
 
 fn indent_text(text: &str) -> String {
     let mut indented = String::with_capacity(FOOTER_INDENT_COLS + text.len());
-    indented.extend(iter::repeat(' ').take(FOOTER_INDENT_COLS));
+    indented.extend(iter::repeat_n(' ', FOOTER_INDENT_COLS));
     indented.push_str(text);
     indented
 }
