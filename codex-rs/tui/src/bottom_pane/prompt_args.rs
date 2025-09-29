@@ -27,7 +27,7 @@ pub fn parse_positional_args(rest: &str) -> Vec<String> {
     Shlex::new(rest).collect()
 }
 
-/// Expands a message of the form `/prompts:name key=value …` using a matching saved prompt.
+/// Expands a message of the form `/prompts:name [value] [value] …` using a matching saved prompt.
 ///
 /// If the text does not start with `/prompts:`, or if no prompt named `name` exists,
 /// the function returns `Ok(None)`. On success it returns
