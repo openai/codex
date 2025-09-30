@@ -6,6 +6,9 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::McpInvocation;
+use codex_core::protocol::McpToolCallBeginEvent;
+use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
@@ -19,6 +22,8 @@ use codex_exec::exec_events::ConversationItemDetails;
 use codex_exec::exec_events::ItemCompletedEvent;
 use codex_exec::exec_events::ItemStartedEvent;
 use codex_exec::exec_events::ItemUpdatedEvent;
+use codex_exec::exec_events::McpToolCallItem;
+use codex_exec::exec_events::McpToolCallStatus;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
 use codex_exec::exec_events::ReasoningItem;
@@ -30,6 +35,7 @@ use codex_exec::exec_events::TurnFailedEvent;
 use codex_exec::exec_events::TurnStartedEvent;
 use codex_exec::exec_events::Usage;
 use codex_exec::experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
+use mcp_types::CallToolResult;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -204,6 +210,109 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
                 usage: Usage::default(),
             }),
         ]
+    );
+}
+
+#[test]
+fn mcp_tool_call_begin_and_end_emit_item_events() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+    let invocation = McpInvocation {
+        server: "server_a".to_string(),
+        tool: "tool_x".to_string(),
+        arguments: None,
+    };
+
+    let begin = event(
+        "m1",
+        EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: "call-1".to_string(),
+            invocation: invocation.clone(),
+        }),
+    );
+    let begin_events = ep.collect_conversation_events(&begin);
+    assert_eq!(
+        begin_events,
+        vec![ConversationEvent::ItemStarted(ItemStartedEvent {
+            item: ConversationItem {
+                id: "item_0".to_string(),
+                details: ConversationItemDetails::McpToolCall(McpToolCallItem {
+                    server: "server_a".to_string(),
+                    tool: "tool_x".to_string(),
+                    status: McpToolCallStatus::InProgress,
+                }),
+            },
+        })]
+    );
+
+    let end = event(
+        "m2",
+        EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id: "call-1".to_string(),
+            invocation,
+            duration: Duration::from_secs(1),
+            result: Ok(CallToolResult {
+                content: Vec::new(),
+                is_error: None,
+                structured_content: None,
+            }),
+        }),
+    );
+    let end_events = ep.collect_conversation_events(&end);
+    assert_eq!(
+        end_events,
+        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
+            item: ConversationItem {
+                id: "item_0".to_string(),
+                details: ConversationItemDetails::McpToolCall(McpToolCallItem {
+                    server: "server_a".to_string(),
+                    tool: "tool_x".to_string(),
+                    status: McpToolCallStatus::Completed,
+                }),
+            },
+        })]
+    );
+}
+
+#[test]
+fn mcp_tool_call_failure_sets_failed_status() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+    let invocation = McpInvocation {
+        server: "server_b".to_string(),
+        tool: "tool_y".to_string(),
+        arguments: None,
+    };
+
+    let begin = event(
+        "m3",
+        EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: "call-2".to_string(),
+            invocation: invocation.clone(),
+        }),
+    );
+    ep.collect_conversation_events(&begin);
+
+    let end = event(
+        "m4",
+        EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id: "call-2".to_string(),
+            invocation,
+            duration: Duration::from_millis(5),
+            result: Err("tool exploded".to_string()),
+        }),
+    );
+    let events = ep.collect_conversation_events(&end);
+    assert_eq!(
+        events,
+        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
+            item: ConversationItem {
+                id: "item_0".to_string(),
+                details: ConversationItemDetails::McpToolCall(McpToolCallItem {
+                    server: "server_b".to_string(),
+                    tool: "tool_y".to_string(),
+                    status: McpToolCallStatus::Failed,
+                }),
+            },
+        })]
     );
 }
 
