@@ -9,8 +9,6 @@ jobs:
   sdks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -40,8 +38,6 @@ jobs:
 
       - name: Lint SDK packages
         run: pnpm -r --filter ./sdk/typescript run lint
-        env:
-          NODE_OPTIONS: --max-old-space-size=8096
 
       - name: Test SDK packages
         run: pnpm -r --filter ./sdk/typescript run test
