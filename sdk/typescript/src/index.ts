@@ -45,8 +45,8 @@ export class Codex {
     this.options = options;
   }
 
-  createConversation(): Conversation {
-    return new Conversation(this.exec, this.options);
+  startThread(): Thread {
+    return new Thread(this.exec, this.options);
   }
 }
 
@@ -61,12 +61,15 @@ export type RunStreamedResult = {
 
 export type Input = string;
 
-export class Conversation {
+export class Thread {
   private exec: CodexExec;
   private options: CodexOptions;
+  public id: string | null;
+
   constructor(exec: CodexExec, options: CodexOptions) {
     this.exec = exec;
     this.options = options;
+    this.id = null;
   }
 
   async runStreamed(input: string): Promise<RunStreamedResult> {
@@ -81,6 +84,9 @@ export class Conversation {
     });
     for await (const item of generator) {
       const parsed = JSON.parse(item) as ConversationEvent;
+      if (parsed.type === "session.created") {
+        this.id = parsed.session_id;
+      }
       yield parsed;
     }
   }

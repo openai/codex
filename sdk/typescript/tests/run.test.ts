@@ -21,19 +21,24 @@ describe("Codex", () => {
       responseBody: sse(responseStarted(), assistantMessage("Hi!"), responseCompleted()),
     });
 
-    const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+    try {
+      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
 
-    const result = await client.createConversation().run("Hello, world!");
+      const thread = client.startThread();
+      const result = await thread.run("Hello, world!");
 
-    const expectedItems = [
-      {
-        id: expect.any(String),
-        item_type: "assistant_message",
-        text: "Hi!",
-      },
-    ];
-    expect(result.items).toEqual(expectedItems);
-
-    await close();
-  }, 20000);
+      const expectedItems = [
+        {
+          id: expect.any(String),
+          item_type: "assistant_message",
+          text: "Hi!",
+        },
+      ];
+      expect(result.items).toEqual(expectedItems);
+      expect(thread.id).toEqual(expect.any(String));
+    }
+    finally{ 
+      await close();
+    }
+  });
 });
