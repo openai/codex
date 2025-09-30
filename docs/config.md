@@ -639,6 +639,17 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 > [!NOTE]
 > Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
 
+### Windows toast notification example
+
+Windows users can reuse the sample PowerShell script in [`docs/examples/codex-notify-windows-toast.ps1`](examples/codex-notify-windows-toast.ps1). Save it somewhere under your profile directory and point `notify` at it:
+
+```toml
+notify = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/<you>/codex-notify.ps1"]
+```
+
+Codex will call the script with the JSON payload shown above; the script parses the data and uses the built-in Windows toast API to surface a desktop notification that includes the first line of your prompt and the assistant’s reply.
+
+
 ## history
 
 By default, Codex CLI records messages sent to the model in `$CODEX_HOME/history.jsonl`. Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.
