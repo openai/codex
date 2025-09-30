@@ -249,13 +249,13 @@ mod api {
                 "input_items": input_items,
             });
 
-            if best_of_n > 1 {
-                if let Some(obj) = request_body.as_object_mut() {
-                    obj.insert(
-                        "metadata".to_string(),
-                        serde_json::json!({ "best_of_n": best_of_n }),
-                    );
-                }
+            if best_of_n > 1
+                && let Some(obj) = request_body.as_object_mut()
+            {
+                obj.insert(
+                    "metadata".to_string(),
+                    serde_json::json!({ "best_of_n": best_of_n }),
+                );
             }
 
             match self.backend.create_task(request_body).await {
