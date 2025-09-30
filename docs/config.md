@@ -336,46 +336,59 @@ Codex provides three main Approval Presets:
 
 You can further customize how Codex runs at the command line using the `--ask-for-approval` and `--sandbox` options.
 
-## mcp_servers
+## MCP Servers
 
-Defines the list of MCP servers that Codex can consult for tool use. Currently, only servers that are launched by executing a program that communicate over stdio are supported. For servers that use the SSE transport, consider an adapter like [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy).
+You can configure Codex to use [MCP servers](https://modelcontextprotocol.io/about) to give Codex access to external applications, resources, or services such as [Playwright](https://github.com/microsoft/playwright-mcp), [Figma](https://www.figma.com/blog/design-context-everywhere-you-build/), [documentation](https://context7.com/), and  [more](https://github.com/mcp?utm_source=blog-source&utm_campaign=mcp-registry-server-launch-2025).
 
-**Note:** Codex may cache the list of tools and resources from an MCP server so that Codex can include this information in context at startup without spawning all the servers. This is designed to save resources by loading MCP servers lazily.
+### Server transport configuration
 
-Each server may set `startup_timeout_sec` to adjust how long Codex waits for it to start and respond to a tools listing. The default is `10` seconds.
-Similarly, `tool_timeout_sec` limits how long individual tool calls may run (default: `60` seconds), and Codex will fall back to the default when this value is omitted.
-
-This config option is comparable to how Claude and Cursor define `mcpServers` in their respective JSON config files, though because Codex uses TOML for its config language, the format is slightly different. For example, the following config in JSON:
-
-```json
-{
-  "mcpServers": {
-    "server-name": {
-      "command": "npx",
-      "args": ["-y", "mcp-server"],
-      "env": {
-        "API_KEY": "value"
-      }
-    }
-  }
-}
-```
-
-Should be represented as follows in `~/.codex/config.toml`:
+#### STDIO
 
 ```toml
-# IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
+# The top-level table name must be `mcp_servers`
+# The sub-table name (`server-name` in this example) can be anything you would like.
 [mcp_servers.server-name]
 command = "npx"
+# Optional
 args = ["-y", "mcp-server"]
+# Optional: propagate additional env vars to the MVP server.
+# A default whitelist of env vars will be propagated to the MCP server.
+# https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/utils.rs#L82
 env = { "API_KEY" = "value" }
+```
+
+#### Streamable HTTP
+
+```toml
+# Streamable HTTP requires the experimental rmcp client
+experimental_use_rmcp_client = true
+[mcp_servers.figma]
+url = "http://127.0.0.1:3845/mcp"
+# Optional bearer token to be passed into an `Authorization: Bearer <token>` header
+# Use this with caution because the token is in plaintext.
+bearer_token = "<token>"
+```
+
+### Other configuration options
+
+```toml
 # Optional: override the default 10s startup timeout
 startup_timeout_sec = 20
 # Optional: override the default 60s per-tool timeout
 tool_timeout_sec = 30
 ```
 
-You can also manage these entries from the CLI [experimental]:
+### Experimental RMCP client
+
+Codex is transitioning to the [official Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk) and new functionality such as streamable http servers will only work with the new client.
+
+Please try and report issues with the new client. To enable it, add this to the top level of your `config.toml`
+
+```toml
+experimental_use_rmcp_client = true
+```
+
+### MCP CLI commands
 
 ```shell
 # Add a server (env can be repeated; `--` separates the launcher command)
