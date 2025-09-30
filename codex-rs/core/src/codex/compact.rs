@@ -15,6 +15,8 @@ use crate::protocol::EventMsg;
 use crate::protocol::InputItem;
 use crate::protocol::InputMessageKind;
 use crate::protocol::TaskStartedEvent;
+use crate::protocol::TokenUsage;
+use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnContextItem;
 use crate::truncate::truncate_middle;
 use crate::util::backoff;
@@ -22,6 +24,7 @@ use askama::Template;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::BASELINE_TOKENS;
 use codex_protocol::protocol::RolloutItem;
 use futures::prelude::*;
 
@@ -135,7 +138,32 @@ async fn run_compact_task_inner(
     let user_messages = collect_user_messages(&history_snapshot);
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
+    let estimated_tokens = estimate_tokens_for_history(&new_history).max(BASELINE_TOKENS);
+    let model_context_window = turn_context.client.get_model_context_window();
+
     sess.replace_history(new_history).await;
+
+    {
+        let mut state = sess.state.lock().await;
+        let estimated_total = estimated_tokens;
+        let current = state.token_info.get_or_insert_with(|| TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                total_tokens: estimated_total,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                total_tokens: estimated_total,
+                ..TokenUsage::default()
+            },
+            model_context_window,
+        });
+        current.last_token_usage.total_tokens = estimated_total;
+        current.total_token_usage.total_tokens = estimated_total;
+        if current.model_context_window.is_none() {
+            current.model_context_window = model_context_window;
+        }
+    }
+    sess.send_token_count_event(&sub_id).await;
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
         message: summary_text.clone(),
@@ -225,6 +253,28 @@ pub(crate) fn build_compacted_history(
         content: vec![ContentItem::InputText { text: bridge }],
     });
     history
+}
+
+fn estimate_tokens_for_history(items: &[ResponseItem]) -> u64 {
+    items.iter().map(estimate_tokens_for_item).sum()
+}
+
+fn estimate_tokens_for_item(item: &ResponseItem) -> u64 {
+    match item {
+        ResponseItem::Message { content, .. } => {
+            let bytes: u64 = content
+                .iter()
+                .map(|segment| match segment {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        text.len() as u64
+                    }
+                    ContentItem::InputImage { .. } => 0,
+                })
+                .sum();
+            bytes.div_ceil(4)
+        }
+        _ => 0,
+    }
 }
 
 async fn drain_to_completed(

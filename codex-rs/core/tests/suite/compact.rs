@@ -3,6 +3,8 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
+use codex_core::protocol::AgentMessageEvent;
+use codex_core::protocol::BASELINE_TOKENS;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -76,7 +78,7 @@ async fn summarize_context_three_requests_and_instructions() {
     // Mount three expectations, one per request, matched by body content.
     let first_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("\"text\":\"hello world\"")
+        body.contains(r#""text":"hello world""#)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
     mount_sse_once_match(&server, first_matcher, sse1).await;
@@ -89,7 +91,7 @@ async fn summarize_context_three_requests_and_instructions() {
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&format!("\"text\":\"{THIRD_USER_MSG}\""))
+        body.contains(&format!(r#""text":"{THIRD_USER_MSG}""#))
     };
     mount_sse_once_match(&server, third_matcher, sse3).await;
 
@@ -263,6 +265,119 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         saw_compacted_summary,
         "expected a Compacted entry containing the summarizer output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compact_emits_reduced_token_usage_event() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse_first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+
+    let sse_compact = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+
+    let first_matcher = |req: &Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(&format!(r#""text":"{FIRST_AUTO_MSG}""#))
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    mount_sse_once_match(&server, first_matcher, sse_first_turn).await;
+
+    let compact_matcher = |req: &Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains("You have exceeded the maximum number of tokens")
+    };
+    mount_sse_once_match(&server, compact_matcher, sse_compact).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager.new_conversation(config).await.unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: FIRST_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    let mut pre_compact_tokens = None;
+    loop {
+        let event = timeout(Duration::from_secs(5), codex.next_event())
+            .await
+            .expect("timeout waiting for event")
+            .expect("stream ended unexpectedly");
+        match event.msg {
+            EventMsg::TokenCount(tc) => {
+                if let Some(info) = tc.info {
+                    pre_compact_tokens = Some(info.last_token_usage.total_tokens);
+                }
+            }
+            EventMsg::TaskComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    codex.submit(Op::Compact).await.unwrap();
+
+    let mut post_compact_tokens = None;
+    let mut saw_completion_message = false;
+    loop {
+        let event = timeout(Duration::from_secs(5), codex.next_event())
+            .await
+            .expect("timeout waiting for event")
+            .expect("stream ended unexpectedly");
+        match event.msg {
+            EventMsg::TokenCount(tc) => {
+                if let Some(info) = tc.info {
+                    post_compact_tokens = Some(info.last_token_usage.total_tokens);
+                }
+            }
+            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+                if message == "Compact task completed" {
+                    saw_completion_message = true;
+                }
+            }
+            EventMsg::TaskComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let first_total = pre_compact_tokens.expect("expected initial token usage");
+    let last_total = post_compact_tokens.expect("expected refreshed token usage");
+
+    assert!(
+        last_total < first_total,
+        "expected compact to lower reported context tokens (before {first_total}, after {last_total})"
+    );
+    assert!(
+        last_total <= BASELINE_TOKENS * 2,
+        "expected compacted context to be near baseline; got {last_total}"
+    );
+    assert!(
+        saw_completion_message,
+        "expected compact completion message"
     );
 }
 

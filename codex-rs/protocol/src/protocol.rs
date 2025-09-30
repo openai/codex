@@ -612,7 +612,7 @@ pub struct RateLimitWindow {
 }
 
 // Includes prompts, tools and space to call compact.
-const BASELINE_TOKENS: u64 = 12000;
+pub const BASELINE_TOKENS: u64 = 12_000;
 
 impl TokenUsage {
     pub fn is_zero(&self) -> bool {
