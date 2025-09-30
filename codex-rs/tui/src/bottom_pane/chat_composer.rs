@@ -32,6 +32,7 @@ use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
 use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::prompt_args::prompt_argument_names;
+use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
@@ -71,6 +72,16 @@ pub enum InputResult {
 struct AttachedImage {
     placeholder: String,
     path: PathBuf,
+}
+
+enum PromptSelectionMode {
+    Completion,
+    Submit,
+}
+
+enum PromptSelectionAction {
+    Insert { text: String, cursor: Option<usize> },
+    Submit { text: String },
 }
 
 pub(crate) struct ChatComposer {
@@ -438,10 +449,18 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
-                                let args = prompt_argument_names(&prompt.content);
-                                let (text, cursor) = Self::prompt_command_text(&prompt.name, &args);
-                                self.textarea.set_text(&text);
-                                cursor_target = Some(cursor);
+                                match prompt_selection_action(
+                                    prompt,
+                                    first_line,
+                                    PromptSelectionMode::Completion,
+                                ) {
+                                    PromptSelectionAction::Insert { text, cursor } => {
+                                        let target = cursor.unwrap_or_else(|| text.len());
+                                        self.textarea.set_text(&text);
+                                        cursor_target = Some(target);
+                                    }
+                                    PromptSelectionAction::Submit { .. } => {}
+                                }
                             }
                         }
                     }
@@ -478,38 +497,20 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
-                                let named_args = prompt_argument_names(&prompt.content);
-                                let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
-
-                                if named_args.is_empty() && !has_numeric {
-                                    // No placeholders at all: auto-submit the literal content
-                                    self.textarea.set_text("");
-                                    return (InputResult::Submitted(prompt.content.clone()), true);
-                                }
-
-                                if !named_args.is_empty() {
-                                    // Insert a key=value skeleton for named placeholders.
-                                    let (text, cursor) =
-                                        Self::prompt_command_text(&prompt.name, &named_args);
-                                    self.textarea.set_text(&text);
-                                    self.textarea.set_cursor(cursor);
-                                } else {
-                                    // Numeric placeholders only.
-                                    // If the user already typed positional args on the first line,
-                                    // expand immediately and submit; otherwise insert "/name " so
-                                    // they can type args.
-                                    let first_line =
-                                        self.textarea.text().lines().next().unwrap_or("");
-                                    if let Some(expanded) =
-                                        expand_if_numeric_with_positional_args(prompt, first_line)
-                                    {
+                                match prompt_selection_action(
+                                    prompt,
+                                    first_line,
+                                    PromptSelectionMode::Submit,
+                                ) {
+                                    PromptSelectionAction::Submit { text } => {
                                         self.textarea.set_text("");
-                                        return (InputResult::Submitted(expanded), true);
-                                    } else {
-                                        let name = prompt.name.clone();
-                                        let text = format!("/{PROMPTS_CMD_PREFIX}:{name} ");
+                                        return (InputResult::Submitted(text), true);
+                                    }
+                                    PromptSelectionAction::Insert { text, cursor } => {
+                                        let target = cursor.unwrap_or_else(|| text.len());
                                         self.textarea.set_text(&text);
-                                        self.textarea.set_cursor(self.textarea.text().len());
+                                        self.textarea.set_cursor(target);
+                                        return (InputResult::None, true);
                                     }
                                 }
                             }
@@ -821,18 +822,6 @@ impl ChatComposer {
         self.textarea.set_text(&new_text);
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
-    }
-
-    fn prompt_command_text(name: &str, args: &[String]) -> (String, usize) {
-        let mut text = format!("/{PROMPTS_CMD_PREFIX}:{name}");
-        let mut cursor: usize = text.len();
-        for (i, arg) in args.iter().enumerate() {
-            text.push_str(format!(" {arg}=\"\"").as_str());
-            if i == 0 {
-                cursor = text.len() - 1; // inside first ""
-            }
-        }
-        (text, cursor)
     }
 
     /// Handle key event when no popup is visible.
@@ -1493,6 +1482,54 @@ impl WidgetRef for ChatComposer {
         if self.textarea.text().is_empty() {
             let placeholder = Span::from(self.placeholder_text.as_str()).dim();
             Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+        }
+    }
+}
+
+fn prompt_selection_action(
+    prompt: &CustomPrompt,
+    first_line: &str,
+    mode: PromptSelectionMode,
+) -> PromptSelectionAction {
+    let named_args = prompt_argument_names(&prompt.content);
+    let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
+
+    match mode {
+        PromptSelectionMode::Completion => {
+            if !named_args.is_empty() {
+                let (text, cursor) =
+                    prompt_command_with_arg_placeholders(&prompt.name, &named_args);
+                return PromptSelectionAction::Insert {
+                    text,
+                    cursor: Some(cursor),
+                };
+            }
+            if has_numeric {
+                let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
+                return PromptSelectionAction::Insert { text, cursor: None };
+            }
+            let text = format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name);
+            PromptSelectionAction::Insert { text, cursor: None }
+        }
+        PromptSelectionMode::Submit => {
+            if !named_args.is_empty() {
+                let (text, cursor) =
+                    prompt_command_with_arg_placeholders(&prompt.name, &named_args);
+                return PromptSelectionAction::Insert {
+                    text,
+                    cursor: Some(cursor),
+                };
+            }
+            if has_numeric {
+                if let Some(expanded) = expand_if_numeric_with_positional_args(prompt, first_line) {
+                    return PromptSelectionAction::Submit { text: expanded };
+                }
+                let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
+                return PromptSelectionAction::Insert { text, cursor: None };
+            }
+            PromptSelectionAction::Submit {
+                text: prompt.content.clone(),
+            }
         }
     }
 }

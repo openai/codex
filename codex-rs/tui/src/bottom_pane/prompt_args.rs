@@ -296,6 +296,20 @@ pub fn expand_numeric_placeholders(content: &str, args: &[String]) -> String {
     out
 }
 
+/// Constructs a command text for a custom prompt with arguments.
+/// Returns the text and the cursor position (inside the first double quote).
+pub fn prompt_command_with_arg_placeholders(name: &str, args: &[String]) -> (String, usize) {
+    let mut text = format!("/{PROMPTS_CMD_PREFIX}:{name}");
+    let mut cursor: usize = text.len();
+    for (i, arg) in args.iter().enumerate() {
+        text.push_str(format!(" {arg}=\"\"").as_str());
+        if i == 0 {
+            cursor = text.len() - 1; // inside first ""
+        }
+    }
+    (text, cursor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
