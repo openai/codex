@@ -12,6 +12,7 @@ use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnAbortReason;
+use mcp_types::JSONRPCNotification;
 use mcp_types::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
@@ -19,13 +20,23 @@ use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TS, Hash)]
 #[ts(type = "string")]
-pub struct ConversationId(pub Uuid);
+pub struct ConversationId {
+    uuid: Uuid,
+}
 
 impl ConversationId {
     pub fn new() -> Self {
-        Self(Uuid::new_v4())
+        Self {
+            uuid: Uuid::now_v7(),
+        }
+    }
+
+    pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
+        Ok(Self {
+            uuid: Uuid::parse_str(s)?,
+        })
     }
 }
 
@@ -37,19 +48,27 @@ impl Default for ConversationId {
 
 impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.uuid)
     }
 }
 
-impl From<Uuid> for ConversationId {
-    fn from(value: Uuid) -> Self {
-        Self(value)
+impl Serialize for ConversationId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&self.uuid)
     }
 }
 
-impl From<ConversationId> for Uuid {
-    fn from(value: ConversationId) -> Self {
-        value.0
+impl<'de> Deserialize<'de> for ConversationId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let uuid = Uuid::parse_str(&value).map_err(serde::de::Error::custom)?;
+        Ok(Self { uuid })
     }
 }
 
@@ -63,7 +82,7 @@ impl GitSha {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
     ApiKey,
@@ -74,6 +93,11 @@ pub enum AuthMode {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(tag = "method", rename_all = "camelCase")]
 pub enum ClientRequest {
+    Initialize {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: InitializeParams,
+    },
     NewConversation {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -134,6 +158,10 @@ pub enum ClientRequest {
     LoginChatGpt {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
     },
     CancelLoginChatGpt {
         #[serde(rename = "id")]
@@ -143,6 +171,10 @@ pub enum ClientRequest {
     LogoutChatGpt {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
     },
     GetAuthStatus {
         #[serde(rename = "id")]
@@ -152,6 +184,10 @@ pub enum ClientRequest {
     GetUserSavedConfig {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
     },
     SetDefaultModel {
         #[serde(rename = "id")]
@@ -161,10 +197,23 @@ pub enum ClientRequest {
     GetUserAgent {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
     },
     UserInfo {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
+    },
+    FuzzyFileSearch {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: FuzzyFileSearchParams,
     },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
@@ -172,6 +221,27 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: ExecOneOffCommandParams,
     },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeParams {
+    pub client_info: ClientInfo,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientInfo {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub version: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeResponse {
+    pub user_agent: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
@@ -646,11 +716,64 @@ pub struct ApplyPatchApprovalResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FuzzyFileSearchParams {
+    pub query: String,
+    pub roots: Vec<String>,
+    // if provided, will cancel any previous request that used the same value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancellation_token: Option<String>,
+}
+
+/// Superset of [`codex_file_search::FileMatch`]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+pub struct FuzzyFileSearchResult {
+    pub root: String,
+    pub path: String,
+    pub score: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indices: Option<Vec<u32>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+pub struct FuzzyFileSearchResponse {
+    pub files: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginChatGptCompleteNotification {
     pub login_id: Uuid,
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionConfiguredNotification {
+    /// Name left as session_id instead of conversation_id for backwards compatibility.
+    pub session_id: ConversationId,
+
+    /// Tell the client what model is being queried.
+    pub model: String,
+
+    /// The effort the model is putting into reasoning about the user's request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+
+    /// Identifier of the history log file (inode on Unix, 0 otherwise).
+    pub history_log_id: u64,
+
+    /// Current number of entries in the history log.
+    pub history_entry_count: usize,
+
+    /// Optional initial messages (as events) for resumed sessions.
+    /// When present, UIs can use these to seed the history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_messages: Option<Vec<EventMsg>>,
+
+    pub rollout_path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -661,7 +784,8 @@ pub struct AuthStatusChangeNotification {
     pub auth_method: Option<AuthMode>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS, Display)]
+/// Notification sent from the server to the client.
+#[derive(Serialize, Deserialize, Debug, Clone, TS, Display)]
 #[serde(tag = "method", content = "params", rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum ServerNotification {
@@ -670,6 +794,9 @@ pub enum ServerNotification {
 
     /// ChatGPT login flow completed
     LoginChatGptComplete(LoginChatGptCompleteNotification),
+
+    /// The special session configured event for a new or resumed conversation.
+    SessionConfigured(SessionConfiguredNotification),
 }
 
 impl ServerNotification {
@@ -677,22 +804,40 @@ impl ServerNotification {
         match self {
             ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
             ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
+            ServerNotification::SessionConfigured(params) => serde_json::to_value(params),
         }
     }
+}
+
+impl TryFrom<JSONRPCNotification> for ServerNotification {
+    type Error = serde_json::Error;
+
+    fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+        serde_json::from_value(serde_json::to_value(value)?)
+    }
+}
+
+/// Notification sent from the client to the server.
+#[derive(Serialize, Deserialize, Debug, Clone, TS, Display)]
+#[serde(tag = "method", content = "params", rename_all = "camelCase")]
+#[strum(serialize_all = "camelCase")]
+pub enum ClientNotification {
+    Initialized,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
     #[test]
-    fn serialize_new_conversation() {
+    fn serialize_new_conversation() -> Result<()> {
         let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: NewConversationParams {
-                model: Some("gpt-5".to_string()),
+                model: Some("gpt-5-codex".to_string()),
                 profile: None,
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
@@ -708,17 +853,54 @@ mod tests {
                 "method": "newConversation",
                 "id": 42,
                 "params": {
-                    "model": "gpt-5",
+                    "model": "gpt-5-codex",
                     "approvalPolicy": "on-request"
                 }
             }),
-            serde_json::to_value(&request).unwrap(),
+            serde_json::to_value(&request)?,
         );
+        Ok(())
     }
 
     #[test]
     fn test_conversation_id_default_is_not_zeroes() {
         let id = ConversationId::default();
-        assert_ne!(id.0, Uuid::nil());
+        assert_ne!(id.uuid, Uuid::nil());
+    }
+
+    #[test]
+    fn conversation_id_serializes_as_plain_string() -> Result<()> {
+        let id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+
+        assert_eq!(
+            json!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
+            serde_json::to_value(id)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn conversation_id_deserializes_from_plain_string() -> Result<()> {
+        let id: ConversationId =
+            serde_json::from_value(json!("67e55044-10b1-426f-9247-bb680e5fe0c8"))?;
+
+        assert_eq!(
+            ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?,
+            id,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_client_notification() -> Result<()> {
+        let notification = ClientNotification::Initialized;
+        // Note there is no "params" field for this notification.
+        assert_eq!(
+            json!({
+                "method": "initialized",
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
     }
 }

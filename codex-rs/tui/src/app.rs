@@ -3,6 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
+use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
@@ -15,12 +16,12 @@ use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::mcp_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -32,6 +33,12 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 // use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub struct AppExitInfo {
+    pub token_usage: TokenUsage,
+    pub conversation_id: Option<ConversationId>,
+}
 
 pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
@@ -45,7 +52,7 @@ pub(crate) struct App {
 
     pub(crate) file_search: FileSearchManager,
 
-    pub(crate) transcript_lines: Vec<Line<'static>>,
+    pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -70,14 +77,14 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
-    ) -> Result<TokenUsage> {
+    ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
         let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        let enhanced_keys_supported = tui.enhanced_keys_supported();
 
         let chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
@@ -131,7 +138,7 @@ impl App {
             active_profile,
             file_search,
             enhanced_keys_supported,
-            transcript_lines: Vec::new(),
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -153,7 +160,10 @@ impl App {
             }
         } {}
         tui.terminal.clear()?;
-        Ok(app.token_usage())
+        Ok(AppExitInfo {
+            token_usage: app.token_usage(),
+            conversation_id: app.chat_widget.conversation_id(),
+        })
     }
 
     pub(crate) async fn handle_tui_event(
@@ -177,6 +187,7 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())
@@ -214,15 +225,12 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let mut cell_transcript = cell.transcript_lines();
-                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
-                    cell_transcript.insert(0, Line::from(""));
-                }
+                let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_lines(cell_transcript.clone());
+                    t.insert_cell(cell.clone());
                     tui.frame_requester().schedule_frame();
                 }
-                self.transcript_lines.extend(cell_transcript.clone());
+                self.transcript_cells.push(cell.clone());
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
@@ -346,6 +354,15 @@ impl App {
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
             }
+            AppEvent::OpenReviewBranchPicker(cwd) => {
+                self.chat_widget.show_review_branch_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCommitPicker(cwd) => {
+                self.chat_widget.show_review_commit_picker(&cwd).await;
+            }
+            AppEvent::OpenReviewCustomPrompt => {
+                self.chat_widget.show_review_custom_prompt();
+            }
         }
         Ok(true)
     }
@@ -369,7 +386,7 @@ impl App {
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
+                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
@@ -394,7 +411,7 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } if self.backtrack.primed
-                && self.backtrack.count > 0
+                && self.backtrack.nth_user_message != usize::MAX
                 && self.chat_widget.composer_is_empty() =>
             {
                 // Delegate to helper for clarity; preserves behavior.
@@ -423,12 +440,20 @@ impl App {
 mod tests {
     use super::*;
     use crate::app_backtrack::BacktrackState;
+    use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::file_search::FileSearchManager;
+    use crate::history_cell::AgentMessageCell;
+    use crate::history_cell::HistoryCell;
+    use crate::history_cell::UserHistoryCell;
+    use crate::history_cell::new_session_info;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
-    use ratatui::text::Line;
+    use codex_core::protocol::SessionConfiguredEvent;
+    use codex_protocol::mcp_protocol::ConversationId;
+    use ratatui::prelude::Line;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -451,7 +476,7 @@ mod tests {
             config,
             active_profile: None,
             file_search,
-            transcript_lines: Vec::<Line<'static>>::new(),
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -478,5 +503,67 @@ mod tests {
             app.chat_widget.config_ref().model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
+    }
+
+    #[test]
+    fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
+        let mut app = make_test_app();
+
+        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(UserHistoryCell {
+                message: text.to_string(),
+            }) as Arc<dyn HistoryCell>
+        };
+        let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(text.to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        let make_header = |is_first| {
+            let event = SessionConfiguredEvent {
+                session_id: ConversationId::new(),
+                model: "gpt-test".to_string(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: PathBuf::new(),
+            };
+            Arc::new(new_session_info(
+                app.chat_widget.config_ref(),
+                event,
+                is_first,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        // Simulate the transcript after trimming for a fork, replaying history, and
+        // appending the edited turn. The session header separates the retained history
+        // from the forked conversation's replayed turns.
+        app.transcript_cells = vec![
+            make_header(true),
+            user_cell("first question"),
+            agent_cell("answer first"),
+            user_cell("follow-up"),
+            agent_cell("answer follow-up"),
+            make_header(false),
+            user_cell("first question"),
+            agent_cell("answer first"),
+            user_cell("follow-up (edited)"),
+            agent_cell("answer edited"),
+        ];
+
+        assert_eq!(user_count(&app.transcript_cells), 2);
+
+        app.backtrack.base_id = Some(ConversationId::new());
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
+
+        app.confirm_backtrack_from_main();
+
+        let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
+        assert_eq!(nth, 1);
+        assert_eq!(prefill, "follow-up (edited)");
     }
 }

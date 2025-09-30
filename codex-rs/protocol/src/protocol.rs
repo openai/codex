@@ -24,6 +24,7 @@ use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
@@ -87,6 +88,8 @@ pub enum Op {
 
         /// Will only be honored if the model is configured to use reasoning.
         summary: ReasoningSummaryConfig,
+        // The JSON schema to use for the final assistant message
+        final_output_json_schema: Option<Value>,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
@@ -589,6 +592,23 @@ impl TokenUsageInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
+    pub rate_limits: Option<RateLimitSnapshot>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct RateLimitSnapshot {
+    pub primary: Option<RateLimitWindow>,
+    pub secondary: Option<RateLimitWindow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct RateLimitWindow {
+    /// Percentage (0-100) of the window that has been consumed.
+    pub used_percent: f64,
+    /// Rolling window duration, in minutes.
+    pub window_minutes: Option<u64>,
+    /// Seconds until the window resets.
+    pub resets_in_seconds: Option<u64>,
 }
 
 // Includes prompts, tools and space to call compact.
@@ -1186,7 +1206,7 @@ pub struct SessionConfiguredEvent {
 }
 
 /// User's decision in response to an ExecApprovalRequest.
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Display, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
@@ -1240,20 +1260,22 @@ pub struct TurnAbortedEvent {
 pub enum TurnAbortReason {
     Interrupted,
     Replaced,
+    ReviewEnded,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use serde_json::json;
     use tempfile::NamedTempFile;
 
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.
     #[test]
-    fn serialize_event() {
-        let conversation_id = ConversationId(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"));
-        let rollout_file = NamedTempFile::new().unwrap();
+    fn serialize_event() -> Result<()> {
+        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -1279,23 +1301,25 @@ mod tests {
                 "rollout_path": format!("{}", rollout_file.path().display()),
             }
         });
-        assert_eq!(expected, serde_json::to_value(&event).unwrap());
+        assert_eq!(expected, serde_json::to_value(&event)?);
+        Ok(())
     }
 
     #[test]
-    fn vec_u8_as_base64_serialization_and_deserialization() {
+    fn vec_u8_as_base64_serialization_and_deserialization() -> Result<()> {
         let event = ExecCommandOutputDeltaEvent {
             call_id: "call21".to_string(),
             stream: ExecOutputStream::Stdout,
             chunk: vec![1, 2, 3, 4, 5],
         };
-        let serialized = serde_json::to_string(&event).unwrap();
+        let serialized = serde_json::to_string(&event)?;
         assert_eq!(
             r#"{"call_id":"call21","stream":"stdout","chunk":"AQIDBAU="}"#,
             serialized,
         );
 
-        let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized).unwrap();
+        let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized)?;
         assert_eq!(deserialized, event);
+        Ok(())
     }
 }

@@ -21,7 +21,6 @@ use crate::exec_command::exec_command_params::WriteStdinParams;
 use crate::exec_command::exec_command_session::ExecCommandSession;
 use crate::exec_command::session_id::SessionId;
 use crate::truncate::truncate_middle;
-use codex_protocol::models::FunctionCallOutputPayload;
 
 #[derive(Debug, Default)]
 pub struct SessionManager {
@@ -38,7 +37,7 @@ pub struct ExecCommandOutput {
 }
 
 impl ExecCommandOutput {
-    fn to_text_output(&self) -> String {
+    pub(crate) fn to_text_output(&self) -> String {
         let wall_time_secs = self.wall_time.as_secs_f32();
         let termination_status = match self.exit_status {
             ExitStatus::Exited(code) => format!("Process exited with code {code}"),
@@ -68,19 +67,6 @@ pub enum ExitStatus {
     Ongoing(SessionId),
 }
 
-pub fn result_into_payload(result: Result<ExecCommandOutput, String>) -> FunctionCallOutputPayload {
-    match result {
-        Ok(output) => FunctionCallOutputPayload {
-            content: output.to_text_output(),
-            success: Some(true),
-        },
-        Err(err) => FunctionCallOutputPayload {
-            content: err,
-            success: Some(false),
-        },
-    }
-}
-
 impl SessionManager {
     /// Processes the request and is required to send a response via `outgoing`.
     pub async fn handle_exec_command_request(
@@ -93,18 +79,16 @@ impl SessionManager {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
         );
 
-        let (session, mut exit_rx) =
-            create_exec_command_session(params.clone())
-                .await
-                .map_err(|err| {
-                    format!(
-                        "failed to create exec command session for session id {}: {err}",
-                        session_id.0
-                    )
-                })?;
+        let (session, mut output_rx, mut exit_rx) = create_exec_command_session(params.clone())
+            .await
+            .map_err(|err| {
+                format!(
+                    "failed to create exec command session for session id {}: {err}",
+                    session_id.0
+                )
+            })?;
 
         // Insert into session map.
-        let mut output_rx = session.output_receiver();
         self.sessions.lock().await.insert(session_id, session);
 
         // Collect output until either timeout expires or process exits.
@@ -245,7 +229,11 @@ impl SessionManager {
 /// Spawn PTY and child process per spawn_exec_command_session logic.
 async fn create_exec_command_session(
     params: ExecCommandParams,
-) -> anyhow::Result<(ExecCommandSession, oneshot::Receiver<i32>)> {
+) -> anyhow::Result<(
+    ExecCommandSession,
+    tokio::sync::broadcast::Receiver<Vec<u8>>,
+    oneshot::Receiver<i32>,
+)> {
     let ExecCommandParams {
         cmd,
         yield_time_ms: _,
@@ -279,8 +267,6 @@ async fn create_exec_command_session(
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
     // Broadcast for streaming PTY output to readers: subscribers receive from subscription time.
     let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
-    let initial_output_rx = output_tx.subscribe();
-
     // Reader task: drain PTY and forward chunks to output channel.
     let mut reader = pair.master.try_clone_reader()?;
     let output_tx_clone = output_tx.clone();
@@ -342,7 +328,7 @@ async fn create_exec_command_session(
     });
 
     // Create and store the session with channels.
-    let session = ExecCommandSession::new(
+    let (session, initial_output_rx) = ExecCommandSession::new(
         writer_tx,
         output_tx,
         killer,
@@ -351,8 +337,7 @@ async fn create_exec_command_session(
         wait_handle,
         exit_status,
     );
-    session.set_initial_output_receiver(initial_output_rx);
-    Ok((session, exit_rx))
+    Ok((session, initial_output_rx, exit_rx))
 }
 
 #[cfg(test)]

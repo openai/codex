@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tracing_test::traced_test;
 
 use codex_core::ContentItem;
 use codex_core::ModelClient;
@@ -8,6 +9,8 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
 use core_test_support::load_default_config_for_test;
 use futures::StreamExt;
@@ -23,11 +26,15 @@ fn network_disabled() -> bool {
 }
 
 async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
+    run_stream_with_bytes(sse_body.as_bytes()).await
+}
+
+async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let server = MockServer::start().await;
 
     let template = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_body.to_string(), "text/event-stream");
+        .set_body_bytes(sse_body.to_vec());
 
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
@@ -63,13 +70,26 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
     let summary = config.model_reasoning_summary;
     let config = Arc::new(config);
 
+    let conversation_id = ConversationId::new();
+
+    let otel_event_manager = OtelEventManager::new(
+        conversation_id,
+        config.model.as_str(),
+        config.model_family.slug.as_str(),
+        None,
+        Some(AuthMode::ChatGPT),
+        false,
+        "test".to_string(),
+    );
+
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
+        otel_event_manager,
         provider,
         effort,
         summary,
-        ConversationId::new(),
+        conversation_id,
     );
 
     let mut prompt = Prompt::default();
@@ -89,7 +109,8 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
     while let Some(event) = stream.next().await {
         match event {
             Ok(ev) => events.push(ev),
-            Err(e) => panic!("stream event error: {e}"),
+            // We still collect the error to exercise telemetry and complete the task.
+            Err(_e) => break,
         }
     }
     events
@@ -317,4 +338,89 @@ async fn streams_reasoning_before_tool_call() {
     }
 
     assert!(matches!(events[3], ResponseEvent::Completed { .. }));
+}
+
+#[tokio::test]
+#[traced_test]
+async fn chat_sse_emits_failed_on_parse_error() {
+    if network_disabled() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let sse_body = concat!("data: not-json\n\n", "data: [DONE]\n\n");
+
+    let _ = run_stream(sse_body).await;
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("codex.api_request") && line.contains("http.response.status_code=200")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or(Err("cannot find codex.api_request event".to_string()))
+    });
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("error.message")
+                    && line.contains("expected ident at line 1 column 2")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or(Err("cannot find SSE event".to_string()))
+    });
+}
+
+#[tokio::test]
+#[traced_test]
+async fn chat_sse_done_chunk_emits_event() {
+    if network_disabled() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let sse_body = "data: [DONE]\n\n";
+
+    let _ = run_stream(sse_body).await;
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| line.contains("codex.sse_event") && line.contains("event.kind=message"))
+            .map(|_| Ok(()))
+            .unwrap_or(Err("cannot find SSE event".to_string()))
+    });
+}
+
+#[tokio::test]
+#[traced_test]
+async fn chat_sse_emits_error_on_invalid_utf8() {
+    if network_disabled() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let _ = run_stream_with_bytes(b"data: \x80\x80\n\n").await;
+
+    logs_assert(|lines: &[&str]| {
+        lines
+            .iter()
+            .find(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("error.message")
+                    && line.contains("UTF8 error: invalid utf-8 sequence of 1 bytes from index 0")
+            })
+            .map(|_| Ok(()))
+            .unwrap_or(Err("cannot find SSE event".to_string()))
+    });
 }

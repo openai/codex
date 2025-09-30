@@ -5,6 +5,8 @@ use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::ResponseItem;
 use codex_core::built_in_model_providers;
+use codex_core::content_items_to_text;
+use codex_core::is_session_prefix_message;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -12,6 +14,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use core_test_support::load_default_config_for_test;
+use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -27,6 +30,8 @@ fn sse_completed(id: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_conversation_twice_drops_to_first_message() {
+    skip_if_no_network!();
+
     // Start a mock server that completes three turns.
     let server = MockServer::start().await;
     let sse = sse_completed("resp");
@@ -104,13 +109,16 @@ async fn fork_conversation_twice_drops_to_first_message() {
         items
     };
 
-    // Compute expected prefixes after each fork by truncating base rollout at nth-from-last user input.
+    // Compute expected prefixes after each fork by truncating base rollout
+    // strictly before the nth user input (0-based).
     let base_items = read_items(&base_path);
     let find_user_input_positions = |items: &[RolloutItem]| -> Vec<usize> {
         let mut pos = Vec::new();
         for (i, it) in items.iter().enumerate() {
             if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = it
                 && role == "user"
+                && content_items_to_text(content)
+                    .is_some_and(|text| !is_session_prefix_message(&text))
             {
                 // Consider any user message as an input boundary; recorder stores both EventMsg and ResponseItem.
                 // We specifically look for input items, which are represented as ContentItem::InputText.
@@ -126,11 +134,8 @@ async fn fork_conversation_twice_drops_to_first_message() {
     };
     let user_inputs = find_user_input_positions(&base_items);
 
-    // After dropping last user input (n=1), cut strictly before that input if present, else empty.
-    let cut1 = user_inputs
-        .get(user_inputs.len().saturating_sub(1))
-        .copied()
-        .unwrap_or(0);
+    // After cutting at nth user input (n=1 → second user message), cut strictly before that input.
+    let cut1 = user_inputs.get(1).copied().unwrap_or(0);
     let expected_after_first: Vec<RolloutItem> = base_items[..cut1].to_vec();
 
     // After dropping again (n=1 on fork1), compute expected relative to fork1's rollout.
@@ -161,12 +166,12 @@ async fn fork_conversation_twice_drops_to_first_message() {
         serde_json::to_value(&expected_after_first).unwrap()
     );
 
-    // Fork again with n=1 → drops the (new) last user message, leaving only the first.
+    // Fork again with n=0 → drops the (new) last user message, leaving only the first.
     let NewConversation {
         conversation: codex_fork2,
         ..
     } = conversation_manager
-        .fork_conversation(1, config_for_fork.clone(), fork1_path.clone())
+        .fork_conversation(0, config_for_fork.clone(), fork1_path.clone())
         .await
         .expect("fork 2");
 

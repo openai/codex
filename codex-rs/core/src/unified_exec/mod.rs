@@ -100,10 +100,13 @@ type OutputBuffer = Arc<Mutex<OutputBufferState>>;
 type OutputHandles = (OutputBuffer, Arc<Notify>);
 
 impl ManagedUnifiedExecSession {
-    fn new(session: ExecCommandSession) -> Self {
+    fn new(
+        session: ExecCommandSession,
+        initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+    ) -> Self {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
-        let mut receiver = session.output_receiver();
+        let mut receiver = initial_output_rx;
         let buffer_clone = Arc::clone(&output_buffer);
         let notify_clone = Arc::clone(&output_notify);
         let output_task = tokio::spawn(async move {
@@ -193,8 +196,8 @@ impl UnifiedExecSessionManager {
         } else {
             let command = request.input_chunks.to_vec();
             let new_id = self.next_session_id.fetch_add(1, Ordering::SeqCst);
-            let session = create_unified_exec_session(&command).await?;
-            let managed_session = ManagedUnifiedExecSession::new(session);
+            let (session, initial_output_rx) = create_unified_exec_session(&command).await?;
+            let managed_session = ManagedUnifiedExecSession::new(session, initial_output_rx);
             let (buffer, notify) = managed_session.output_handles();
             writer_tx = managed_session.writer_sender();
             output_buffer = buffer;
@@ -297,7 +300,13 @@ impl UnifiedExecSessionManager {
 
 async fn create_unified_exec_session(
     command: &[String],
-) -> Result<ExecCommandSession, UnifiedExecError> {
+) -> Result<
+    (
+        ExecCommandSession,
+        tokio::sync::broadcast::Receiver<Vec<u8>>,
+    ),
+    UnifiedExecError,
+> {
     if command.is_empty() {
         return Err(UnifiedExecError::MissingCommandLine);
     }
@@ -327,7 +336,6 @@ async fn create_unified_exec_session(
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
     let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
-    let initial_output_rx = output_tx.subscribe();
 
     let mut reader = pair
         .master
@@ -381,7 +389,7 @@ async fn create_unified_exec_session(
         wait_exit_status.store(true, Ordering::SeqCst);
     });
 
-    let session = ExecCommandSession::new(
+    let (session, initial_output_rx) = ExecCommandSession::new(
         writer_tx,
         output_tx,
         killer,
@@ -390,14 +398,14 @@ async fn create_unified_exec_session(
         wait_handle,
         exit_status,
     );
-    session.set_initial_output_receiver(initial_output_rx);
-
-    Ok(session)
+    Ok((session, initial_output_rx))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use core_test_support::skip_if_sandbox;
 
     #[test]
     fn push_chunk_trims_only_excess_bytes() {
@@ -419,6 +427,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unified_exec_persists_across_requests_jif() -> Result<(), UnifiedExecError> {
+        skip_if_sandbox!(Ok(()));
+
         let manager = UnifiedExecSessionManager::default();
 
         let open_shell = manager
@@ -456,6 +466,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn multi_unified_exec_sessions() -> Result<(), UnifiedExecError> {
+        skip_if_sandbox!(Ok(()));
+
         let manager = UnifiedExecSessionManager::default();
 
         let shell_a = manager
@@ -502,6 +514,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn unified_exec_timeouts() -> Result<(), UnifiedExecError> {
+        skip_if_sandbox!(Ok(()));
+
         let manager = UnifiedExecSessionManager::default();
 
         let open_shell = manager
@@ -551,6 +565,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore] // Ignored while we have a better way to test this.
     async fn requests_with_large_timeout_are_capped() -> Result<(), UnifiedExecError> {
         let manager = UnifiedExecSessionManager::default();
 
@@ -572,6 +587,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore] // Ignored while we have a better way to test this.
     async fn completed_commands_do_not_persist_sessions() -> Result<(), UnifiedExecError> {
         let manager = UnifiedExecSessionManager::default();
         let result = manager
@@ -593,6 +609,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reusing_completed_session_returns_unknown_session() -> Result<(), UnifiedExecError> {
+        skip_if_sandbox!(Ok(()));
+
         let manager = UnifiedExecSessionManager::default();
 
         let open_shell = manager

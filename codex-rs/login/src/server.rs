@@ -16,10 +16,11 @@ use base64::Engine;
 use chrono::Utc;
 use codex_core::auth::AuthDotJson;
 use codex_core::auth::get_auth_file;
-use codex_core::default_client::ORIGINATOR;
+use codex_core::default_client::originator;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
 use rand::RngCore;
+use serde_json::Value as JsonValue;
 use tiny_http::Header;
 use tiny_http::Request;
 use tiny_http::Response;
@@ -314,7 +315,7 @@ fn build_authorize_url(
         ("id_token_add_organizations", "true"),
         ("codex_cli_simplified_flow", "true"),
         ("state", state),
-        ("originator", ORIGINATOR.value.as_str()),
+        ("originator", originator().value.as_str()),
     ];
     let qs = query
         .into_iter()
@@ -326,7 +327,7 @@ fn build_authorize_url(
 
 fn generate_state() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
@@ -392,13 +393,13 @@ fn bind_server(port: u16) -> io::Result<Server> {
     }
 }
 
-struct ExchangedTokens {
-    id_token: String,
-    access_token: String,
-    refresh_token: String,
+pub(crate) struct ExchangedTokens {
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
 }
 
-async fn exchange_code_for_tokens(
+pub(crate) async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -442,7 +443,7 @@ async fn exchange_code_for_tokens(
     })
 }
 
-async fn persist_tokens_async(
+pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
@@ -496,11 +497,11 @@ fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &s
         .unwrap_or("");
     let completed_onboarding = token_claims
         .get("completed_platform_onboarding")
-        .and_then(|v| v.as_bool())
+        .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let is_org_owner = token_claims
         .get("is_org_owner")
-        .and_then(|v| v.as_bool())
+        .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let needs_setup = (!completed_onboarding) && is_org_owner;
     let plan_type = access_claims
@@ -561,7 +562,11 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
 }
 
-async fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<String> {
+pub(crate) async fn obtain_api_key(
+    issuer: &str,
+    client_id: &str,
+    id_token: &str,
+) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
     struct ExchangeResp {
