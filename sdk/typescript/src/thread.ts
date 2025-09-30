@@ -1,15 +1,15 @@
 import { CodexOptions } from "./codexOptions";
-import { ConversationEvent } from "./events";
+import { ThreadEvent } from "./events";
 import { CodexExec } from "./exec";
-import { ConversationItem } from "./items";
+import { ThreadItem } from "./items";
 
 export type RunResult = {
-  items: ConversationItem[];
+  items: ThreadItem[];
   finalResponse: string;
 };
 
 export type RunStreamedResult = {
-  events: AsyncGenerator<ConversationEvent>;
+  events: AsyncGenerator<ThreadEvent>;
 };
 
 export type Input = string;
@@ -29,17 +29,17 @@ export class Thread {
     return { events: this.runStreamedInternal(input) };
   }
 
-  private async *runStreamedInternal(input: string): AsyncGenerator<ConversationEvent> {
+  private async *runStreamedInternal(input: string): AsyncGenerator<ThreadEvent> {
     const generator = this.exec.run({
       input,
       baseUrl: this.options.baseUrl,
       apiKey: this.options.apiKey,
-      sessionId: this.id,
+      threadId: this.id,
     });
     for await (const item of generator) {
-      const parsed = JSON.parse(item) as ConversationEvent;
-      if (parsed.type === "session.created") {
-        this.id = parsed.session_id;
+      const parsed = JSON.parse(item) as ThreadEvent;
+      if (parsed.type === "thread.started") {
+        this.id = parsed.thread_id;
       }
       yield parsed;
     }
@@ -47,7 +47,7 @@ export class Thread {
 
   async run(input: string): Promise<RunResult> {
     const generator = this.runStreamedInternal(input);
-    const items: ConversationItem[] = [];
+    const items: ThreadItem[] = [];
     let finalResponse: string = "";
     for await (const event of generator) {
       if (event.type === "item.completed") {
