@@ -64,7 +64,6 @@ shlex = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 supports-color = { workspace = true }
-is-terminal = "0.4"
 tempfile = { workspace = true }
 textwrap = { workspace = true }
 tokio = { workspace = true, features = [

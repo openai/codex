@@ -141,7 +141,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     /// Print a concise summary of the effective configuration that will be used
     /// for the session. This mirrors the information shown in the TUI welcome
     /// screen.
-    fn print_config_summary(&mut self, config: &Config, prompt: &str, ev: &SessionConfiguredEvent) {
+    fn print_config_summary(&mut self, config: &Config, prompt: &str, _: &SessionConfiguredEvent) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         ts_println!(
             self,
@@ -154,14 +154,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         for (key, value) in entries {
             println!("{} {}", format!("{key}:").style(self.bold), value);
         }
-
-        // Make the rollout (resume) file location visible at session start.
-        // Available for both new and resumed sessions; especially useful on resume.
-        println!(
-            "{} {}",
-            "resume file:".style(self.bold),
-            ev.rollout_path.display()
-        );
 
         println!("--------");
 
