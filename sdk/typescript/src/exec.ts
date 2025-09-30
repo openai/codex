@@ -1,12 +1,15 @@
 import { spawn } from "child_process";
 import readline from "node:readline";
 
+import { TurnOptions } from "./turnOptions";
+
 export type CodexExecArgs = {
   input: string;
 
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
+  turnOptions?: TurnOptions;
 };
 
 export class CodexExec {
@@ -17,6 +20,15 @@ export class CodexExec {
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
     const commandArgs: string[] = ["exec", "--experimental-json"];
+
+    if (args.turnOptions?.model) {
+      commandArgs.push("--model", args.turnOptions.model);
+    }
+
+    if (args.turnOptions?.sandboxMode) {
+      commandArgs.push("--sandbox", args.turnOptions.sandboxMode);
+    }
+
     if (args.threadId) {
       commandArgs.push("resume", args.threadId, args.input);
     } else {
