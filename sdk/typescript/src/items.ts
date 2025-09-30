@@ -78,17 +78,7 @@ export type SessionItem = {
   session_id: string;
 };
 
-export type ConversationItem =
-  | AssistantMessageItem
-  | ReasoningItem
-  | CommandExecutionItem
-  | FileChangeItem
-  | McpToolCallItem
-  | WebSearchItem
-  | TodoListItem
-  | ErrorItem;
-
-export type ConversationItemDetails =
+export type ThreadItem =
   | AssistantMessageItem
   | ReasoningItem
   | CommandExecutionItem

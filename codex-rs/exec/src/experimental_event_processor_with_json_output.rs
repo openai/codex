@@ -8,10 +8,6 @@ use crate::event_processor::handle_last_message;
 use crate::exec_events::AssistantMessageItem;
 use crate::exec_events::CommandExecutionItem;
 use crate::exec_events::CommandExecutionStatus;
-use crate::exec_events::ConversationErrorEvent;
-use crate::exec_events::ConversationEvent;
-use crate::exec_events::ConversationItem;
-use crate::exec_events::ConversationItemDetails;
 use crate::exec_events::FileChangeItem;
 use crate::exec_events::FileUpdateChange;
 use crate::exec_events::ItemCompletedEvent;
@@ -22,6 +18,10 @@ use crate::exec_events::McpToolCallStatus;
 use crate::exec_events::PatchApplyStatus;
 use crate::exec_events::PatchChangeKind;
 use crate::exec_events::ReasoningItem;
+use crate::exec_events::ThreadErrorEvent;
+use crate::exec_events::ThreadEvent;
+use crate::exec_events::ThreadItem;
+use crate::exec_events::ThreadItemDetails;
 use crate::exec_events::ThreadStartedEvent;
 use crate::exec_events::TodoItem;
 use crate::exec_events::TodoListItem;
@@ -59,7 +59,7 @@ pub struct ExperimentalEventProcessorWithJsonOutput {
     running_todo_list: Option<RunningTodoList>,
     last_total_token_usage: Option<codex_core::protocol::TokenUsage>,
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
-    last_critical_error: Option<ConversationErrorEvent>,
+    last_critical_error: Option<ThreadErrorEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,7 +95,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
         }
     }
 
-    pub fn collect_conversation_events(&mut self, event: &Event) -> Vec<ConversationEvent> {
+    pub fn collect_thread_events(&mut self, event: &Event) -> Vec<ThreadEvent> {
         match &event.msg {
             EventMsg::SessionConfigured(ev) => self.handle_session_configured(ev),
             EventMsg::AgentMessage(ev) => self.handle_agent_message(ev),
@@ -115,13 +115,13 @@ impl ExperimentalEventProcessorWithJsonOutput {
             EventMsg::TaskStarted(ev) => self.handle_task_started(ev),
             EventMsg::TaskComplete(_) => self.handle_task_complete(),
             EventMsg::Error(ev) => {
-                let error = ConversationErrorEvent {
+                let error = ThreadErrorEvent {
                     message: ev.message.clone(),
                 };
                 self.last_critical_error = Some(error.clone());
-                vec![ConversationEvent::Error(error)]
+                vec![ThreadEvent::Error(error)]
             }
-            EventMsg::StreamError(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
+            EventMsg::StreamError(ev) => vec![ThreadEvent::Error(ThreadErrorEvent {
                 message: ev.message.clone(),
             })],
             EventMsg::PlanUpdate(ev) => self.handle_plan_update(ev),
@@ -137,43 +137,36 @@ impl ExperimentalEventProcessorWithJsonOutput {
         )
     }
 
-    fn handle_session_configured(
-        &self,
-        payload: &SessionConfiguredEvent,
-    ) -> Vec<ConversationEvent> {
-        vec![ConversationEvent::ThreadStarted(ThreadStartedEvent {
+    fn handle_session_configured(&self, payload: &SessionConfiguredEvent) -> Vec<ThreadEvent> {
+        vec![ThreadEvent::ThreadStarted(ThreadStartedEvent {
             thread_id: payload.session_id.to_string(),
         })]
     }
 
-    fn handle_agent_message(&self, payload: &AgentMessageEvent) -> Vec<ConversationEvent> {
-        let item = ConversationItem {
+    fn handle_agent_message(&self, payload: &AgentMessageEvent) -> Vec<ThreadEvent> {
+        let item = ThreadItem {
             id: self.get_next_item_id(),
 
-            details: ConversationItemDetails::AssistantMessage(AssistantMessageItem {
+            details: ThreadItemDetails::AssistantMessage(AssistantMessageItem {
                 text: payload.message.clone(),
             }),
         };
 
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item,
-        })]
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
-    fn handle_reasoning_event(&self, ev: &AgentReasoningEvent) -> Vec<ConversationEvent> {
-        let item = ConversationItem {
+    fn handle_reasoning_event(&self, ev: &AgentReasoningEvent) -> Vec<ThreadEvent> {
+        let item = ThreadItem {
             id: self.get_next_item_id(),
 
-            details: ConversationItemDetails::Reasoning(ReasoningItem {
+            details: ThreadItemDetails::Reasoning(ReasoningItem {
                 text: ev.text.clone(),
             }),
         };
 
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item,
-        })]
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
-    fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ConversationEvent> {
+    fn handle_exec_command_begin(&mut self, ev: &ExecCommandBeginEvent) -> Vec<ThreadEvent> {
         let item_id = self.get_next_item_id();
 
         let command_string = match shlex::try_join(ev.command.iter().map(String::as_str)) {
@@ -195,9 +188,9 @@ impl ExperimentalEventProcessorWithJsonOutput {
             },
         );
 
-        let item = ConversationItem {
+        let item = ThreadItem {
             id: item_id,
-            details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+            details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                 command: command_string,
                 aggregated_output: String::new(),
                 exit_code: None,
@@ -205,10 +198,10 @@ impl ExperimentalEventProcessorWithJsonOutput {
             }),
         };
 
-        vec![ConversationEvent::ItemStarted(ItemStartedEvent { item })]
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
     }
 
-    fn handle_mcp_tool_call_begin(&mut self, ev: &McpToolCallBeginEvent) -> Vec<ConversationEvent> {
+    fn handle_mcp_tool_call_begin(&mut self, ev: &McpToolCallBeginEvent) -> Vec<ThreadEvent> {
         let item_id = self.get_next_item_id();
         let server = ev.invocation.server.clone();
         let tool = ev.invocation.tool.clone();
@@ -222,19 +215,19 @@ impl ExperimentalEventProcessorWithJsonOutput {
             },
         );
 
-        let item = ConversationItem {
+        let item = ThreadItem {
             id: item_id,
-            details: ConversationItemDetails::McpToolCall(McpToolCallItem {
+            details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                 server,
                 tool,
                 status: McpToolCallStatus::InProgress,
             }),
         };
 
-        vec![ConversationEvent::ItemStarted(ItemStartedEvent { item })]
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
     }
 
-    fn handle_mcp_tool_call_end(&mut self, ev: &McpToolCallEndEvent) -> Vec<ConversationEvent> {
+    fn handle_mcp_tool_call_end(&mut self, ev: &McpToolCallEndEvent) -> Vec<ThreadEvent> {
         let status = if ev.is_success() {
             McpToolCallStatus::Completed
         } else {
@@ -256,21 +249,19 @@ impl ExperimentalEventProcessorWithJsonOutput {
             }
         };
 
-        let item = ConversationItem {
+        let item = ThreadItem {
             id: item_id,
-            details: ConversationItemDetails::McpToolCall(McpToolCallItem {
+            details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                 server,
                 tool,
                 status,
             }),
         };
 
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item,
-        })]
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
-    fn handle_patch_apply_begin(&mut self, ev: &PatchApplyBeginEvent) -> Vec<ConversationEvent> {
+    fn handle_patch_apply_begin(&mut self, ev: &PatchApplyBeginEvent) -> Vec<ThreadEvent> {
         self.running_patch_applies
             .insert(ev.call_id.clone(), ev.clone());
 
@@ -285,17 +276,17 @@ impl ExperimentalEventProcessorWithJsonOutput {
         }
     }
 
-    fn handle_patch_apply_end(&mut self, ev: &PatchApplyEndEvent) -> Vec<ConversationEvent> {
+    fn handle_patch_apply_end(&mut self, ev: &PatchApplyEndEvent) -> Vec<ThreadEvent> {
         if let Some(running_patch_apply) = self.running_patch_applies.remove(&ev.call_id) {
             let status = if ev.success {
                 PatchApplyStatus::Completed
             } else {
                 PatchApplyStatus::Failed
             };
-            let item = ConversationItem {
+            let item = ThreadItem {
                 id: self.get_next_item_id(),
 
-                details: ConversationItemDetails::FileChange(FileChangeItem {
+                details: ThreadItemDetails::FileChange(FileChangeItem {
                     changes: running_patch_apply
                         .changes
                         .iter()
@@ -308,15 +299,13 @@ impl ExperimentalEventProcessorWithJsonOutput {
                 }),
             };
 
-            return vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-                item,
-            })];
+            return vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })];
         }
 
         Vec::new()
     }
 
-    fn handle_exec_command_end(&mut self, ev: &ExecCommandEndEvent) -> Vec<ConversationEvent> {
+    fn handle_exec_command_end(&mut self, ev: &ExecCommandEndEvent) -> Vec<ThreadEvent> {
         let Some(RunningCommand { command, item_id }) = self.running_commands.remove(&ev.call_id)
         else {
             warn!(
@@ -330,10 +319,10 @@ impl ExperimentalEventProcessorWithJsonOutput {
         } else {
             CommandExecutionStatus::Failed
         };
-        let item = ConversationItem {
+        let item = ThreadItem {
             id: item_id,
 
-            details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+            details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                 command,
                 aggregated_output: ev.aggregated_output.clone(),
                 exit_code: Some(ev.exit_code),
@@ -341,9 +330,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
             }),
         };
 
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item,
-        })]
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
     fn todo_items_from_plan(&self, args: &UpdatePlanArgs) -> Vec<TodoItem> {
@@ -356,16 +343,16 @@ impl ExperimentalEventProcessorWithJsonOutput {
             .collect()
     }
 
-    fn handle_plan_update(&mut self, args: &UpdatePlanArgs) -> Vec<ConversationEvent> {
+    fn handle_plan_update(&mut self, args: &UpdatePlanArgs) -> Vec<ThreadEvent> {
         let items = self.todo_items_from_plan(args);
 
         if let Some(running) = &mut self.running_todo_list {
             running.items = items.clone();
-            let item = ConversationItem {
+            let item = ThreadItem {
                 id: running.item_id.clone(),
-                details: ConversationItemDetails::TodoList(TodoListItem { items }),
+                details: ThreadItemDetails::TodoList(TodoListItem { items }),
             };
-            return vec![ConversationEvent::ItemUpdated(ItemUpdatedEvent { item })];
+            return vec![ThreadEvent::ItemUpdated(ItemUpdatedEvent { item })];
         }
 
         let item_id = self.get_next_item_id();
@@ -373,19 +360,19 @@ impl ExperimentalEventProcessorWithJsonOutput {
             item_id: item_id.clone(),
             items: items.clone(),
         });
-        let item = ConversationItem {
+        let item = ThreadItem {
             id: item_id,
-            details: ConversationItemDetails::TodoList(TodoListItem { items }),
+            details: ThreadItemDetails::TodoList(TodoListItem { items }),
         };
-        vec![ConversationEvent::ItemStarted(ItemStartedEvent { item })]
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
     }
 
-    fn handle_task_started(&mut self, _: &TaskStartedEvent) -> Vec<ConversationEvent> {
+    fn handle_task_started(&mut self, _: &TaskStartedEvent) -> Vec<ThreadEvent> {
         self.last_critical_error = None;
-        vec![ConversationEvent::TurnStarted(TurnStartedEvent {})]
+        vec![ThreadEvent::TurnStarted(TurnStartedEvent {})]
     }
 
-    fn handle_task_complete(&mut self) -> Vec<ConversationEvent> {
+    fn handle_task_complete(&mut self) -> Vec<ThreadEvent> {
         let usage = if let Some(u) = &self.last_total_token_usage {
             Usage {
                 input_tokens: u.input_tokens,
@@ -399,23 +386,19 @@ impl ExperimentalEventProcessorWithJsonOutput {
         let mut items = Vec::new();
 
         if let Some(running) = self.running_todo_list.take() {
-            let item = ConversationItem {
+            let item = ThreadItem {
                 id: running.item_id,
-                details: ConversationItemDetails::TodoList(TodoListItem {
+                details: ThreadItemDetails::TodoList(TodoListItem {
                     items: running.items,
                 }),
             };
-            items.push(ConversationEvent::ItemCompleted(ItemCompletedEvent {
-                item,
-            }));
+            items.push(ThreadEvent::ItemCompleted(ItemCompletedEvent { item }));
         }
 
         if let Some(error) = self.last_critical_error.take() {
-            items.push(ConversationEvent::TurnFailed(TurnFailedEvent { error }));
+            items.push(ThreadEvent::TurnFailed(TurnFailedEvent { error }));
         } else {
-            items.push(ConversationEvent::TurnCompleted(TurnCompletedEvent {
-                usage,
-            }));
+            items.push(ThreadEvent::TurnCompleted(TurnCompletedEvent { usage }));
         }
 
         items
@@ -431,7 +414,7 @@ impl EventProcessor for ExperimentalEventProcessorWithJsonOutput {
     }
 
     fn process_event(&mut self, event: Event) -> CodexStatus {
-        let aggregated = self.collect_conversation_events(&event);
+        let aggregated = self.collect_thread_events(&event);
         for conv_event in aggregated {
             match serde_json::to_string(&conv_event) {
                 Ok(line) => {

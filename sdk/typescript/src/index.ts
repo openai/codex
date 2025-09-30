@@ -1,15 +1,17 @@
 export type {
-  ConversationEvent,
-  SessionCreatedEvent,
+  ThreadEvent,
+  ThreadStartedEvent,
   TurnStartedEvent,
   TurnCompletedEvent,
+  TurnFailedEvent,
   ItemStartedEvent,
   ItemUpdatedEvent,
   ItemCompletedEvent,
-  ConversationErrorEvent,
+  ThreadError,
+  ThreadErrorEvent,
 } from "./events";
 export type {
-  ConversationItem,
+  ThreadItem,
   AssistantMessageItem,
   ReasoningItem,
   CommandExecutionItem,
