@@ -224,25 +224,12 @@ fn print_exit_messages(exit_info: AppExitInfo) {
     }
 }
 
-pub(crate) const CODEX_SECURE_MODE_ENV_VAR: &str = "CODEX_SECURE_MODE";
-
-/// As early as possible in the process lifecycle, apply hardening measures
-/// if the CODEX_SECURE_MODE environment variable is set to "1".
+/// As early as possible in the process lifecycle, apply hardening measures. We
+/// skip this in debug builds to avoid interfering with debugging.
 #[ctor::ctor]
+#[cfg(not(debug_assertions))]
 fn pre_main_hardening() {
-    let secure_mode = match std::env::var(CODEX_SECURE_MODE_ENV_VAR) {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-
-    if secure_mode == "1" {
-        codex_process_hardening::pre_main_hardening();
-    }
-
-    // Always clear this env var so child processes don't inherit it.
-    unsafe {
-        std::env::remove_var(CODEX_SECURE_MODE_ENV_VAR);
-    }
+    codex_process_hardening::pre_main_hardening();
 }
 
 fn main() -> anyhow::Result<()> {
