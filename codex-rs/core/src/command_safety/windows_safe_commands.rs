@@ -153,8 +153,16 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
             .to_ascii_lowercase();
         if matches!(
             inner.as_str(),
-            "set-content" | "add-content" | "out-file" | "new-item" | "remove-item"
-                | "move-item" | "copy-item" | "rename-item" | "start-process" | "stop-process"
+            "set-content"
+                | "add-content"
+                | "out-file"
+                | "new-item"
+                | "remove-item"
+                | "move-item"
+                | "copy-item"
+                | "rename-item"
+                | "start-process"
+                | "stop-process"
         ) {
             // Examples rejected here: "Write-Output (Set-Content foo6.txt 'abc')" and "Get-Content (New-Item bar.txt)".
             return false;
