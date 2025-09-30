@@ -15,7 +15,7 @@ import {
 const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
 
 describe("Codex", () => {
-  it("returns session events", async () => {
+  it("returns thread events", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
@@ -65,7 +65,7 @@ describe("Codex", () => {
       await thread.run("first input");
       await thread.run("second input");
 
-      // Check second request continues conversation
+      // Check second request continues the same thread
       expect(requests.length).toBeGreaterThanOrEqual(2);
       const secondRequest = requests[1];
       expect(secondRequest).toBeDefined();

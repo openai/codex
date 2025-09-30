@@ -4,7 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 import { Codex } from "@openai/codex-sdk";
-import type { ConversationEvent, ConversationItem } from "@openai/codex-sdk";
+import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
 import path from "node:path";
 
 const executablePath =
@@ -15,7 +15,7 @@ const codex = new Codex({ executablePath });
 const thread = codex.startThread();
 const rl = createInterface({ input, output });
 
-const handleItemCompleted = (item: ConversationItem): void => {
+const handleItemCompleted = (item: ThreadItem): void => {
   switch (item.item_type) {
     case "assistant_message":
       console.log(`Assistant: ${item.text}`);
@@ -37,7 +37,7 @@ const handleItemCompleted = (item: ConversationItem): void => {
   }
 };
 
-const handleItemUpdated = (item: ConversationItem): void => {
+const handleItemUpdated = (item: ThreadItem): void => {
   switch (item.item_type) {
     case "todo_list": {
       console.log(`Todo:`);
@@ -49,7 +49,7 @@ const handleItemUpdated = (item: ConversationItem): void => {
   }
 };
 
-const handleEvent = (event: ConversationEvent): void => {
+const handleEvent = (event: ThreadEvent): void => {
   switch (event.type) {
     case "item.completed":
       handleItemCompleted(event.item);
@@ -62,6 +62,9 @@ const handleEvent = (event: ConversationEvent): void => {
       console.log(
         `Used ${event.usage.input_tokens} input tokens, ${event.usage.cached_input_tokens} cached input tokens, ${event.usage.output_tokens} output tokens.`,
       );
+      break;
+    case "turn.failed":
+      console.error(`Turn failed: ${event.error.message}`);
       break;
   }
 };
