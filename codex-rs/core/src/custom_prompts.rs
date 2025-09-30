@@ -32,7 +32,10 @@ pub async fn discover_prompts_in_excluding(
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        let is_file_like = fs::metadata(&path).await.map(|m| m.is_file()).unwrap_or(false);
+        let is_file_like = fs::metadata(&path)
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false);
         if !is_file_like {
             continue;
         }
