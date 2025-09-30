@@ -9,20 +9,20 @@ pub enum ThreadEvent {
     /// Emitted when a new thread is started as the first event.
     #[serde(rename = "thread.started")]
     ThreadStarted(ThreadStartedEvent),
-    /// Emmited when a turn is started by sending a new prompt to the model.
+    /// Emitted when a turn is started by sending a new prompt to the model.
     /// A turn encompasses all events that happen while agent is processing the prompt.
     #[serde(rename = "turn.started")]
     TurnStarted(TurnStartedEvent),
-    /// Emmited when a turn is completed. Typically right after the assistant's response.
+    /// Emitted when a turn is completed. Typically right after the assistant's response.
     #[serde(rename = "turn.completed")]
     TurnCompleted(TurnCompletedEvent),
     /// Indicates that a turn failed with an error.
     #[serde(rename = "turn.failed")]
     TurnFailed(TurnFailedEvent),
-    /// Emmited when a new item is added to the thread. Typically the item will be in an "in progress" state.
+    /// Emitted when a new item is added to the thread. Typically the item will be in an "in progress" state.
     #[serde(rename = "item.started")]
     ItemStarted(ItemStartedEvent),
-    /// Emmited when an item is updated.
+    /// Emitted when an item is updated.
     #[serde(rename = "item.updated")]
     ItemUpdated(ItemUpdatedEvent),
     /// Signals that an item has reached a terminal state—either success or failure.

@@ -42,7 +42,7 @@ const result = thread.runStreamed("Diagnose the test failure and propose a fix")
 
 ### Resuming a thread
 
-If you don't have the original `Thread` instance to continue the thread, you can resume a thread by calling `resumeThread()` with the thread id of a previousl thread.
+If you don't have the original `Thread` instance to continue the thread, you can resume a thread by calling `resumeThread()` and providing the thread.
 
 ```typescript
 const threadId = "...";
