@@ -1,6 +1,6 @@
+use app_test_support::McpProcess;
+use app_test_support::to_response;
 use codex_protocol::mcp_protocol::GetUserAgentResponse;
-use mcp_test_support::McpProcess;
-use mcp_test_support::to_response;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
@@ -35,7 +35,7 @@ async fn get_user_agent_returns_current_codex_user_agent() {
 
     let os_info = os_info::get();
     let user_agent = format!(
-        "codex_cli_rs/0.0.0 ({} {}; {}) {} (elicitation test; 0.0.0)",
+        "codex_cli_rs/0.0.0 ({} {}; {}) {} (codex-app-server-tests; 0.1.0)",
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),

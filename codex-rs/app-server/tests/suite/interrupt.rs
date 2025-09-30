@@ -1,5 +1,5 @@
 #![cfg(unix)]
-// Support code lives in the `mcp_test_support` crate under tests/common.
+// Support code lives in the `app_test_support` crate under tests/common.
 
 use std::path::Path;
 
@@ -17,10 +17,10 @@ use mcp_types::RequestId;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-use mcp_test_support::McpProcess;
-use mcp_test_support::create_mock_chat_completions_server;
-use mcp_test_support::create_shell_sse_response;
-use mcp_test_support::to_response;
+use app_test_support::McpProcess;
+use app_test_support::create_mock_chat_completions_server;
+use app_test_support::create_shell_sse_response;
+use app_test_support::to_response;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 

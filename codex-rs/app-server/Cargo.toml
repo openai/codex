@@ -1,14 +1,14 @@
 [package]
 edition = "2024"
-name = "codex-mcp-server"
+name = "codex-app-server"
 version = { workspace = true }
 
 [[bin]]
-name = "codex-mcp-server"
+name = "codex-app-server"
 path = "src/main.rs"
 
 [lib]
-name = "codex_mcp_server"
+name = "codex_app_server"
 path = "src/lib.rs"
 
 [lints]
@@ -19,13 +19,15 @@ anyhow = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
+codex-file-search = { workspace = true }
+codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
+# We should only be using mcp-types for JSON-RPC types: it would be nice to
+# split this out into a separate crate at some point.
 mcp-types = { workspace = true }
-schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-shlex = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -35,12 +37,15 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
+app_test_support = { workspace = true }
 assert_cmd = { workspace = true }
+base64 = { workspace = true }
 core_test_support = { workspace = true }
-mcp_test_support = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+toml = { workspace = true }
 wiremock = { workspace = true }
