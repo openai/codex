@@ -93,7 +93,7 @@ fn task_started_produces_turn_started_event() {
 
 #[test]
 fn web_search_end_emits_item_completed() {
-    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+    let mut ep = EventProcessorWithJsonOutput::new(None);
     let query = "rust async await".to_string();
     let out = ep.collect_thread_events(&event(
         "w1",
