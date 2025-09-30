@@ -6,7 +6,7 @@ export type CodexExecArgs = {
 
   baseUrl?: string;
   apiKey?: string;
-  sessionId?: string | null;
+  threadId?: string | null;
 };
 
 export class CodexExec {
@@ -17,8 +17,8 @@ export class CodexExec {
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
     const commandArgs: string[] = ["exec", "--experimental-json"];
-    if (args.sessionId) {
-      commandArgs.push("resume", args.sessionId, args.input);
+    if (args.threadId) {
+      commandArgs.push("resume", args.threadId, args.input);
     } else {
       commandArgs.push(args.input);
     }

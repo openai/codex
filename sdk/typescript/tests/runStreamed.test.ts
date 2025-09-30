@@ -3,7 +3,7 @@ import path from "path";
 import { describe, expect, it } from "@jest/globals";
 
 import { Codex } from "../src/codex";
-import { ConversationEvent } from "../src/index";
+import { ThreadEvent } from "../src/index";
 
 import {
   assistantMessage,
@@ -16,7 +16,7 @@ import {
 const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
 
 describe("Codex", () => {
-  it("returns session events", async () => {
+  it("returns thread events", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
@@ -28,15 +28,15 @@ describe("Codex", () => {
       const thread = client.startThread();
       const result = await thread.runStreamed("Hello, world!");
 
-      const events: ConversationEvent[] = [];
+      const events: ThreadEvent[] = [];
       for await (const event of result.events) {
         events.push(event);
       }
 
       expect(events).toEqual([
         {
-          type: "session.created",
-          session_id: expect.any(String),
+          type: "thread.started",
+          thread_id: expect.any(String),
         },
         {
           type: "turn.started",
@@ -91,7 +91,7 @@ describe("Codex", () => {
       const second = await thread.runStreamed("second input");
       await drainEvents(second.events);
 
-      // Check second request continues conversation
+      // Check second request continues the same thread
       expect(requests.length).toBeGreaterThanOrEqual(2);
       const secondRequest = requests[1];
       expect(secondRequest).toBeDefined();
@@ -159,7 +159,7 @@ describe("Codex", () => {
   });
 });
 
-async function drainEvents(events: AsyncGenerator<ConversationEvent>): Promise<void> {
+async function drainEvents(events: AsyncGenerator<ThreadEvent>): Promise<void> {
   let done = false;
   do {
     done = (await events.next()).done ?? false;

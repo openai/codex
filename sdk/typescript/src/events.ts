@@ -1,10 +1,10 @@
 // based on event types from codex-rs/exec/src/exec_events.rs
 
-import type { ConversationItem } from "./items";
+import type { ThreadItem } from "./items";
 
-export type SessionCreatedEvent = {
-  type: "session.created";
-  session_id: string;
+export type ThreadStartedEvent = {
+  type: "thread.started";
+  thread_id: string;
 };
 
 export type TurnStartedEvent = {
@@ -22,31 +22,41 @@ export type TurnCompletedEvent = {
   usage: Usage;
 };
 
+export type TurnFailedEvent = {
+  type: "turn.failed";
+  error: ThreadError;
+};
+
 export type ItemStartedEvent = {
   type: "item.started";
-  item: ConversationItem;
+  item: ThreadItem;
 };
 
 export type ItemUpdatedEvent = {
   type: "item.updated";
-  item: ConversationItem;
+  item: ThreadItem;
 };
 
 export type ItemCompletedEvent = {
   type: "item.completed";
-  item: ConversationItem;
+  item: ThreadItem;
 };
 
-export type ConversationErrorEvent = {
+export type ThreadError = {
+  message: string;
+};
+
+export type ThreadErrorEvent = {
   type: "error";
   message: string;
 };
 
-export type ConversationEvent =
-  | SessionCreatedEvent
+export type ThreadEvent =
+  | ThreadStartedEvent
   | TurnStartedEvent
   | TurnCompletedEvent
+  | TurnFailedEvent
   | ItemStartedEvent
   | ItemUpdatedEvent
   | ItemCompletedEvent
-  | ConversationErrorEvent;
+  | ThreadErrorEvent;

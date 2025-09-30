@@ -15,10 +15,6 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_exec::exec_events::AssistantMessageItem;
 use codex_exec::exec_events::CommandExecutionItem;
 use codex_exec::exec_events::CommandExecutionStatus;
-use codex_exec::exec_events::ConversationErrorEvent;
-use codex_exec::exec_events::ConversationEvent;
-use codex_exec::exec_events::ConversationItem;
-use codex_exec::exec_events::ConversationItemDetails;
 use codex_exec::exec_events::ItemCompletedEvent;
 use codex_exec::exec_events::ItemStartedEvent;
 use codex_exec::exec_events::ItemUpdatedEvent;
@@ -27,6 +23,10 @@ use codex_exec::exec_events::McpToolCallStatus;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
 use codex_exec::exec_events::ReasoningItem;
+use codex_exec::exec_events::ThreadErrorEvent;
+use codex_exec::exec_events::ThreadEvent;
+use codex_exec::exec_events::ThreadItem;
+use codex_exec::exec_events::ThreadItemDetails;
 use codex_exec::exec_events::ThreadStartedEvent;
 use codex_exec::exec_events::TodoItem as ExecTodoItem;
 use codex_exec::exec_events::TodoListItem as ExecTodoListItem;
@@ -67,10 +67,10 @@ fn session_configured_produces_thread_started_event() {
             rollout_path,
         }),
     );
-    let out = ep.collect_conversation_events(&ev);
+    let out = ep.collect_thread_events(&ev);
     assert_eq!(
         out,
-        vec![ConversationEvent::ThreadStarted(ThreadStartedEvent {
+        vec![ThreadEvent::ThreadStarted(ThreadStartedEvent {
             thread_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
         })]
     );
@@ -79,17 +79,14 @@ fn session_configured_produces_thread_started_event() {
 #[test]
 fn task_started_produces_turn_started_event() {
     let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
-    let out = ep.collect_conversation_events(&event(
+    let out = ep.collect_thread_events(&event(
         "t1",
         EventMsg::TaskStarted(codex_core::protocol::TaskStartedEvent {
             model_context_window: Some(32_000),
         }),
     ));
 
-    assert_eq!(
-        out,
-        vec![ConversationEvent::TurnStarted(TurnStartedEvent {})]
-    );
+    assert_eq!(out, vec![ThreadEvent::TurnStarted(TurnStartedEvent {})]);
 }
 
 #[test]
@@ -117,13 +114,13 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
             ],
         }),
     );
-    let out_first = ep.collect_conversation_events(&first);
+    let out_first = ep.collect_thread_events(&first);
     assert_eq!(
         out_first,
-        vec![ConversationEvent::ItemStarted(ItemStartedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::TodoList(ExecTodoListItem {
+                details: ThreadItemDetails::TodoList(ExecTodoListItem {
                     items: vec![
                         ExecTodoItem {
                             text: "step one".to_string(),
@@ -156,13 +153,13 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
             ],
         }),
     );
-    let out_second = ep.collect_conversation_events(&second);
+    let out_second = ep.collect_thread_events(&second);
     assert_eq!(
         out_second,
-        vec![ConversationEvent::ItemUpdated(ItemUpdatedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemUpdated(ItemUpdatedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::TodoList(ExecTodoListItem {
+                details: ThreadItemDetails::TodoList(ExecTodoListItem {
                     items: vec![
                         ExecTodoItem {
                             text: "step one".to_string(),
@@ -185,14 +182,14 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
             last_agent_message: None,
         }),
     );
-    let out_complete = ep.collect_conversation_events(&complete);
+    let out_complete = ep.collect_thread_events(&complete);
     assert_eq!(
         out_complete,
         vec![
-            ConversationEvent::ItemCompleted(ItemCompletedEvent {
-                item: ConversationItem {
+            ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ThreadItem {
                     id: "item_0".to_string(),
-                    details: ConversationItemDetails::TodoList(ExecTodoListItem {
+                    details: ThreadItemDetails::TodoList(ExecTodoListItem {
                         items: vec![
                             ExecTodoItem {
                                 text: "step one".to_string(),
@@ -206,7 +203,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
                     }),
                 },
             }),
-            ConversationEvent::TurnCompleted(TurnCompletedEvent {
+            ThreadEvent::TurnCompleted(TurnCompletedEvent {
                 usage: Usage::default(),
             }),
         ]
@@ -229,13 +226,13 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
             invocation: invocation.clone(),
         }),
     );
-    let begin_events = ep.collect_conversation_events(&begin);
+    let begin_events = ep.collect_thread_events(&begin);
     assert_eq!(
         begin_events,
-        vec![ConversationEvent::ItemStarted(ItemStartedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::McpToolCall(McpToolCallItem {
+                details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                     server: "server_a".to_string(),
                     tool: "tool_x".to_string(),
                     status: McpToolCallStatus::InProgress,
@@ -257,13 +254,13 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
             }),
         }),
     );
-    let end_events = ep.collect_conversation_events(&end);
+    let end_events = ep.collect_thread_events(&end);
     assert_eq!(
         end_events,
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::McpToolCall(McpToolCallItem {
+                details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                     server: "server_a".to_string(),
                     tool: "tool_x".to_string(),
                     status: McpToolCallStatus::Completed,
@@ -289,7 +286,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
             invocation: invocation.clone(),
         }),
     );
-    ep.collect_conversation_events(&begin);
+    ep.collect_thread_events(&begin);
 
     let end = event(
         "m4",
@@ -300,13 +297,13 @@ fn mcp_tool_call_failure_sets_failed_status() {
             result: Err("tool exploded".to_string()),
         }),
     );
-    let events = ep.collect_conversation_events(&end);
+    let events = ep.collect_thread_events(&end);
     assert_eq!(
         events,
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::McpToolCall(McpToolCallItem {
+                details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                     server: "server_b".to_string(),
                     tool: "tool_y".to_string(),
                     status: McpToolCallStatus::Failed,
@@ -335,14 +332,14 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
             }],
         }),
     );
-    let _ = ep.collect_conversation_events(&start);
+    let _ = ep.collect_thread_events(&start);
     let complete = event(
         "t2",
         EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
             last_agent_message: None,
         }),
     );
-    let _ = ep.collect_conversation_events(&complete);
+    let _ = ep.collect_thread_events(&complete);
 
     // Second turn: a new todo list should have a new id
     let start_again = event(
@@ -355,10 +352,10 @@ fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
             }],
         }),
     );
-    let out = ep.collect_conversation_events(&start_again);
+    let out = ep.collect_thread_events(&start_again);
 
     match &out[0] {
-        ConversationEvent::ItemStarted(ItemStartedEvent { item }) => {
+        ThreadEvent::ItemStarted(ItemStartedEvent { item }) => {
             assert_eq!(&item.id, "item_1");
         }
         other => panic!("unexpected event: {other:?}"),
@@ -374,13 +371,13 @@ fn agent_reasoning_produces_item_completed_reasoning() {
             text: "thinking...".to_string(),
         }),
     );
-    let out = ep.collect_conversation_events(&ev);
+    let out = ep.collect_thread_events(&ev);
     assert_eq!(
         out,
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::Reasoning(ReasoningItem {
+                details: ThreadItemDetails::Reasoning(ReasoningItem {
                     text: "thinking...".to_string(),
                 }),
             },
@@ -397,13 +394,13 @@ fn agent_message_produces_item_completed_assistant_message() {
             message: "hello".to_string(),
         }),
     );
-    let out = ep.collect_conversation_events(&ev);
+    let out = ep.collect_thread_events(&ev);
     assert_eq!(
         out,
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::AssistantMessage(AssistantMessageItem {
+                details: ThreadItemDetails::AssistantMessage(AssistantMessageItem {
                     text: "hello".to_string(),
                 }),
             },
@@ -414,7 +411,7 @@ fn agent_message_produces_item_completed_assistant_message() {
 #[test]
 fn error_event_produces_error() {
     let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
-    let out = ep.collect_conversation_events(&event(
+    let out = ep.collect_thread_events(&event(
         "e1",
         EventMsg::Error(codex_core::protocol::ErrorEvent {
             message: "boom".to_string(),
@@ -422,7 +419,7 @@ fn error_event_produces_error() {
     ));
     assert_eq!(
         out,
-        vec![ConversationEvent::Error(ConversationErrorEvent {
+        vec![ThreadEvent::Error(ThreadErrorEvent {
             message: "boom".to_string(),
         })]
     );
@@ -431,7 +428,7 @@ fn error_event_produces_error() {
 #[test]
 fn stream_error_event_produces_error() {
     let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
-    let out = ep.collect_conversation_events(&event(
+    let out = ep.collect_thread_events(&event(
         "e1",
         EventMsg::StreamError(codex_core::protocol::StreamErrorEvent {
             message: "retrying".to_string(),
@@ -439,7 +436,7 @@ fn stream_error_event_produces_error() {
     ));
     assert_eq!(
         out,
-        vec![ConversationEvent::Error(ConversationErrorEvent {
+        vec![ThreadEvent::Error(ThreadErrorEvent {
             message: "retrying".to_string(),
         })]
     );
@@ -456,8 +453,8 @@ fn error_followed_by_task_complete_produces_turn_failed() {
         }),
     );
     assert_eq!(
-        ep.collect_conversation_events(&error_event),
-        vec![ConversationEvent::Error(ConversationErrorEvent {
+        ep.collect_thread_events(&error_event),
+        vec![ThreadEvent::Error(ThreadErrorEvent {
             message: "boom".to_string(),
         })]
     );
@@ -469,9 +466,9 @@ fn error_followed_by_task_complete_produces_turn_failed() {
         }),
     );
     assert_eq!(
-        ep.collect_conversation_events(&complete_event),
-        vec![ConversationEvent::TurnFailed(TurnFailedEvent {
-            error: ConversationErrorEvent {
+        ep.collect_thread_events(&complete_event),
+        vec![ThreadEvent::TurnFailed(TurnFailedEvent {
+            error: ThreadErrorEvent {
                 message: "boom".to_string(),
             },
         })]
@@ -492,13 +489,13 @@ fn exec_command_end_success_produces_completed_command_item() {
             parsed_cmd: Vec::new(),
         }),
     );
-    let out_begin = ep.collect_conversation_events(&begin);
+    let out_begin = ep.collect_thread_events(&begin);
     assert_eq!(
         out_begin,
-        vec![ConversationEvent::ItemStarted(ItemStartedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                     command: "bash -lc 'echo hi'".to_string(),
                     aggregated_output: String::new(),
                     exit_code: None,
@@ -521,13 +518,13 @@ fn exec_command_end_success_produces_completed_command_item() {
             formatted_output: String::new(),
         }),
     );
-    let out_ok = ep.collect_conversation_events(&end_ok);
+    let out_ok = ep.collect_thread_events(&end_ok);
     assert_eq!(
         out_ok,
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                     command: "bash -lc 'echo hi'".to_string(),
                     aggregated_output: "hi\n".to_string(),
                     exit_code: Some(0),
@@ -553,11 +550,11 @@ fn exec_command_end_failure_produces_failed_command_item() {
         }),
     );
     assert_eq!(
-        ep.collect_conversation_events(&begin),
-        vec![ConversationEvent::ItemStarted(ItemStartedEvent {
-            item: ConversationItem {
+        ep.collect_thread_events(&begin),
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                     command: "sh -c 'exit 1'".to_string(),
                     aggregated_output: String::new(),
                     exit_code: None,
@@ -580,13 +577,13 @@ fn exec_command_end_failure_produces_failed_command_item() {
             formatted_output: String::new(),
         }),
     );
-    let out_fail = ep.collect_conversation_events(&end_fail);
+    let out_fail = ep.collect_thread_events(&end_fail);
     assert_eq!(
         out_fail,
-        vec![ConversationEvent::ItemCompleted(ItemCompletedEvent {
-            item: ConversationItem {
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ConversationItemDetails::CommandExecution(CommandExecutionItem {
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                     command: "sh -c 'exit 1'".to_string(),
                     aggregated_output: String::new(),
                     exit_code: Some(1),
@@ -601,7 +598,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
 fn exec_command_end_without_begin_is_ignored() {
     let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
 
-    // End event arrives without a prior Begin; should produce no conversation events.
+    // End event arrives without a prior Begin; should produce no thread events.
     let end_only = event(
         "c1",
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
@@ -614,7 +611,7 @@ fn exec_command_end_without_begin_is_ignored() {
             formatted_output: String::new(),
         }),
     );
-    let out = ep.collect_conversation_events(&end_only);
+    let out = ep.collect_thread_events(&end_only);
     assert!(out.is_empty());
 }
 
@@ -653,7 +650,7 @@ fn patch_apply_success_produces_item_completed_patchapply() {
             changes: changes.clone(),
         }),
     );
-    let out_begin = ep.collect_conversation_events(&begin);
+    let out_begin = ep.collect_thread_events(&begin);
     assert!(out_begin.is_empty());
 
     // End (success) -> item.completed (item_0)
@@ -666,15 +663,15 @@ fn patch_apply_success_produces_item_completed_patchapply() {
             success: true,
         }),
     );
-    let out_end = ep.collect_conversation_events(&end);
+    let out_end = ep.collect_thread_events(&end);
     assert_eq!(out_end.len(), 1);
 
     // Validate structure without relying on HashMap iteration order
     match &out_end[0] {
-        ConversationEvent::ItemCompleted(ItemCompletedEvent { item }) => {
+        ThreadEvent::ItemCompleted(ItemCompletedEvent { item }) => {
             assert_eq!(&item.id, "item_0");
             match &item.details {
-                ConversationItemDetails::FileChange(file_update) => {
+                ThreadItemDetails::FileChange(file_update) => {
                     assert_eq!(file_update.status, PatchApplyStatus::Completed);
 
                     let mut actual: Vec<(String, PatchChangeKind)> = file_update
@@ -722,7 +719,7 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
             changes: changes.clone(),
         }),
     );
-    assert!(ep.collect_conversation_events(&begin).is_empty());
+    assert!(ep.collect_thread_events(&begin).is_empty());
 
     // End (failure) -> item.completed (item_0) with Failed status
     let end = event(
@@ -734,14 +731,14 @@ fn patch_apply_failure_produces_item_completed_patchapply_failed() {
             success: false,
         }),
     );
-    let out_end = ep.collect_conversation_events(&end);
+    let out_end = ep.collect_thread_events(&end);
     assert_eq!(out_end.len(), 1);
 
     match &out_end[0] {
-        ConversationEvent::ItemCompleted(ItemCompletedEvent { item }) => {
+        ThreadEvent::ItemCompleted(ItemCompletedEvent { item }) => {
             assert_eq!(&item.id, "item_0");
             match &item.details {
-                ConversationItemDetails::FileChange(file_update) => {
+                ThreadItemDetails::FileChange(file_update) => {
                     assert_eq!(file_update.status, PatchApplyStatus::Failed);
                     assert_eq!(file_update.changes.len(), 1);
                     assert_eq!(file_update.changes[0].path, "file.txt".to_string());
@@ -778,10 +775,7 @@ fn task_complete_produces_turn_completed_with_usage() {
             rate_limits: None,
         }),
     );
-    assert!(
-        ep.collect_conversation_events(&token_count_event)
-            .is_empty()
-    );
+    assert!(ep.collect_thread_events(&token_count_event).is_empty());
 
     // Then TaskComplete should produce turn.completed with the captured usage.
     let complete_event = event(
@@ -790,10 +784,10 @@ fn task_complete_produces_turn_completed_with_usage() {
             last_agent_message: Some("done".to_string()),
         }),
     );
-    let out = ep.collect_conversation_events(&complete_event);
+    let out = ep.collect_thread_events(&complete_event);
     assert_eq!(
         out,
-        vec![ConversationEvent::TurnCompleted(TurnCompletedEvent {
+        vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
             usage: Usage {
                 input_tokens: 1200,
                 cached_input_tokens: 200,
