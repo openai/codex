@@ -1,5 +1,6 @@
 import path from "path";
 
+import { codexExecSpy } from "./codexExecSpy";
 import { describe, expect, it } from "@jest/globals";
 
 import { Codex } from "../src/codex";
@@ -130,4 +131,56 @@ describe("Codex", () => {
       await close();
     }
   });
+
+  it("passes turn options to exec", async () => {
+    const { url, close, requests } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Turn options applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run("apply options", {
+        model: "gpt-test-1",
+        sandboxMode: "workspace-write",
+      });
+
+      const payload = requests[0];
+      expect(payload).toBeDefined();
+      const json = payload!.json as { model?: string } | undefined;
+
+      expect(json?.model).toBe("gpt-test-1");
+      expect(spawnArgs.length).toBeGreaterThan(0);
+      const commandArgs = spawnArgs[0];
+
+      expectPair(commandArgs, ["--sandbox", "workspace-write"]);
+      expectPair(commandArgs, ["--model", "gpt-test-1"]);
+  
+    } finally {
+      restore();
+      await close();
+    }
+  });
 });
+
+
+function expectPair(args: string[] | undefined, pair: [string, string]) {
+  if (!args) {
+    throw new Error("Args is undefined");
+  }
+  const index = args.indexOf(pair[0]);
+  if (index === -1) {
+    throw new Error(`Pair ${pair[0]} not found in args`);
+  }
+  expect(args[index + 1]).toBe(pair[1]);
+}
