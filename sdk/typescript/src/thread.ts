@@ -26,7 +26,7 @@ export class Thread {
 
   /** Returns the ID of the thread. Populated after the first turn starts. */
   public get id(): string | null {
-    return this.id;
+    return this._id;
   }
 
   constructor(exec: CodexExec, options: CodexOptions, id: string | null = null) {
@@ -36,7 +36,7 @@ export class Thread {
   }
 
   /** Provides the input to the agent and streams events as they are produced during the turn. */
-  async runStreamed(input: string, options?: TurnOptions): Promise<RunStreamedResult> {
+  async runStreamed(input: string, options?: TurnOptions): Promise<StreamedTurn> {
     return { events: this.runStreamedInternal(input, options) };
   }
 
@@ -44,25 +44,30 @@ export class Thread {
     input: string,
     options?: TurnOptions,
   ): AsyncGenerator<ThreadEvent> {
-    const generator = this.exec.run({
+    const generator = this._exec.run({
       input,
-      baseUrl: this.options.baseUrl,
-      apiKey: this.options.apiKey,
-      threadId: this.id,
+      baseUrl: this._options.baseUrl,
+      apiKey: this._options.apiKey,
+      threadId: this._id,
       model: options?.model,
       sandboxMode: options?.sandboxMode,
     });
     for await (const item of generator) {
-      const parsed = JSON.parse(item) as ThreadEvent;
+      let parsed: ThreadEvent;
+      try{
+        parsed = JSON.parse(item) as ThreadEvent;
+      } catch (error) {
+        throw new Error(`Failed to parse item: ${item}`);
+      }
       if (parsed.type === "thread.started") {
-        this.id = parsed.thread_id;
+        this._id = parsed.thread_id;
       }
       yield parsed;
     }
   }
 
-  /** Provides the input to the agent and returns the completed turn.
-  async run(input: string, options?: TurnOptions): Promise<RunResult> {
+  /** Provides the input to the agent and returns the completed turn. */
+  async run(input: string, options?: TurnOptions): Promise<Turn> {
     const generator = this.runStreamedInternal(input, options);
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
