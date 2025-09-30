@@ -127,7 +127,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
         payload: &SessionConfiguredEvent,
     ) -> Vec<ConversationEvent> {
         vec![ConversationEvent::ThreadStarted(ThreadStartedEvent {
-            session_id: payload.session_id.to_string(),
+            thread_id: payload.session_id.to_string(),
         })]
     }
 

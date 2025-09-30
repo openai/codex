@@ -26,7 +26,7 @@ pub enum ConversationEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct ThreadStartedEvent {
-    pub session_id: String,
+    pub thread_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
