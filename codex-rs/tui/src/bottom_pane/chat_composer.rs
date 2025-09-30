@@ -22,7 +22,6 @@ use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
-use super::footer::prompt_mode;
 use super::footer::render_footer;
 use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
@@ -102,7 +101,7 @@ enum ActivePopup {
     File(FileSearchPopup),
 }
 
-const FOOTER_SPACING_HEIGHT: u16 = 1;
+const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 impl ChatComposer {
     pub fn new(
@@ -143,11 +142,7 @@ impl ChatComposer {
     pub fn desired_height(&self, width: u16) -> u16 {
         let footer_props = self.footer_props();
         let footer_hint_height = footer_height(footer_props);
-        let footer_spacing = if footer_hint_height > 0 {
-            FOOTER_SPACING_HEIGHT
-        } else {
-            0
-        };
+        let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         self.textarea
             .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
@@ -162,11 +157,7 @@ impl ChatComposer {
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
         let footer_hint_height = footer_height(footer_props);
-        let footer_spacing = if footer_hint_height > 0 {
-            FOOTER_SPACING_HEIGHT
-        } else {
-            0
-        };
+        let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => {
@@ -186,6 +177,14 @@ impl ChatComposer {
         textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
         textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
         [composer_rect, textarea_rect, popup_rect]
+    }
+
+    fn footer_spacing(footer_hint_height: u16) -> u16 {
+        if footer_hint_height == 0 {
+            0
+        } else {
+            FOOTER_SPACING_HEIGHT
+        }
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -337,7 +336,7 @@ impl ChatComposer {
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
         if show {
-            self.footer_mode = prompt_mode();
+            self.footer_mode = FooterMode::CtrlCReminder;
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
@@ -1261,12 +1260,14 @@ impl ChatComposer {
             return false;
         }
 
-        let toggles = match key_event.code {
-            KeyCode::Char('?') if key_event.modifiers.is_empty() => true,
-            KeyCode::BackTab => true,
-            KeyCode::Tab if key_event.modifiers.contains(KeyModifiers::SHIFT) => true,
-            _ => false,
-        };
+        let toggles = matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('?'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.is_empty()
+        );
 
         if !toggles {
             return false;
@@ -1288,12 +1289,13 @@ impl ChatComposer {
     }
 
     fn footer_mode(&self) -> FooterMode {
-        if matches!(self.footer_mode, FooterMode::EscHint) {
-            FooterMode::EscHint
-        } else if self.ctrl_c_quit_hint {
-            FooterMode::CtrlCReminder
-        } else {
-            self.footer_mode
+        match self.footer_mode {
+            FooterMode::EscHint => FooterMode::EscHint,
+            FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
+            FooterMode::CtrlCReminder => FooterMode::CtrlCReminder,
+            FooterMode::ShortcutPrompt if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
+            FooterMode::ShortcutPrompt if !self.is_empty() => FooterMode::Empty,
+            other => other,
         }
     }
 
@@ -1405,9 +1407,6 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
-        if running {
-            self.footer_mode = prompt_mode();
-        }
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
@@ -1431,12 +1430,9 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let footer_hint_height = footer_height(self.footer_props());
-                let footer_spacing = if footer_hint_height > 0 {
-                    FOOTER_SPACING_HEIGHT
-                } else {
-                    0
-                };
+                let footer_props = self.footer_props();
+                let footer_hint_height = footer_height(footer_props);
+                let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([
                         Constraint::Length(footer_spacing),
@@ -1447,10 +1443,7 @@ impl WidgetRef for ChatComposer {
                 } else {
                     popup_rect
                 };
-                let mut footer_rect = hint_rect;
-                footer_rect.x = footer_rect.x.saturating_add(2);
-                footer_rect.width = footer_rect.width.saturating_sub(2);
-                render_footer(footer_rect, buf, self.footer_props());
+                render_footer(hint_rect, buf, footer_props);
             }
         }
         let style = user_message_style(terminal_palette::default_bg());
@@ -1566,8 +1559,10 @@ mod tests {
             false,
         );
         setup(&mut composer);
-        let footer_lines = footer_height(composer.footer_props());
-        let height = footer_lines + 8;
+        let footer_props = composer.footer_props();
+        let footer_lines = footer_height(footer_props);
+        let footer_spacing = ChatComposer::footer_spacing(footer_lines);
+        let height = footer_lines + footer_spacing + 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|f| f.render_widget_ref(composer, f.area()))
@@ -1621,6 +1616,76 @@ mod tests {
                 composer.set_esc_backtrack_hint(true);
             },
         );
+
+        snapshot_composer_state("footer_mode_hidden_while_typing", true, |composer| {
+            type_chars_humanlike(composer, &['h']);
+        });
+    }
+
+    #[test]
+    fn question_mark_only_toggles_on_first_char() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw, "toggling overlay should request redraw");
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
+
+        // Toggle back to prompt mode so subsequent typing captures characters.
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutPrompt);
+
+        type_chars_humanlike(&mut composer, &['h']);
+        assert_eq!(composer.textarea.text(), "h");
+        assert_eq!(composer.footer_mode(), FooterMode::Empty);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw, "typing should still mark the view dirty");
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let _ = composer.flush_paste_burst_if_due();
+        assert_eq!(composer.textarea.text(), "h?");
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutPrompt);
+        assert_eq!(composer.footer_mode(), FooterMode::Empty);
+    }
+
+    #[test]
+    fn shortcut_overlay_persists_while_task_running() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
+
+        composer.set_task_running(true);
+
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
+        assert_eq!(composer.footer_mode(), FooterMode::ShortcutOverlay);
     }
 
     #[test]
