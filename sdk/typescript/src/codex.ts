@@ -4,7 +4,7 @@ import { Thread } from "./thread";
 
 /**
  * Codex is the main class for interacting with the Codex agent.
- * 
+ *
  * Use the `startThread()` method to start a new thread or `resumeThread()` to resume a previously started thread.
  */
 export class Codex {
@@ -31,7 +31,7 @@ export class Codex {
   /**
    * Resumes a conversation with an agent based on the thread id.
    * Threads are persisted in ~/.codex/sessions.
-   * 
+   *
    * @param id The id of the thread to resume.
    * @returns A new thread instance.
    */

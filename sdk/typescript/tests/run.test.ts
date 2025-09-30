@@ -211,14 +211,12 @@ describe("Codex", () => {
 
       expectPair(commandArgs, ["--sandbox", "workspace-write"]);
       expectPair(commandArgs, ["--model", "gpt-test-1"]);
-  
     } finally {
       restore();
       await close();
     }
   });
 });
-
 
 function expectPair(args: string[] | undefined, pair: [string, string]) {
   if (!args) {

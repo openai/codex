@@ -30,7 +30,6 @@ const result = await thread.run("Implement the fix");
 console.log(result);
 ```
 
-
 ### Streaming
 
 The `await run()` method completes when a thread turn is complete and agent is prepared the final response.
@@ -39,8 +38,6 @@ You can thread items while they are being produced by calling `await runStreamed
 
 ```typescript
 const result = thread.runStreamed("Diagnose the test failure and propose a fix");
-
-
 ```
 
 ### Resuming a thread
@@ -48,7 +45,7 @@ const result = thread.runStreamed("Diagnose the test failure and propose a fix")
 If you don't have the original `Thread` instance to continue the thread, you can resume a thread by calling `resumeThread()` with the thread id of a previousl thread.
 
 ```typescript
-const threadId = "..."
+const threadId = "...";
 const thread = codex.resumeThread(threadId);
 const result = await thread.run("Implement the fix");
 

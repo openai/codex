@@ -54,7 +54,7 @@ export class Thread {
     });
     for await (const item of generator) {
       let parsed: ThreadEvent;
-      try{
+      try {
         parsed = JSON.parse(item) as ThreadEvent;
       } catch (error) {
         throw new Error(`Failed to parse item: ${item}`, { cause: error });

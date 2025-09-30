@@ -70,7 +70,7 @@ export class CodexExec {
       }
 
       const exitCode = new Promise((resolve) => {
-        child.once("exit", (code) => { 
+        child.once("exit", (code) => {
           if (code === 0) {
             resolve(code);
           } else {
