@@ -1,5 +1,6 @@
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningEvent;
+use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
@@ -21,10 +22,11 @@ use codex_exec::exec_events::ItemUpdatedEvent;
 use codex_exec::exec_events::PatchApplyStatus;
 use codex_exec::exec_events::PatchChangeKind;
 use codex_exec::exec_events::ReasoningItem;
-use codex_exec::exec_events::SessionCreatedEvent;
+use codex_exec::exec_events::ThreadStartedEvent;
 use codex_exec::exec_events::TodoItem as ExecTodoItem;
 use codex_exec::exec_events::TodoListItem as ExecTodoListItem;
 use codex_exec::exec_events::TurnCompletedEvent;
+use codex_exec::exec_events::TurnFailedEvent;
 use codex_exec::exec_events::TurnStartedEvent;
 use codex_exec::exec_events::Usage;
 use codex_exec::experimental_event_processor_with_json_output::ExperimentalEventProcessorWithJsonOutput;
@@ -40,7 +42,7 @@ fn event(id: &str, msg: EventMsg) -> Event {
 }
 
 #[test]
-fn session_configured_produces_session_created_event() {
+fn session_configured_produces_thread_started_event() {
     let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
     let session_id = codex_protocol::mcp_protocol::ConversationId::from_string(
         "67e55044-10b1-426f-9247-bb680e5fe0c8",
@@ -62,8 +64,8 @@ fn session_configured_produces_session_created_event() {
     let out = ep.collect_conversation_events(&ev);
     assert_eq!(
         out,
-        vec![ConversationEvent::SessionCreated(SessionCreatedEvent {
-            session_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+        vec![ConversationEvent::ThreadStarted(ThreadStartedEvent {
+            thread_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
         })]
     );
 }
@@ -330,6 +332,39 @@ fn stream_error_event_produces_error() {
         out,
         vec![ConversationEvent::Error(ConversationErrorEvent {
             message: "retrying".to_string(),
+        })]
+    );
+}
+
+#[test]
+fn error_followed_by_task_complete_produces_turn_failed() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+
+    let error_event = event(
+        "e1",
+        EventMsg::Error(ErrorEvent {
+            message: "boom".to_string(),
+        }),
+    );
+    assert_eq!(
+        ep.collect_conversation_events(&error_event),
+        vec![ConversationEvent::Error(ConversationErrorEvent {
+            message: "boom".to_string(),
+        })]
+    );
+
+    let complete_event = event(
+        "e2",
+        EventMsg::TaskComplete(codex_core::protocol::TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    );
+    assert_eq!(
+        ep.collect_conversation_events(&complete_event),
+        vec![ConversationEvent::TurnFailed(TurnFailedEvent {
+            error: ConversationErrorEvent {
+                message: "boom".to_string(),
+            },
         })]
     );
 }

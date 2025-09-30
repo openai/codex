@@ -6,12 +6,14 @@ use ts_rs::TS;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "type")]
 pub enum ConversationEvent {
-    #[serde(rename = "session.created")]
-    SessionCreated(SessionCreatedEvent),
+    #[serde(rename = "thread.started")]
+    ThreadStarted(ThreadStartedEvent),
     #[serde(rename = "turn.started")]
     TurnStarted(TurnStartedEvent),
     #[serde(rename = "turn.completed")]
     TurnCompleted(TurnCompletedEvent),
+    #[serde(rename = "turn.failed")]
+    TurnFailed(TurnFailedEvent),
     #[serde(rename = "item.started")]
     ItemStarted(ItemStartedEvent),
     #[serde(rename = "item.updated")]
@@ -23,8 +25,8 @@ pub enum ConversationEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct SessionCreatedEvent {
-    pub session_id: String,
+pub struct ThreadStartedEvent {
+    pub thread_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
@@ -33,6 +35,11 @@ pub struct TurnStartedEvent {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct TurnCompletedEvent {
     pub usage: Usage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct TurnFailedEvent {
+    pub error: ConversationErrorEvent,
 }
 
 /// Minimal usage summary for a turn.
