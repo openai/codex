@@ -21,7 +21,6 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
-mod pre_main_hardening;
 
 use crate::mcp_cmd::McpCli;
 use crate::proto::ProtoCli;
@@ -182,7 +181,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         } else {
             resume_cmd
         };
-        lines.push(format!("To continue this session, run {command}."));
+        lines.push(format!("To continue this session, run {command}"));
     }
 
     lines
@@ -207,14 +206,7 @@ fn pre_main_hardening() {
     };
 
     if secure_mode == "1" {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        crate::pre_main_hardening::pre_main_hardening_linux();
-
-        #[cfg(target_os = "macos")]
-        crate::pre_main_hardening::pre_main_hardening_macos();
-
-        #[cfg(windows)]
-        crate::pre_main_hardening::pre_main_hardening_windows();
+        codex_process_hardening::pre_main_hardening();
     }
 
     // Always clear this env var so child processes don't inherit it.
@@ -489,7 +481,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000."
+                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );
