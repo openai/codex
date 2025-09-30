@@ -1,0 +1,29 @@
+name: copilot-review-notify
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  comment:
+    if: github.event.review.user.login == 'github-copilot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Add comment noting Copilot review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const number = context.payload.pull_request.number;
+            const url = context.payload.pull_request.html_url;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: number,
+              body: `Automated: GitHub Copilot has submitted a review for ${url}.`
+            });
+

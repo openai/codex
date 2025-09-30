@@ -1,0 +1,48 @@
+name: wait-for-copilot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  wait:
+    name: Wait for Copilot review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    concurrency:
+      group: wait-for-copilot-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Poll for Copilot review (max 15m)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const number = pr.number;
+            const deadline = Date.now() + 15 * 60 * 1000; // 15 minutes
+            const botLogin = 'github-copilot[bot]';
+
+            async function hasCopilotFeedback() {
+              const [reviews, comments] = await Promise.all([
+                github.rest.pulls.listReviews({ owner, repo, pull_number: number, per_page: 100 }),
+                github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 }),
+              ]);
+              const anyReview = reviews.data.some(r => (r.user?.login || '') === botLogin);
+              const anyComment = comments.data.some(c => (c.user?.login || '') === botLogin);
+              core.info(`Copilot review detected: ${anyReview}, comment detected: ${anyComment}`);
+              return anyReview || anyComment;
+            }
+
+            while (Date.now() < deadline) {
+              if (await hasCopilotFeedback()) {
+                core.notice('Copilot review found.');
+                return;
+              }
+              await new Promise(r => setTimeout(r, 20_000));
+            }
+            core.setFailed('Copilot review not found within 15 minutes.');
+
