@@ -26,4 +26,11 @@ jobs:
               issue_number: number,
               body: `Automated: GitHub Copilot has submitted a review for ${url}.`
             });
-
+      - name: Optional Slack notify
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          pr_url="${{ github.event.pull_request.html_url }}"
+          payload=$(jq -n --arg text "Copilot reviewed $pr_url" '{text: $text}')
+          curl -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
