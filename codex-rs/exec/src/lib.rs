@@ -38,15 +38,12 @@ use tracing_subscriber::prelude::*;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use codex_core::default_client::SetOriginatorError;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec") {
-        if !matches!(err, SetOriginatorError::AlreadyInitialized) {
-            tracing::warn!(?err, "Failed to set codex exec originator override");
-        }
+        tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
 
     let Cli {
