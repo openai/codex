@@ -1,7 +1,6 @@
 ---
 source: tui/src/bottom_pane/footer.rs
+assertion_line: 389
 expression: terminal.backend()
 ---
-" ⌃C again to quit                                                               "
-"                                                                                "
-"                                                                                "
+"  ctrl + c again to quit                                                        "

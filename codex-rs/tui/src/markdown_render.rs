@@ -35,8 +35,7 @@ impl IndentContext {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn render_markdown_text(input: &str) -> Text<'static> {
+pub fn render_markdown_text(input: &str) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     let parser = Parser::new_ext(input, options);
