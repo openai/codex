@@ -10,6 +10,7 @@ use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
@@ -120,8 +121,12 @@ impl CommandPopup {
                 out.push((CommandItem::Builtin(*cmd), Some(indices), score));
             }
         }
+        // Support both search styles:
+        // - Typing "name" should surface "/prompts:name" results.
+        // - Typing "prompts:name" should also work.
         for (idx, p) in self.prompts.iter().enumerate() {
-            if let Some((indices, score)) = fuzzy_match(&p.name, filter) {
+            let display = format!("{PROMPTS_CMD_PREFIX}:{}", p.name);
+            if let Some((indices, score)) = fuzzy_match(&display, filter) {
                 out.push((CommandItem::UserPrompt(idx), Some(indices), score));
             }
         }
@@ -158,7 +163,7 @@ impl CommandPopup {
                         (format!("/{}", cmd.command()), cmd.description().to_string())
                     }
                     CommandItem::UserPrompt(i) => (
-                        format!("/{}", self.prompts[i].name),
+                        format!("/{PROMPTS_CMD_PREFIX}:{}", self.prompts[i].name),
                         "send saved prompt".to_string(),
                     ),
                 };

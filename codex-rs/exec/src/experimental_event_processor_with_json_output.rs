@@ -22,10 +22,11 @@ use crate::exec_events::McpToolCallStatus;
 use crate::exec_events::PatchApplyStatus;
 use crate::exec_events::PatchChangeKind;
 use crate::exec_events::ReasoningItem;
-use crate::exec_events::SessionCreatedEvent;
+use crate::exec_events::ThreadStartedEvent;
 use crate::exec_events::TodoItem;
 use crate::exec_events::TodoListItem;
 use crate::exec_events::TurnCompletedEvent;
+use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use codex_core::config::Config;
@@ -58,6 +59,7 @@ pub struct ExperimentalEventProcessorWithJsonOutput {
     running_todo_list: Option<RunningTodoList>,
     last_total_token_usage: Option<codex_core::protocol::TokenUsage>,
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
+    last_critical_error: Option<ConversationErrorEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +91,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
             running_todo_list: None,
             last_total_token_usage: None,
             running_mcp_tool_calls: HashMap::new(),
+            last_critical_error: None,
         }
     }
 
@@ -111,9 +114,13 @@ impl ExperimentalEventProcessorWithJsonOutput {
             }
             EventMsg::TaskStarted(ev) => self.handle_task_started(ev),
             EventMsg::TaskComplete(_) => self.handle_task_complete(),
-            EventMsg::Error(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
-                message: ev.message.clone(),
-            })],
+            EventMsg::Error(ev) => {
+                let error = ConversationErrorEvent {
+                    message: ev.message.clone(),
+                };
+                self.last_critical_error = Some(error.clone());
+                vec![ConversationEvent::Error(error)]
+            }
             EventMsg::StreamError(ev) => vec![ConversationEvent::Error(ConversationErrorEvent {
                 message: ev.message.clone(),
             })],
@@ -134,8 +141,8 @@ impl ExperimentalEventProcessorWithJsonOutput {
         &self,
         payload: &SessionConfiguredEvent,
     ) -> Vec<ConversationEvent> {
-        vec![ConversationEvent::SessionCreated(SessionCreatedEvent {
-            session_id: payload.session_id.to_string(),
+        vec![ConversationEvent::ThreadStarted(ThreadStartedEvent {
+            thread_id: payload.session_id.to_string(),
         })]
     }
 
@@ -373,7 +380,8 @@ impl ExperimentalEventProcessorWithJsonOutput {
         vec![ConversationEvent::ItemStarted(ItemStartedEvent { item })]
     }
 
-    fn handle_task_started(&self, _: &TaskStartedEvent) -> Vec<ConversationEvent> {
+    fn handle_task_started(&mut self, _: &TaskStartedEvent) -> Vec<ConversationEvent> {
+        self.last_critical_error = None;
         vec![ConversationEvent::TurnStarted(TurnStartedEvent {})]
     }
 
@@ -402,9 +410,13 @@ impl ExperimentalEventProcessorWithJsonOutput {
             }));
         }
 
-        items.push(ConversationEvent::TurnCompleted(TurnCompletedEvent {
-            usage,
-        }));
+        if let Some(error) = self.last_critical_error.take() {
+            items.push(ConversationEvent::TurnFailed(TurnFailedEvent { error }));
+        } else {
+            items.push(ConversationEvent::TurnCompleted(TurnCompletedEvent {
+                usage,
+            }));
+        }
 
         items
     }
