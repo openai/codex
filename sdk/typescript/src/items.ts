@@ -87,5 +87,3 @@ export type ThreadItem =
   | WebSearchItem
   | TodoListItem
   | ErrorItem;
-
-export type ThreadItemDetails = ThreadItem;

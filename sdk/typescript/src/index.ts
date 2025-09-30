@@ -20,7 +20,6 @@ export type {
   WebSearchItem,
   TodoListItem,
   ErrorItem,
-  ThreadItemDetails,
 } from "./items";
 
 export type { Thread, RunResult, RunStreamedResult, Input } from "./thread";
