@@ -67,7 +67,7 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
             && format.get("strict") == Some(&serde_json::Value::Bool(true))
             && format.get("schema") == Some(&expected_schema)
     };
-    responses::mount_sse_once(&server, match_json_text_param, sse1).await;
+    responses::mount_sse_once_match(&server, match_json_text_param, sse1).await;
 
     let TestCodex { codex, cwd, .. } = test_codex().build(&server).await?;
 

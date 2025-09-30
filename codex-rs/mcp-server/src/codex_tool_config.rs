@@ -2,6 +2,7 @@
 
 use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::SandboxMode;
+use codex_utils_json_to_toml::json_to_toml;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
 use schemars::JsonSchema;
@@ -10,8 +11,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-use crate::json_to_toml::json_to_toml;
 
 /// Client-supplied configuration for a `codex` tool-call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]

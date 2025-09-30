@@ -395,7 +395,6 @@ impl ChatWidget {
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         if info.is_some() {
-            self.bottom_pane.set_token_usage(info.clone());
             self.token_info = info;
         }
     }
@@ -1779,6 +1778,20 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
 
         items.push(SelectionItem {
+            name: "Review against a base branch".to_string(),
+            description: Some("(PR Style)".into()),
+            is_current: false,
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
             description: None,
             is_current: false,
@@ -1805,20 +1818,6 @@ impl ChatWidget {
                 let cwd = self.config.cwd.clone();
                 move |tx| {
                     tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
-                }
-            })],
-            dismiss_on_select: false,
-            search_value: None,
-        });
-
-        items.push(SelectionItem {
-            name: "Review against a base branch".to_string(),
-            description: None,
-            is_current: false,
-            actions: vec![Box::new({
-                let cwd = self.config.cwd.clone();
-                move |tx| {
-                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
                 }
             })],
             dismiss_on_select: false,
@@ -1974,7 +1973,6 @@ impl ChatWidget {
 
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
-        self.bottom_pane.set_token_usage(None);
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
