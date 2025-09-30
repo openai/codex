@@ -17,6 +17,18 @@ use crate::rollout::list::ConversationsPage;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::get_conversation;
 use crate::rollout::list::get_conversations;
+use anyhow::Result;
+use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::UserMessageEvent;
 
 fn write_session_file(
     root: &Path,
@@ -146,14 +158,17 @@ async fn test_list_conversations_latest_first() {
             ConversationItem {
                 path: p1,
                 head: head_3,
+                tail: Vec::new(),
             },
             ConversationItem {
                 path: p2,
                 head: head_2,
+                tail: Vec::new(),
             },
             ConversationItem {
                 path: p3,
                 head: head_1,
+                tail: Vec::new(),
             },
         ],
         next_cursor: Some(expected_cursor),
@@ -219,10 +234,12 @@ async fn test_pagination_cursor() {
             ConversationItem {
                 path: p5,
                 head: head_5,
+                tail: Vec::new(),
             },
             ConversationItem {
                 path: p4,
                 head: head_4,
+                tail: Vec::new(),
             },
         ],
         next_cursor: Some(expected_cursor1.clone()),
@@ -269,10 +286,12 @@ async fn test_pagination_cursor() {
             ConversationItem {
                 path: p3,
                 head: head_3,
+                tail: Vec::new(),
             },
             ConversationItem {
                 path: p2,
                 head: head_2,
+                tail: Vec::new(),
             },
         ],
         next_cursor: Some(expected_cursor2.clone()),
@@ -304,6 +323,7 @@ async fn test_pagination_cursor() {
         items: vec![ConversationItem {
             path: p1,
             head: head_1,
+            tail: Vec::new(),
         }],
         next_cursor: Some(expected_cursor3),
         num_scanned_files: 5, // scanned 05, 04 (anchor), 03, 02 (anchor), 01
@@ -346,6 +366,7 @@ async fn test_get_conversation_contents() {
         items: vec![ConversationItem {
             path: expected_path,
             head: expected_head,
+            tail: Vec::new(),
         }],
         next_cursor: Some(expected_cursor),
         num_scanned_files: 1,
@@ -364,6 +385,250 @@ async fn test_get_conversation_contents() {
     let rec1 = serde_json::json!({"record_type": "response", "index": 1});
     let expected_content = format!("{meta}\n{user_event}\n{rec0}\n{rec1}\n");
     assert_eq!(content, expected_content);
+}
+
+#[tokio::test]
+async fn test_tail_includes_last_response_items() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-06-01T08-00-00";
+    let uuid = Uuid::from_u128(42);
+    let day_dir = home.join("sessions").join("2025").join("06").join("01");
+    fs::create_dir_all(&day_dir)?;
+    let file_path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let mut file = File::create(&file_path)?;
+
+    let conversation_id = ConversationId::from_string(&uuid.to_string())?;
+    let meta_line = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: conversation_id,
+                timestamp: ts.to_string(),
+                instructions: None,
+                cwd: ".".into(),
+                originator: "test_originator".into(),
+                cli_version: "test_version".into(),
+            },
+            git: None,
+        }),
+    };
+    writeln!(file, "{}", serde_json::to_string(&meta_line)?)?;
+
+    let user_event_line = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "hello".into(),
+            kind: Some(InputMessageKind::Plain),
+            images: None,
+        })),
+    };
+    writeln!(file, "{}", serde_json::to_string(&user_event_line)?)?;
+
+    let total_messages = 12usize;
+    for idx in 0..total_messages {
+        let response_line = RolloutLine {
+            timestamp: format!("{ts}-{idx:02}"),
+            item: RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText {
+                    text: format!("reply-{idx}"),
+                }],
+            }),
+        };
+        writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
+    }
+    drop(file);
+
+    let page = get_conversations(home, 1, None).await?;
+    let item = page.items.first().expect("conversation item");
+    let tail_len = item.tail.len();
+    assert_eq!(tail_len, 10usize.min(total_messages));
+
+    let expected: Vec<serde_json::Value> = (total_messages - tail_len..total_messages)
+        .map(|idx| {
+            serde_json::to_value(ResponseItem::Message {
+                id: None,
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText {
+                    text: format!("reply-{idx}"),
+                }],
+            })
+            .expect("serialize response item")
+        })
+        .collect();
+
+    assert_eq!(item.tail, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_tail_handles_short_sessions() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-06-02T08-30-00";
+    let uuid = Uuid::from_u128(7);
+    let day_dir = home.join("sessions").join("2025").join("06").join("02");
+    fs::create_dir_all(&day_dir)?;
+    let file_path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let mut file = File::create(&file_path)?;
+
+    let conversation_id = ConversationId::from_string(&uuid.to_string())?;
+    let meta_line = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: conversation_id,
+                timestamp: ts.to_string(),
+                instructions: None,
+                cwd: ".".into(),
+                originator: "test_originator".into(),
+                cli_version: "test_version".into(),
+            },
+            git: None,
+        }),
+    };
+    writeln!(file, "{}", serde_json::to_string(&meta_line)?)?;
+
+    let user_event_line = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "hi".into(),
+            kind: Some(InputMessageKind::Plain),
+            images: None,
+        })),
+    };
+    writeln!(file, "{}", serde_json::to_string(&user_event_line)?)?;
+
+    for idx in 0..3 {
+        let response_line = RolloutLine {
+            timestamp: format!("{ts}-{idx:02}"),
+            item: RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText {
+                    text: format!("short-{idx}"),
+                }],
+            }),
+        };
+        writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
+    }
+    drop(file);
+
+    let page = get_conversations(home, 1, None).await?;
+    let tail = &page.items.first().expect("conversation item").tail;
+
+    assert_eq!(tail.len(), 3);
+
+    let expected: Vec<serde_json::Value> = (0..3)
+        .map(|idx| {
+            serde_json::to_value(ResponseItem::Message {
+                id: None,
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText {
+                    text: format!("short-{idx}"),
+                }],
+            })
+            .expect("serialize response item")
+        })
+        .collect();
+
+    assert_eq!(tail, &expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_tail_skips_trailing_non_responses() -> Result<()> {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-06-03T10-00-00";
+    let uuid = Uuid::from_u128(11);
+    let day_dir = home.join("sessions").join("2025").join("06").join("03");
+    fs::create_dir_all(&day_dir)?;
+    let file_path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let mut file = File::create(&file_path)?;
+
+    let conversation_id = ConversationId::from_string(&uuid.to_string())?;
+    let meta_line = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: conversation_id,
+                timestamp: ts.to_string(),
+                instructions: None,
+                cwd: ".".into(),
+                originator: "test_originator".into(),
+                cli_version: "test_version".into(),
+            },
+            git: None,
+        }),
+    };
+    writeln!(file, "{}", serde_json::to_string(&meta_line)?)?;
+
+    let user_event_line = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "hello".into(),
+            kind: Some(InputMessageKind::Plain),
+            images: None,
+        })),
+    };
+    writeln!(file, "{}", serde_json::to_string(&user_event_line)?)?;
+
+    for idx in 0..4 {
+        let response_line = RolloutLine {
+            timestamp: format!("{ts}-{idx:02}"),
+            item: RolloutItem::ResponseItem(ResponseItem::Message {
+                id: None,
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText {
+                    text: format!("response-{idx}"),
+                }],
+            }),
+        };
+        writeln!(file, "{}", serde_json::to_string(&response_line)?)?;
+    }
+
+    let compacted_line = RolloutLine {
+        timestamp: format!("{ts}-compacted"),
+        item: RolloutItem::Compacted(CompactedItem {
+            message: "compacted".into(),
+        }),
+    };
+    writeln!(file, "{}", serde_json::to_string(&compacted_line)?)?;
+
+    let shutdown_event = RolloutLine {
+        timestamp: format!("{ts}-shutdown"),
+        item: RolloutItem::EventMsg(EventMsg::ShutdownComplete),
+    };
+    writeln!(file, "{}", serde_json::to_string(&shutdown_event)?)?;
+    drop(file);
+
+    let page = get_conversations(home, 1, None).await?;
+    let tail = &page.items.first().expect("conversation item").tail;
+
+    let expected: Vec<serde_json::Value> = (0..4)
+        .map(|idx| {
+            serde_json::to_value(ResponseItem::Message {
+                id: None,
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText {
+                    text: format!("response-{idx}"),
+                }],
+            })
+            .expect("serialize response item")
+        })
+        .collect();
+
+    assert_eq!(tail, &expected);
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -410,10 +675,12 @@ async fn test_stable_ordering_same_second_pagination() {
             ConversationItem {
                 path: p3,
                 head: head(u3),
+                tail: Vec::new(),
             },
             ConversationItem {
                 path: p2,
                 head: head(u2),
+                tail: Vec::new(),
             },
         ],
         next_cursor: Some(expected_cursor1.clone()),
@@ -436,6 +703,7 @@ async fn test_stable_ordering_same_second_pagination() {
         items: vec![ConversationItem {
             path: p1,
             head: head(u1),
+            tail: Vec::new(),
         }],
         next_cursor: Some(expected_cursor2),
         num_scanned_files: 3, // scanned u3, u2 (anchor), u1
