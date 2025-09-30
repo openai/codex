@@ -129,8 +129,9 @@ impl CloudBackend for MockClient {
         prompt: &str,
         git_ref: &str,
         qa_mode: bool,
+        best_of_n: usize,
     ) -> Result<crate::CreatedTask> {
-        let _ = (env_id, prompt, git_ref, qa_mode);
+        let _ = (env_id, prompt, git_ref, qa_mode, best_of_n);
         let id = format!("task_local_{}", chrono::Utc::now().timestamp_millis());
         Ok(crate::CreatedTask { id: TaskId(id) })
     }

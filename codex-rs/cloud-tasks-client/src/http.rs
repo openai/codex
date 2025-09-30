@@ -101,9 +101,10 @@ impl CloudBackend for HttpClient {
         prompt: &str,
         git_ref: &str,
         qa_mode: bool,
+        best_of_n: usize,
     ) -> Result<crate::CreatedTask> {
         self.tasks_api()
-            .create(env_id, prompt, git_ref, qa_mode)
+            .create(env_id, prompt, git_ref, qa_mode, best_of_n)
             .await
     }
 }
@@ -221,6 +222,7 @@ mod api {
             prompt: &str,
             git_ref: &str,
             qa_mode: bool,
+            best_of_n: usize,
         ) -> Result<crate::CreatedTask> {
             let mut input_items: Vec<serde_json::Value> = Vec::new();
             input_items.push(serde_json::json!({
@@ -238,7 +240,7 @@ mod api {
                 }));
             }
 
-            let request_body = serde_json::json!({
+            let mut request_body = serde_json::json!({
                 "new_task": {
                     "environment_id": env_id,
                     "branch": git_ref,
@@ -246,6 +248,15 @@ mod api {
                 },
                 "input_items": input_items,
             });
+
+            if best_of_n > 1 {
+                if let Some(obj) = request_body.as_object_mut() {
+                    obj.insert(
+                        "metadata".to_string(),
+                        serde_json::json!({ "best_of_n": best_of_n }),
+                    );
+                }
+            }
 
             match self.backend.create_task(request_body).await {
                 Ok(id) => {
