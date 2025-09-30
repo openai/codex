@@ -2,7 +2,8 @@ import path from "path";
 
 import { describe, expect, it } from "@jest/globals";
 
-import { Codex, ConversationEvent } from "../src/index";
+import { ConversationEvent } from "../src/index";
+import { Codex } from "../src/codex";
 
 import {
   assistantMessage,
