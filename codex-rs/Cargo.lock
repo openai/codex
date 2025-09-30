@@ -784,7 +784,6 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
- "codex-backend-client",
  "codex-cloud-tasks-client",
  "codex-common",
  "codex-core",
