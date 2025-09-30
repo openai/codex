@@ -29,6 +29,7 @@ use crate::exec_events::TurnCompletedEvent;
 use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
+use crate::exec_events::WebSearchItem;
 use codex_core::config::Config;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -46,6 +47,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::WebSearchEndEvent;
 use tracing::error;
 use tracing::warn;
 
@@ -106,6 +108,8 @@ impl ExperimentalEventProcessorWithJsonOutput {
             EventMsg::McpToolCallEnd(ev) => self.handle_mcp_tool_call_end(ev),
             EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.handle_patch_apply_end(ev),
+            EventMsg::WebSearchBegin(_) => Vec::new(),
+            EventMsg::WebSearchEnd(ev) => self.handle_web_search_end(ev),
             EventMsg::TokenCount(ev) => {
                 if let Some(info) = &ev.info {
                     self.last_total_token_usage = Some(info.total_token_usage.clone());
@@ -141,6 +145,17 @@ impl ExperimentalEventProcessorWithJsonOutput {
         vec![ThreadEvent::ThreadStarted(ThreadStartedEvent {
             thread_id: payload.session_id.to_string(),
         })]
+    }
+
+    fn handle_web_search_end(&self, ev: &WebSearchEndEvent) -> Vec<ThreadEvent> {
+        let item = ThreadItem {
+            id: self.get_next_item_id(),
+            details: ThreadItemDetails::WebSearch(WebSearchItem {
+                query: ev.query.clone(),
+            }),
+        };
+
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
     fn handle_agent_message(&self, payload: &AgentMessageEvent) -> Vec<ThreadEvent> {
