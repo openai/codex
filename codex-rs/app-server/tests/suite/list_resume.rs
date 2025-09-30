@@ -164,19 +164,24 @@ async fn test_list_and_resume_conversations() {
 
     let notification: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event"),
+        mcp.read_stream_until_notification_message("sessionConfigured"),
     )
     .await
-    .expect("session_configured notification timeout")
-    .expect("session_configured notification");
-    let msg_type = notification
-        .params
-        .as_ref()
-        .and_then(|p| p.get("msg"))
-        .and_then(|m| m.get("type"))
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
-    assert_eq!(msg_type, "session_configured");
+    .expect("sessionConfigured notification timeout")
+    .expect("sessionConfigured notification");
+    let session_configured: ServerNotification = notification
+        .try_into()
+        .expect("deserialize sessionConfigured notification");
+    let ServerNotification::SessionConfigured(SessionConfiguredNotification {
+        model,
+        rollout_path,
+        ..
+    }) = session_configured
+    else {
+        unreachable!("expected sessionConfigured notification");
+    };
+    assert_eq!(model, "gpt-5-codex");
+    assert_eq!(items[0].path.clone(), rollout_path);
 
     let resume_by_id_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
