@@ -145,6 +145,22 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
         return false;
     }
 
+    // Reject nested unsafe cmdlets inside parentheses or arguments
+    for w in words.iter() {
+        let inner = w
+            .trim_matches(|c| c == '(' || c == ')')
+            .trim_start_matches('-')
+            .to_ascii_lowercase();
+        if matches!(
+            inner.as_str(),
+            "set-content" | "add-content" | "out-file" | "new-item" | "remove-item"
+                | "move-item" | "copy-item" | "rename-item" | "start-process" | "stop-process"
+        ) {
+            // Examples rejected here: "Write-Output (Set-Content foo6.txt 'abc')" and "Get-Content (New-Item bar.txt)".
+            return false;
+        }
+    }
+
     // Block PowerShell call operator or any redirection explicitly.
     if words.iter().any(|w| {
         matches!(
@@ -385,6 +401,23 @@ mod tests {
             "powershell.exe",
             "-Command",
             "Get-ChildItem; Remove-Item foo",
+        ])));
+        // Nested unsafe cmdlet inside safe command must fail
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "Write-Output (Set-Content foo6.txt 'abc')",
+        ])));
+        // Additional nested unsafe cmdlet examples must fail
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "Write-Host (Remove-Item foo.txt)",
+        ])));
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-Command",
+            "Get-Content (New-Item bar.txt)",
         ])));
     }
 }
