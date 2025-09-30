@@ -1,7 +1,9 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
+use crate::diff_render::DiffSummary;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
@@ -292,7 +294,7 @@ impl App {
                 } else {
                     text.lines().map(ansi_escape_line).collect()
                 };
-                self.overlay = Some(Overlay::new_static_with_title(
+                self.overlay = Some(Overlay::new_static_with_lines(
                     pager_lines,
                     "D I F F".to_string(),
                 ));
@@ -324,12 +326,18 @@ impl App {
                     Ok(()) => {
                         if let Some(profile) = profile {
                             self.chat_widget.add_info_message(
-                                format!("Model changed to {model} for {profile} profile"),
+                                format!("Model changed to {model}{reasoning_effort} for {profile} profile", reasoning_effort = effort.map(|e| format!(" {e}")).unwrap_or_default()),
                                 None,
                             );
                         } else {
-                            self.chat_widget
-                                .add_info_message(format!("Model changed to {model}"), None);
+                            self.chat_widget.add_info_message(
+                                format!(
+                                    "Model changed to {model}{reasoning_effort}",
+                                    reasoning_effort =
+                                        effort.map(|e| format!(" {e}")).unwrap_or_default()
+                                ),
+                                None,
+                            );
                         }
                     }
                     Err(err) => {
@@ -363,6 +371,19 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::FullScreenApprovalRequest(request) => match request {
+                ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let diff_summary = DiffSummary::new(changes, cwd);
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![diff_summary.into()],
+                        "P A T C H".to_string(),
+                    ));
+                }
+                ApprovalRequest::Exec { .. } => {
+                    todo!()
+                }
+            },
         }
         Ok(true)
     }
