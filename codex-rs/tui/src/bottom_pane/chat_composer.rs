@@ -507,7 +507,8 @@ impl ChatComposer {
                                         self.textarea.set_text("");
                                         return (InputResult::Submitted(expanded), true);
                                     } else {
-                                        let text = format!("/{} ", prompt.name);
+                                        let text =
+                                            format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
                                         self.textarea.set_text(&text);
                                         self.textarea.set_cursor(self.textarea.text().len());
                                     }
@@ -2672,7 +2673,7 @@ mod tests {
 
         composer
             .textarea
-            .set_text("/my-prompt USER=Alice BRANCH=main");
+            .set_text("/prompts:my-prompt USER=Alice BRANCH=main");
 
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -2706,7 +2707,7 @@ mod tests {
 
         composer
             .textarea
-            .set_text("/my-prompt USER=\"Alice Smith\" BRANCH=dev-main");
+            .set_text("/prompts:my-prompt USER=\"Alice Smith\" BRANCH=dev-main");
 
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -2738,13 +2739,18 @@ mod tests {
             argument_hint: None,
         }]);
 
-        composer.textarea.set_text("/my-prompt USER=Alice stray");
+        composer
+            .textarea
+            .set_text("/prompts:my-prompt USER=Alice stray");
 
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(InputResult::None, result);
-        assert_eq!("/my-prompt USER=Alice stray", composer.textarea.text());
+        assert_eq!(
+            "/prompts:my-prompt USER=Alice stray",
+            composer.textarea.text()
+        );
 
         let mut found_error = false;
         while let Ok(event) = rx.try_recv() {
@@ -2784,13 +2790,13 @@ mod tests {
         }]);
 
         // Provide only one of the required args
-        composer.textarea.set_text("/my-prompt USER=Alice");
+        composer.textarea.set_text("/prompts:my-prompt USER=Alice");
 
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(InputResult::None, result);
-        assert_eq!("/my-prompt USER=Alice", composer.textarea.text());
+        assert_eq!("/prompts:my-prompt USER=Alice", composer.textarea.text());
 
         let mut found_error = false;
         while let Ok(event) = rx.try_recv() {
@@ -2874,7 +2880,7 @@ mod tests {
         }]);
 
         // Type positional args; should submit with numeric expansion, no errors.
-        composer.textarea.set_text("/elegant hi");
+        composer.textarea.set_text("/prompts:elegant hi");
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 

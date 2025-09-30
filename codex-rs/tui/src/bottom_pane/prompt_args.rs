@@ -310,7 +310,8 @@ mod tests {
             argument_hint: None,
         }];
 
-        let out = expand_custom_prompt("/my-prompt USER=Alice BRANCH=main", &prompts).unwrap();
+        let out =
+            expand_custom_prompt("/prompts:my-prompt USER=Alice BRANCH=main", &prompts).unwrap();
         assert_eq!(out, Some("Review Alice changes on main".to_string()));
     }
 
@@ -324,8 +325,11 @@ mod tests {
             argument_hint: None,
         }];
 
-        let out = expand_custom_prompt("/my-prompt USER=\"Alice Smith\" BRANCH=dev-main", &prompts)
-            .unwrap();
+        let out = expand_custom_prompt(
+            "/prompts:my-prompt USER=\"Alice Smith\" BRANCH=dev-main",
+            &prompts,
+        )
+        .unwrap();
         assert_eq!(out, Some("Pair Alice Smith with dev-main".to_string()));
     }
 
@@ -338,7 +342,7 @@ mod tests {
             description: None,
             argument_hint: None,
         }];
-        let err = expand_custom_prompt("/my-prompt USER=Alice stray", &prompts)
+        let err = expand_custom_prompt("/prompts:my-prompt USER=Alice stray", &prompts)
             .unwrap_err()
             .user_message();
         assert!(err.contains("expected key=value"));
@@ -353,7 +357,7 @@ mod tests {
             description: None,
             argument_hint: None,
         }];
-        let err = expand_custom_prompt("/my-prompt USER=Alice", &prompts)
+        let err = expand_custom_prompt("/prompts:my-prompt USER=Alice", &prompts)
             .unwrap_err()
             .user_message();
         assert!(err.to_lowercase().contains("missing required args"));
@@ -382,7 +386,7 @@ mod tests {
             argument_hint: None,
         }];
 
-        let out = expand_custom_prompt("/my-prompt", &prompts).unwrap();
+        let out = expand_custom_prompt("/prompts:my-prompt", &prompts).unwrap();
         assert_eq!(out, Some("literal $$USER".to_string()));
     }
 }
