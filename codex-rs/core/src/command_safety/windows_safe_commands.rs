@@ -12,6 +12,8 @@ pub fn is_safe_command_windows(command: &[String]) -> bool {
     false
 }
 
+/// Returns each command sequence if the invocation starts with a PowerShell binary.
+/// For example, the tokens from `pwsh Get-ChildItem | Measure-Object` become two sequences.
 fn try_parse_powershell_command_sequence(command: &[String]) -> Option<Vec<Vec<String>>> {
     let (exe, rest) = command.split_first()?;
     if !is_powershell_executable(exe) {
@@ -20,8 +22,10 @@ fn try_parse_powershell_command_sequence(command: &[String]) -> Option<Vec<Vec<S
     parse_powershell_invocation(rest)
 }
 
+/// Parses a PowerShell invocation into discrete command vectors, rejecting unsafe patterns.
 fn parse_powershell_invocation(args: &[String]) -> Option<Vec<Vec<String>>> {
     if args.is_empty() {
+        // Examples rejected here: "pwsh" and "powershell.exe" with no additional arguments.
         return None;
     }
 
@@ -33,12 +37,16 @@ fn parse_powershell_invocation(args: &[String]) -> Option<Vec<Vec<String>>> {
             "-command" | "/command" | "-c" => {
                 let script = args.get(idx + 1)?;
                 if idx + 2 != args.len() {
+                    // Reject if there is more than one token representing the actual command.
+                    // Examples rejected here: "pwsh -Command foo bar" and "powershell -c ls extra".
                     return None;
                 }
                 return parse_powershell_script(script);
             }
             _ if lower.starts_with("-command:") || lower.starts_with("/command:") => {
                 if idx + 1 != args.len() {
+                    // Reject if there are more tokens after the command itself.
+                    // Examples rejected here: "pwsh -Command:dir C:\\" and "powershell /Command:dir C:\\" with trailing args.
                     return None;
                 }
                 let script = arg.split_once(':')?.1;
@@ -54,31 +62,41 @@ fn parse_powershell_invocation(args: &[String]) -> Option<Vec<Vec<String>>> {
             // Explicitly forbidden/opaque or unnecessary for read-only operations.
             "-encodedcommand" | "-ec" | "-file" | "/file" | "-windowstyle" | "-executionpolicy"
             | "-workingdirectory" => {
+                // Examples rejected here: "pwsh -EncodedCommand ..." and "powershell -File script.ps1".
                 return None;
             }
 
             // Unknown switch → bail conservatively.
             _ if lower.starts_with('-') => {
+                // Examples rejected here: "pwsh -UnknownFlag" and "powershell -foo bar".
                 return None;
             }
 
             // If we hit non-flag tokens, treat the remainder as a command sequence.
+            // This happens if powershell is invoked without -Command, e.g.
+            // ["pwsh", "-NoLogo", "git", "-c", "core.pager=cat", "status"]
             _ => {
                 return split_into_commands(args[idx..].to_vec());
             }
         }
     }
 
+    // Examples rejected here: "pwsh" and "powershell.exe -NoLogo" without a script.
     None
 }
 
+/// Tokenizes an inline PowerShell script and delegates to the command splitter.
+/// Examples of when this is called: pwsh.exe -Command '<script>' or pwsh.exe -Command:<script>
 fn parse_powershell_script(script: &str) -> Option<Vec<Vec<String>>> {
     let tokens = shlex_split(script)?;
     split_into_commands(tokens)
 }
 
+/// Splits tokens into pipeline segments while ensuring no unsafe separators slip through.
+/// e.g. Get-ChildItem | Measure-Object -> [['Get-ChildItem'], ['Measure-Object']]
 fn split_into_commands(tokens: Vec<String>) -> Option<Vec<Vec<String>>> {
     if tokens.is_empty() {
+        // Examples rejected here: "pwsh -Command ''" and "powershell -Command \"\"".
         return None;
     }
 
@@ -88,6 +106,7 @@ fn split_into_commands(tokens: Vec<String>) -> Option<Vec<Vec<String>>> {
         match token.as_str() {
             "|" | "||" | "&&" | ";" => {
                 if current.is_empty() {
+                    // Examples rejected here: "pwsh -Command '| Get-ChildItem'" and "pwsh -Command '; dir'".
                     return None;
                 }
                 commands.push(current);
@@ -95,6 +114,7 @@ fn split_into_commands(tokens: Vec<String>) -> Option<Vec<Vec<String>>> {
             }
             // Reject if any token embeds separators, redirection, or call operator characters.
             _ if token.contains(['|', ';', '>', '<', '&']) || token.contains("$(") => {
+                // Examples rejected here: "pwsh -Command 'dir|select'" and "pwsh -Command 'echo hi > out.txt'".
                 return None;
             }
             _ => current.push(token),
@@ -102,12 +122,14 @@ fn split_into_commands(tokens: Vec<String>) -> Option<Vec<Vec<String>>> {
     }
 
     if current.is_empty() {
+        // Examples rejected here: "pwsh -Command 'dir |'" and "pwsh -Command 'Get-ChildItem ;'".
         return None;
     }
     commands.push(current);
     Some(commands)
 }
 
+/// Returns true when the executable name is one of the supported PowerShell binaries.
 fn is_powershell_executable(exe: &str) -> bool {
     matches!(
         exe.to_ascii_lowercase().as_str(),
@@ -115,8 +137,11 @@ fn is_powershell_executable(exe: &str) -> bool {
     )
 }
 
+/// Validates that a parsed PowerShell command stays within our read-only safelist.
+/// Everything before this is parsing, and rejecting things that make us feel uncomfortable.
 fn is_safe_powershell_command(words: &[String]) -> bool {
     if words.is_empty() {
+        // Examples rejected here: "pwsh -Command ''" and "pwsh -Command \"\"".
         return false;
     }
 
@@ -127,6 +152,7 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
             "&" | ">" | ">>" | "1>" | "2>" | "2>&1" | "*>" | "<" | "<<"
         )
     }) {
+        // Examples rejected here: "pwsh -Command '& Remove-Item foo'" and "pwsh -Command 'Get-Content foo > bar'".
         return false;
     }
 
@@ -152,18 +178,26 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
 
         // Extra safety: explicitly prohibit common side-effecting cmdlets regardless of args.
         "set-content" | "add-content" | "out-file" | "new-item" | "remove-item" | "move-item"
-        | "copy-item" | "rename-item" | "start-process" | "stop-process" => false,
+        | "copy-item" | "rename-item" | "start-process" | "stop-process" => {
+            // Examples rejected here: "pwsh -Command 'Set-Content notes.txt data'" and "pwsh -Command 'Remove-Item temp.log'".
+            false
+        }
 
-        _ => false,
+        _ => {
+            // Examples rejected here: "pwsh -Command 'Invoke-WebRequest https://example.com'" and "pwsh -Command 'Start-Service Spooler'".
+            false
+        }
     }
 }
 
+/// Checks that an `rg` invocation avoids options that can spawn arbitrary executables.
 fn is_safe_ripgrep(words: &[String]) -> bool {
     const UNSAFE_RIPGREP_OPTIONS_WITH_ARGS: &[&str] = &["--pre", "--hostname-bin"];
     const UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS: &[&str] = &["--search-zip", "-z"];
 
     !words.iter().skip(1).any(|arg| {
         let arg_lc = arg.to_ascii_lowercase();
+        // Examples rejected here: "pwsh -Command 'rg --pre cat pattern'" and "pwsh -Command 'rg --search-zip pattern'".
         UNSAFE_RIPGREP_OPTIONS_WITHOUT_ARGS.contains(&arg_lc.as_str())
             || UNSAFE_RIPGREP_OPTIONS_WITH_ARGS
                 .iter()
@@ -171,6 +205,7 @@ fn is_safe_ripgrep(words: &[String]) -> bool {
     })
 }
 
+/// Ensures a Git command sticks to whitelisted read-only subcommands and flags.
 fn is_safe_git_command(words: &[String]) -> bool {
     const SAFE_SUBCOMMANDS: &[&str] = &["status", "log", "show", "diff", "cat-file"];
 
@@ -181,6 +216,7 @@ fn is_safe_git_command(words: &[String]) -> bool {
         if arg.starts_with('-') {
             if arg.eq_ignore_ascii_case("-c") || arg.eq_ignore_ascii_case("--config") {
                 if iter.next().is_none() {
+                    // Examples rejected here: "pwsh -Command 'git -c'" and "pwsh -Command 'git --config'".
                     return false;
                 }
                 continue;
@@ -196,6 +232,7 @@ fn is_safe_git_command(words: &[String]) -> bool {
 
             if arg.eq_ignore_ascii_case("--git-dir") || arg.eq_ignore_ascii_case("--work-tree") {
                 if iter.next().is_none() {
+                    // Examples rejected here: "pwsh -Command 'git --git-dir'" and "pwsh -Command 'git --work-tree'".
                     return false;
                 }
                 continue;
@@ -207,6 +244,7 @@ fn is_safe_git_command(words: &[String]) -> bool {
         return SAFE_SUBCOMMANDS.contains(&arg_lc.as_str());
     }
 
+    // Examples rejected here: "pwsh -Command 'git'" and "pwsh -Command 'git status --short | Remove-Item foo'".
     false
 }
 
@@ -215,6 +253,7 @@ mod tests {
     use super::is_safe_command_windows;
     use std::string::ToString;
 
+    /// Converts a slice of string literals into owned `String`s for the tests.
     fn vec_str(args: &[&str]) -> Vec<String> {
         args.iter().map(ToString::to_string).collect()
     }
