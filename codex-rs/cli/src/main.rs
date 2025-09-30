@@ -352,7 +352,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     mcp: codex_prehook::McpConfig {
                         server: Some(server),
                         tool: Some("codex.prehook.review".to_string()),
-                        timeout_ms: 5_000,
+                        connect_timeout_ms: 2_000,
+                        call_timeout_ms: 5_000,
                     },
                     script: Default::default(),
                 };
@@ -367,21 +368,35 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     | Ok(codex_prehook::Outcome::Augment { .. }) => {}
                     Ok(codex_prehook::Outcome::Deny { reason }) => {
                         eprintln!("Prehook denied apply: {reason}");
-                        std::process::exit(1);
+                        std::process::exit(10);
                     }
                     Ok(codex_prehook::Outcome::Ask { message }) => {
                         eprintln!("Prehook requires approval (apply): {message}");
-                        std::process::exit(1);
+                        std::process::exit(11);
                     }
                     Ok(codex_prehook::Outcome::Patch { .. }) => {
                         eprintln!(
                             "Prehook suggested a patch; unsupported in apply gate. Aborting."
                         );
-                        std::process::exit(1);
+                        std::process::exit(12);
+                    }
+                    Ok(codex_prehook::Outcome::Defer { .. }) => {
+                        eprintln!("Prehook defer for apply; aborting.");
+                        std::process::exit(13);
+                    }
+                    Ok(codex_prehook::Outcome::RateLimit {
+                        retry_after_ms,
+                        message,
+                    }) => {
+                        if let Some(m) = message {
+                            eprintln!("Prehook rate limit: {m}");
+                        }
+                        eprintln!("Retry after: {retry_after_ms} ms");
+                        std::process::exit(14);
                     }
                     Err(e) => {
                         eprintln!("Prehook error (apply): {e:#}");
-                        std::process::exit(1);
+                        std::process::exit(10);
                     }
                 }
             }

@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use tokio::process::Command;
 use tokio::time::Duration;
 use tokio::time::timeout;
-use tracing::debug;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -110,6 +109,11 @@ pub enum Outcome {
         message: Option<String>,
         context_items: Vec<serde_json::Value>,
     },
+    #[serde(rename = "defer")]
+    Defer {
+        message: Option<String>,
+        reason: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -149,9 +153,12 @@ pub struct McpConfig {
     pub server: Option<String>,
     /// Tool name to invoke, e.g. "codex.prehook.review"
     pub tool: Option<String>,
-    /// Timeout in ms (default 5000)
+    /// Connect/startup timeout in ms (default 2000)
+    #[serde(default = "default_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+    /// Tool call timeout in ms (default 5000)
     #[serde(default = "default_timeout_ms")]
-    pub timeout_ms: u64,
+    pub call_timeout_ms: u64,
 }
 
 impl Default for McpConfig {
@@ -159,7 +166,8 @@ impl Default for McpConfig {
         Self {
             server: None,
             tool: Some("codex.prehook.review".to_string()),
-            timeout_ms: default_timeout_ms(),
+            connect_timeout_ms: default_connect_timeout_ms(),
+            call_timeout_ms: default_timeout_ms(),
         }
     }
 }
@@ -186,6 +194,9 @@ impl Default for ScriptConfig {
 fn default_timeout_ms() -> u64 {
     5_000
 }
+fn default_connect_timeout_ms() -> u64 {
+    2_000
+}
 
 #[async_trait::async_trait]
 pub trait PreHook: Send + Sync {
@@ -203,6 +214,33 @@ impl ScriptPreHook {
     }
 }
 
+fn default_sanitized_env() -> std::collections::HashMap<String, String> {
+    use regex_lite::Regex;
+    let mut out = std::collections::HashMap::new();
+    let allow = [
+        "HOME", "LOGNAME", "PATH", "SHELL", "USER", "LANG", "LC_ALL", "TERM", "TMPDIR", "TZ",
+        "PWD", "COLUMNS", "LINES",
+    ];
+    let deny =
+        Regex::new(r"(?i)(TOKEN|SECRET|PASSWORD|WEBHOOK|API[_-]?KEY|ACCESS[_-]?KEY)").unwrap();
+    for k in allow.iter() {
+        if let Ok(v) = std::env::var(k) {
+            if !deny.is_match(k) && !deny.is_match(&v) {
+                out.insert((*k).to_string(), v);
+            }
+        }
+    }
+    for drop in [
+        "GITHUB_TOKEN",
+        "SLACK_WEBHOOK_URL",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ] {
+        out.remove(drop);
+    }
+    out.retain(|k, _| !(k.starts_with("AWS_") || k.starts_with("SSH_") || k == "NPM_TOKEN"));
+    out
+}
+
 #[async_trait::async_trait]
 impl PreHook for ScriptPreHook {
     async fn run(&self, ctx: &Context) -> Result<Outcome> {
@@ -217,6 +255,8 @@ impl PreHook for ScriptPreHook {
             .args(&self.cfg.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
+            .env_clear()
+            .envs(default_sanitized_env())
             .spawn()
             .with_context(|| format!("failed to spawn prehook script {cmd}"))?;
         {
@@ -224,14 +264,41 @@ impl PreHook for ScriptPreHook {
             let mut stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
             stdin.write_all(&payload).await?;
         }
+        // script timeout
         let tmo = Duration::from_millis(self.cfg.timeout_ms.max(1));
-        let out = match timeout(tmo, child.wait_with_output()).await {
-            Ok(Ok(o)) => o,
+        // We can't move `child` into wait_with_output then later kill it on timeout,
+        // so split into wait() + collect output from pipes.
+        let out = match timeout(tmo, child.wait()).await {
+            Ok(Ok(status)) => {
+                use tokio::io::AsyncReadExt;
+                let mut stdout = Vec::new();
+                if let Some(mut so) = child.stdout.take() {
+                    let _ = so.read_to_end(&mut stdout).await;
+                }
+                std::process::Output {
+                    status,
+                    stdout,
+                    stderr: Vec::new(),
+                }
+            }
             Ok(Err(e)) => return self.handle_err(anyhow!(e)),
-            Err(_) => return self.handle_err(anyhow!("prehook script timed out")),
+            Err(_) => {
+                #[cfg(unix)]
+                {
+                    // Best-effort attempt to kill the process group
+                    unsafe {
+                        libc::kill(0, libc::SIGKILL);
+                    }
+                }
+                let _ = child.kill().await;
+                return self.handle_err(anyhow!("prehook script timed out"));
+            }
         };
         if !out.status.success() {
             return self.handle_err(anyhow!("prehook script exit status {}", out.status));
+        }
+        if out.stdout.len() > 64 * 1024 {
+            return self.handle_err(anyhow!("prehook script output too large"));
         }
         let parsed: Outcome = serde_json::from_slice(&out.stdout)
             .map_err(|e| anyhow!("invalid prehook JSON: {e}"))?;
@@ -282,9 +349,11 @@ impl PreHook for McpPreHook {
             .tool
             .clone()
             .unwrap_or_else(|| "codex.prehook.review".to_string());
-        let tmo = Duration::from_millis(self.cfg.timeout_ms.max(1));
+        // timeouts handled via connect_tmo/call_tmo below
 
         let payload = serde_json::to_value(ctx)?;
+        let connect_tmo = Duration::from_millis(self.cfg.connect_timeout_ms.max(1));
+        let call_tmo = Duration::from_millis(self.cfg.call_timeout_ms.max(1));
         let fut = async move {
             // Only stdio: scheme supported in MVP
             let (prog, args): (std::ffi::OsString, Vec<std::ffi::OsString>) =
@@ -302,7 +371,12 @@ impl PreHook for McpPreHook {
                     return Err(anyhow!("unsupported MCP server scheme (expected stdio:)"));
                 };
 
-            let client = codex_mcp_client::McpClient::new_stdio_client(prog, args, None).await?;
+            let client = tokio::time::timeout(
+                connect_tmo,
+                codex_mcp_client::McpClient::new_stdio_client(prog, args, None),
+            )
+            .await
+            .map_err(|_| anyhow!("MCP connect timeout"))??;
             let init_params = InitializeRequestParams {
                 capabilities: ClientCapabilities {
                     elicitation: None,
@@ -318,8 +392,10 @@ impl PreHook for McpPreHook {
                 },
                 protocol_version: "2025-06-18".into(),
             };
-            let _ = client.initialize(init_params, Some(tmo)).await?;
-            let res = client.call_tool(tool, Some(payload), Some(tmo)).await?;
+            let _ = client.initialize(init_params, Some(call_tmo)).await?;
+            let res = client
+                .call_tool(tool, Some(payload), Some(call_tmo))
+                .await?;
             if let Some(v) = res.structured_content {
                 let outcome: Outcome = serde_json::from_value(v)
                     .map_err(|e| anyhow!("invalid MCP outcome JSON: {e}"))?;
@@ -329,6 +405,9 @@ impl PreHook for McpPreHook {
             for block in res.content {
                 if let mcp_types::ContentBlock::TextContent(tc) = block {
                     if let Ok(outcome) = serde_json::from_str::<Outcome>(&tc.text) {
+                        warn!(
+                            "prehook(mcp): parsed Outcome from text block fallback; prefer structured_content JSON"
+                        );
                         return Ok(outcome);
                     }
                 }
@@ -336,7 +415,7 @@ impl PreHook for McpPreHook {
             Err(anyhow!("MCP tool did not return structuredOutcome JSON"))
         };
 
-        match timeout(tmo, fut).await {
+        match timeout(call_tmo, fut).await {
             Ok(Ok(outcome)) => Ok(outcome),
             Ok(Err(e)) => self.handle_err(e),
             Err(_) => self.handle_err(anyhow!("prehook MCP timed out")),
@@ -386,6 +465,10 @@ impl PreHookDispatcher {
             "chained" => {
                 let mcp = McpPreHook::new(self.cfg.mcp.clone(), self.cfg.on_error);
                 match mcp.run(ctx).await {
+                    Ok(Outcome::Defer { .. }) => {
+                        let b = ScriptPreHook::new(self.cfg.script.clone(), self.cfg.on_error);
+                        b.run(ctx).await
+                    }
                     Ok(o) => Ok(o),
                     Err(e) => {
                         warn!("prehook chained: MCP failed, trying script: {e:#}");

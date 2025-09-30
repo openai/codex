@@ -22,6 +22,8 @@ uuid = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 async-trait = "0.1"
 mcp-types = { workspace = true }
+libc = { workspace = true }
+regex-lite = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

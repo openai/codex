@@ -42,6 +42,13 @@ use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
 use codex_prehook as prehook;
 
+// Prehook exit codes (non-zero for blocking outcomes)
+const EXIT_DENY: i32 = 10;
+const EXIT_ASK: i32 = 11;
+const EXIT_PATCH: i32 = 12;
+const EXIT_DEFER: i32 = 13;
+const EXIT_RATE_LIMIT: i32 = 14;
+
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec") {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
@@ -213,7 +220,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         if let Some(t) = prehook_mcp_tool.clone() {
             cfg.mcp.tool = Some(t);
         }
-        cfg.mcp.timeout_ms = prehook_timeout_ms;
+        cfg.mcp.connect_timeout_ms = prehook_timeout_ms.min(2_000);
+        cfg.mcp.call_timeout_ms = prehook_timeout_ms;
         if let Some(cmd) = prehook_script_cmd.clone() {
             cfg.script.cmd = Some(cmd);
         }
@@ -243,23 +251,39 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             Ok(prehook::Outcome::Augment { .. }) => {
                 // MVP: ignore augmentation in exec; continue
             }
+            Ok(prehook::Outcome::Defer { .. }) => {
+                eprintln!(
+                    "Prehook returned defer in exec mode; aborting (use chained backend to fallback)."
+                );
+                std::process::exit(EXIT_DEFER);
+            }
             Ok(prehook::Outcome::Ask { message }) => {
                 eprintln!("Prehook requires approval: {message}");
-                std::process::exit(1);
+                std::process::exit(EXIT_ASK);
             }
             Ok(prehook::Outcome::Patch { .. }) => {
                 eprintln!("Prehook suggested a patch; unsupported in exec mode. Aborting.");
-                std::process::exit(1);
+                std::process::exit(EXIT_PATCH);
             }
             Ok(prehook::Outcome::Deny { reason }) => {
                 eprintln!("Prehook denied execution: {reason}");
-                std::process::exit(1);
+                std::process::exit(EXIT_DENY);
+            }
+            Ok(prehook::Outcome::RateLimit {
+                retry_after_ms,
+                message,
+            }) => {
+                if let Some(m) = message {
+                    eprintln!("Prehook rate limit: {m}");
+                }
+                eprintln!("Retry after: {retry_after_ms} ms");
+                std::process::exit(EXIT_RATE_LIMIT);
             }
             Err(e) => {
                 match on_error {
                     prehook::OnErrorPolicy::Fail => {
                         eprintln!("Prehook error: {e:#}");
-                        std::process::exit(1);
+                        std::process::exit(EXIT_DENY);
                     }
                     prehook::OnErrorPolicy::Warn => {
                         eprintln!("Warning: prehook error: {e:#}");
