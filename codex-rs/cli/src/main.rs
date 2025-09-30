@@ -66,6 +66,12 @@ enum Subcommand {
     /// [experimental] Run Codex as an MCP server and manage MCP servers.
     Mcp(McpCli),
 
+    /// [experimental] Run the Codex MCP server (stdio transport).
+    McpServer,
+
+    /// [experimental] Run the app server.
+    AppServer,
+
     /// Run the Protocol stream via stdin/stdout
     #[clap(visible_alias = "p")]
     Proto(ProtoCli),
@@ -260,10 +266,16 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
+        Some(Subcommand::McpServer) => {
+            codex_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+        }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
-            mcp_cli.run(codex_linux_sandbox_exe).await?;
+            mcp_cli.run().await?;
+        }
+        Some(Subcommand::AppServer) => {
+            codex_app_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
         }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,

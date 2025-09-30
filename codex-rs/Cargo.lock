@@ -166,6 +166,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
 
 [[package]]
+name = "app_test_support"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "codex-protocol",
+ "mcp-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "arboard"
 version = "3.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -637,6 +651,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-app-server"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "app_test_support",
+ "assert_cmd",
+ "base64",
+ "codex-arg0",
+ "codex-common",
+ "codex-core",
+ "codex-file-search",
+ "codex-login",
+ "codex-protocol",
+ "codex-utils-json-to-toml",
+ "core_test_support",
+ "mcp-types",
+ "os_info",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "codex-apply-patch"
 version = "0.0.0"
 dependencies = [
@@ -685,6 +729,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "clap_complete",
+ "codex-app-server",
  "codex-arg0",
  "codex-chatgpt",
  "codex-common",
@@ -914,13 +959,11 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
- "base64",
  "codex-arg0",
  "codex-common",
  "codex-core",
- "codex-file-search",
- "codex-login",
  "codex-protocol",
+ "codex-utils-json-to-toml",
  "core_test_support",
  "mcp-types",
  "mcp_test_support",
@@ -932,10 +975,8 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
- "toml",
  "tracing",
  "tracing-subscriber",
- "uuid",
  "wiremock",
 ]
 
@@ -1102,6 +1143,15 @@ dependencies = [
  "unicode-width 0.2.1",
  "url",
  "vt100",
+]
+
+[[package]]
+name = "codex-utils-json-to-toml"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -3004,7 +3054,6 @@ dependencies = [
  "assert_cmd",
  "codex-core",
  "codex-mcp-server",
- "codex-protocol",
  "mcp-types",
  "os_info",
  "pretty_assertions",
