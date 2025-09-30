@@ -114,6 +114,12 @@ pub enum Outcome {
         message: Option<String>,
         reason: Option<String>,
     },
+    #[serde(rename = "rate_limit")]
+    RateLimit {
+        retry_after_ms: u64,
+        #[serde(default)]
+        message: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
