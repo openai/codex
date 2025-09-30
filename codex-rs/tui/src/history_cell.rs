@@ -6,6 +6,7 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::markdown::MarkdownCitationContext;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
@@ -128,38 +129,44 @@ impl HistoryCell for UserHistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct ReasoningSummaryCell {
-    _header: Vec<Line<'static>>,
-    content: Vec<Line<'static>>,
+    _header: String,
+    content: String,
+    citation_context: MarkdownCitationContext,
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(header: Vec<Line<'static>>, content: Vec<Line<'static>>) -> Self {
+    pub(crate) fn new(
+        header: String,
+        content: String,
+        citation_context: MarkdownCitationContext,
+    ) -> Self {
         Self {
             _header: header,
             content,
+            citation_context,
         }
     }
 }
 
 impl HistoryCell for ReasoningSummaryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let summary_lines = self
-            .content
-            .iter()
-            .map(|line| {
-                Line::from(
-                    line.spans
-                        .iter()
-                        .map(|span| {
-                            Span::styled(
-                                span.content.clone().into_owned(),
-                                span.style
-                                    .add_modifier(Modifier::ITALIC)
-                                    .add_modifier(Modifier::DIM),
-                            )
-                        })
-                        .collect::<Vec<_>>(),
-                )
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        append_markdown(
+            &self.content,
+            Some((width as usize).saturating_sub(2)),
+            &mut lines,
+            self.citation_context.clone(),
+        );
+        let summary_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        let summary_lines = lines
+            .into_iter()
+            .map(|mut line| {
+                line.spans = line
+                    .spans
+                    .into_iter()
+                    .map(|span| span.patch_style(summary_style))
+                    .collect();
+                line
             })
             .collect::<Vec<_>>();
 
@@ -174,7 +181,14 @@ impl HistoryCell for ReasoningSummaryCell {
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push("thinking".magenta().bold().into());
-        out.extend(self.content.clone());
+        let mut lines = Vec::new();
+        append_markdown(
+            &self.content,
+            None,
+            &mut lines,
+            self.citation_context.clone(),
+        );
+        out.extend(lines);
         out
     }
 }
@@ -1065,7 +1079,7 @@ pub(crate) fn new_reasoning_block(
 ) -> TranscriptOnlyHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from("thinking".magenta().italic()));
-    append_markdown(&full_reasoning_buffer, &mut lines, config);
+    append_markdown(&full_reasoning_buffer, None, &mut lines, config);
     TranscriptOnlyHistoryCell { lines }
 }
 
@@ -1089,14 +1103,12 @@ pub(crate) fn new_reasoning_summary_block(
                 // then we don't have a summary to inject into history
                 if after_close_idx < full_reasoning_buffer.len() {
                     let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                    let mut header_lines = Vec::new();
-                    append_markdown(&header_buffer, &mut header_lines, config);
-
                     let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-                    let mut summary_lines = Vec::new();
-                    append_markdown(&summary_buffer, &mut summary_lines, config);
-
-                    return Box::new(ReasoningSummaryCell::new(header_lines, summary_lines));
+                    return Box::new(ReasoningSummaryCell::new(
+                        header_buffer,
+                        summary_buffer,
+                        config.into(),
+                    ));
                 }
             }
         }
