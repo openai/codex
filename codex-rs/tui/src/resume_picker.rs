@@ -922,7 +922,8 @@ mod tests {
         fn head_with_meta_and_text(cwd: &str, ts: &str, text: &str) -> Vec<serde_json::Value> {
             let meta = SessionMetaLine {
                 meta: SessionMeta {
-                    id: ConversationId::from_string("00000000-0000-0000-0000-000000000000").unwrap(),
+                    id: ConversationId::from_string("00000000-0000-0000-0000-000000000000")
+                        .unwrap(),
                     timestamp: ts.to_string(),
                     cwd: PathBuf::from(cwd),
                     originator: "test".to_string(),
