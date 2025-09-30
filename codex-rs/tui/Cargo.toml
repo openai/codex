@@ -97,3 +97,4 @@ insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 vt100 = { workspace = true }
+uuid = { workspace = true }

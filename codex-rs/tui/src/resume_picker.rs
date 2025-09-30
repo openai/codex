@@ -439,7 +439,21 @@ impl PickerState {
             self.filtered_rows = self
                 .all_rows
                 .iter()
-                .filter(|r| r.preview.to_lowercase().contains(&q))
+                .filter(|r| {
+                    // match preview text
+                    if r.preview.to_lowercase().contains(&q) {
+                        return true;
+                    }
+                    // match project tag (directory basename recorded in SessionMeta)
+                    if let Some(ref proj) = r.project {
+                        if proj.to_lowercase().contains(&q) {
+                            return true;
+                        }
+                    }
+                    // match full path
+                    let p = r.path.to_string_lossy().to_lowercase();
+                    p.contains(&q)
+                })
                 .cloned()
                 .collect();
         }
@@ -897,6 +911,87 @@ mod tests {
         }
     }
 
+    #[test]
+    fn filter_respects_project_tag_and_path() {
+        use codex_protocol::mcp_protocol::ConversationId;
+        use codex_protocol::protocol::RolloutItem;
+        use codex_protocol::protocol::SessionMeta;
+        use codex_protocol::protocol::SessionMetaLine;
+
+        // Build heads that include a SessionMeta line to set cwd (project tag source)
+        fn head_with_meta_and_text(cwd: &str, ts: &str, text: &str) -> Vec<serde_json::Value> {
+            let meta = SessionMetaLine {
+                meta: SessionMeta {
+                    id: ConversationId::from_string("00000000-0000-0000-0000-000000000000").unwrap(),
+                    timestamp: ts.to_string(),
+                    cwd: PathBuf::from(cwd),
+                    originator: "test".to_string(),
+                    cli_version: "0".to_string(),
+                    instructions: None,
+                },
+                git: None,
+            };
+            vec![
+                serde_json::to_value(RolloutItem::SessionMeta(meta)).unwrap(),
+                serde_json::json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [ { "type": "input_text", "text": text } ]
+                }),
+            ]
+        }
+
+        let items = vec![
+            ConversationItem {
+                // project: myproj
+                path: PathBuf::from("/tmp/myproj/a.jsonl"),
+                head: head_with_meta_and_text("/tmp/myproj", "2025-01-01T00:00:00Z", "alpha"),
+                tail: Vec::new(),
+            },
+            ConversationItem {
+                // project: other
+                path: PathBuf::from("/opt/other/b.jsonl"),
+                head: head_with_meta_and_text("/opt/other", "2025-01-02T00:00:00Z", "beta"),
+                tail: Vec::new(),
+            },
+        ];
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state =
+            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        state.reset_pagination();
+        state.ingest_page(page(items, None, 2, false));
+
+        // Match by project tag (basename of cwd)
+        state.set_query("myproj".to_string());
+        assert_eq!(state.filtered_rows.len(), 1);
+        assert!(
+            state.filtered_rows[0]
+                .path
+                .to_string_lossy()
+                .contains("/tmp/myproj/")
+        );
+
+        // Match by path substring
+        state.set_query("/opt/other".to_string());
+        assert_eq!(state.filtered_rows.len(), 1);
+        assert!(
+            state.filtered_rows[0]
+                .path
+                .to_string_lossy()
+                .contains("/opt/other/")
+        );
+
+        // Match by preview
+        state.set_query("alpha".to_string());
+        assert_eq!(state.filtered_rows.len(), 1);
+        assert!(
+            state.filtered_rows[0]
+                .preview
+                .to_lowercase()
+                .contains("alpha")
+        );
+    }
     fn block_on_future<F: Future<Output = T>, T>(future: F) -> T {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
