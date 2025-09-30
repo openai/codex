@@ -1,10 +1,10 @@
 pub mod config;
+pub mod cronloop;
 pub mod db;
 pub mod runner;
-pub mod cronloop;
 
 use anyhow::Result;
-use config::{load_scheduler_config_from_toml};
+use config::load_scheduler_config_from_toml;
 use db::Db;
 use tokio::task::JoinHandle;
 use tracing::info;
@@ -22,7 +22,7 @@ pub async fn start_scheduler_if_configured() -> Result<Option<SchedulerHandles>>
         return Ok(None);
     };
 
-    let db = Db::new(&arango_cfg).await?;
+    let db = Db::from_config(&sched_cfg, &arango_cfg)?;
     db.ensure_collections_and_indexes().await?;
 
     let cron_handle = tokio::spawn(async move {
@@ -33,4 +33,3 @@ pub async fn start_scheduler_if_configured() -> Result<Option<SchedulerHandles>>
 
     Ok(Some(SchedulerHandles { cron_handle }))
 }
-

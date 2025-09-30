@@ -2,8 +2,10 @@ use crate::config::{SchedulerConfig, SchedulerJob};
 use crate::db::Db;
 use crate::runner::{execute_run, RunRequest};
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use cron::Schedule;
 use hostname;
+use std::sync::Arc;
 use std::{str::FromStr, time::Duration};
 use tokio::{sync::Semaphore, time::sleep};
 use tracing::warn;
@@ -15,14 +17,19 @@ pub async fn run(cfg: SchedulerConfig, db: Db) -> Result<()> {
         hostname::get().unwrap_or_default().to_string_lossy(),
         Uuid::new_v4()
     );
-    let lock_key = cfg.lock_key.clone().unwrap_or_else(|| "codex-scheduler".to_string());
+    let lock_key = cfg
+        .lock_key
+        .clone()
+        .unwrap_or_else(|| "codex-scheduler".to_string());
     let lock_ttl = cfg.lock_ttl_seconds.unwrap_or(60);
     let poll_secs = cfg.poll_interval_seconds.unwrap_or(5);
+    let due_window = std::time::Duration::from_millis(cfg.due_window_ms.max(1));
 
-    let sem = Semaphore::new(cfg.max_concurrency.unwrap_or(2));
+    let sem = Arc::new(Semaphore::new(cfg.max_concurrency.unwrap_or(2)));
     let mut compiled: Vec<(SchedulerJob, Schedule)> = vec![];
     for j in &cfg.jobs {
-        let sched = Schedule::from_str(&j.cron).with_context(|| format!("invalid cron for job {}", j.id))?;
+        let sched = Schedule::from_str(&j.cron)
+            .with_context(|| format!("invalid cron for job {}", j.id))?;
         compiled.push((j.clone(), sched));
     }
 
@@ -36,9 +43,8 @@ pub async fn run(cfg: SchedulerConfig, db: Db) -> Result<()> {
         let now = chrono::Utc::now();
         for (job, schedule) in &compiled {
             if let Some(next) = schedule.after(&now).next() {
-                let delta = (now - next).num_seconds().abs();
-                if delta <= poll_secs as i64 {
-                    if let Ok(permit) = sem.try_acquire() {
+                if is_due_within(next, now, due_window) {
+                    if let Ok(permit) = sem.clone().try_acquire_owned() {
                         let dbc = db.clone();
                         let jobc = job.clone();
                         tokio::spawn(async move {
@@ -64,6 +70,23 @@ pub async fn run(cfg: SchedulerConfig, db: Db) -> Result<()> {
     }
 }
 
+/// Returns true if `next_due` is non-negative and within `window` from `now`.
+/// This isolates the proximity decision for unit testing and consistent behavior.
+pub(crate) fn is_due_within(
+    next_due: DateTime<Utc>,
+    now: DateTime<Utc>,
+    window: std::time::Duration,
+) -> bool {
+    let delta = next_due - now;
+    if delta.num_milliseconds() < 0 {
+        return false;
+    }
+    match delta.to_std() {
+        Ok(d) => d <= window,
+        Err(_) => false,
+    }
+}
+
 async fn try_acquire_lock(db: &Db, key: &str, owner: &str, ttl_secs: u64) -> Result<bool> {
     let q = r#"
 LET now = DATE_NOW()
@@ -81,12 +104,15 @@ ELSE
 "#;
     let ttl_ms = (ttl_secs as i64) * 1000;
     let resp = db
-        .aql_public(q, serde_json::json!({
-            "@state": db.state_collection(),
-            "key": key,
-            "owner": owner,
-            "ttl_ms": ttl_ms
-        }))
+        .aql_public(
+            q,
+            serde_json::json!({
+                "@state": db.state_collection(),
+                "key": key,
+                "owner": owner,
+                "ttl_ms": ttl_ms
+            }),
+        )
         .await?;
     let acquired = resp
         .pointer("/result/0/acquired")
@@ -103,13 +129,38 @@ UPDATE { _key: @key } WITH { owner_id: @owner, heartbeat: DATE_ISO8601(now), exp
 "#;
     let ttl_ms = (ttl_secs as i64) * 1000;
     let _ = db
-        .aql_public(q, serde_json::json!({
-            "@state": db.state_collection(),
-            "key": key,
-            "owner": owner,
-            "ttl_ms": ttl_ms
-        }))
+        .aql_public(
+            q,
+            serde_json::json!({
+                "@state": db.state_collection(),
+                "key": key,
+                "owner": owner,
+                "ttl_ms": ttl_ms
+            }),
+        )
         .await?;
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn proximity_detection_basic() {
+        let now = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 0).unwrap();
+        let within = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 2).unwrap();
+        let outside = Utc.with_ymd_and_hms(2025, 1, 1, 12, 0, 6).unwrap();
+        assert!(is_due_within(
+            within,
+            now,
+            std::time::Duration::from_secs(5)
+        ));
+        assert!(!is_due_within(
+            outside,
+            now,
+            std::time::Duration::from_secs(5)
+        ));
+    }
+}

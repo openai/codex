@@ -20,3 +20,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 dirs = "5"
 toml = "0.8"
 hostname = "0.4"
+rand = { workspace = true }
