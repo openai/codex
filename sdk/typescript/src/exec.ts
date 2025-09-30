@@ -56,15 +56,18 @@ export class CodexExec {
         yield line as string;
       }
 
-      // Wait for actual exit after streams close
-      const exitCode: number | null = await new Promise((resolve) => {
-        child.once("exit", (code) => resolve(code));
+      const exitCode = new Promise((resolve) => {
+        child.once("exit", (code) => { 
+          if (code === 0) {
+            resolve(code);
+          } else {
+            throw new Error(`Codex Exec exited with code ${code}`);
+          }
+        });
       });
 
       if (spawnError) throw spawnError;
-      if ((exitCode ?? 0) !== 0) {
-        throw new Error(`Codex Exec exited with code ${exitCode}`);
-      }
+      await exitCode;
     } finally {
       rl.close();
       child.removeAllListeners();
