@@ -13,4 +13,23 @@ module.exports = {
     "^(\\.{1,2}/.*)\\.js$": "$1",
   },
   testMatch: ["**/tests/**/*.test.ts"],
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        diagnostics: {
+          ignoreCodes: [1343]
+        },
+        astTransformers: {
+          before: [
+            {
+              path: 'ts-jest-mock-import-meta', 
+              // Workaround for meta.url not working in jest
+              options: { metaObjectReplacement: { url: "file://" + __dirname + "/dist/index.js" } }
+            }
+          ]
+        }
+      }
+    ]
+  }
 };
