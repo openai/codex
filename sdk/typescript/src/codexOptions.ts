@@ -1,7 +1,6 @@
 export type CodexOptions = {
-  // TODO: remove
-  executablePath: string;
-  // TODO: remove
+  /* @internal */
+  _executablePathOverride?: string;
   baseUrl?: string;
   apiKey?: string;
 };
