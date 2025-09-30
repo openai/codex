@@ -455,7 +455,7 @@ impl ChatComposer {
                                     PromptSelectionMode::Completion,
                                 ) {
                                     PromptSelectionAction::Insert { text, cursor } => {
-                                        let target = cursor.unwrap_or_else(|| text.len());
+                                        let target = cursor.unwrap_or(text.len());
                                         self.textarea.set_text(&text);
                                         cursor_target = Some(target);
                                     }
@@ -507,7 +507,7 @@ impl ChatComposer {
                                         return (InputResult::Submitted(text), true);
                                     }
                                     PromptSelectionAction::Insert { text, cursor } => {
-                                        let target = cursor.unwrap_or_else(|| text.len());
+                                        let target = cursor.unwrap_or(text.len());
                                         self.textarea.set_text(&text);
                                         self.textarea.set_cursor(target);
                                         return (InputResult::None, true);
