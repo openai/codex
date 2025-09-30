@@ -12,6 +12,7 @@ mod fork_conversation;
 mod json_result;
 mod live_cli;
 mod model_overrides;
+mod otel;
 mod prompt_caching;
 mod review;
 mod rmcp_client;

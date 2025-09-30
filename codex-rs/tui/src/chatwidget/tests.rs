@@ -340,6 +340,7 @@ fn make_chatwidget_manual() -> (
         is_review_mode: false,
         ghost_snapshots: Vec::new(),
         ghost_snapshots_disabled: false,
+        needs_final_message_separator: false,
     };
     (widget, rx, op_rx)
 }

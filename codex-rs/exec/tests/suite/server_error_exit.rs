@@ -21,7 +21,7 @@ async fn exits_non_zero_when_server_reports_error() -> anyhow::Result<()> {
             "error": {"code": "rate_limit_exceeded", "message": "synthetic server error"}
         }
     })]);
-    responses::mount_sse_once(&server, any(), body).await;
+    responses::mount_sse_once_match(&server, any(), body).await;
 
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")

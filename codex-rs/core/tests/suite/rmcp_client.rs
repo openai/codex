@@ -12,7 +12,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::responses;
-use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -36,7 +36,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     let server_name = "rmcp";
     let tool_name = format!("{server_name}__echo");
 
-    mount_sse_once(
+    mount_sse_once_match(
         &server,
         any(),
         responses::sse(vec![
@@ -49,7 +49,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         ]),
     )
     .await;
-    mount_sse_once(
+    mount_sse_once_match(
         &server,
         any(),
         responses::sse(vec![
@@ -173,7 +173,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
     let server_name = "rmcp_http";
     let tool_name = format!("{server_name}__echo");
 
-    mount_sse_once(
+    mount_sse_once_match(
         &server,
         any(),
         responses::sse(vec![
@@ -186,7 +186,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         ]),
     )
     .await;
-    mount_sse_once(
+    mount_sse_once_match(
         &server,
         any(),
         responses::sse(vec![

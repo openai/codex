@@ -25,6 +25,7 @@ mod codex_tool_config;
 mod codex_tool_runner;
 mod error_code;
 mod exec_approval;
+mod fuzzy_file_search;
 mod json_to_toml;
 pub(crate) mod message_processor;
 mod outgoing_message;

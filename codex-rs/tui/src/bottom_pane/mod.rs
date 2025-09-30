@@ -25,6 +25,7 @@ pub mod custom_prompt_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
+mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod paste_burst;
 pub mod popup_consts;
@@ -100,6 +101,10 @@ impl BottomPane {
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
         }
+    }
+
+    pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
+        self.status.as_ref()
     }
 
     fn active_view(&self) -> Option<&dyn BottomPaneView> {

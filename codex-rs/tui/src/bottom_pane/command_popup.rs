@@ -10,6 +10,7 @@ use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
@@ -53,12 +54,8 @@ impl CommandPopup {
         self.prompts = prompts;
     }
 
-    pub(crate) fn prompt_name(&self, idx: usize) -> Option<&str> {
-        self.prompts.get(idx).map(|p| p.name.as_str())
-    }
-
-    pub(crate) fn prompt_content(&self, idx: usize) -> Option<&str> {
-        self.prompts.get(idx).map(|p| p.content.as_str())
+    pub(crate) fn prompt(&self, idx: usize) -> Option<&CustomPrompt> {
+        self.prompts.get(idx)
     }
 
     /// Update the filter string based on the current composer text. The text
@@ -124,8 +121,12 @@ impl CommandPopup {
                 out.push((CommandItem::Builtin(*cmd), Some(indices), score));
             }
         }
+        // Support both search styles:
+        // - Typing "name" should surface "/prompts:name" results.
+        // - Typing "prompts:name" should also work.
         for (idx, p) in self.prompts.iter().enumerate() {
-            if let Some((indices, score)) = fuzzy_match(&p.name, filter) {
+            let display = format!("{PROMPTS_CMD_PREFIX}:{}", p.name);
+            if let Some((indices, score)) = fuzzy_match(&display, filter) {
                 out.push((CommandItem::UserPrompt(idx), Some(indices), score));
             }
         }
@@ -162,7 +163,7 @@ impl CommandPopup {
                         (format!("/{}", cmd.command()), cmd.description().to_string())
                     }
                     CommandItem::UserPrompt(i) => (
-                        format!("/{}", self.prompts[i].name),
+                        format!("/{PROMPTS_CMD_PREFIX}:{}", self.prompts[i].name),
                         "send saved prompt".to_string(),
                     ),
                 };
@@ -218,7 +219,6 @@ impl WidgetRef for CommandPopup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::string::ToString;
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
@@ -276,11 +276,15 @@ mod tests {
                 name: "foo".to_string(),
                 path: "/tmp/foo.md".to_string().into(),
                 content: "hello from foo".to_string(),
+                description: None,
+                argument_hint: None,
             },
             CustomPrompt {
                 name: "bar".to_string(),
                 path: "/tmp/bar.md".to_string().into(),
                 content: "hello from bar".to_string(),
+                description: None,
+                argument_hint: None,
             },
         ];
         let popup = CommandPopup::new(prompts);
@@ -288,7 +292,7 @@ mod tests {
         let mut prompt_names: Vec<String> = items
             .into_iter()
             .filter_map(|it| match it {
-                CommandItem::UserPrompt(i) => popup.prompt_name(i).map(ToString::to_string),
+                CommandItem::UserPrompt(i) => popup.prompt(i).map(|p| p.name.clone()),
                 _ => None,
             })
             .collect();
@@ -303,10 +307,12 @@ mod tests {
             name: "init".to_string(),
             path: "/tmp/init.md".to_string().into(),
             content: "should be ignored".to_string(),
+            description: None,
+            argument_hint: None,
         }]);
         let items = popup.filtered_items();
         let has_collision_prompt = items.into_iter().any(|it| match it {
-            CommandItem::UserPrompt(i) => popup.prompt_name(i) == Some("init"),
+            CommandItem::UserPrompt(i) => popup.prompt(i).is_some_and(|p| p.name == "init"),
             _ => false,
         });
         assert!(

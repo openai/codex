@@ -54,9 +54,16 @@ where
         ));
     }
 
+    if let Err(err) = validate_auth_header_bytes(&buf[AUTH_HEADER_PREFIX.len()..total]) {
+        buf.zeroize();
+        return Err(err);
+    }
+
     let header_str = match std::str::from_utf8(&buf[..total]) {
         Ok(value) => value,
         Err(err) => {
+            // In theory, validate_auth_header_bytes() should have caught
+            // any invalid UTF-8 sequences, but just in case...
             buf.zeroize();
             return Err(err).context("reading Authorization header from stdin as UTF-8");
         }
@@ -113,6 +120,21 @@ fn mlock_str(value: &str) {
 #[cfg(not(unix))]
 fn mlock_str(_value: &str) {}
 
+/// The key should match /^[A-Za-z0-9\-_]+$/. Ensure there is no funny business
+/// with NUL characters and whatnot.
+fn validate_auth_header_bytes(key_bytes: &[u8]) -> Result<()> {
+    if key_bytes
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "OPENAI_API_KEY may only contain ASCII letters, numbers, '-' or '_'"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,7 +180,7 @@ mod tests {
         })
         .unwrap_err();
         let message = format!("{err:#}");
-        assert!(message.contains("too large"));
+        assert!(message.contains("OPENAI_API_KEY is too large to fit in the 512-byte buffer"));
     }
 
     #[test]
@@ -180,6 +202,23 @@ mod tests {
         .unwrap_err();
 
         let message = format!("{err:#}");
-        assert!(message.contains("UTF-8"));
+        assert!(
+            message.contains("OPENAI_API_KEY may only contain ASCII letters, numbers, '-' or '_'")
+        );
+    }
+
+    #[test]
+    fn errors_on_invalid_characters() {
+        let err = read_auth_header_with(|buf| {
+            let data = b"sk-abc!23";
+            buf[..data.len()].copy_from_slice(data);
+            Ok(data.len())
+        })
+        .unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("OPENAI_API_KEY may only contain ASCII letters, numbers, '-' or '_'")
+        );
     }
 }

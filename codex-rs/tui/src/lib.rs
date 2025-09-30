@@ -12,16 +12,15 @@ use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
-use codex_core::config::GPT_5_CODEX_MEDIUM_MODEL;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::config::persist_model_selection;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::mcp_protocol::AuthMode;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
@@ -54,7 +53,6 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
-mod new_model_popup;
 pub mod onboarding;
 mod pager_overlay;
 mod render;
@@ -79,14 +77,11 @@ pub mod test_backend;
 #[cfg(not(debug_assertions))]
 mod updates;
 
-use crate::new_model_popup::ModelUpgradeDecision;
-use crate::new_model_popup::run_model_upgrade_popup;
 use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
 pub use cli::Cli;
-use codex_core::internal_storage::InternalStorage;
 
 // (tests access modules directly within the crate)
 
@@ -204,8 +199,6 @@ pub async fn run_main(
         cli_profile_override,
     )?;
 
-    let internal_storage = InternalStorage::load(&config.codex_home);
-
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
@@ -247,23 +240,38 @@ pub async fn run_main(
             .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
     }
 
-    let _ = tracing_subscriber::registry().with(file_layer).try_init();
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 
-    run_ratatui_app(
-        cli,
-        config,
-        internal_storage,
-        active_profile,
-        should_show_trust_screen,
-    )
-    .await
-    .map_err(|err| std::io::Error::other(err.to_string()))
+    #[allow(clippy::print_stderr)]
+    let otel = match otel {
+        Ok(otel) => otel,
+        Err(e) => {
+            eprintln!("Could not create otel exporter: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(provider) = otel.as_ref() {
+        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
+        );
+
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(otel_layer)
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::registry().with(file_layer).try_init();
+    };
+
+    run_ratatui_app(cli, config, active_profile, should_show_trust_screen)
+        .await
+        .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
     cli: Cli,
     config: Config,
-    mut internal_storage: InternalStorage,
     active_profile: Option<String>,
     should_show_trust_screen: bool,
 ) -> color_eyre::Result<AppExitInfo> {
@@ -288,6 +296,8 @@ async fn run_ratatui_app(
     // within the TUI scrollback. Building spans keeps styling consistent.
     #[cfg(not(debug_assertions))]
     if let Some(latest_version) = updates::get_upgrade_version(&config) {
+        use crate::history_cell::padded_emoji;
+        use crate::history_cell::with_border_with_inner_width;
         use ratatui::style::Stylize as _;
         use ratatui::text::Line;
 
@@ -295,16 +305,27 @@ async fn run_ratatui_app(
         let exe = std::env::current_exe()?;
         let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
 
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(vec![
-            "✨⬆️ Update available!".bold().cyan(),
-            " ".into(),
-            format!("{current_version} -> {latest_version}.").into(),
-        ]));
+        let mut content_lines: Vec<Line<'static>> = vec![
+            Line::from(vec![
+                padded_emoji("✨").bold().cyan(),
+                "Update available!".bold().cyan(),
+                " ".into(),
+                format!("{current_version} -> {latest_version}.").bold(),
+            ]),
+            Line::from(""),
+            Line::from("See full release notes:"),
+            Line::from(""),
+            Line::from(
+                "https://github.com/openai/codex/releases/latest"
+                    .cyan()
+                    .underlined(),
+            ),
+            Line::from(""),
+        ];
 
         if managed_by_npm {
             let npm_cmd = "npm install -g @openai/codex@latest";
-            lines.push(Line::from(vec![
+            content_lines.push(Line::from(vec![
                 "Run ".into(),
                 npm_cmd.cyan(),
                 " to update.".into(),
@@ -313,19 +334,22 @@ async fn run_ratatui_app(
             && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
         {
             let brew_cmd = "brew upgrade codex";
-            lines.push(Line::from(vec![
+            content_lines.push(Line::from(vec![
                 "Run ".into(),
                 brew_cmd.cyan(),
                 " to update.".into(),
             ]));
         } else {
-            lines.push(Line::from(vec![
+            content_lines.push(Line::from(vec![
                 "See ".into(),
-                "https://github.com/openai/codex/releases/latest".cyan(),
-                " for the latest releases and installation options.".into(),
+                "https://github.com/openai/codex".cyan().underlined(),
+                " for installation options.".into(),
             ]));
         }
 
+        let viewport_width = tui.terminal.viewport_area.width as usize;
+        let inner_width = viewport_width.saturating_sub(4).max(1);
+        let mut lines = with_border_with_inner_width(content_lines, inner_width);
         lines.push("".into());
         tui.insert_history_lines(lines);
     }
@@ -388,36 +412,6 @@ async fn run_ratatui_app(
     } else {
         resume_picker::ResumeSelection::StartFresh
     };
-
-    if should_show_model_rollout_prompt(
-        &cli,
-        &config,
-        active_profile.as_deref(),
-        internal_storage.gpt_5_codex_model_prompt_seen,
-    ) {
-        internal_storage.gpt_5_codex_model_prompt_seen = true;
-        if let Err(e) = internal_storage.persist().await {
-            error!("Failed to persist internal storage: {e:?}");
-        }
-
-        let upgrade_decision = run_model_upgrade_popup(&mut tui).await?;
-        let switch_to_new_model = upgrade_decision == ModelUpgradeDecision::Switch;
-
-        if switch_to_new_model {
-            config.model = GPT_5_CODEX_MEDIUM_MODEL.to_owned();
-            config.model_reasoning_effort = None;
-            if let Err(e) = persist_model_selection(
-                &config.codex_home,
-                active_profile.as_deref(),
-                &config.model,
-                config.model_reasoning_effort,
-            )
-            .await
-            {
-                error!("Failed to persist model selection: {e:?}");
-            }
-        }
-    }
 
     let Cli { prompt, images, .. } = cli;
 
@@ -531,141 +525,4 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
     }
 
     login_status == LoginStatus::NotAuthenticated
-}
-
-fn should_show_model_rollout_prompt(
-    cli: &Cli,
-    config: &Config,
-    active_profile: Option<&str>,
-    gpt_5_codex_model_prompt_seen: bool,
-) -> bool {
-    let login_status = get_login_status(config);
-
-    active_profile.is_none()
-        && cli.model.is_none()
-        && !gpt_5_codex_model_prompt_seen
-        && config.model_provider.requires_openai_auth
-        && matches!(login_status, LoginStatus::AuthMode(AuthMode::ChatGPT))
-        && !cli.oss
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::Parser;
-    use codex_core::auth::AuthDotJson;
-    use codex_core::auth::get_auth_file;
-    use codex_core::auth::login_with_api_key;
-    use codex_core::auth::write_auth_json;
-    use codex_core::token_data::IdTokenInfo;
-    use codex_core::token_data::TokenData;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
-
-    fn get_next_codex_home() -> PathBuf {
-        static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
-        let mut codex_home = std::env::temp_dir();
-        let unique_suffix = format!(
-            "codex_tui_test_{}_{}",
-            std::process::id(),
-            NEXT_CODEX_HOME_ID.fetch_add(1, Ordering::Relaxed)
-        );
-        codex_home.push(unique_suffix);
-        codex_home
-    }
-
-    fn make_config() -> Config {
-        // Create a unique CODEX_HOME per test to isolate auth.json writes.
-        let codex_home = get_next_codex_home();
-        std::fs::create_dir_all(&codex_home).expect("create unique CODEX_HOME");
-        Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            codex_home,
-        )
-        .expect("load default config")
-    }
-
-    /// Test helper to write an `auth.json` with the requested auth mode into the
-    /// provided CODEX_HOME directory. This ensures `get_login_status()` reads the
-    /// intended mode deterministically.
-    fn set_auth_method(codex_home: &std::path::Path, mode: AuthMode) {
-        match mode {
-            AuthMode::ApiKey => {
-                login_with_api_key(codex_home, "sk-test-key").expect("write api key auth.json");
-            }
-            AuthMode::ChatGPT => {
-                // Minimal valid JWT payload: header.payload.signature (all base64url, no padding)
-                const FAKE_JWT: &str = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.e30.c2ln"; // {"alg":"none","typ":"JWT"}.{}."sig"
-                let mut id_info = IdTokenInfo::default();
-                id_info.raw_jwt = FAKE_JWT.to_string();
-                let auth = AuthDotJson {
-                    openai_api_key: None,
-                    tokens: Some(TokenData {
-                        id_token: id_info,
-                        access_token: "access-token".to_string(),
-                        refresh_token: "refresh-token".to_string(),
-                        account_id: None,
-                    }),
-                    last_refresh: None,
-                };
-                let file = get_auth_file(codex_home);
-                write_auth_json(&file, &auth).expect("write chatgpt auth.json");
-            }
-        }
-    }
-
-    #[test]
-    fn shows_login_when_not_authenticated() {
-        let cfg = make_config();
-        assert!(should_show_login_screen(
-            LoginStatus::NotAuthenticated,
-            &cfg
-        ));
-    }
-
-    #[test]
-    fn shows_model_rollout_prompt_for_default_model() {
-        let cli = Cli::parse_from(["codex"]);
-        let cfg = make_config();
-        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
-        assert!(should_show_model_rollout_prompt(&cli, &cfg, None, false,));
-    }
-
-    #[test]
-    fn hides_model_rollout_prompt_when_api_auth_mode() {
-        let cli = Cli::parse_from(["codex"]);
-        let cfg = make_config();
-        set_auth_method(&cfg.codex_home, AuthMode::ApiKey);
-        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false,));
-    }
-
-    #[test]
-    fn hides_model_rollout_prompt_when_marked_seen() {
-        let cli = Cli::parse_from(["codex"]);
-        let cfg = make_config();
-        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
-        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, true,));
-    }
-
-    #[test]
-    fn hides_model_rollout_prompt_when_cli_overrides_model() {
-        let cli = Cli::parse_from(["codex", "--model", "gpt-4.1"]);
-        let cfg = make_config();
-        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
-        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false,));
-    }
-
-    #[test]
-    fn hides_model_rollout_prompt_when_profile_active() {
-        let cli = Cli::parse_from(["codex"]);
-        let cfg = make_config();
-        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
-        assert!(!should_show_model_rollout_prompt(
-            &cli,
-            &cfg,
-            Some("gpt5"),
-            false,
-        ));
-    }
 }
