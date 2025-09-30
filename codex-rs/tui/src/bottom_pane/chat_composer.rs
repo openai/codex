@@ -28,7 +28,10 @@ use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
+use crate::bottom_pane::prompt_args::expand_custom_prompt;
+use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
 use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::bottom_pane::prompt_args::prompt_argument_names;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
@@ -36,7 +39,6 @@ use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
-use super::prompt_args;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
@@ -436,7 +438,7 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
-                                let args = prompt_args::prompt_argument_names(&prompt.content);
+                                let args = prompt_argument_names(&prompt.content);
                                 let (text, cursor) = Self::prompt_command_text(&prompt.name, &args);
                                 self.textarea.set_text(&text);
                                 cursor_target = Some(cursor);
@@ -462,7 +464,7 @@ impl ChatComposer {
                     && let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
                     && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name)
                     && let Some(expanded) =
-                        prompt_args::expand_if_numeric_with_positional_args(prompt, first_line)
+                        expand_if_numeric_with_positional_args(prompt, first_line)
                 {
                     self.textarea.set_text("");
                     return (InputResult::Submitted(expanded), true);
@@ -476,8 +478,7 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
-                                let named_args =
-                                    prompt_args::prompt_argument_names(&prompt.content);
+                                let named_args = prompt_argument_names(&prompt.content);
                                 let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
 
                                 if named_args.is_empty() && !has_numeric {
@@ -500,9 +501,7 @@ impl ChatComposer {
                                     let first_line =
                                         self.textarea.text().lines().next().unwrap_or("");
                                     if let Some(expanded) =
-                                        prompt_args::expand_if_numeric_with_positional_args(
-                                            prompt, first_line,
-                                        )
+                                        expand_if_numeric_with_positional_args(prompt, first_line)
                                     {
                                         self.textarea.set_text("");
                                         return (InputResult::Submitted(expanded), true);
@@ -951,18 +950,17 @@ impl ChatComposer {
                 // If there is neither text nor attachments, suppress submission entirely.
                 let has_attachments = !self.attached_images.is_empty();
                 text = text.trim().to_string();
-                let expanded_prompt =
-                    match prompt_args::expand_custom_prompt(&text, &self.custom_prompts) {
-                        Ok(expanded) => expanded,
-                        Err(err) => {
-                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(err.user_message()),
-                            )));
-                            self.textarea.set_text(&original_input);
-                            self.textarea.set_cursor(original_input.len());
-                            return (InputResult::None, true);
-                        }
-                    };
+                let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
+                    Ok(expanded) => expanded,
+                    Err(err) => {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(err.user_message()),
+                        )));
+                        self.textarea.set_text(&original_input);
+                        self.textarea.set_cursor(original_input.len());
+                        return (InputResult::None, true);
+                    }
+                };
                 if let Some(expanded) = expanded_prompt {
                     text = expanded;
                 }
