@@ -18,6 +18,10 @@ importers:
         version: 3.5.3
 
   sdk/typescript:
+    dependencies:
+      eslint-plugin-jest:
+        specifier: ^29.0.1
+        version: 29.0.1(@typescript-eslint/eslint-plugin@8.45.0(@typescript-eslint/parser@8.45.0(eslint@9.36.0)(typescript@5.9.2))(eslint@9.36.0)(typescript@5.9.2))(eslint@9.36.0)(jest@29.7.0(@types/node@20.19.18)(ts-node@10.9.2(@types/node@20.19.18)(typescript@5.9.2)))(typescript@5.9.2)
     devDependencies:
       '@types/jest':
         specifier: ^29.5.14
@@ -1347,6 +1351,19 @@ packages:
       eslint: ^2 || ^3 || ^4 || ^5 || ^6 || ^7.2.0 || ^8 || ^9
     peerDependenciesMeta:
       '@typescript-eslint/parser':
+        optional: true
+
+  eslint-plugin-jest@29.0.1:
+    resolution: {integrity: sha512-EE44T0OSMCeXhDrrdsbKAhprobKkPtJTbQz5yEktysNpHeDZTAL1SfDTNKmcFfJkY6yrQLtTKZALrD3j/Gpmiw==}
+    engines: {node: ^20.12.0 || ^22.0.0 || >=24.0.0}
+    peerDependencies:
+      '@typescript-eslint/eslint-plugin': ^8.0.0
+      eslint: ^8.57.0 || ^9.0.0
+      jest: '*'
+    peerDependenciesMeta:
+      '@typescript-eslint/eslint-plugin':
+        optional: true
+      jest:
         optional: true
 
   eslint-scope@8.4.0:
@@ -4155,6 +4172,17 @@ snapshots:
       - eslint-import-resolver-typescript
       - eslint-import-resolver-webpack
       - supports-color
+
+  eslint-plugin-jest@29.0.1(@typescript-eslint/eslint-plugin@8.45.0(@typescript-eslint/parser@8.45.0(eslint@9.36.0)(typescript@5.9.2))(eslint@9.36.0)(typescript@5.9.2))(eslint@9.36.0)(jest@29.7.0(@types/node@20.19.18)(ts-node@10.9.2(@types/node@20.19.18)(typescript@5.9.2)))(typescript@5.9.2):
+    dependencies:
+      '@typescript-eslint/utils': 8.45.0(eslint@9.36.0)(typescript@5.9.2)
+      eslint: 9.36.0
+    optionalDependencies:
+      '@typescript-eslint/eslint-plugin': 8.45.0(@typescript-eslint/parser@8.45.0(eslint@9.36.0)(typescript@5.9.2))(eslint@9.36.0)(typescript@5.9.2)
+      jest: 29.7.0(@types/node@20.19.18)(ts-node@10.9.2(@types/node@20.19.18)(typescript@5.9.2))
+    transitivePeerDependencies:
+      - supports-color
+      - typescript
 
   eslint-scope@8.4.0:
     dependencies:
