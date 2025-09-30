@@ -85,6 +85,52 @@ describe("Codex", () => {
     }
   });
 
+  it("continues the thread when run is called twice with options", async () => {
+    const { url, close, requests } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("First response", "item_1"),
+          responseCompleted("response_1"),
+        ),
+        sse(
+          responseStarted("response_2"),
+          assistantMessage("Second response", "item_2"),
+          responseCompleted("response_2"),
+        ),
+      ],
+    });
+
+    try {
+      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run("first input");
+      await thread.run("second input", {
+        model: "gpt-test-1",
+      });
+
+      // Check second request continues the same thread
+      expect(requests.length).toBeGreaterThanOrEqual(2);
+      const secondRequest = requests[1];
+      expect(secondRequest).toBeDefined();
+      const payload = secondRequest!.json;
+
+      expect(payload.model).toBe("gpt-test-1");
+      const assistantEntry = payload.input.find(
+        (entry: { role: string }) => entry.role === "assistant",
+      );
+      expect(assistantEntry).toBeDefined();
+      const assistantText = assistantEntry?.content?.find(
+        (item: { type: string; text: string }) => item.type === "output_text",
+      )?.text;
+      expect(assistantText).toBe("First response");
+    } finally {
+      await close();
+    }
+  });
+
   it("resumes thread by id", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
       statusCode: 200,

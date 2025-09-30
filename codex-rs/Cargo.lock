@@ -771,8 +771,6 @@ dependencies = [
  "supports-color",
  "tempfile",
  "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1125,7 +1123,6 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-protocol",
- "mcp-types",
  "ts-rs",
 ]
 

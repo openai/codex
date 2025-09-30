@@ -43,8 +43,6 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
