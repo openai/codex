@@ -1,6 +1,6 @@
-import { ConversationEvent } from "./events.js";
-import { CodexExec } from "./exec.js";
-import { ConversationItem } from "./items.js";
+import { ConversationEvent } from "./events";
+import { CodexExec } from "./exec";
+import { ConversationItem } from "./items";
 
 export type {
   ConversationEvent,
@@ -11,7 +11,7 @@ export type {
   ItemUpdatedEvent,
   ItemCompletedEvent,
   ConversationErrorEvent,
-} from "./events.js";
+} from "./events";
 export type {
   ConversationItem,
   AssistantMessageItem,
@@ -22,7 +22,7 @@ export type {
   WebSearchItem,
   TodoListItem,
   ErrorItem,
-} from "./items.js";
+} from "./items";
 
 export type CodexOptions = {
   // TODO: remove

@@ -1,6 +1,6 @@
 // based on event types from codex-rs/exec/src/exec_events.rs
 
-import type { ConversationItem } from "./items.js";
+import type { ConversationItem } from "./items";
 
 export type SessionCreatedEvent = {
   type: "session.created";
