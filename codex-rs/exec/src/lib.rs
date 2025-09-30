@@ -1,7 +1,7 @@
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
-pub mod event_processor_with_json_output;
+pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
 
 pub use cli::Cli;
@@ -21,7 +21,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
-use event_processor_with_json_output::EventProcessorWithJsonOutput;
+use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use serde_json::Value;
 use std::io::IsTerminal;

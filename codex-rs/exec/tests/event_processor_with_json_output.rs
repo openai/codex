@@ -12,7 +12,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_exec::event_processor_with_json_output::EventProcessorWithJsonOutput;
+use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use codex_exec::exec_events::AssistantMessageItem;
 use codex_exec::exec_events::CommandExecutionItem;
 use codex_exec::exec_events::CommandExecutionStatus;
