@@ -158,6 +158,10 @@ pub enum ClientRequest {
     LoginChatGpt {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
     },
     CancelLoginChatGpt {
         #[serde(rename = "id")]
@@ -167,6 +171,10 @@ pub enum ClientRequest {
     LogoutChatGpt {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
     },
     GetAuthStatus {
         #[serde(rename = "id")]
@@ -176,6 +184,10 @@ pub enum ClientRequest {
     GetUserSavedConfig {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
     },
     SetDefaultModel {
         #[serde(rename = "id")]
@@ -185,10 +197,18 @@ pub enum ClientRequest {
     GetUserAgent {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
     },
     UserInfo {
         #[serde(rename = "id")]
         request_id: RequestId,
+
+        #[ts(type = "undefined")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        params: Option<()>,
     },
     FuzzyFileSearch {
         #[serde(rename = "id")]

@@ -12,6 +12,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use codex_exec::exec_events::AssistantMessageItem;
 use codex_exec::exec_events::CommandExecutionItem;
@@ -35,6 +36,7 @@ use codex_exec::exec_events::TurnCompletedEvent;
 use codex_exec::exec_events::TurnFailedEvent;
 use codex_exec::exec_events::TurnStartedEvent;
 use codex_exec::exec_events::Usage;
+use codex_exec::exec_events::WebSearchItem;
 use mcp_types::CallToolResult;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -87,6 +89,29 @@ fn task_started_produces_turn_started_event() {
     ));
 
     assert_eq!(out, vec![ThreadEvent::TurnStarted(TurnStartedEvent {})]);
+}
+
+#[test]
+fn web_search_end_emits_item_completed() {
+    let mut ep = ExperimentalEventProcessorWithJsonOutput::new(None);
+    let query = "rust async await".to_string();
+    let out = ep.collect_thread_events(&event(
+        "w1",
+        EventMsg::WebSearchEnd(WebSearchEndEvent {
+            call_id: "call-123".to_string(),
+            query: query.clone(),
+        }),
+    ));
+
+    assert_eq!(
+        out,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::WebSearch(WebSearchItem { query }),
+            },
+        })]
+    );
 }
 
 #[test]

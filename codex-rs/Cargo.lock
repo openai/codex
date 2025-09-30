@@ -1125,7 +1125,6 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-protocol",
- "mcp-types",
  "ts-rs",
 ]
 
