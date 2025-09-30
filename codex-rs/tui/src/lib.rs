@@ -86,21 +86,6 @@ pub use cli::Cli;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
-use crossterm::terminal::LeaveAlternateScreen;
-use crossterm::terminal::disable_raw_mode;
-
-#[allow(clippy::print_stderr)]
-fn install_panic_hook_once() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        std::panic::set_hook(Box::new(|info| {
-            // Best-effort cleanup so panic is visible to the user.
-            let _ = disable_raw_mode();
-            let _ = crossterm::execute!(std::io::stdout(), LeaveAlternateScreen);
-            eprintln!("\n\ncodex-tui panic: {info}");
-        }));
-    });
-}
 
 // (tests access modules directly within the crate)
 
@@ -108,7 +93,6 @@ pub async fn run_main(
     cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
-    install_panic_hook_once();
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
