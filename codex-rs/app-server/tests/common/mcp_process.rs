@@ -37,6 +37,8 @@ use mcp_types::RequestId;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
 
+use anyhow::Result;
+
 pub struct McpProcess {
     next_request_id: AtomicI64,
     /// Retain this child process until the client is dropped. The Tokio runtime
@@ -49,7 +51,7 @@ pub struct McpProcess {
 }
 
 impl McpProcess {
-    pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
+    pub async fn new(codex_home: &Path) -> Result<Self> {
         Self::new_with_env(codex_home, &[]).await
     }
 
@@ -61,7 +63,7 @@ impl McpProcess {
     pub async fn new_with_env(
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         // Use assert_cmd to locate the binary path and then switch to tokio::process::Command
         let std_cmd = StdCommand::cargo_bin("codex-app-server")
             .context("should find binary for codex-mcp-server")?;
@@ -120,7 +122,7 @@ impl McpProcess {
     }
 
     /// Performs the initialization handshake with the MCP server.
-    pub async fn initialize(&mut self) -> anyhow::Result<()> {
+    pub async fn initialize(&mut self) -> Result<()> {
         let params = Some(serde_json::to_value(InitializeParams {
             client_info: ClientInfo {
                 name: "codex-app-server-tests".to_string(),
@@ -152,7 +154,7 @@ impl McpProcess {
     pub async fn send_new_conversation_request(
         &mut self,
         params: NewConversationParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("newConversation", params).await
     }
@@ -161,7 +163,7 @@ impl McpProcess {
     pub async fn send_archive_conversation_request(
         &mut self,
         params: ArchiveConversationParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("archiveConversation", params).await
     }
@@ -170,7 +172,7 @@ impl McpProcess {
     pub async fn send_add_conversation_listener_request(
         &mut self,
         params: AddConversationListenerParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("addConversationListener", params).await
     }
@@ -179,7 +181,7 @@ impl McpProcess {
     pub async fn send_send_user_message_request(
         &mut self,
         params: SendUserMessageParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         // Wire format expects variants in camelCase; text item uses external tagging.
         let params = Some(serde_json::to_value(params)?);
         self.send_request("sendUserMessage", params).await
@@ -189,17 +191,14 @@ impl McpProcess {
     pub async fn send_remove_conversation_listener_request(
         &mut self,
         params: RemoveConversationListenerParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("removeConversationListener", params)
             .await
     }
 
     /// Send a `sendUserTurn` JSON-RPC request.
-    pub async fn send_send_user_turn_request(
-        &mut self,
-        params: SendUserTurnParams,
-    ) -> anyhow::Result<i64> {
+    pub async fn send_send_user_turn_request(&mut self, params: SendUserTurnParams) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("sendUserTurn", params).await
     }
@@ -208,7 +207,7 @@ impl McpProcess {
     pub async fn send_interrupt_conversation_request(
         &mut self,
         params: InterruptConversationParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("interruptConversation", params).await
     }
@@ -217,23 +216,23 @@ impl McpProcess {
     pub async fn send_get_auth_status_request(
         &mut self,
         params: GetAuthStatusParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("getAuthStatus", params).await
     }
 
     /// Send a `getUserSavedConfig` JSON-RPC request.
-    pub async fn send_get_user_saved_config_request(&mut self) -> anyhow::Result<i64> {
+    pub async fn send_get_user_saved_config_request(&mut self) -> Result<i64> {
         self.send_request("getUserSavedConfig", None).await
     }
 
     /// Send a `getUserAgent` JSON-RPC request.
-    pub async fn send_get_user_agent_request(&mut self) -> anyhow::Result<i64> {
+    pub async fn send_get_user_agent_request(&mut self) -> Result<i64> {
         self.send_request("getUserAgent", None).await
     }
 
     /// Send a `userInfo` JSON-RPC request.
-    pub async fn send_user_info_request(&mut self) -> anyhow::Result<i64> {
+    pub async fn send_user_info_request(&mut self) -> Result<i64> {
         self.send_request("userInfo", None).await
     }
 
@@ -241,7 +240,7 @@ impl McpProcess {
     pub async fn send_set_default_model_request(
         &mut self,
         params: SetDefaultModelParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("setDefaultModel", params).await
     }
@@ -250,7 +249,7 @@ impl McpProcess {
     pub async fn send_list_conversations_request(
         &mut self,
         params: ListConversationsParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("listConversations", params).await
     }
@@ -259,22 +258,19 @@ impl McpProcess {
     pub async fn send_resume_conversation_request(
         &mut self,
         params: ResumeConversationParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("resumeConversation", params).await
     }
 
     /// Send a `loginApiKey` JSON-RPC request.
-    pub async fn send_login_api_key_request(
-        &mut self,
-        params: LoginApiKeyParams,
-    ) -> anyhow::Result<i64> {
+    pub async fn send_login_api_key_request(&mut self, params: LoginApiKeyParams) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("loginApiKey", params).await
     }
 
     /// Send a `loginChatGpt` JSON-RPC request.
-    pub async fn send_login_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
+    pub async fn send_login_chat_gpt_request(&mut self) -> Result<i64> {
         self.send_request("loginChatGpt", None).await
     }
 
@@ -282,13 +278,13 @@ impl McpProcess {
     pub async fn send_cancel_login_chat_gpt_request(
         &mut self,
         params: CancelLoginChatGptParams,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("cancelLoginChatGpt", params).await
     }
 
     /// Send a `logoutChatGpt` JSON-RPC request.
-    pub async fn send_logout_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
+    pub async fn send_logout_chat_gpt_request(&mut self) -> Result<i64> {
         self.send_request("logoutChatGpt", None).await
     }
 
@@ -298,7 +294,7 @@ impl McpProcess {
         query: &str,
         roots: Vec<String>,
         cancellation_token: Option<String>,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let mut params = serde_json::json!({
             "query": query,
             "roots": roots,
@@ -313,7 +309,7 @@ impl McpProcess {
         &mut self,
         method: &str,
         params: Option<serde_json::Value>,
-    ) -> anyhow::Result<i64> {
+    ) -> Result<i64> {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
 
         let message = JSONRPCMessage::Request(JSONRPCRequest {
@@ -326,11 +322,7 @@ impl McpProcess {
         Ok(request_id)
     }
 
-    pub async fn send_response(
-        &mut self,
-        id: RequestId,
-        result: serde_json::Value,
-    ) -> anyhow::Result<()> {
+    pub async fn send_response(&mut self, id: RequestId, result: serde_json::Value) -> Result<()> {
         self.send_jsonrpc_message(JSONRPCMessage::Response(JSONRPCResponse {
             jsonrpc: JSONRPC_VERSION.into(),
             id,
@@ -339,10 +331,7 @@ impl McpProcess {
         .await
     }
 
-    pub async fn send_notification(
-        &mut self,
-        notification: ClientNotification,
-    ) -> anyhow::Result<()> {
+    pub async fn send_notification(&mut self, notification: ClientNotification) -> Result<()> {
         let value = serde_json::to_value(notification)?;
         self.send_jsonrpc_message(JSONRPCMessage::Notification(JSONRPCNotification {
             jsonrpc: JSONRPC_VERSION.into(),
@@ -356,7 +345,7 @@ impl McpProcess {
         .await
     }
 
-    async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {
+    async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> Result<()> {
         eprintln!("writing message to stdin: {message:?}");
         let payload = serde_json::to_string(&message)?;
         self.stdin.write_all(payload.as_bytes()).await?;
@@ -365,7 +354,7 @@ impl McpProcess {
         Ok(())
     }
 
-    async fn read_jsonrpc_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
+    async fn read_jsonrpc_message(&mut self) -> Result<JSONRPCMessage> {
         let mut line = String::new();
         self.stdout.read_line(&mut line).await?;
         let message = serde_json::from_str::<JSONRPCMessage>(&line)?;
@@ -373,7 +362,7 @@ impl McpProcess {
         Ok(message)
     }
 
-    pub async fn read_stream_until_request_message(&mut self) -> anyhow::Result<JSONRPCRequest> {
+    pub async fn read_stream_until_request_message(&mut self) -> Result<JSONRPCRequest> {
         eprintln!("in read_stream_until_request_message()");
 
         loop {
@@ -399,7 +388,7 @@ impl McpProcess {
     pub async fn read_stream_until_response_message(
         &mut self,
         request_id: RequestId,
-    ) -> anyhow::Result<JSONRPCResponse> {
+    ) -> Result<JSONRPCResponse> {
         eprintln!("in read_stream_until_response_message({request_id:?})");
 
         loop {
@@ -426,7 +415,7 @@ impl McpProcess {
     pub async fn read_stream_until_error_message(
         &mut self,
         request_id: RequestId,
-    ) -> anyhow::Result<mcp_types::JSONRPCError> {
+    ) -> Result<mcp_types::JSONRPCError> {
         loop {
             let message = self.read_jsonrpc_message().await?;
             match message {
@@ -451,7 +440,7 @@ impl McpProcess {
     pub async fn read_stream_until_notification_message(
         &mut self,
         method: &str,
-    ) -> anyhow::Result<JSONRPCNotification> {
+    ) -> Result<JSONRPCNotification> {
         eprintln!("in read_stream_until_notification_message({method})");
 
         loop {
