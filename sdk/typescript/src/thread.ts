@@ -57,7 +57,7 @@ export class Thread {
       try{
         parsed = JSON.parse(item) as ThreadEvent;
       } catch (error) {
-        throw new Error(`Failed to parse item: ${item}`);
+        throw new Error(`Failed to parse item: ${item}`, { cause: error });
       }
       if (parsed.type === "thread.started") {
         this._id = parsed.thread_id;
