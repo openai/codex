@@ -39,6 +39,7 @@ where
     let matches_any = |name: &str, patterns: &[EnvironmentVariablePattern]| -> bool {
         patterns.iter().any(|pattern| pattern.matches(name))
     };
+    let should_allow = |name: &str| matches_any(name, &policy.allow);
 
     // Step 2 – Apply the default exclude if not disabled.
     if !policy.ignore_default_excludes {
@@ -47,12 +48,12 @@ where
             EnvironmentVariablePattern::new_case_insensitive("*SECRET*"),
             EnvironmentVariablePattern::new_case_insensitive("*TOKEN*"),
         ];
-        env_map.retain(|k, _| !matches_any(k, &default_excludes));
+        env_map.retain(|k, _| should_allow(k) || !matches_any(k, &default_excludes));
     }
 
     // Step 3 – Apply custom excludes.
     if !policy.exclude.is_empty() {
-        env_map.retain(|k, _| !matches_any(k, &policy.exclude));
+        env_map.retain(|k, _| should_allow(k) || !matches_any(k, &policy.exclude));
     }
 
     // Step 4 – Apply user-provided overrides.
@@ -71,6 +72,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_types::EnvironmentVariablePattern;
     use crate::config_types::ShellEnvironmentPolicyInherit;
     use maplit::hashmap;
 
@@ -79,6 +81,27 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn test_allow_preserves_default_excludes() {
+        let vars = make_vars(&[("AWS_SECRET_ACCESS_KEY", "secret"), ("PATH", "/usr/bin")]);
+
+        let policy = ShellEnvironmentPolicy {
+            allow: vec![EnvironmentVariablePattern::new_case_insensitive(
+                "AWS_SECRET_ACCESS_KEY",
+            )],
+            ..Default::default()
+        };
+
+        let result = populate_env(vars, &policy);
+
+        let expected: HashMap<String, String> = hashmap! {
+            "PATH".to_string() => "/usr/bin".to_string(),
+            "AWS_SECRET_ACCESS_KEY".to_string() => "secret".to_string(),
+        };
+
+        assert_eq!(result, expected);
     }
 
     #[test]

@@ -350,6 +350,10 @@ pub struct ShellEnvironmentPolicyToml {
     /// List of regular expressions.
     pub exclude: Option<Vec<String>>,
 
+    /// List of regular expressions to always retain, even if they match
+    /// an exclude filter.
+    pub allow: Option<Vec<String>>,
+
     pub r#set: Option<HashMap<String, String>>,
 
     /// List of regular expressions.
@@ -363,8 +367,10 @@ pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
 /// Deriving the `env` based on this policy works as follows:
 /// 1. Create an initial map based on the `inherit` policy.
 /// 2. If `ignore_default_excludes` is false, filter the map using the default
-///    exclude pattern(s), which are: `"*KEY*"` and `"*TOKEN*"`.
+///    exclude pattern(s), which are: `"*KEY*"`, `"*SECRET*"`, and `"*TOKEN*"`.
+///    Entries that match the `allow` patterns are preserved.
 /// 3. If `exclude` is not empty, filter the map using the provided patterns.
+///    Entries that match the `allow` patterns are preserved.
 /// 4. Insert any entries from `r#set` into the map.
 /// 5. If non-empty, filter the map using the `include_only` patterns.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -378,6 +384,9 @@ pub struct ShellEnvironmentPolicy {
 
     /// Environment variable names to exclude from the environment.
     pub exclude: Vec<EnvironmentVariablePattern>,
+
+    /// Environment variable names that should always be retained.
+    pub allow: Vec<EnvironmentVariablePattern>,
 
     /// (key, value) pairs to insert in the environment.
     pub r#set: HashMap<String, String>,
@@ -400,6 +409,12 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             .into_iter()
             .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
             .collect();
+        let allow = toml
+            .allow
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
+            .collect();
         let r#set = toml.r#set.unwrap_or_default();
         let include_only = toml
             .include_only
@@ -413,6 +428,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             inherit,
             ignore_default_excludes,
             exclude,
+            allow,
             r#set,
             include_only,
             use_profile,

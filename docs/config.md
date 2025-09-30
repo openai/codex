@@ -418,6 +418,8 @@ inherit = "core"
 ignore_default_excludes = false
 # exclude patterns (case-insensitive globs)
 exclude = ["AWS_*", "AZURE_*"]
+# allow patterns override excludes (case-insensitive globs)
+allow = ["AWS_SECRET_ACCESS_KEY"]
 # force-set / override values
 set = { CI = "1" }
 # if provided, *only* vars matching these patterns are kept
@@ -429,6 +431,7 @@ include_only = ["PATH", "HOME"]
 | `inherit`                 | string                     | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).           |
 | `ignore_default_excludes` | boolean                    | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.              |
 | `exclude`                 | array<string>        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
+| `allow`                   | array<string>        | `[]`    | Case-insensitive glob patterns to **preserve** even if they match the default or custom excludes. Use for secrets that tools legitimately need. |
 | `set`                     | table<string,string> | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |
 | `include_only`            | array<string>        | `[]`    | If non-empty, a whitelist of patterns; only variables that match _one_ pattern survive the final step. (Generally used with `inherit = "all"`.) |
 

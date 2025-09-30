@@ -22,15 +22,13 @@ fn formatter() -> &'static DecimalFormatter {
     FORMATTER.get_or_init(|| make_local_formatter().unwrap_or_else(make_en_us_formatter))
 }
 
-/// Format a u64 with locale-aware digit separators (e.g. "12345" -> "12,345"
-/// for en-US).
-pub fn format_with_separators(n: u64) -> String {
-    formatter().format(&Decimal::from(n)).to_string()
+fn format_with_separators_with_formatter(n: u64, formatter: &DecimalFormatter) -> String {
+    formatter.format(&Decimal::from(n)).to_string()
 }
 
 fn format_si_suffix_with_formatter(n: u64, formatter: &DecimalFormatter) -> String {
     if n < 1000 {
-        return formatter.format(&Decimal::from(n)).to_string();
+        return format_with_separators_with_formatter(n, formatter);
     }
 
     // Format `n / scale` with the requested number of fractional digits.
@@ -57,7 +55,7 @@ fn format_si_suffix_with_formatter(n: u64, formatter: &DecimalFormatter) -> Stri
     // Above 1000G, keep whole‑G precision.
     format!(
         "{}G",
-        format_with_separators(((n as f64) / 1e9).round() as u64)
+        format_with_separators_with_formatter(((n as f64) / 1e9).round() as u64, formatter)
     )
 }
 
@@ -69,6 +67,10 @@ fn format_si_suffix_with_formatter(n: u64, formatter: &DecimalFormatter) -> Stri
 ///   - 123456789 -> "123M"
 pub fn format_si_suffix(n: u64) -> String {
     format_si_suffix_with_formatter(n, formatter())
+}
+
+pub fn format_with_separators(n: u64) -> String {
+    format_with_separators_with_formatter(n, formatter())
 }
 
 #[cfg(test)]
