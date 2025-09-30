@@ -41,7 +41,7 @@ jobs:
       - name: Lint SDK packages
         run: pnpm -r --filter ./sdk/typescript run lint
         env:
-          NODE_OPTIONS: --max-old-space-size=4096
+          NODE_OPTIONS: --max-old-space-size=8096
 
       - name: Test SDK packages
         run: pnpm -r --filter ./sdk/typescript run test
