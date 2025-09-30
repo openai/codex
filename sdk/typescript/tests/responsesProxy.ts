@@ -14,13 +14,26 @@ type SseResponseBody = {
 };
 
 export type ResponsesProxyOptions = {
-  responseBody: SseResponseBody;
+  responseBodies: SseResponseBody[];
   statusCode?: number;
 };
 
 export type ResponsesProxy = {
   url: string;
   close: () => Promise<void>;
+  requests: RecordedRequest[];
+};
+
+export type ResponsesApiRequest = {
+  input: Array<{
+    role: string;
+    content?: Array<{ type: string; text: string }>;
+  }>;
+};
+
+export type RecordedRequest = {
+  body: string;
+  json: ResponsesApiRequest;
 };
 
 const formatSseEvent = (event: SseEvent): string => {
@@ -30,20 +43,55 @@ const formatSseEvent = (event: SseEvent): string => {
 export async function startResponsesTestProxy(
   options: ResponsesProxyOptions,
 ): Promise<ResponsesProxy> {
-  const server = http.createServer((req, res) => {
-    if (req.method === "POST" && req.url === "/responses") {
-      const status = options.statusCode ?? 200;
-      res.statusCode = status;
-      res.setHeader("content-type", "text/event-stream");
-      for (const event of options.responseBody.events) {
-        res.write(formatSseEvent(event));
-      }
-      res.end();
-      return;
-    }
+  const responseBodies = options.responseBodies;
+  if (responseBodies.length === 0) {
+    throw new Error("responseBodies is required");
+  }
 
-    res.statusCode = 404;
-    res.end();
+  const requests: RecordedRequest[] = [];
+
+  const readRequestBody = (req: http.IncomingMessage) =>
+    new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      });
+      req.on("end", () => {
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      });
+      req.on("error", reject);
+    });
+
+  let responseIndex = 0;
+
+  const server = http.createServer((req, res) => {
+    const handle = async () => {
+      if (req.method === "POST" && req.url === "/responses") {
+        const body = await readRequestBody(req);
+        const json = JSON.parse(body);
+        requests.push({ body, json });
+
+        const status = options.statusCode ?? 200;
+        res.statusCode = status;
+        res.setHeader("content-type", "text/event-stream");
+
+        const responseBody = responseBodies[Math.min(responseIndex, responseBodies.length - 1)]!;
+        responseIndex += 1;
+        for (const event of responseBody.events) {
+          res.write(formatSseEvent(event));
+        }
+        res.end();
+        return;
+      }
+
+      res.statusCode = 404;
+      res.end();
+    };
+
+    handle().catch(() => {
+      res.statusCode = 500;
+      res.end();
+    });
   });
 
   const url = await new Promise<string>((resolve, reject) => {
@@ -71,7 +119,7 @@ export async function startResponsesTestProxy(
       });
     });
   };
-  return { url, close };
+  return { url, close, requests };
 }
 
 export const sse = (...events: SseEvent[]): SseResponseBody => ({

@@ -4,8 +4,9 @@ import readline from "node:readline";
 export type CodexExecArgs = {
   input: string;
 
-  baseUrl: string;
-  apiKey: string;
+  baseUrl?: string;
+  apiKey?: string;
+  sessionId?: string | null;
 };
 
 export class CodexExec {
@@ -15,12 +16,25 @@ export class CodexExec {
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
-    const child = spawn(this.executablePath, ["exec", "--experimental-json", args.input], {
-      env: {
-        ...process.env,
-        OPENAI_BASE_URL: args.baseUrl,
-        OPENAI_API_KEY: args.apiKey,
-      },
+    const commandArgs: string[] = ["exec", "--experimental-json"];
+    if (args.sessionId) {
+      commandArgs.push("resume", args.sessionId, args.input);
+    } else {
+      commandArgs.push(args.input);
+    }
+
+    const env = {
+      ...process.env,
+    };
+    if (args.baseUrl) {
+      env.OPENAI_BASE_URL = args.baseUrl;
+    }
+    if (args.apiKey) {
+      env.OPENAI_API_KEY = args.apiKey;
+    }
+
+    const child = spawn(this.executablePath, commandArgs, {
+      env,
     });
 
     let spawnError: unknown | null = null;

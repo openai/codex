@@ -28,8 +28,8 @@ export type CodexOptions = {
   // TODO: remove
   executablePath: string;
   // TODO: remove
-  baseUrl: string;
-  apiKey: string;
+  baseUrl?: string;
+  apiKey?: string;
 };
 
 export class Codex {
@@ -47,6 +47,10 @@ export class Codex {
 
   startThread(): Thread {
     return new Thread(this.exec, this.options);
+  }
+
+  resumeThread(id: string): Thread {
+    return new Thread(this.exec, this.options, id);
   }
 }
 
@@ -66,10 +70,10 @@ export class Thread {
   private options: CodexOptions;
   public id: string | null;
 
-  constructor(exec: CodexExec, options: CodexOptions) {
+  constructor(exec: CodexExec, options: CodexOptions, id: string | null = null) {
     this.exec = exec;
     this.options = options;
-    this.id = null;
+    this.id = id;
   }
 
   async runStreamed(input: string): Promise<RunStreamedResult> {
@@ -81,6 +85,7 @@ export class Thread {
       input,
       baseUrl: this.options.baseUrl,
       apiKey: this.options.apiKey,
+      sessionId: this.id,
     });
     for await (const item of generator) {
       const parsed = JSON.parse(item) as ConversationEvent;
