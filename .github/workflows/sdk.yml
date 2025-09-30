@@ -26,6 +26,11 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - uses: dtolnay/rust-toolchain@1.90
+
+      - name: build codex
+        run: cargo build --bin codex
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -34,5 +39,8 @@ jobs:
 
       - name: Lint SDK packages
         run: pnpm -r --filter ./sdk/typescript run lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
-      # Tested as part of the rust-ci workflow as the SDK requires the codex executable
+      - name: Test SDK packages
+        run: pnpm -r --filter ./sdk/typescript run test
