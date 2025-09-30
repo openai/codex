@@ -7,6 +7,7 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -93,6 +94,7 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
     footer_mode: FooterMode,
+    footer_hint_override: Option<Vec<(String, String)>>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -134,6 +136,7 @@ impl ChatComposer {
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
             footer_mode: FooterMode::ShortcutPrompt,
+            footer_hint_override: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -142,7 +145,9 @@ impl ChatComposer {
 
     pub fn desired_height(&self, width: u16) -> u16 {
         let footer_props = self.footer_props();
-        let footer_hint_height = footer_height(footer_props);
+        let footer_hint_height = self
+            .custom_footer_height()
+            .unwrap_or_else(|| footer_height(footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         self.textarea
@@ -157,7 +162,9 @@ impl ChatComposer {
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
-        let footer_hint_height = footer_height(footer_props);
+        let footer_hint_height = self
+            .custom_footer_height()
+            .unwrap_or_else(|| footer_height(footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
@@ -271,6 +278,12 @@ impl ChatComposer {
         if disabled && !was_disabled {
             self.paste_burst.clear_window_after_non_char();
         }
+    }
+
+    /// Override the footer hint items displayed beneath the composer. Passing
+    /// `None` restores the default shortcut footer.
+    pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.footer_hint_override = items;
     }
 
     /// Replace the entire composer content with `text` and reset cursor.
@@ -1304,6 +1317,12 @@ impl ChatComposer {
         }
     }
 
+    fn custom_footer_height(&self) -> Option<u16> {
+        self.footer_hint_override
+            .as_ref()
+            .map(|items| if items.is_empty() { 0 } else { 1 })
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
@@ -1436,7 +1455,9 @@ impl WidgetRef for ChatComposer {
             }
             ActivePopup::None => {
                 let footer_props = self.footer_props();
-                let footer_hint_height = footer_height(footer_props);
+                let custom_height = self.custom_footer_height();
+                let footer_hint_height =
+                    custom_height.unwrap_or_else(|| footer_height(footer_props));
                 let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([
@@ -1448,7 +1469,27 @@ impl WidgetRef for ChatComposer {
                 } else {
                     popup_rect
                 };
-                render_footer(hint_rect, buf, footer_props);
+                if let Some(items) = self.footer_hint_override.as_ref() {
+                    if !items.is_empty() {
+                        let mut spans = Vec::with_capacity(items.len() * 4);
+                        for (idx, (key, label)) in items.iter().enumerate() {
+                            spans.push(" ".into());
+                            spans.push(Span::styled(key.clone(), Style::default().bold()));
+                            spans.push(format!(" {label}").into());
+                            if idx + 1 != items.len() {
+                                spans.push("   ".into());
+                            }
+                        }
+                        let mut custom_rect = hint_rect;
+                        if custom_rect.width > 2 {
+                            custom_rect.x += 2;
+                            custom_rect.width = custom_rect.width.saturating_sub(2);
+                        }
+                        Line::from(spans).render_ref(custom_rect, buf);
+                    }
+                } else {
+                    render_footer(hint_rect, buf, footer_props);
+                }
             }
         }
         let style = user_message_style(terminal_palette::default_bg());

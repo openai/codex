@@ -1779,6 +1779,20 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
 
         items.push(SelectionItem {
+            name: "Review against a base branch".to_string(),
+            description: Some("(PR Style)".into()),
+            is_current: false,
+            actions: vec![Box::new({
+                let cwd = self.config.cwd.clone();
+                move |tx| {
+                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
+                }
+            })],
+            dismiss_on_select: false,
+            search_value: None,
+        });
+
+        items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
             description: None,
             is_current: false,
@@ -1805,20 +1819,6 @@ impl ChatWidget {
                 let cwd = self.config.cwd.clone();
                 move |tx| {
                     tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
-                }
-            })],
-            dismiss_on_select: false,
-            search_value: None,
-        });
-
-        items.push(SelectionItem {
-            name: "Review against a base branch".to_string(),
-            description: None,
-            is_current: false,
-            actions: vec![Box::new({
-                let cwd = self.config.cwd.clone();
-                move |tx| {
-                    tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
                 }
             })],
             dismiss_on_select: false,
