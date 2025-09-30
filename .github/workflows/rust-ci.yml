@@ -40,6 +40,7 @@ jobs:
           workflows=false
           for f in "${files[@]}"; do
             [[ $f == codex-rs/* ]] && codex=true
+            [[ $f == sdk/typescript/* ]] && codex=true
             [[ $f == .github/* ]] && workflows=true
           done
 
@@ -194,6 +195,14 @@ jobs:
         env:
           RUST_BACKTRACE: 1
 
+      - name: test sdk
+        id: test_sdk
+        if: ${{ matrix.profile != 'release' }}
+        continue-on-error: true
+        run: pnpm -r --filter ./sdk/typescript run test
+        env:
+          RUST_BACKTRACE: 1
+        
       # Fail the job if any of the previous steps failed.
       - name: verify all steps passed
         if: |

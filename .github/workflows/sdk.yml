@@ -1,0 +1,38 @@
+name: sdk
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+
+jobs:
+  sdks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK packages
+        run: pnpm -r --filter ./sdk/typescript run build
+
+      - name: Lint SDK packages
+        run: pnpm -r --filter ./sdk/typescript run lint
+
+      # Tested as part of the rust-ci workflow as the SDK requires the codex executable
