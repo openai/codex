@@ -799,6 +799,7 @@ dependencies = [
  "codex-protocol",
  "core_test_support",
  "libc",
+ "mcp-types",
  "opentelemetry-appender-tracing",
  "owo-colors",
  "predicates",
@@ -893,6 +894,7 @@ dependencies = [
  "url",
  "urlencoding",
  "webbrowser",
+ "wiremock",
 ]
 
 [[package]]
