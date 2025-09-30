@@ -48,6 +48,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.env_modal.is_some() {
         draw_env_modal(frame, area, app);
     }
+    if app.best_of_modal.is_some() {
+        draw_best_of_modal(frame, area, app);
+    }
     if app.apply_modal.is_some() {
         draw_apply_modal(frame, area, app);
     }
@@ -120,6 +123,16 @@ pub fn draw_new_task_page(frame: &mut Frame, area: Rect, app: &mut App) {
             spans.push("  • ".into());
             spans.push("Env: none (press ctrl-o to choose)".red());
         }
+        if let Some(page) = app.new_task.as_ref() {
+            spans.push("  • ".into());
+            let attempts = page.best_of_n;
+            let label = format!(
+                "{} attempt{}",
+                attempts,
+                if attempts == 1 { "" } else { "s" }
+            );
+            spans.push(label.cyan());
+        }
         spans
     };
     let block = Block::default()
@@ -166,7 +179,10 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &mut App) {
     // Selection reflects the actual task index (no artificial spacer item).
     let mut state = ListState::default().with_selected(Some(app.selected));
     // Dim task list when a modal/overlay is active to emphasize focus.
-    let dim_bg = app.env_modal.is_some() || app.apply_modal.is_some() || app.diff_overlay.is_some();
+    let dim_bg = app.env_modal.is_some()
+        || app.apply_modal.is_some()
+        || app.best_of_modal.is_some()
+        || app.diff_overlay.is_some();
     // Dynamic title includes current environment filter
     let suffix_span = if let Some(ref id) = app.env_filter {
         let label = app
@@ -246,6 +262,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         help.push(": Apply  ".dim());
     }
     help.push("o : Set Env  ".dim());
+    help.push("Ctrl+N".dim());
+    help.push(format!(": Attempts {}x  ", app.best_of_n).dim());
     if app.new_task.is_some() {
         help.push("(editing new task)  ".dim());
     } else {
@@ -980,4 +998,51 @@ pub fn draw_env_modal(frame: &mut Frame, area: Rect, app: &mut App) {
         .highlight_style(Style::default().bold())
         .block(Block::default().borders(Borders::NONE));
     frame.render_stateful_widget(list, rows[2], &mut list_state);
+}
+
+pub fn draw_best_of_modal(frame: &mut Frame, area: Rect, app: &mut App) {
+    use ratatui::widgets::Wrap;
+
+    let inner = overlay_outer(area);
+    let title = Line::from(vec!["Parallel Attempts".magenta().bold()]);
+    let block = overlay_block().title(title);
+
+    frame.render_widget(Clear, inner);
+    frame.render_widget(block.clone(), inner);
+    let content = overlay_content(inner);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(1)])
+        .split(content);
+
+    let hint = Paragraph::new(Line::from(
+        "Use ↑/↓ to choose, 1-4 jump; Enter confirm, Esc cancel"
+            .cyan()
+            .dim(),
+    ))
+    .wrap(Wrap { trim: true });
+    frame.render_widget(hint, rows[0]);
+
+    let selected = app.best_of_modal.as_ref().map(|m| m.selected).unwrap_or(0);
+    let options = [1usize, 2, 3, 4];
+    let mut items: Vec<ListItem> = Vec::new();
+    for &attempts in &options {
+        let mut spans: Vec<ratatui::text::Span> =
+            vec![format!("{attempts} attempt{}", if attempts == 1 { "" } else { "s" }).into()];
+        spans.push("  ".into());
+        spans.push(format!("{attempts}x parallel").dim());
+        if attempts == app.best_of_n {
+            spans.push("  ".into());
+            spans.push("Current".magenta().bold());
+        }
+        items.push(ListItem::new(Line::from(spans)));
+    }
+    let sel = selected.min(options.len().saturating_sub(1));
+    let mut list_state = ListState::default().with_selected(Some(sel));
+    let list = List::new(items)
+        .highlight_symbol("› ")
+        .highlight_style(Style::default().bold())
+        .block(Block::default().borders(Borders::NONE));
+    frame.render_stateful_widget(list, rows[1], &mut list_state);
 }

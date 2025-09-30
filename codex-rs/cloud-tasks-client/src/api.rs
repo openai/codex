@@ -153,5 +153,6 @@ pub trait CloudBackend: Send + Sync {
         prompt: &str,
         git_ref: &str,
         qa_mode: bool,
+        best_of_n: usize,
     ) -> Result<CreatedTask>;
 }

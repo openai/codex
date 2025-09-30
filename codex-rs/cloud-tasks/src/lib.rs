@@ -812,6 +812,9 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                 // Close environment selector if open (don’t quit composer).
                                 app.env_modal = None;
                                 needs_redraw = true;
+                            } else if app.best_of_modal.is_some() {
+                                app.best_of_modal = None;
+                                needs_redraw = true;
                             } else if app.apply_modal.is_some() {
                                 app.apply_modal = None;
                                 app.status = "Apply canceled".to_string();
@@ -829,6 +832,77 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                             // Render updated state immediately before continuing to next loop iteration.
                             render_if_needed(&mut terminal, &mut app, &mut needs_redraw)?;
                             // Render after New Task branch to reflect input changes immediately.
+                            render_if_needed(&mut terminal, &mut app, &mut needs_redraw)?;
+                            continue;
+                        }
+                        let is_ctrl_n = key.modifiers.contains(KeyModifiers::CONTROL)
+                            && matches!(key.code, KeyCode::Char('n') | KeyCode::Char('N'))
+                            || matches!(key.code, KeyCode::Char('\u{000E}'));
+                        if is_ctrl_n {
+                            if app.best_of_modal.is_some() {
+                                app.best_of_modal = None;
+                                needs_redraw = true;
+                            } else {
+                                let selected = app.best_of_n.saturating_sub(1).min(3);
+                                app.best_of_modal = Some(app::BestOfModalState { selected });
+                                app.status = format!(
+                                    "Select best-of attempts (current: {} attempt{})",
+                                    app.best_of_n,
+                                    if app.best_of_n == 1 { "" } else { "s" }
+                                );
+                                needs_redraw = true;
+                            }
+                            render_if_needed(&mut terminal, &mut app, &mut needs_redraw)?;
+                            continue;
+                        }
+                        if app.best_of_modal.is_some() {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.best_of_modal = None;
+                                    needs_redraw = true;
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    if let Some(m) = app.best_of_modal.as_mut() {
+                                        m.selected = (m.selected + 1).min(3);
+                                    }
+                                    needs_redraw = true;
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    if let Some(m) = app.best_of_modal.as_mut() {
+                                        m.selected = m.selected.saturating_sub(1);
+                                    }
+                                    needs_redraw = true;
+                                }
+                                KeyCode::Char('1') | KeyCode::Char('2') | KeyCode::Char('3') | KeyCode::Char('4') => {
+                                    if let Some(m) = app.best_of_modal.as_mut() {
+                                        let val = match key.code {
+                                            KeyCode::Char('1') => 0,
+                                            KeyCode::Char('2') => 1,
+                                            KeyCode::Char('3') => 2,
+                                            KeyCode::Char('4') => 3,
+                                            _ => m.selected,
+                                        };
+                                        m.selected = val;
+                                    }
+                                    needs_redraw = true;
+                                }
+                                KeyCode::Enter => {
+                                    if let Some(state) = app.best_of_modal.take() {
+                                        let new_value = state.selected + 1;
+                                        app.best_of_n = new_value;
+                                        if let Some(page) = app.new_task.as_mut() {
+                                            page.best_of_n = new_value;
+                                        }
+                                        append_error_log(format!("best-of.select: attempts={new_value}"));
+                                        app.status = format!(
+                                            "Best-of updated to {new_value} attempt{}",
+                                            if new_value == 1 { "" } else { "s" }
+                                        );
+                                        needs_redraw = true;
+                                    }
+                                }
+                                _ => {}
+                            }
                             render_if_needed(&mut terminal, &mut app, &mut needs_redraw)?;
                             continue;
                         }
@@ -889,8 +963,9 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                                 app.status = "Submitting new task…".to_string();
                                                 let tx = tx.clone();
                                                 let backend = Arc::clone(&backend);
+                                                let best_of_n = page.best_of_n;
                                                 tokio::spawn(async move {
-                                                    let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, "main", false).await;
+                                                    let result = codex_cloud_tasks_client::CloudBackend::create_task(&*backend, &env, &text, "main", false, best_of_n).await;
                                                     let evt = match result {
                                                         Ok(ok) => app::AppEvent::NewTaskSubmitted(Ok(ok)),
                                                         Err(e) => app::AppEvent::NewTaskSubmitted(Err(format!("{e}"))),
@@ -1121,9 +1196,9 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                 KeyCode::PageUp => { if let Some(m) = app.env_modal.as_mut() { let step = 10usize; m.selected = m.selected.saturating_sub(step); } needs_redraw = true; }
                                 KeyCode::Char('n') => {
                                     if app.env_filter.is_none() {
-                                        app.new_task = Some(crate::new_task::NewTaskPage::new(None));
+                                        app.new_task = Some(crate::new_task::NewTaskPage::new(None, app.best_of_n));
                                     } else {
-                                        app.new_task = Some(crate::new_task::NewTaskPage::new(app.env_filter.clone()));
+                                        app.new_task = Some(crate::new_task::NewTaskPage::new(app.env_filter.clone(), app.best_of_n));
                                     }
                                     app.status = "New Task: Enter to submit; Esc to cancel".to_string();
                                     needs_redraw = true;
@@ -1230,7 +1305,7 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                                 }
                                 KeyCode::Char('n') => {
                                     let env_opt = app.env_filter.clone();
-                                    app.new_task = Some(crate::new_task::NewTaskPage::new(env_opt));
+                                    app.new_task = Some(crate::new_task::NewTaskPage::new(env_opt, app.best_of_n));
                                     app.status = "New Task: Enter to submit; Esc to cancel".to_string();
                                     needs_redraw = true;
                                 }

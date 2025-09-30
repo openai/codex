@@ -15,6 +15,11 @@ pub struct EnvModalState {
     pub selected: usize,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct BestOfModalState {
+    pub selected: usize,
+}
+
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
 pub enum ApplyResultLevel {
     Success,
@@ -52,12 +57,14 @@ pub struct App {
     pub env_filter: Option<String>,
     pub env_modal: Option<EnvModalState>,
     pub apply_modal: Option<ApplyModalState>,
+    pub best_of_modal: Option<BestOfModalState>,
     pub environments: Vec<EnvironmentRow>,
     pub env_last_loaded: Option<std::time::Instant>,
     pub env_loading: bool,
     pub env_error: Option<String>,
     // New Task page
     pub new_task: Option<crate::new_task::NewTaskPage>,
+    pub best_of_n: usize,
     // Apply preflight spinner state
     pub apply_preflight_inflight: bool,
     // Apply action spinner state
@@ -81,11 +88,13 @@ impl App {
             env_filter: None,
             env_modal: None,
             apply_modal: None,
+            best_of_modal: None,
             environments: Vec::new(),
             env_last_loaded: None,
             env_loading: false,
             env_error: None,
             new_task: None,
+            best_of_n: 1,
             apply_preflight_inflight: false,
             apply_inflight: false,
             list_generation: 0,
@@ -440,6 +449,7 @@ mod tests {
             _prompt: &str,
             _git_ref: &str,
             _qa_mode: bool,
+            _best_of_n: usize,
         ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::CreatedTask> {
             Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
                 "not used in test",
