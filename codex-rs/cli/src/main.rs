@@ -12,7 +12,6 @@ use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
-use codex_cli::proto;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
@@ -26,7 +25,6 @@ use supports_color::Stream;
 mod mcp_cmd;
 
 use crate::mcp_cmd::McpCli;
-use crate::proto::ProtoCli;
 
 /// Codex CLI
 ///
@@ -73,10 +71,6 @@ enum Subcommand {
 
     /// [experimental] Run the app server.
     AppServer,
-
-    /// Run the Protocol stream via stdin/stdout
-    #[clap(visible_alias = "p")]
-    Proto(ProtoCli),
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
@@ -318,13 +312,6 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             run_logout(logout_cli.config_overrides).await;
-        }
-        Some(Subcommand::Proto(mut proto_cli)) => {
-            prepend_config_flags(
-                &mut proto_cli.config_overrides,
-                root_config_overrides.clone(),
-            );
-            proto::run_main(proto_cli).await?;
         }
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);

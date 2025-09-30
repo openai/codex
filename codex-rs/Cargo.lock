@@ -771,8 +771,6 @@ dependencies = [
  "supports-color",
  "tempfile",
  "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
