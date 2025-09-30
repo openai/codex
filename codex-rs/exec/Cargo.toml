@@ -58,3 +58,4 @@ tempfile = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
+mcp-types = { workspace = true }

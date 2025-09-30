@@ -33,3 +33,4 @@ webbrowser = { workspace = true }
 anyhow = { workspace = true }
 core_test_support = { workspace = true }
 tempfile = { workspace = true }
+wiremock = { workspace = true }

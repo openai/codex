@@ -2,16 +2,18 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-/// Top-level events emitted on the Codex Exec conversation stream.
+/// Top-level events emitted on the Codex Exec thread stream.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "type")]
-pub enum ConversationEvent {
-    #[serde(rename = "session.created")]
-    SessionCreated(SessionCreatedEvent),
+pub enum ThreadEvent {
+    #[serde(rename = "thread.started")]
+    ThreadStarted(ThreadStartedEvent),
     #[serde(rename = "turn.started")]
     TurnStarted(TurnStartedEvent),
     #[serde(rename = "turn.completed")]
     TurnCompleted(TurnCompletedEvent),
+    #[serde(rename = "turn.failed")]
+    TurnFailed(TurnFailedEvent),
     #[serde(rename = "item.started")]
     ItemStarted(ItemStartedEvent),
     #[serde(rename = "item.updated")]
@@ -19,12 +21,12 @@ pub enum ConversationEvent {
     #[serde(rename = "item.completed")]
     ItemCompleted(ItemCompletedEvent),
     #[serde(rename = "error")]
-    Error(ConversationErrorEvent),
+    Error(ThreadErrorEvent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct SessionCreatedEvent {
-    pub session_id: String,
+pub struct ThreadStartedEvent {
+    pub thread_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS, Default)]
@@ -33,6 +35,11 @@ pub struct TurnStartedEvent {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct TurnCompletedEvent {
     pub usage: Usage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct TurnFailedEvent {
+    pub error: ThreadErrorEvent,
 }
 
 /// Minimal usage summary for a turn.
@@ -45,37 +52,37 @@ pub struct Usage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct ItemStartedEvent {
-    pub item: ConversationItem,
+    pub item: ThreadItem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct ItemCompletedEvent {
-    pub item: ConversationItem,
+    pub item: ThreadItem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct ItemUpdatedEvent {
-    pub item: ConversationItem,
+    pub item: ThreadItem,
 }
 
 /// Fatal error emitted by the stream.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct ConversationErrorEvent {
+pub struct ThreadErrorEvent {
     pub message: String,
 }
 
-/// Canonical representation of a conversation item and its domain-specific payload.
+/// Canonical representation of a thread item and its domain-specific payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct ConversationItem {
+pub struct ThreadItem {
     pub id: String,
     #[serde(flatten)]
-    pub details: ConversationItemDetails,
+    pub details: ThreadItemDetails,
 }
 
-/// Typed payloads for each supported conversation item type.
+/// Typed payloads for each supported thread item type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(tag = "item_type", rename_all = "snake_case")]
-pub enum ConversationItemDetails {
+pub enum ThreadItemDetails {
     AssistantMessage(AssistantMessageItem),
     Reasoning(ReasoningItem),
     CommandExecution(CommandExecutionItem),
@@ -86,7 +93,7 @@ pub enum ConversationItemDetails {
     Error(ErrorItem),
 }
 
-/// Session conversation metadata.
+/// Session metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct SessionItem {
     pub session_id: String,

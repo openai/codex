@@ -31,26 +31,28 @@
     "build": "tsup",
     "build:watch": "tsup --watch",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "lint:fix": "pnpm run lint -- --fix",
-    "test": "vitest run",
-    "test:watch": "vitest watch",
-    "coverage": "vitest run --coverage",
+    "lint:fix": "eslint --fix \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "coverage": "jest --coverage",
     "format": "prettier --check .",
     "format:fix": "prettier --write .",
     "prepare": "pnpm run build"
   },
   "devDependencies": {
+    "@types/jest": "^29.5.14",
     "@types/node": "^20.19.18",
-    "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
-    "@vitest/coverage-v8": "^1.6.1",
+    "@typescript-eslint/eslint-plugin": "^8.45.0",
+    "@typescript-eslint/parser": "^8.45.0",
     "eslint": "^9.36.0",
     "eslint-config-prettier": "^9.1.2",
     "eslint-import-resolver-typescript": "^3.10.1",
     "eslint-plugin-import": "^2.32.0",
+    "jest": "^29.7.0",
     "prettier": "^3.6.2",
+    "ts-jest": "^29.3.4",
+    "ts-node": "^10.9.2",
     "tsup": "^8.5.0",
-    "typescript": "^5.9.2",
-    "vitest": "^1.6.1"
+    "typescript": "^5.9.2"
   }
 }
