@@ -1,6 +1,6 @@
 use crate::config::ArangoConfig;
 use anyhow::{bail, Result};
-use reqwest::Client;
+use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -46,6 +46,11 @@ pub struct NotificationDoc {
 
 impl Db {
     pub async fn new(cfg: &ArangoConfig) -> Result<Self> {
+        let client = ClientBuilder::new()
+            .use_rustls_tls()
+            .https_only(true)
+            .user_agent(concat!("codex-scheduler/", env!("CARGO_PKG_VERSION")))
+            .build()?;
         Ok(Self {
             base_url: cfg.url.clone(),
             database: cfg.database.clone(),
@@ -53,7 +58,7 @@ impl Db {
             events: cfg.events_collection.clone(),
             notes: cfg.notifications_collection.clone(),
             state: cfg.state_collection.clone(),
-            client: Client::builder().build()?,
+            client,
             auth: (cfg.username.clone(), cfg.password.clone()),
         })
     }
@@ -78,6 +83,34 @@ impl Db {
             bail!("arangodb POST {} failed: {} body={}", url, status, val);
         }
         Ok(val)
+    }
+
+    /// Retry wrapper with jittered exponential backoff for POSTs that insert documents.
+    async fn post_json_with_retry(&self, url: &str, body: &Value, max_retries: usize) -> Result<()> {
+        use rand::{thread_rng, Rng};
+        use tokio::time::{sleep, Duration};
+
+        let mut attempt = 0usize;
+        loop {
+            match self.post_json(url, body).await {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    tracing::warn!("Arango POST retryable error: {e}");
+                }
+            }
+            if attempt >= max_retries { break; }
+            // backoff 200ms * 2^attempt with +/-25% jitter
+            let base_ms = 200u64.saturating_mul(1u64 << attempt.min(8));
+            let variance = (base_ms as f64 * 0.25) as u64;
+            let jitter = {
+                let mut rng = thread_rng();
+                let offset: i64 = rng.gen_range(-(variance as i64)..=(variance as i64));
+                (base_ms as i64 + offset).max(50) as u64
+            };
+            sleep(Duration::from_millis(jitter)).await;
+            attempt += 1;
+        }
+        bail!("arangodb POST exhausted retries for {}", url)
     }
 
     pub async fn aql_public(&self, query: &str, bind_vars: Value) -> Result<Value> {
@@ -151,17 +184,17 @@ impl Db {
         let docs: Vec<Value> = batch.iter().map(|(seq, typ, payload)| {
             json!({"run_id": run_id, "seq": seq, "ts": now_iso(), "type": typ, "payload": payload})
         }).collect();
-        let q = format!("FOR d IN @docs INSERT d INTO {}", self.events);
-        let _ = self.aql_public(&q, json!({"docs": docs})).await?;
-        Ok(())
+        let url = self.col_url(&self.events);
+        let body = Value::from(docs);
+        self.post_json_with_retry(&url, &body, 5).await
     }
 
     pub async fn notify(&self, run_id: &str, job_id: &str, kind: &str, ttl_secs: u64) -> Result<()> {
         let created_at = now_iso();
         let expires_at = plus_seconds_iso(ttl_secs as i64);
         let body = json!({"run_id": run_id, "job_id": job_id, "kind": kind, "created_at": created_at, "expiresAt": expires_at});
-        let _ = self.post_json(&self.col_url(&self.notes), &body).await?;
-        Ok(())
+        let url = self.col_url(&self.notes);
+        self.post_json_with_retry(&url, &body, 5).await
     }
 
     pub async fn fetch_notifications_since(&self, since_iso: &str) -> Result<Vec<NotificationDoc>> {
@@ -188,4 +221,3 @@ fn now_iso() -> String {
 fn plus_seconds_iso(secs: i64) -> String {
     (chrono::Utc::now() + chrono::Duration::seconds(secs)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
-
