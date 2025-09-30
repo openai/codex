@@ -1,9 +1,13 @@
 [workspace]
 members = [
+    "backend-client",
     "ansi-escape",
     "app-server",
     "apply-patch",
     "arg0",
+    "codex-backend-openapi-models",
+    "cloud-tasks",
+    "cloud-tasks-client",
     "cli",
     "common",
     "core",
@@ -24,6 +28,7 @@ members = [
     "responses-api-proxy",
     "otel",
     "tui",
+    "git-apply",
     "utils/json-to-toml",
     "utils/readiness",
 ]
@@ -59,6 +64,7 @@ codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
+codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-tui = { path = "tui" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }

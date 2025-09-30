@@ -13,8 +13,10 @@ use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
 use codex_cli::proto;
+use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use owo_colors::OwoColorize;
@@ -92,6 +94,13 @@ enum Subcommand {
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
+    /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
+    #[clap(name = "cloud", alias = "cloud-tasks")]
+    Cloud(CloudTasksCli),
+
+    /// Internal: run the responses API proxy.
+    #[clap(hide = true)]
+    ResponsesApiProxy(ResponsesApiProxyArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -333,6 +342,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);
         }
+        Some(Subcommand::Cloud(mut cloud_cli)) => {
+            prepend_config_flags(
+                &mut cloud_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
+        }
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
             DebugCommand::Seatbelt(mut seatbelt_cli) => {
                 prepend_config_flags(
@@ -363,6 +379,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             run_apply_command(apply_cli, None).await?;
+        }
+        Some(Subcommand::ResponsesApiProxy(args)) => {
+            tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
+                .await??;
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;

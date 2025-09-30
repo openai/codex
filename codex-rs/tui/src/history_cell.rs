@@ -875,7 +875,7 @@ pub(crate) fn new_mcp_tools_output(
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
 
         match &cfg.transport {
-            McpServerTransportConfig::Stdio { command, args, .. } => {
+            McpServerTransportConfig::Stdio { command, args, env } => {
                 let args_suffix = if args.is_empty() {
                     String::new()
                 } else {
@@ -883,6 +883,15 @@ pub(crate) fn new_mcp_tools_output(
                 };
                 let cmd_display = format!("{command}{args_suffix}");
                 lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+
+                if let Some(env) = env.as_ref()
+                    && !env.is_empty()
+                {
+                    let mut env_pairs: Vec<String> =
+                        env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    env_pairs.sort();
+                    lines.push(vec!["    • Env: ".into(), env_pairs.join(" ").into()].into());
+                }
             }
             McpServerTransportConfig::StreamableHttp { url, .. } => {
                 lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
