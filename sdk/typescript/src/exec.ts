@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 import readline from "node:readline";
 
-import { TurnOptions } from "./turnOptions";
+import { SandboxMode } from "./turnOptions";
 
 export type CodexExecArgs = {
   input: string;
@@ -9,7 +9,8 @@ export type CodexExecArgs = {
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
-  turnOptions?: TurnOptions;
+  model?: string;
+  sandboxMode?: SandboxMode;
 };
 
 export class CodexExec {
@@ -21,12 +22,12 @@ export class CodexExec {
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
     const commandArgs: string[] = ["exec", "--experimental-json"];
 
-    if (args.turnOptions?.model) {
-      commandArgs.push("--model", args.turnOptions.model);
+    if (args.model) {
+      commandArgs.push("--model", args.model);
     }
 
-    if (args.turnOptions?.sandboxMode) {
-      commandArgs.push("--sandbox", args.turnOptions.sandboxMode);
+    if (args.sandboxMode) {
+      commandArgs.push("--sandbox", args.sandboxMode);
     }
 
     if (args.threadId) {

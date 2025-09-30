@@ -39,7 +39,8 @@ export class Thread {
       baseUrl: this.options.baseUrl,
       apiKey: this.options.apiKey,
       threadId: this.id,
-      turnOptions: options,
+      model: options?.model,
+      sandboxMode: options?.sandboxMode,
     });
     for await (const item of generator) {
       const parsed = JSON.parse(item) as ThreadEvent;
