@@ -1,7 +1,6 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
-use crate::json_to_toml::json_to_toml;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use codex_core::AuthManager;
@@ -77,6 +76,7 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::SessionConfiguredNotification;
 use codex_protocol::mcp_protocol::SetDefaultModelParams;
 use codex_protocol::mcp_protocol::SetDefaultModelResponse;
 use codex_protocol::mcp_protocol::UserInfoResponse;
@@ -85,6 +85,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InputMessageKind;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_utils_json_to_toml::json_to_toml;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use std::collections::HashMap;
@@ -153,6 +154,9 @@ impl CodexMessageProcessor {
 
     pub async fn process_request(&mut self, request: ClientRequest) {
         match request {
+            ClientRequest::Initialize { .. } => {
+                panic!("Initialize should be handled in MessageProcessor");
+            }
             ClientRequest::NewConversation { request_id, params } => {
                 // Do not tokio::spawn() to process new_conversation()
                 // asynchronously because we need to ensure the conversation is
@@ -762,11 +766,19 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
-                let event = Event {
-                    id: "".to_string(),
-                    msg: EventMsg::SessionConfigured(session_configured.clone()),
-                };
-                self.outgoing.send_event_as_notification(&event, None).await;
+                self.outgoing
+                    .send_server_notification(ServerNotification::SessionConfigured(
+                        SessionConfiguredNotification {
+                            session_id: session_configured.session_id,
+                            model: session_configured.model.clone(),
+                            reasoning_effort: session_configured.reasoning_effort,
+                            history_log_id: session_configured.history_log_id,
+                            history_entry_count: session_configured.history_entry_count,
+                            initial_messages: session_configured.initial_messages.clone(),
+                            rollout_path: session_configured.rollout_path.clone(),
+                        },
+                    ))
+                    .await;
                 let initial_messages = session_configured.initial_messages.map(|msgs| {
                     msgs.into_iter()
                         .filter(|event| {

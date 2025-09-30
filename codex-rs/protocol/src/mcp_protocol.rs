@@ -12,6 +12,7 @@ use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnAbortReason;
+use mcp_types::JSONRPCNotification;
 use mcp_types::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
@@ -92,6 +93,11 @@ pub enum AuthMode {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(tag = "method", rename_all = "camelCase")]
 pub enum ClientRequest {
+    Initialize {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: InitializeParams,
+    },
     NewConversation {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -195,6 +201,27 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: ExecOneOffCommandParams,
     },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeParams {
+    pub client_info: ClientInfo,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientInfo {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub version: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeResponse {
+    pub user_agent: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
@@ -702,6 +729,33 @@ pub struct LoginChatGptCompleteNotification {
     pub error: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionConfiguredNotification {
+    /// Name left as session_id instead of conversation_id for backwards compatibility.
+    pub session_id: ConversationId,
+
+    /// Tell the client what model is being queried.
+    pub model: String,
+
+    /// The effort the model is putting into reasoning about the user's request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+
+    /// Identifier of the history log file (inode on Unix, 0 otherwise).
+    pub history_log_id: u64,
+
+    /// Current number of entries in the history log.
+    pub history_entry_count: usize,
+
+    /// Optional initial messages (as events) for resumed sessions.
+    /// When present, UIs can use these to seed the history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_messages: Option<Vec<EventMsg>>,
+
+    pub rollout_path: PathBuf,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthStatusChangeNotification {
@@ -710,7 +764,8 @@ pub struct AuthStatusChangeNotification {
     pub auth_method: Option<AuthMode>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS, Display)]
+/// Notification sent from the server to the client.
+#[derive(Serialize, Deserialize, Debug, Clone, TS, Display)]
 #[serde(tag = "method", content = "params", rename_all = "camelCase")]
 #[strum(serialize_all = "camelCase")]
 pub enum ServerNotification {
@@ -719,6 +774,9 @@ pub enum ServerNotification {
 
     /// ChatGPT login flow completed
     LoginChatGptComplete(LoginChatGptCompleteNotification),
+
+    /// The special session configured event for a new or resumed conversation.
+    SessionConfigured(SessionConfiguredNotification),
 }
 
 impl ServerNotification {
@@ -726,8 +784,25 @@ impl ServerNotification {
         match self {
             ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
             ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
+            ServerNotification::SessionConfigured(params) => serde_json::to_value(params),
         }
     }
+}
+
+impl TryFrom<JSONRPCNotification> for ServerNotification {
+    type Error = serde_json::Error;
+
+    fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+        serde_json::from_value(serde_json::to_value(value)?)
+    }
+}
+
+/// Notification sent from the client to the server.
+#[derive(Serialize, Deserialize, Debug, Clone, TS, Display)]
+#[serde(tag = "method", content = "params", rename_all = "camelCase")]
+#[strum(serialize_all = "camelCase")]
+pub enum ClientNotification {
+    Initialized,
 }
 
 #[cfg(test)]
@@ -792,6 +867,19 @@ mod tests {
         assert_eq!(
             ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?,
             id,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_client_notification() -> Result<()> {
+        let notification = ClientNotification::Initialized;
+        // Note there is no "params" field for this notification.
+        assert_eq!(
+            json!({
+                "method": "initialized",
+            }),
+            serde_json::to_value(&notification)?,
         );
         Ok(())
     }

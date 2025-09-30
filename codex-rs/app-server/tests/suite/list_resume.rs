@@ -1,13 +1,15 @@
 use std::fs;
 use std::path::Path;
 
+use app_test_support::McpProcess;
+use app_test_support::to_response;
 use codex_protocol::mcp_protocol::ListConversationsParams;
 use codex_protocol::mcp_protocol::ListConversationsResponse;
 use codex_protocol::mcp_protocol::NewConversationParams; // reused for overrides shape
 use codex_protocol::mcp_protocol::ResumeConversationParams;
 use codex_protocol::mcp_protocol::ResumeConversationResponse;
-use mcp_test_support::McpProcess;
-use mcp_test_support::to_response;
+use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::SessionConfiguredNotification;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
@@ -111,23 +113,28 @@ async fn test_list_and_resume_conversations() {
         .await
         .expect("send resumeConversation");
 
-    // Expect a codex/event notification with msg.type == session_configured
+    // Expect a codex/event notification with msg.type == sessionConfigured
     let notification: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event"),
+        mcp.read_stream_until_notification_message("sessionConfigured"),
     )
     .await
-    .expect("session_configured notification timeout")
-    .expect("session_configured notification");
-    // Basic shape assertion: ensure event type is session_configured
-    let msg_type = notification
-        .params
-        .as_ref()
-        .and_then(|p| p.get("msg"))
-        .and_then(|m| m.get("type"))
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
-    assert_eq!(msg_type, "session_configured");
+    .expect("sessionConfigured notification timeout")
+    .expect("sessionConfigured notification");
+    let session_configured: ServerNotification = notification
+        .try_into()
+        .expect("deserialize sessionConfigured notification");
+    // Basic shape assertion: ensure event type is sessionConfigured
+    let ServerNotification::SessionConfigured(SessionConfiguredNotification {
+        model,
+        rollout_path,
+        ..
+    }) = session_configured
+    else {
+        unreachable!("expected sessionConfigured notification");
+    };
+    assert_eq!(model, "o3");
+    assert_eq!(items[0].path.clone(), rollout_path);
 
     // Then the response for resumeConversation
     let resume_resp: JSONRPCResponse = timeout(
