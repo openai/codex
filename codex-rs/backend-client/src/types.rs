@@ -2,6 +2,7 @@ pub use codex_backend_openapi_models::models::PaginatedListTaskListItem;
 pub use codex_backend_openapi_models::models::TaskListItem;
 
 use serde::Deserialize;
+use serde::de::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -26,11 +27,11 @@ pub struct Turn {
     pub attempt_placement: Option<i64>,
     #[serde(default, rename = "turn_status")]
     pub turn_status: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec")]
     pub sibling_turn_ids: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec")]
     pub input_items: Vec<TurnItem>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec")]
     pub output_items: Vec<TurnItem>,
     #[serde(default)]
     pub worklog: Option<Worklog>,
@@ -44,7 +45,7 @@ pub struct TurnItem {
     pub kind: String,
     #[serde(default)]
     pub role: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec")]
     pub content: Vec<ContentFragment>,
     #[serde(default)]
     pub diff: Option<String>,
@@ -75,7 +76,7 @@ pub struct DiffPayload {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Worklog {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec")]
     pub messages: Vec<WorklogMessage>,
 }
 
@@ -294,6 +295,14 @@ impl CodeTaskDetailsResponseExt for CodeTaskDetailsResponse {
             .as_ref()
             .and_then(Turn::error_summary)
     }
+}
+
+fn deserialize_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<Vec<T>>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
 }
 
 #[derive(Clone, Debug, Deserialize)]

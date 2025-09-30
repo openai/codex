@@ -23,6 +23,7 @@ use chrono::Local;
 use chrono::Utc;
 use codex_cloud_tasks_client::AttemptStatus;
 use codex_cloud_tasks_client::TaskStatus;
+use codex_tui::render_markdown_text;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -702,7 +703,14 @@ fn conversation_text_spans(
         )];
     }
 
-    vec![Span::raw(display.to_string())]
+    let mut rendered = render_markdown_text(display);
+    if rendered.lines.is_empty() {
+        return vec![Span::raw(display.to_string())];
+    }
+    // `render_markdown_text` can yield multiple lines when the input contains
+    // explicit breaks. We only expect a single line here; join the spans of the
+    // first rendered line for styling.
+    rendered.lines.remove(0).spans.into_iter().collect()
 }
 
 fn attempt_status_span(status: AttemptStatus) -> Option<ratatui::text::Span<'static>> {
