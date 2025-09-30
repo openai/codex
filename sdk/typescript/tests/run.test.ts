@@ -178,7 +178,7 @@ function expectPair(args: string[] | undefined, pair: [string, string]) {
   if (!args) {
     throw new Error("Args is undefined");
   }
-  let index = args.indexOf(pair[0]);
+  const index = args.indexOf(pair[0]);
   if (index === -1) {
     throw new Error(`Pair ${pair[0]} not found in args`);
   }
