@@ -56,46 +56,24 @@ pub async fn apply_diff_from_task(
 }
 
 async fn apply_diff(diff: &str, cwd: Option<PathBuf>) -> anyhow::Result<()> {
-    let mut cmd = tokio::process::Command::new("git");
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
-    }
-    let toplevel_output = cmd
-        .args(vec!["rev-parse", "--show-toplevel"])
-        .output()
-        .await?;
-
-    if !toplevel_output.status.success() {
-        anyhow::bail!("apply must be run from a git repository.");
-    }
-
-    let repo_root = String::from_utf8(toplevel_output.stdout)?
-        .trim()
-        .to_string();
-
-    let mut git_apply_cmd = tokio::process::Command::new("git")
-        .args(vec!["apply", "--3way"])
-        .current_dir(&repo_root)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
-
-    if let Some(mut stdin) = git_apply_cmd.stdin.take() {
-        tokio::io::AsyncWriteExt::write_all(&mut stdin, diff.as_bytes()).await?;
-        drop(stdin);
-    }
-
-    let output = git_apply_cmd.wait_with_output().await?;
-
-    if !output.status.success() {
+    let cwd = cwd.unwrap_or(std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
+    let req = codex_git_apply::ApplyGitRequest {
+        cwd,
+        diff: diff.to_string(),
+        revert: false,
+        preflight: false,
+    };
+    let res = codex_git_apply::apply_git_patch(&req)?;
+    if res.exit_code != 0 {
         anyhow::bail!(
-            "Git apply failed with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
+            "Git apply failed (applied={}, skipped={}, conflicts={})\nstdout:\n{}\nstderr:\n{}",
+            res.applied_paths.len(),
+            res.skipped_paths.len(),
+            res.conflicted_paths.len(),
+            res.stdout,
+            res.stderr
         );
     }
-
     println!("Successfully applied diff");
     Ok(())
 }

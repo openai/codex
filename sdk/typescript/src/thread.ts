@@ -2,6 +2,7 @@ import { CodexOptions } from "./codexOptions";
 import { ThreadEvent } from "./events";
 import { CodexExec } from "./exec";
 import { ThreadItem } from "./items";
+import { TurnOptions } from "./turnOptions";
 
 /** Completed turn. */
 export type Turn = {
@@ -35,15 +36,34 @@ export class Thread {
   }
 
   /** Provides the input to the agent and streams events as they are produced during the turn. */
-  async runStreamed(input: string): Promise<StreamedTurn> {
-    return { events: this.runStreamedInternal(input) };
+  async runStreamed(input: string, options?: TurnOptions): Promise<RunStreamedResult> {
+    return { events: this.runStreamedInternal(input, options) };
+  }
+
+  private async *runStreamedInternal(
+    input: string,
+    options?: TurnOptions,
+  ): AsyncGenerator<ThreadEvent> {
+    const generator = this.exec.run({
+      input,
+      baseUrl: this.options.baseUrl,
+      apiKey: this.options.apiKey,
+      threadId: this.id,
+      model: options?.model,
+      sandboxMode: options?.sandboxMode,
+    });
+    for await (const item of generator) {
+      const parsed = JSON.parse(item) as ThreadEvent;
+      if (parsed.type === "thread.started") {
+        this.id = parsed.thread_id;
+      }
+      yield parsed;
+    }
   }
 
   /** Provides the input to the agent and returns the completed turn.
-   * Throws if the turn fails.
-   */
-  async run(input: string): Promise<Turn> {
-    const generator = this.runStreamedInternal(input);
+  async run(input: string, options?: TurnOptions): Promise<RunResult> {
+    const generator = this.runStreamedInternal(input, options);
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
     for await (const event of generator) {
@@ -56,22 +76,4 @@ export class Thread {
     }
     return { items, finalResponse };
   }
-
-
-  private async *runStreamedInternal(input: string): AsyncGenerator<ThreadEvent> {
-    const generator = this._exec.run({
-      input,
-      baseUrl: this._options.baseUrl,
-      apiKey: this._options.apiKey,
-      threadId: this._id,
-    });
-    for await (const item of generator) {
-      const parsed = JSON.parse(item) as ThreadEvent;
-      if (parsed.type === "thread.started") {
-        this._id = parsed.thread_id;
-      }
-      yield parsed;
-    }
-  }
-
 }

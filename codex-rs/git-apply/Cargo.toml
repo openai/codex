@@ -1,0 +1,17 @@
+[package]
+name = "codex-git-apply"
+version = { workspace = true }
+edition = "2024"
+
+[lib]
+name = "codex_git_apply"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+once_cell = "1"
+regex = "1"
+tempfile = "3"
+

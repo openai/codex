@@ -27,3 +27,5 @@ export type { Thread, Turn as RunResult, StreamedTurn as RunStreamedResult, Inpu
 export type { Codex } from "./codex";
 
 export type { CodexOptions } from "./codexOptions";
+
+export type { TurnOptions, ApprovalMode, SandboxMode } from "./turnOptions";
