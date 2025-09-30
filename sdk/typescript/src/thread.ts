@@ -3,49 +3,46 @@ import { ThreadEvent } from "./events";
 import { CodexExec } from "./exec";
 import { ThreadItem } from "./items";
 
-export type RunResult = {
+/** Completed turn. */
+export type Turn = {
   items: ThreadItem[];
   finalResponse: string;
 };
 
-export type RunStreamedResult = {
+/** The result of the `runStreamed` method. */
+export type StreamedTurn = {
   events: AsyncGenerator<ThreadEvent>;
 };
 
+/** An input to send to the agent. */
 export type Input = string;
 
+/** Respesent a thread of conversation with the agent. One thread can have multiple consecutive turns. */
 export class Thread {
-  private exec: CodexExec;
-  private options: CodexOptions;
-  public id: string | null;
+  private _exec: CodexExec;
+  private _options: CodexOptions;
+  private _id: string | null;
 
-  constructor(exec: CodexExec, options: CodexOptions, id: string | null = null) {
-    this.exec = exec;
-    this.options = options;
-    this.id = id;
+  /** Returns the ID of the thread. Populated after the first turn starts. */
+  public get id(): string | null {
+    return this.id;
   }
 
-  async runStreamed(input: string): Promise<RunStreamedResult> {
+  constructor(exec: CodexExec, options: CodexOptions, id: string | null = null) {
+    this._exec = exec;
+    this._options = options;
+    this._id = id;
+  }
+
+  /** Provides the input to the agent and streams events as they are produced during the turn. */
+  async runStreamed(input: string): Promise<StreamedTurn> {
     return { events: this.runStreamedInternal(input) };
   }
 
-  private async *runStreamedInternal(input: string): AsyncGenerator<ThreadEvent> {
-    const generator = this.exec.run({
-      input,
-      baseUrl: this.options.baseUrl,
-      apiKey: this.options.apiKey,
-      threadId: this.id,
-    });
-    for await (const item of generator) {
-      const parsed = JSON.parse(item) as ThreadEvent;
-      if (parsed.type === "thread.started") {
-        this.id = parsed.thread_id;
-      }
-      yield parsed;
-    }
-  }
-
-  async run(input: string): Promise<RunResult> {
+  /** Provides the input to the agent and returns the completed turn.
+   * Throws if the turn fails.
+   */
+  async run(input: string): Promise<Turn> {
     const generator = this.runStreamedInternal(input);
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
@@ -59,4 +56,22 @@ export class Thread {
     }
     return { items, finalResponse };
   }
+
+
+  private async *runStreamedInternal(input: string): AsyncGenerator<ThreadEvent> {
+    const generator = this._exec.run({
+      input,
+      baseUrl: this._options.baseUrl,
+      apiKey: this._options.apiKey,
+      threadId: this._id,
+    });
+    for await (const item of generator) {
+      const parsed = JSON.parse(item) as ThreadEvent;
+      if (parsed.type === "thread.started") {
+        this._id = parsed.thread_id;
+      }
+      yield parsed;
+    }
+  }
+
 }
