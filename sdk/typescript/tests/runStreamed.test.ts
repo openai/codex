@@ -2,7 +2,7 @@ import path from "path";
 
 import { describe, expect, it } from "@jest/globals";
 
-import { Codex, ConversationEvent } from "../src/index.js";
+import { Codex, ConversationEvent } from "../src/index";
 
 import {
   assistantMessage,
@@ -10,7 +10,7 @@ import {
   responseStarted,
   sse,
   startResponsesTestProxy,
-} from "./responsesProxy.js";
+} from "./responsesProxy";
 
 const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
 
