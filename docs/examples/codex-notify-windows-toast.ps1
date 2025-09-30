@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Example Codex CLI notifier for Windows toast notifications.
 
@@ -12,10 +12,18 @@
         notify = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/<you>/codex-notify.ps1"]
 
     in `~/.codex/config.toml` (note forward slashes for TOML strings).
+
+    The script defaults to the built-in `Windows.PowerShell` AppUserModelID (AUMID)
+    when displaying the toast. If you already have a custom AUMID registered (for
+    example via a Start menu shortcut for another helper app), supply it as the
+    second argument when wiring up `notify`.
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [string]$NotificationJson
+    [string]$NotificationJson,
+
+    [Parameter(Position = 1)]
+    [string]$AppId = 'Windows.PowerShell'
 )
 
 # Try to parse the JSON payload Codex passes to `notify` commands.
@@ -75,9 +83,8 @@ try {
         $toast.Group = 'codex-cli-turns'
     }
 
-    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Codex.CLI')
+    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId)
     $notifier.Show($toast)
 } catch {
     Write-Verbose "codex-cli-notify: toast failed: $_"
 }
-

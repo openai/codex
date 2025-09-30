@@ -1,4 +1,4 @@
-# Config
+﻿# Config
 
 
 Codex supports several mechanisms for setting config values:
@@ -99,11 +99,11 @@ query_params = { api-version = "2025-04-01-preview" }
 wire_api = "responses"
 ```
 
-Export your key before launching Codex: `export AZURE_OPENAI_API_KEY=…`
+Export your key before launching Codex: `export AZURE_OPENAI_API_KEY=â€¦`
 
 ### Per-provider network tuning
 
-The following optional settings control retry behaviour and streaming idle timeouts **per model provider**. They must be specified inside the corresponding `[model_providers.<id>]` block in `config.toml`. (Older releases accepted top‑level keys; those are now ignored.)
+The following optional settings control retry behaviour and streaming idle timeouts **per model provider**. They must be specified inside the corresponding `[model_providers.<id>]` block in `config.toml`. (Older releases accepted topâ€‘level keys; those are now ignored.)
 
 Example:
 
@@ -112,7 +112,7 @@ Example:
 name = "OpenAI"
 base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
-# network tuning overrides (all optional; falls back to built‑in defaults)
+# network tuning overrides (all optional; falls back to builtâ€‘in defaults)
 request_max_retries = 4            # retry failed HTTP requests
 stream_max_retries = 10            # retry dropped SSE streams
 stream_idle_timeout_ms = 300000    # 5m idle timeout
@@ -252,7 +252,7 @@ model_reasoning_summary = "none"  # disable reasoning summaries
 
 ## model_verbosity
 
-Controls output length/detail on GPT‑5 family models when using the Responses API. Supported values:
+Controls output length/detail on GPTâ€‘5 family models when using the Responses API. Supported values:
 
 - `"low"`
 - `"medium"` (default when omitted)
@@ -426,10 +426,10 @@ include_only = ["PATH", "HOME"]
 
 | Field                     | Type                       | Default | Description                                                                                                                                     |
 | ------------------------- | -------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`                 | string                     | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).           |
+| `inherit`                 | string                     | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, â€¦), or `none` (start empty).           |
 | `ignore_default_excludes` | boolean                    | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.              |
 | `exclude`                 | array<string>        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
-| `set`                     | table<string,string> | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |
+| `set`                     | table<string,string> | `{}`    | Explicit key/value overrides or additions â€“ always win over inherited values.                                                                   |
 | `include_only`            | array<string>        | `[]`    | If non-empty, a whitelist of patterns; only variables that match _one_ pattern survive the final step. (Generally used with `inherit = "all"`.) |
 
 The patterns are **glob style**, not full regular expressions: `*` matches any
@@ -467,7 +467,7 @@ Codex tags every exported event with `service.name = $ORIGINATOR` (the same
 value sent in the `originator` header, `codex_cli_rs` by default), the CLI
 version, and an `env` attribute so downstream collectors can distinguish
 dev/staging/prod traffic. Only telemetry produced inside the `codex_otel`
-crate—the events listed below—is forwarded to the exporter.
+crateâ€”the events listed belowâ€”is forwarded to the exporter.
 
 ### Event catalog
 
@@ -525,9 +525,9 @@ These event shapes may change as we iterate.
 
 Set `otel.exporter` to control where events go:
 
-- `none` – leaves instrumentation active but skips exporting. This is the
+- `none` â€“ leaves instrumentation active but skips exporting. This is the
   default.
-- `otlp-http` – posts OTLP log records to an OTLP/HTTP collector. Specify the
+- `otlp-http` â€“ posts OTLP log records to an OTLP/HTTP collector. Specify the
   endpoint, protocol, and headers your collector expects:
 
   ```toml
@@ -539,7 +539,7 @@ Set `otel.exporter` to control where events go:
   }}
   ```
 
-- `otlp-grpc` – streams OTLP log records over gRPC. Provide the endpoint and any
+- `otlp-grpc` â€“ streams OTLP log records over gRPC. Provide the endpoint and any
   metadata headers:
 
   ```toml
@@ -637,7 +637,7 @@ notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 ```
 
 > [!NOTE]
-> Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
+> Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers inâ€‘TUI alerts (e.g., approval prompts), while `notify` is best for systemâ€‘level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
 
 ### Windows toast notification example
 
@@ -647,7 +647,7 @@ Windows users can reuse the sample PowerShell script in [`docs/examples/codex-no
 notify = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/<you>/codex-notify.ps1"]
 ```
 
-Codex will call the script with the JSON payload shown above; the script parses the data and uses the built-in Windows toast API to surface a desktop notification that includes the first line of your prompt and the assistant’s reply.
+Codex will call the script with the JSON payload shown above; the script parses the data and uses the built-in Windows toast API to surface a desktop notification that includes the first line of your prompt and the assistantâ€™s reply. The script defaults to the built-in `Windows.PowerShell` AppUserModelID (AUMID); if you have registered a different AUMID, append it as an extra argument in the `notify` array (for example, add `"MyCustom.App"` after the script path).
 
 
 ## history
@@ -665,7 +665,7 @@ persistence = "none"  # "save-all" is the default value
 
 Identifies the editor/URI scheme to use for hyperlinking citations in model output. If set, citations to files in the model output will be hyperlinked using the specified URI scheme so they can be ctrl/cmd-clicked from the terminal to open them.
 
-For example, if the model output includes a reference such as `【F:/home/user/project/main.py†L42-L50】`, then this would be rewritten to link to the URI `vscode://file/home/user/project/main.py:42`.
+For example, if the model output includes a reference such as `ã€F:/home/user/project/main.pyâ€ L42-L50ã€‘`, then this would be rewritten to link to the URI `vscode://file/home/user/project/main.py:42`.
 
 Note this is **not** a general editor setting (like `$EDITOR`), as it only accepts a fixed set of values:
 
@@ -689,7 +689,7 @@ hide_agent_reasoning = true   # defaults to false
 
 ## show_raw_agent_reasoning
 
-Surfaces the model’s raw chain-of-thought ("raw reasoning content") when available.
+Surfaces the modelâ€™s raw chain-of-thought ("raw reasoning content") when available.
 
 Notes:
 
@@ -735,7 +735,7 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 > Codex emits desktop notifications using terminal escape codes. Not all terminals support these (notably, macOS Terminal.app and VS Code's terminal do not support custom notifications. iTerm2, Ghostty and WezTerm do support these notifications).
 
 > [!NOTE]
-> `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
+> `tui.notifications` is builtâ€‘in and limited to the TUI session. For programmatic or crossâ€‘environment notificationsâ€”or to integrate with OSâ€‘specific notifiersâ€”use the topâ€‘level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
 ## Config reference
 
@@ -747,8 +747,8 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `model_max_output_tokens` | number | Max output tokens. |
 | `approval_policy` | `untrusted` \| `on-failure` \| `on-request` \| `never` | When to prompt for approval. |
 | `sandbox_mode` | `read-only` \| `workspace-write` \| `danger-full-access` | OS sandbox policy. |
-| `sandbox_workspace_write.writable_roots` | array<string> | Extra writable roots in workspace‑write. |
-| `sandbox_workspace_write.network_access` | boolean | Allow network in workspace‑write (default: false). |
+| `sandbox_workspace_write.writable_roots` | array<string> | Extra writable roots in workspaceâ€‘write. |
+| `sandbox_workspace_write.network_access` | boolean | Allow network in workspaceâ€‘write (default: false). |
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean | Exclude `$TMPDIR` from writable roots (default: false). |
 | `sandbox_workspace_write.exclude_slash_tmp` | boolean | Exclude `/tmp` from writable roots (default: false). |
 | `disable_response_storage` | boolean | Required for ZDR orgs. |
@@ -766,28 +766,29 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `model_providers.<id>.query_params` | map<string,string> | Extra query params (e.g., Azure `api-version`). |
 | `model_providers.<id>.http_headers` | map<string,string> | Additional static headers. |
 | `model_providers.<id>.env_http_headers` | map<string,string> | Headers sourced from env vars. |
-| `model_providers.<id>.request_max_retries` | number | Per‑provider HTTP retry count (default: 4). |
+| `model_providers.<id>.request_max_retries` | number | Perâ€‘provider HTTP retry count (default: 4). |
 | `model_providers.<id>.stream_max_retries` | number | SSE stream retry count (default: 5). |
 | `model_providers.<id>.stream_idle_timeout_ms` | number | SSE idle timeout (ms) (default: 300000). |
 | `project_doc_max_bytes` | number | Max bytes to read from `AGENTS.md`. |
 | `profile` | string | Active profile name. |
-| `profiles.<name>.*` | various | Profile‑scoped overrides of the same keys. |
+| `profiles.<name>.*` | various | Profileâ€‘scoped overrides of the same keys. |
 | `history.persistence` | `save-all` \| `none` | History file persistence (default: `save-all`). |
 | `history.max_bytes` | number | Currently ignored (not enforced). |
 | `file_opener` | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`). |
-| `tui` | table | TUI‑specific options. |
+| `tui` | table | TUIâ€‘specific options. |
 | `tui.notifications` | boolean \| array<string> | Enable desktop notifications in the tui (default: false). |
 | `hide_agent_reasoning` | boolean | Hide model reasoning events. |
 | `show_raw_agent_reasoning` | boolean | Show raw reasoning (when available). |
 | `model_reasoning_effort` | `minimal` \| `low` \| `medium` \| `high` | Responses API reasoning effort. |
 | `model_reasoning_summary` | `auto` \| `concise` \| `detailed` \| `none` | Reasoning summaries. |
-| `model_verbosity` | `low` \| `medium` \| `high` | GPT‑5 text verbosity (Responses API). |
-| `model_supports_reasoning_summaries` | boolean | Force‑enable reasoning summaries. |
+| `model_verbosity` | `low` \| `medium` \| `high` | GPTâ€‘5 text verbosity (Responses API). |
+| `model_supports_reasoning_summaries` | boolean | Forceâ€‘enable reasoning summaries. |
 | `model_reasoning_summary_format` | `none` \| `experimental` | Force reasoning summary format. |
 | `chatgpt_base_url` | string | Base URL for ChatGPT auth flow. |
 | `experimental_resume` | string (path) | Resume JSONL path (internal/experimental). |
-| `experimental_instructions_file` | string (path) | Replace built‑in instructions (experimental). |
+| `experimental_instructions_file` | string (path) | Replace builtâ€‘in instructions (experimental). |
 | `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool. |
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
 | `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |
+
