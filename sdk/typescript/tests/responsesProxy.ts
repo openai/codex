@@ -36,9 +36,9 @@ export type RecordedRequest = {
   json: ResponsesApiRequest;
 };
 
-const formatSseEvent = (event: SseEvent): string => {
+function formatSseEvent(event: SseEvent): string {
   return `event: ${event.type}\n` + `data: ${JSON.stringify(event)}\n\n`;
-};
+}
 
 export async function startResponsesTestProxy(
   options: ResponsesProxyOptions,
@@ -50,8 +50,8 @@ export async function startResponsesTestProxy(
 
   const requests: RecordedRequest[] = [];
 
-  const readRequestBody = (req: http.IncomingMessage) =>
-    new Promise<string>((resolve, reject) => {
+  function readRequestBody(req: http.IncomingMessage): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
       const chunks: Buffer[] = [];
       req.on("data", (chunk) => {
         chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
@@ -61,11 +61,12 @@ export async function startResponsesTestProxy(
       });
       req.on("error", reject);
     });
+  }
 
   let responseIndex = 0;
 
   const server = http.createServer((req, res) => {
-    const handle = async () => {
+    async function handle(): Promise<void> {
       if (req.method === "POST" && req.url === "/responses") {
         const body = await readRequestBody(req);
         const json = JSON.parse(body);
@@ -86,7 +87,7 @@ export async function startResponsesTestProxy(
 
       res.statusCode = 404;
       res.end();
-    };
+    }
 
     handle().catch(() => {
       res.statusCode = 500;
@@ -108,7 +109,7 @@ export async function startResponsesTestProxy(
     server.once("error", reject);
   });
 
-  const close = async () => {
+  async function close(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       server.close((err) => {
         if (err) {
@@ -118,47 +119,55 @@ export async function startResponsesTestProxy(
         resolve();
       });
     });
-  };
+  }
   return { url, close, requests };
 }
 
-export const sse = (...events: SseEvent[]): SseResponseBody => ({
-  kind: "sse",
-  events,
-});
+export function sse(...events: SseEvent[]): SseResponseBody {
+  return {
+    kind: "sse",
+    events,
+  };
+}
 
-export const responseStarted = (responseId: string = DEFAULT_RESPONSE_ID): SseEvent => ({
-  type: "response.created",
-  response: {
-    id: responseId,
-  },
-});
-
-export const assistantMessage = (text: string, itemId: string = DEFAULT_MESSAGE_ID): SseEvent => ({
-  type: "response.output_item.done",
-  item: {
-    type: "message",
-    role: "assistant",
-    id: itemId,
-    content: [
-      {
-        type: "output_text",
-        text,
-      },
-    ],
-  },
-});
-
-export const responseCompleted = (responseId: string = DEFAULT_RESPONSE_ID): SseEvent => ({
-  type: "response.completed",
-  response: {
-    id: responseId,
-    usage: {
-      input_tokens: 0,
-      input_tokens_details: null,
-      output_tokens: 0,
-      output_tokens_details: null,
-      total_tokens: 0,
+export function responseStarted(responseId: string = DEFAULT_RESPONSE_ID): SseEvent {
+  return {
+    type: "response.created",
+    response: {
+      id: responseId,
     },
-  },
-});
+  };
+}
+
+export function assistantMessage(text: string, itemId: string = DEFAULT_MESSAGE_ID): SseEvent {
+  return {
+    type: "response.output_item.done",
+    item: {
+      type: "message",
+      role: "assistant",
+      id: itemId,
+      content: [
+        {
+          type: "output_text",
+          text,
+        },
+      ],
+    },
+  };
+}
+
+export function responseCompleted(responseId: string = DEFAULT_RESPONSE_ID): SseEvent {
+  return {
+    type: "response.completed",
+    response: {
+      id: responseId,
+      usage: {
+        input_tokens: 0,
+        input_tokens_details: null,
+        output_tokens: 0,
+        output_tokens_details: null,
+        total_tokens: 0,
+      },
+    },
+  };
+}

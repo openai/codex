@@ -2,8 +2,8 @@ import path from "path";
 
 import { describe, expect, it } from "@jest/globals";
 
-import { ConversationEvent } from "../src/index";
 import { Codex } from "../src/codex";
+import { ConversationEvent } from "../src/index";
 
 import {
   assistantMessage,
@@ -159,9 +159,9 @@ describe("Codex", () => {
   });
 });
 
-const drainEvents = async (events: AsyncGenerator<ConversationEvent>) => {
+async function drainEvents(events: AsyncGenerator<ConversationEvent>): Promise<void> {
   let done = false;
   do {
     done = (await events.next()).done ?? false;
   } while (!done);
-};
+}

@@ -35,6 +35,7 @@
       {
         "ts-expect-error": "allow-with-description"
       }
-    ]
+    ],
+    "func-style": ["error", "declaration"]
   }
 }

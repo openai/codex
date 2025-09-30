@@ -7,14 +7,6 @@ import { Codex } from "@openai/codex-sdk";
 import type { ConversationEvent, ConversationItem } from "@openai/codex-sdk";
 import path from "node:path";
 
-const requireEnv = (value: string | undefined, name: string): string => {
-  if (value && value.trim().length > 0) {
-    return value;
-  }
-  console.error(`Set ${name} before running this sample.`);
-  process.exit(1);
-};
-
 const executablePath =
   process.env.CODEX_EXECUTABLE ??
   path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
