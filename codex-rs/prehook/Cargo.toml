@@ -1,0 +1,30 @@
+[package]
+name = "codex-prehook"
+version = { workspace = true }
+edition = "2024"
+
+[lib]
+name = "codex_prehook"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+tokio = { workspace = true, features = ["process", "time", "macros"] }
+tracing = { workspace = true }
+codex-mcp-client = { workspace = true }
+codex-common = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+async-trait = "0.1"
+mcp-types = { workspace = true }
+libc = { workspace = true }
+regex-lite = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

@@ -29,6 +29,7 @@ members = [
     "responses-api-proxy",
     "otel",
     "tui",
+    "prehook",
     "git-apply",
     "utils/json-to-toml",
     "utils/readiness",
