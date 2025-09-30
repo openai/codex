@@ -71,7 +71,7 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
             .status()
             .with_context(|| format!("Failed to invoke Prettier at {}", prettier_bin.display()))?;
         if !status.success() {
-            return Err(anyhow!("Prettier failed with status {}", status));
+            return Err(anyhow!("Prettier failed with status {status}"));
         }
     }
 
