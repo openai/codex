@@ -1,8 +1,13 @@
-use crate::config::{ArangoConfig, SchedulerConfig};
-use anyhow::{bail, Result};
-use reqwest::{Client, ClientBuilder};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use crate::config::ArangoConfig;
+use crate::config::SchedulerConfig;
+use anyhow::bail;
+use anyhow::Result;
+use reqwest::Client;
+use reqwest::ClientBuilder;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::json;
+use serde_json::Value;
 
 #[derive(Clone)]
 pub struct Db {
@@ -125,8 +130,10 @@ impl Db {
 
     /// Retry wrapper with jittered exponential backoff for POSTs that insert documents.
     async fn post_json_with_retry(&self, url: &str, body: &Value) -> Result<()> {
-        use rand::{thread_rng, Rng};
-        use tokio::time::{sleep, Duration};
+        use rand::rng;
+        use rand::Rng;
+        use tokio::time::sleep;
+        use tokio::time::Duration;
 
         let mut attempt = 0usize;
         loop {
@@ -143,8 +150,8 @@ impl Db {
             let base_ms = self.backoff_base_ms.saturating_mul(1u64 << attempt.min(8));
             let variance = (base_ms as f32 * self.backoff_jitter) as u64;
             let jitter = {
-                let mut rng = thread_rng();
-                let offset: i64 = rng.gen_range(-(variance as i64)..=(variance as i64));
+                let mut r = rng();
+                let offset: i64 = r.random_range(-(variance as i64)..=(variance as i64));
                 (base_ms as i64 + offset).max(50) as u64
             };
             sleep(Duration::from_millis(jitter)).await;

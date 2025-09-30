@@ -1,4 +1,5 @@
-use codex_scheduler::config::{ArangoConfig, SchedulerConfig};
+use codex_scheduler::config::ArangoConfig;
+use codex_scheduler::config::SchedulerConfig;
 
 #[test]
 fn arango_password_is_redacted_in_debug() {

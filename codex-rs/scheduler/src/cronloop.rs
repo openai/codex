@@ -1,13 +1,19 @@
-use crate::config::{SchedulerConfig, SchedulerJob};
+use crate::config::SchedulerConfig;
+use crate::config::SchedulerJob;
 use crate::db::Db;
-use crate::runner::{execute_run, RunRequest};
-use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use crate::runner::execute_run;
+use crate::runner::RunRequest;
+use anyhow::Context;
+use anyhow::Result;
+use chrono::DateTime;
+use chrono::Utc;
 use cron::Schedule;
 use hostname;
+use std::str::FromStr;
 use std::sync::Arc;
-use std::{str::FromStr, time::Duration};
-use tokio::{sync::Semaphore, time::sleep};
+use std::time::Duration;
+use tokio::sync::Semaphore;
+use tokio::time::sleep;
 use tracing::warn;
 use uuid::Uuid;
 

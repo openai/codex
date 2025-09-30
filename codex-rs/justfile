@@ -60,15 +60,5 @@ pr-body PR FILE:
 pr-comment PR FILE:
     cd .. && gh pr comment {{PR}} -F {{FILE}}
 
-review-bundle OUT?=local/review_bundles/single/review.md:
-    cd .. && bash -lc '
-      OUTDIR=$(dirname {{OUT}}); mkdir -p "$OUTDIR";
-      OUT={{OUT}}; DATE=$(date +%F);
-      WT=$(git diff || true);
-      echo "# Codex Review Bundle (Single File)\n\n- Date: $DATE\n" > "$OUT";
-      echo "## Diffs (working tree)\n\n\`\`\`diff" >> "$OUT";
-      printf "%s\n" "$WT" >> "$OUT";
-      echo "\`\`\`" >> "$OUT";
-      echo "\n## Test Plan\n- cd codex-rs && just fmt\n- cargo test -p codex-tui\n" >> "$OUT";
-      gh gist create -p -d "Codex Review Bundle $DATE" "$OUT" | tail -n1
-    '
+review-bundle OUT='local/review_bundles/single/review.md':
+    cd .. && OUTDIR=$(dirname {{OUT}}) && mkdir -p "$OUTDIR" && OUT={{OUT}} && DATE=$(date +%F) && WT=$(git diff || true) && printf "# Codex Review Bundle (Single File)\n\n- Date: %s\n\n## Diffs (working tree)\n\n\`\`\`diff\n%s\n\`\`\`\n\n## Test Plan\n- cd codex-rs && just fmt\n- cargo test -p codex-tui\n" "$DATE" "$WT" > "$OUT" && gh gist create -p -d "Codex Review Bundle $DATE" "$OUT" | tail -n1
