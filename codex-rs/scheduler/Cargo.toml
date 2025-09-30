@@ -16,8 +16,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "ti
 tracing = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 which = "6"
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "cookies"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 dirs = "5"
 toml = "0.8"
 hostname = "0.4"
-

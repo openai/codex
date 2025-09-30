@@ -35,6 +35,7 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+codex-scheduler = { path = "../scheduler", optional = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
@@ -44,3 +45,9 @@ os_info = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 wiremock = { workspace = true }
+
+[features]
+# Do not enable scheduler by default.
+default = []
+# Opt-in scheduler integration
+scheduler = ["dep:codex-scheduler"]

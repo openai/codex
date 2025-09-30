@@ -65,3 +65,53 @@ If you don’t have the tool:
 ### Test assertions
 
 - Tests should use pretty_assertions::assert_eq for clearer diffs. Import this at the top of the test module if it isn't already.
+
+## PR Autopilot (agent policy)
+
+The agent may prepare and update PRs when explicitly asked. It follows these guardrails:
+
+- Preconditions
+  - The user says: “prepare PR”, “update PR”, “trigger Codex review”, “post PR comment”, or “generate review bundle”.
+  - `gh` is authenticated and SSO‑authorized for the target org/repo.
+  - Remotes `origin` (fork) and `upstream` (main) are configured.
+
+- Steps (prepare PR)
+  - Scope check: `git diff --name-only origin/main...HEAD` and confirm only intended files are touched.
+  - Formatting + lint: `cd codex-rs && just fmt` and `just fix -p <crate>` for touched crates.
+  - Targeted tests for touched crates (e.g., `cargo test -p codex-tui`).
+  - Create/checkout a branch, `git add -A`, `git commit`, `git push --set-upstream origin <branch>`.
+  - Open/update PR with `gh pr create`/`gh pr edit` using a local markdown body file.
+
+- Steps (trigger Codex Review)
+  - `git fetch upstream && git rebase upstream/main`.
+  - `git commit --allow-empty -m "chore: re-run Codex Review" && git push --force-with-lease`.
+
+- Steps (comments/body)
+  - `gh pr comment <number> -R <org/repo> --body-file <path>`.
+  - `gh pr edit <number> -R <org/repo> --body-file <path>`.
+
+- Guardrails
+  - Never push unrelated diffs; trim PRs to the intended files.
+  - Always prefer `--force-with-lease` over `--force`.
+  - For larger changes, generate a single‑file review bundle (see scripts below) and include a short “How to verify” section.
+
+## PR helpers (scripts + just targets)
+
+We keep a few lightweight commands so the agent (and humans) can perform routine PR tasks reliably.
+
+- `scripts/pr.sh` (invoked by just targets)
+  - `prepare <branch> <body_md>`: run fmt/fix/tests, push branch, and create/update PR.
+  - `comment <pr> <md>`: post a PR comment from a file.
+  - `body <pr> <md>`: update PR body from a file.
+  - `trigger`: create an empty commit and push to re‑run Codex Review.
+
+- `codex-rs/justfile` (targets)
+  - `pr-fmt`: `cd codex-rs && just fmt`
+  - `pr-fix-<crate>`: `cd codex-rs && just fix -p <crate>`
+  - `pr-tests-<crate>`: e.g., `cd codex-rs && cargo test -p codex-tui`
+  - `pr-trigger`: empty commit + push with lease
+  - `pr-body PR=<n> FILE=<path>`: update PR body
+  - `pr-comment PR=<n> FILE=<path>`: post PR comment
+  - `review-bundle FILE=<out.md>`: generate a single‑file gist for code review (diffs + excerpts + test plan)
+
+These helpers are safe defaults the agent can call when asked; they also make human review runs reproducible.

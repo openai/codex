@@ -45,3 +45,30 @@ test:
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"
+
+# --- PR helpers ---
+
+pr-fmt:
+    cd .. && cd codex-rs && just fmt
+
+pr-trigger:
+    cd .. && git commit --allow-empty -m "chore: re-run Codex Review" && git push --force-with-lease
+
+pr-body PR FILE:
+    cd .. && gh pr edit {{PR}} -F {{FILE}}
+
+pr-comment PR FILE:
+    cd .. && gh pr comment {{PR}} -F {{FILE}}
+
+review-bundle OUT?=local/review_bundles/single/review.md:
+    cd .. && bash -lc '
+      OUTDIR=$(dirname {{OUT}}); mkdir -p "$OUTDIR";
+      OUT={{OUT}}; DATE=$(date +%F);
+      WT=$(git diff || true);
+      echo "# Codex Review Bundle (Single File)\n\n- Date: $DATE\n" > "$OUT";
+      echo "## Diffs (working tree)\n\n\`\`\`diff" >> "$OUT";
+      printf "%s\n" "$WT" >> "$OUT";
+      echo "\`\`\`" >> "$OUT";
+      echo "\n## Test Plan\n- cd codex-rs && just fmt\n- cargo test -p codex-tui\n" >> "$OUT";
+      gh gist create -p -d "Codex Review Bundle $DATE" "$OUT" | tail -n1
+    '
