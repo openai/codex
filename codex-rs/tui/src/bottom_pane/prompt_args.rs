@@ -1,4 +1,5 @@
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use shlex::Shlex;
 
 /// Parse a first-line slash command of the form `/name <rest>`.
@@ -26,9 +27,9 @@ pub fn parse_positional_args(rest: &str) -> Vec<String> {
     Shlex::new(rest).collect()
 }
 
-/// Expands a message of the form `/name key=value …` using a matching saved prompt.
+/// Expands a message of the form `/prompts:name [value] [value] …` using a matching saved prompt.
 ///
-/// If the text does not start with `/`, or if no prompt named `name` exists,
+/// If the text does not start with `/prompts:`, or if no prompt named `name` exists,
 /// the function returns `Ok(None)`. On success it returns
 /// `Ok(Some(expanded))`; otherwise it returns a descriptive error.
 pub fn expand_custom_prompt(
@@ -39,7 +40,12 @@ pub fn expand_custom_prompt(
         return Ok(None);
     };
 
-    let prompt = match custom_prompts.iter().find(|p| p.name == name) {
+    // Only handle custom prompts when using the explicit prompts prefix with a colon.
+    let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:")) else {
+        return Ok(None);
+    };
+
+    let prompt = match custom_prompts.iter().find(|p| p.name == prompt_name) {
         Some(prompt) => prompt,
         None => return Ok(None),
     };
@@ -79,7 +85,11 @@ pub fn extract_positional_args_for_prompt_line(line: &str, prompt_name: &str) ->
     let Some(rest) = trimmed.strip_prefix('/') else {
         return Vec::new();
     };
-    let mut parts = rest.splitn(2, char::is_whitespace);
+    // Require the explicit prompts prefix for custom prompt invocations.
+    let Some(after_prefix) = rest.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:")) else {
+        return Vec::new();
+    };
+    let mut parts = after_prefix.splitn(2, char::is_whitespace);
     let cmd = parts.next().unwrap_or("");
     if cmd != prompt_name {
         return Vec::new();
