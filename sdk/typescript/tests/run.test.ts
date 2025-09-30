@@ -85,8 +85,6 @@ describe("Codex", () => {
     }
   });
 
-
-
   it("continues the thread when run is called twice with options", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
       statusCode: 200,
@@ -179,7 +177,6 @@ describe("Codex", () => {
       await close();
     }
   });
-
 
   it("passes turn options to exec", async () => {
     const { url, close, requests } = await startResponsesTestProxy({
