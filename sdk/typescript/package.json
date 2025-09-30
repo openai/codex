@@ -30,8 +30,8 @@
     "clean": "rm -rf dist",
     "build": "tsup",
     "build:watch": "tsup --watch",
-    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "lint:fix": "eslint --fix \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "lint": "pnpm eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "lint:fix": "pnpm eslint --fix \"src/**/*.ts\" \"tests/**/*.ts\"",
     "test": "jest",
     "test:watch": "jest --watch",
     "coverage": "jest --coverage",
@@ -42,17 +42,15 @@
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^20.19.18",
-    "@typescript-eslint/eslint-plugin": "^8.45.0",
-    "@typescript-eslint/parser": "^8.45.0",
+    "typescript-eslint": "^8.45.0",
     "eslint": "^9.36.0",
     "eslint-config-prettier": "^9.1.2",
-    "eslint-import-resolver-typescript": "^3.10.1",
-    "eslint-plugin-import": "^2.32.0",
     "jest": "^29.7.0",
     "prettier": "^3.6.2",
     "ts-jest": "^29.3.4",
     "ts-node": "^10.9.2",
     "tsup": "^8.5.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "eslint-plugin-jest": "^29.0.1"
   }
 }
