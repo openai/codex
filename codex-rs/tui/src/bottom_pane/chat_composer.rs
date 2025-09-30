@@ -507,8 +507,8 @@ impl ChatComposer {
                                         self.textarea.set_text("");
                                         return (InputResult::Submitted(expanded), true);
                                     } else {
-                                        let text =
-                                            format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
+                                        let name = prompt.name.clone();
+                                        let text = format!("/{PROMPTS_CMD_PREFIX}:{name} ");
                                         self.textarea.set_text(&text);
                                         self.textarea.set_cursor(self.textarea.text().len());
                                     }
