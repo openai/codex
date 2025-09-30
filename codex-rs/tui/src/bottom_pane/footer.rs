@@ -1,11 +1,12 @@
+use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::WidgetRef;
+use std::iter;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
@@ -21,12 +22,14 @@ pub(crate) enum FooterMode {
     ShortcutPrompt,
     ShortcutOverlay,
     EscHint,
+    Empty,
 }
 
 pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
-    if ctrl_c_hint {
+    if ctrl_c_hint && matches!(current, FooterMode::CtrlCReminder) {
         return current;
     }
+
     match current {
         FooterMode::ShortcutOverlay | FooterMode::CtrlCReminder => FooterMode::ShortcutPrompt,
         _ => FooterMode::ShortcutOverlay,
@@ -43,13 +46,12 @@ pub(crate) fn esc_hint_mode(current: FooterMode, is_task_running: bool) -> Foote
 
 pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     match current {
-        FooterMode::EscHint | FooterMode::ShortcutOverlay => FooterMode::ShortcutPrompt,
+        FooterMode::EscHint
+        | FooterMode::ShortcutOverlay
+        | FooterMode::CtrlCReminder
+        | FooterMode::Empty => FooterMode::ShortcutPrompt,
         other => other,
     }
-}
-
-pub(crate) fn prompt_mode() -> FooterMode {
-    FooterMode::ShortcutPrompt
 }
 
 pub(crate) fn footer_height(props: FooterProps) -> u16 {
@@ -70,24 +72,16 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     match props.mode {
-        FooterMode::CtrlCReminder => {
-            vec![ctrl_c_reminder_line(CtrlCReminderState {
-                is_task_running: props.is_task_running,
-            })]
-        }
-        FooterMode::ShortcutPrompt => vec![Line::from(vec!["? for shortcuts".dim()])],
+        FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
+            is_task_running: props.is_task_running,
+        })],
+        FooterMode::ShortcutPrompt => vec![dim_line(indent_text("? for shortcuts"))],
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
             use_shift_enter_hint: props.use_shift_enter_hint,
             esc_backtrack_hint: props.esc_backtrack_hint,
-            is_task_running: props.is_task_running,
         }),
-        FooterMode::EscHint => {
-            vec![esc_hint_line(ShortcutsState {
-                use_shift_enter_hint: props.use_shift_enter_hint,
-                esc_backtrack_hint: props.esc_backtrack_hint,
-                is_task_running: props.is_task_running,
-            })]
-        }
+        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
+        FooterMode::Empty => Vec::new(),
     }
 }
 
@@ -100,7 +94,6 @@ struct CtrlCReminderState {
 struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
-    is_task_running: bool,
 }
 
 fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
@@ -109,28 +102,54 @@ fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
     } else {
         "quit"
     };
-    Line::from(vec![
-        Span::from(format!("  ctrl + c again to {action}")).dim(),
-    ])
+    let text = format!("ctrl + c again to {action}");
+    dim_line(indent_text(&text))
 }
 
-fn esc_hint_line(state: ShortcutsState) -> Line<'static> {
-    let text = if state.esc_backtrack_hint {
-        "  esc again to edit previous message"
+fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
+    let text = if esc_backtrack_hint {
+        "esc again to edit previous message"
     } else {
-        "  esc esc to edit previous message"
+        "esc esc to edit previous message"
     };
-    Line::from(vec![Span::from(text).dim()])
+    dim_line(indent_text(text))
 }
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
-    let mut rendered = Vec::new();
+    let mut commands = String::new();
+    let mut newline = String::new();
+    let mut file_paths = String::new();
+    let mut paste_image = String::new();
+    let mut edit_previous = String::new();
+    let mut quit = String::new();
+    let mut show_transcript = String::new();
+
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
-            rendered.push(text);
+            match descriptor.id {
+                ShortcutId::Commands => commands = text,
+                ShortcutId::InsertNewline => newline = text,
+                ShortcutId::FilePaths => file_paths = text,
+                ShortcutId::PasteImage => paste_image = text,
+                ShortcutId::EditPrevious => edit_previous = text,
+                ShortcutId::Quit => quit = text,
+                ShortcutId::ShowTranscript => show_transcript = text,
+            }
         }
     }
-    build_columns(rendered)
+
+    let ordered = vec![
+        commands,
+        newline,
+        file_paths,
+        paste_image,
+        edit_previous,
+        quit,
+        String::new(),
+        show_transcript,
+    ];
+
+    build_columns(ordered)
 }
 
 fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
@@ -138,11 +157,20 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
         return Vec::new();
     }
 
-    const COLUMNS: usize = 3;
-    const MAX_PADDED_WIDTHS: [usize; COLUMNS - 1] = [24, 28];
-    const MIN_PADDED_WIDTHS: [usize; COLUMNS - 1] = [22, 0];
+    const COLUMNS: usize = 2;
+    const COLUMN_PADDING: [usize; COLUMNS] = [4, 4];
+    const COLUMN_GAP: usize = 4;
 
     let rows = entries.len().div_ceil(COLUMNS);
+    let target_len = rows * COLUMNS;
+    let mut entries = entries;
+    if entries.len() < target_len {
+        entries.extend(std::iter::repeat_n(
+            String::new(),
+            target_len - entries.len(),
+        ));
+    }
+
     let mut column_widths = [0usize; COLUMNS];
 
     for (idx, entry) in entries.iter().enumerate() {
@@ -150,39 +178,43 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
         column_widths[column] = column_widths[column].max(entry.len());
     }
 
-    let mut lines = Vec::new();
-    for row in 0..rows {
-        let mut line = String::from("  ");
-        for col in 0..COLUMNS {
-            let idx = row * COLUMNS + col;
-            if idx >= entries.len() {
-                continue;
-            }
-            let entry = &entries[idx];
-            if col < COLUMNS - 1 {
-                let max_width = MAX_PADDED_WIDTHS[col];
-                let mut target_width = column_widths[col];
-                target_width = target_width.max(MIN_PADDED_WIDTHS[col]).min(max_width);
-                let pad_width = target_width + 2;
-                line.push_str(&format!("{entry:<pad_width$}"));
-            } else {
-                if col != 0 {
-                    line.push_str("  ");
-                }
-                line.push_str(entry);
-            }
-        }
-        lines.push(Line::from(vec![Span::from(line).dim()]));
+    for (idx, width) in column_widths.iter_mut().enumerate() {
+        *width += COLUMN_PADDING[idx];
     }
 
-    lines
+    entries
+        .chunks(COLUMNS)
+        .map(|chunk| {
+            let mut line = String::new();
+            for (col, entry) in chunk.iter().enumerate() {
+                line.push_str(entry);
+                if col < COLUMNS - 1 {
+                    let target_width = column_widths[col];
+                    let padding = target_width.saturating_sub(entry.len()) + COLUMN_GAP;
+                    line.push_str(&" ".repeat(padding));
+                }
+            }
+            let indented = indent_text(&line);
+            dim_line(indented)
+        })
+        .collect()
+}
+
+fn indent_text(text: &str) -> String {
+    let mut indented = String::with_capacity(FOOTER_INDENT_COLS + text.len());
+    indented.extend(iter::repeat_n(' ', FOOTER_INDENT_COLS));
+    indented.push_str(text);
+    indented
+}
+
+fn dim_line(text: String) -> Line<'static> {
+    Line::from(text).dim()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
     InsertNewline,
-    ChangeMode,
     FilePaths,
     PasteImage,
     EditPrevious,
@@ -236,13 +268,6 @@ impl ShortcutDescriptor {
     fn overlay_entry(&self, state: ShortcutsState) -> Option<String> {
         let binding = self.binding_for(state)?;
         let label = match self.id {
-            ShortcutId::Quit => {
-                if state.is_task_running {
-                    " to interrupt"
-                } else {
-                    self.label
-                }
-            }
             ShortcutId::EditPrevious => {
                 if state.esc_backtrack_hint {
                     " again to edit previous message"
@@ -252,12 +277,7 @@ impl ShortcutDescriptor {
             }
             _ => self.label,
         };
-        let text = match self.id {
-            ShortcutId::Quit if state.is_task_running => {
-                format!("{}{} to interrupt", self.prefix, binding.overlay_text)
-            }
-            _ => format!("{}{}{}", self.prefix, binding.overlay_text, label),
-        };
+        let text = format!("{}{}{}", self.prefix, binding.overlay_text, label);
         Some(text)
     }
 }
@@ -292,17 +312,6 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         ],
         prefix: "",
         label: " for newline",
-    },
-    ShortcutDescriptor {
-        id: ShortcutId::ChangeMode,
-        bindings: &[ShortcutBinding {
-            code: KeyCode::BackTab,
-            modifiers: KeyModifiers::SHIFT,
-            overlay_text: "shift + tab",
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " to change mode",
     },
     ShortcutDescriptor {
         id: ShortcutId::FilePaths,
