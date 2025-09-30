@@ -164,13 +164,13 @@ pub fn expand_custom_prompt(
         }
         let content = &prompt.content;
         let replaced = PROMPT_ARG_REGEX.replace_all(content, |caps: &regex_lite::Captures<'_>| {
-            let matched = caps
-                .get(0)
-                .expect("prompt arg regex should provide whole match");
-            if matched.start() > 0 && content.as_bytes()[matched.start() - 1] == b'$' {
+            if let Some(matched) = caps.get(0)
+                && matched.start() > 0
+                && content.as_bytes()[matched.start() - 1] == b'$'
+            {
                 return matched.as_str().to_string();
             }
-            let whole = matched.as_str();
+            let whole = &caps[0];
             let key = &whole[1..];
             inputs
                 .get(key)
