@@ -1,9 +1,14 @@
-use anyhow::{anyhow, Context as _, Result};
-use serde::{Deserialize, Serialize};
+use anyhow::Context as _;
+use anyhow::Result;
+use anyhow::anyhow;
+use serde::Deserialize;
+use serde::Serialize;
 use std::path::PathBuf;
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
-use tracing::{debug, warn};
+use tokio::time::Duration;
+use tokio::time::timeout;
+use tracing::debug;
+use tracing::warn;
 use uuid::Uuid;
 
 /// What to do when the prehook backend errors (unreachable, bad JSON, timeout, etc.).
@@ -16,7 +21,9 @@ pub enum OnErrorPolicy {
 }
 
 impl Default for OnErrorPolicy {
-    fn default() -> Self { Self::Fail }
+    fn default() -> Self {
+        Self::Fail
+    }
 }
 
 /// High-level action the caller intends to perform.
@@ -85,22 +92,31 @@ impl Context {
 #[serde(rename_all = "snake_case", tag = "decision")]
 pub enum Outcome {
     #[serde(rename = "allow")]
-    Allow { message: Option<String>, ttl_ms: Option<u64> },
+    Allow {
+        message: Option<String>,
+        ttl_ms: Option<u64>,
+    },
     #[serde(rename = "deny")]
     Deny { reason: String },
     #[serde(rename = "ask")]
     Ask { message: String },
     #[serde(rename = "patch")]
-    Patch { message: Option<String>, diff: String },
+    Patch {
+        message: Option<String>,
+        diff: String,
+    },
     #[serde(rename = "augment")]
-    Augment { message: Option<String>, context_items: Vec<serde_json::Value> },
+    Augment {
+        message: Option<String>,
+        context_items: Vec<serde_json::Value>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PrehookConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_backend")] 
+    #[serde(default = "default_backend")]
     pub backend: String, // "mcp" | "script" | "chained"
     #[serde(default)]
     pub on_error: OnErrorPolicy,
@@ -111,7 +127,9 @@ pub struct PrehookConfig {
     pub script: ScriptConfig,
 }
 
-fn default_backend() -> String { "mcp".to_string() }
+fn default_backend() -> String {
+    "mcp".to_string()
+}
 
 impl Default for PrehookConfig {
     fn default() -> Self {
@@ -132,12 +150,18 @@ pub struct McpConfig {
     /// Tool name to invoke, e.g. "codex.prehook.review"
     pub tool: Option<String>,
     /// Timeout in ms (default 5000)
-    #[serde(default = "default_timeout_ms")] 
+    #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
 }
 
 impl Default for McpConfig {
-    fn default() -> Self { Self { server: None, tool: Some("codex.prehook.review".to_string()), timeout_ms: default_timeout_ms() } }
+    fn default() -> Self {
+        Self {
+            server: None,
+            tool: Some("codex.prehook.review".to_string()),
+            timeout_ms: default_timeout_ms(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -145,15 +169,23 @@ pub struct ScriptConfig {
     pub cmd: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
-    #[serde(default = "default_timeout_ms")] 
+    #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
 }
 
 impl Default for ScriptConfig {
-    fn default() -> Self { Self { cmd: None, args: Vec::new(), timeout_ms: default_timeout_ms() } }
+    fn default() -> Self {
+        Self {
+            cmd: None,
+            args: Vec::new(),
+            timeout_ms: default_timeout_ms(),
+        }
+    }
 }
 
-fn default_timeout_ms() -> u64 { 5_000 }
+fn default_timeout_ms() -> u64 {
+    5_000
+}
 
 #[async_trait::async_trait]
 pub trait PreHook: Send + Sync {
@@ -166,13 +198,20 @@ pub struct ScriptPreHook {
 }
 
 impl ScriptPreHook {
-    pub fn new(cfg: ScriptConfig, on_error: OnErrorPolicy) -> Self { Self { cfg, on_error } }
+    pub fn new(cfg: ScriptConfig, on_error: OnErrorPolicy) -> Self {
+        Self { cfg, on_error }
+    }
 }
 
 #[async_trait::async_trait]
 impl PreHook for ScriptPreHook {
     async fn run(&self, ctx: &Context) -> Result<Outcome> {
-        let Some(cmd) = &self.cfg.cmd else { return Ok(Outcome::Allow { message: Some("prehook: script backend not configured".into()), ttl_ms: None }); };
+        let Some(cmd) = &self.cfg.cmd else {
+            return Ok(Outcome::Allow {
+                message: Some("prehook: script backend not configured".into()),
+                ttl_ms: None,
+            });
+        };
         let payload = serde_json::to_vec(ctx)?;
         let mut child = Command::new(cmd)
             .args(&self.cfg.args)
@@ -222,33 +261,61 @@ pub struct McpPreHook {
 }
 
 impl McpPreHook {
-    pub fn new(cfg: McpConfig, on_error: OnErrorPolicy) -> Self { Self { cfg, on_error } }
+    pub fn new(cfg: McpConfig, on_error: OnErrorPolicy) -> Self {
+        Self { cfg, on_error }
+    }
 }
 
 #[async_trait::async_trait]
 impl PreHook for McpPreHook {
     async fn run(&self, ctx: &Context) -> Result<Outcome> {
-        use mcp_types::{ClientCapabilities, InitializeRequestParams, Implementation};
-        let server = self.cfg.server.clone().ok_or_else(|| anyhow!("prehook MCP server not configured"))?;
-        let tool = self.cfg.tool.clone().unwrap_or_else(|| "codex.prehook.review".to_string());
+        use mcp_types::ClientCapabilities;
+        use mcp_types::Implementation;
+        use mcp_types::InitializeRequestParams;
+        let server = self
+            .cfg
+            .server
+            .clone()
+            .ok_or_else(|| anyhow!("prehook MCP server not configured"))?;
+        let tool = self
+            .cfg
+            .tool
+            .clone()
+            .unwrap_or_else(|| "codex.prehook.review".to_string());
         let tmo = Duration::from_millis(self.cfg.timeout_ms.max(1));
 
         let payload = serde_json::to_value(ctx)?;
         let fut = async move {
             // Only stdio: scheme supported in MVP
-            let (prog, args): (std::ffi::OsString, Vec<std::ffi::OsString>) = if let Some(path) = server.strip_prefix("stdio:") {
-                let parts: Vec<&str> = path.trim().split_whitespace().collect();
-                let p = std::ffi::OsString::from(parts.get(0).ok_or_else(|| anyhow!("invalid stdio: path"))?);
-                let a = parts[1..].iter().map(|s| std::ffi::OsString::from(s)).collect();
-                (p, a)
-            } else {
-                return Err(anyhow!("unsupported MCP server scheme (expected stdio:)"));
-            };
+            let (prog, args): (std::ffi::OsString, Vec<std::ffi::OsString>) =
+                if let Some(path) = server.strip_prefix("stdio:") {
+                    let parts: Vec<&str> = path.trim().split_whitespace().collect();
+                    let p = std::ffi::OsString::from(
+                        parts.get(0).ok_or_else(|| anyhow!("invalid stdio: path"))?,
+                    );
+                    let a = parts[1..]
+                        .iter()
+                        .map(|s| std::ffi::OsString::from(s))
+                        .collect();
+                    (p, a)
+                } else {
+                    return Err(anyhow!("unsupported MCP server scheme (expected stdio:)"));
+                };
 
             let client = codex_mcp_client::McpClient::new_stdio_client(prog, args, None).await?;
             let init_params = InitializeRequestParams {
-                capabilities: ClientCapabilities { elicitation: None, experimental: None, roots: None, sampling: None },
-                client_info: Implementation { name: "codex-prehook".into(), title: Some("Codex PreHook".into()), version: env!("CARGO_PKG_VERSION").into(), user_agent: None },
+                capabilities: ClientCapabilities {
+                    elicitation: None,
+                    experimental: None,
+                    roots: None,
+                    sampling: None,
+                },
+                client_info: Implementation {
+                    name: "codex-prehook".into(),
+                    title: Some("Codex PreHook".into()),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    user_agent: None,
+                },
                 protocol_version: "2025-06-18".into(),
             };
             let _ = client.initialize(init_params, Some(tmo)).await?;
@@ -299,10 +366,17 @@ pub struct PreHookDispatcher {
 }
 
 impl PreHookDispatcher {
-    pub fn new(cfg: PrehookConfig) -> Self { Self { cfg } }
+    pub fn new(cfg: PrehookConfig) -> Self {
+        Self { cfg }
+    }
 
     pub async fn run(&self, ctx: &Context) -> Result<Outcome> {
-        if !self.cfg.enabled { return Ok(Outcome::Allow { message: Some("prehook disabled".into()), ttl_ms: None }); }
+        if !self.cfg.enabled {
+            return Ok(Outcome::Allow {
+                message: Some("prehook disabled".into()),
+                ttl_ms: None,
+            });
+        }
         match self.cfg.backend.as_str() {
             "script" => {
                 let b = ScriptPreHook::new(self.cfg.script.clone(), self.cfg.on_error);
@@ -337,10 +411,24 @@ mod tests {
 
     #[tokio::test]
     async fn script_prehook_allows_when_not_configured() {
-        let hook = ScriptPreHook::new(ScriptConfig { cmd: None, args: vec![], timeout_ms: 100 }, OnErrorPolicy::Fail);
-        let ctx = Context::new(CommandKind::Exec, PathBuf::from("/"), vec!["echo".to_string()]);
+        let hook = ScriptPreHook::new(
+            ScriptConfig {
+                cmd: None,
+                args: vec![],
+                timeout_ms: 100,
+            },
+            OnErrorPolicy::Fail,
+        );
+        let ctx = Context::new(
+            CommandKind::Exec,
+            PathBuf::from("/"),
+            vec!["echo".to_string()],
+        );
         let out = hook.run(&ctx).await.unwrap();
-        match out { Outcome::Allow { .. } => {}, other => panic!("unexpected: {other:?}") }
+        match out {
+            Outcome::Allow { .. } => {}
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -360,10 +448,17 @@ mod tests {
             p.set_mode(0o755);
             std::fs::set_permissions(&script_path, p).unwrap();
         }
-        let cfg = ScriptConfig { cmd: Some(script_path.to_string_lossy().to_string()), args: vec![], timeout_ms: 1000 };
+        let cfg = ScriptConfig {
+            cmd: Some(script_path.to_string_lossy().to_string()),
+            args: vec![],
+            timeout_ms: 1000,
+        };
         let hook = ScriptPreHook::new(cfg, OnErrorPolicy::Fail);
         let ctx = Context::new(CommandKind::Exec, PathBuf::from("/"), vec![]);
         let out = hook.run(&ctx).await.unwrap();
-        match out { Outcome::Deny { reason } => assert_eq!(reason, "blocked by policy"), other => panic!("unexpected: {other:?}") }
+        match out {
+            Outcome::Deny { reason } => assert_eq!(reason, "blocked by policy"),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

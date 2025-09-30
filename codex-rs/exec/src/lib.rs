@@ -40,6 +40,7 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
+use codex_prehook as prehook;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     if let Err(err) = set_default_originator("codex_exec") {
@@ -65,6 +66,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         output_schema: output_schema_path,
         include_plan_tool,
         config_overrides,
+        prehook_enabled,
+        prehook_backend,
+        prehook_on_error,
+        prehook_mcp_server,
+        prehook_mcp_tool,
+        prehook_script_cmd,
+        prehook_timeout_ms,
     } = cli;
 
     // Determine the prompt source (parent or subcommand) and read from stdin if needed.
@@ -187,6 +195,82 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+
+    // --- Prehook gate (MVP) ---
+    if prehook_enabled {
+        let on_error = match prehook_on_error.as_str() {
+            "warn" => prehook::OnErrorPolicy::Warn,
+            "skip" => prehook::OnErrorPolicy::Skip,
+            _ => prehook::OnErrorPolicy::Fail,
+        };
+        let mut cfg = prehook::PrehookConfig::default();
+        cfg.enabled = true;
+        cfg.backend = prehook_backend.clone();
+        cfg.on_error = on_error;
+        if let Some(s) = prehook_mcp_server.clone() {
+            cfg.mcp.server = Some(s);
+        }
+        if let Some(t) = prehook_mcp_tool.clone() {
+            cfg.mcp.tool = Some(t);
+        }
+        cfg.mcp.timeout_ms = prehook_timeout_ms;
+        if let Some(cmd) = prehook_script_cmd.clone() {
+            cfg.script.cmd = Some(cmd);
+        }
+        cfg.script.timeout_ms = prehook_timeout_ms;
+
+        let ctx = prehook::Context {
+            id: uuid::Uuid::now_v7().to_string(),
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            command_kind: prehook::CommandKind::Exec,
+            args: std::env::args().collect(),
+            cwd: config.cwd.clone(),
+            os: std::env::consts::OS.to_string(),
+            user: std::env::var("USER").ok(),
+            env_profile: prehook::EnvProfile {
+                approval_policy: Some(format!("{:?}", config.approval_policy)),
+                sandbox: Some(format!("{:?}", config.sandbox_policy)),
+                model: Some(config.model.clone()),
+            },
+            git_summary: None,
+            repo_root: codex_core::git_info::get_git_repo_root(&config.cwd),
+            relpath: None,
+            task_metadata: None,
+        };
+        let dispatcher = prehook::PreHookDispatcher::new(cfg);
+        match dispatcher.run(&ctx).await {
+            Ok(prehook::Outcome::Allow { .. }) => {}
+            Ok(prehook::Outcome::Augment { .. }) => {
+                // MVP: ignore augmentation in exec; continue
+            }
+            Ok(prehook::Outcome::Ask { message }) => {
+                eprintln!("Prehook requires approval: {message}");
+                std::process::exit(1);
+            }
+            Ok(prehook::Outcome::Patch { .. }) => {
+                eprintln!("Prehook suggested a patch; unsupported in exec mode. Aborting.");
+                std::process::exit(1);
+            }
+            Ok(prehook::Outcome::Deny { reason }) => {
+                eprintln!("Prehook denied execution: {reason}");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                match on_error {
+                    prehook::OnErrorPolicy::Fail => {
+                        eprintln!("Prehook error: {e:#}");
+                        std::process::exit(1);
+                    }
+                    prehook::OnErrorPolicy::Warn => {
+                        eprintln!("Warning: prehook error: {e:#}");
+                    }
+                    prehook::OnErrorPolicy::Skip => {
+                        // silently continue
+                    }
+                }
+            }
+        }
+    }
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 

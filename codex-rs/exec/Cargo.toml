@@ -31,6 +31,7 @@ owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
+uuid = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -46,6 +47,7 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
+codex-prehook = { path = "../prehook" }
 
 
 [dev-dependencies]

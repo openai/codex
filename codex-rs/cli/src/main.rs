@@ -342,6 +342,51 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);
         }
+        Some(Subcommand::Apply(apply_cli)) => {
+            // Optional prehook gate for apply via env var (MVP). Disabled by default.
+            if let Ok(server) = std::env::var("PREHOOK_APPLY_MCP") {
+                let cfg = codex_prehook::PrehookConfig {
+                    enabled: true,
+                    backend: "mcp".to_string(),
+                    on_error: codex_prehook::OnErrorPolicy::Fail,
+                    mcp: codex_prehook::McpConfig {
+                        server: Some(server),
+                        tool: Some("codex.prehook.review".to_string()),
+                        timeout_ms: 5_000,
+                    },
+                    script: Default::default(),
+                };
+                let ctx = codex_prehook::Context::new(
+                    codex_prehook::CommandKind::ApplyPatch,
+                    std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()),
+                    vec![apply_cli.task_id.clone()],
+                );
+                let dispatcher = codex_prehook::PreHookDispatcher::new(cfg);
+                match dispatcher.run(&ctx).await {
+                    Ok(codex_prehook::Outcome::Allow { .. })
+                    | Ok(codex_prehook::Outcome::Augment { .. }) => {}
+                    Ok(codex_prehook::Outcome::Deny { reason }) => {
+                        eprintln!("Prehook denied apply: {reason}");
+                        std::process::exit(1);
+                    }
+                    Ok(codex_prehook::Outcome::Ask { message }) => {
+                        eprintln!("Prehook requires approval (apply): {message}");
+                        std::process::exit(1);
+                    }
+                    Ok(codex_prehook::Outcome::Patch { .. }) => {
+                        eprintln!(
+                            "Prehook suggested a patch; unsupported in apply gate. Aborting."
+                        );
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("Prehook error (apply): {e:#}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            run_apply_command(apply_cli, codex_linux_sandbox_exe).await?;
+        }
         Some(Subcommand::Cloud(mut cloud_cli)) => {
             prepend_config_flags(
                 &mut cloud_cli.config_overrides,
