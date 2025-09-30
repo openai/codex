@@ -1,7 +1,6 @@
 ---
 source: tui/src/bottom_pane/footer.rs
+assertion_line: 389
 expression: terminal.backend()
 ---
-"⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit                                   "
-"                                                                                "
-"                                                                                "
+"  ? for shortcuts                                                               "
