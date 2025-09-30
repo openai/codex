@@ -1779,8 +1779,8 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::new();
 
         items.push(SelectionItem {
-            name: "Review against a base branch (PR Style)".to_string(),
-            description: None,
+            name: "Review against a base branch".to_string(),
+            description: Some("(PR Style)".into()),
             is_current: false,
             actions: vec![Box::new({
                 let cwd = self.config.cwd.clone();
