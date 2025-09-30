@@ -193,28 +193,43 @@ impl CodexMessageProcessor {
             ClientRequest::LoginApiKey { request_id, params } => {
                 self.login_api_key(request_id, params).await;
             }
-            ClientRequest::LoginChatGpt { request_id } => {
+            ClientRequest::LoginChatGpt {
+                request_id,
+                params: _,
+            } => {
                 self.login_chatgpt(request_id).await;
             }
             ClientRequest::CancelLoginChatGpt { request_id, params } => {
                 self.cancel_login_chatgpt(request_id, params.login_id).await;
             }
-            ClientRequest::LogoutChatGpt { request_id } => {
+            ClientRequest::LogoutChatGpt {
+                request_id,
+                params: _,
+            } => {
                 self.logout_chatgpt(request_id).await;
             }
             ClientRequest::GetAuthStatus { request_id, params } => {
                 self.get_auth_status(request_id, params).await;
             }
-            ClientRequest::GetUserSavedConfig { request_id } => {
+            ClientRequest::GetUserSavedConfig {
+                request_id,
+                params: _,
+            } => {
                 self.get_user_saved_config(request_id).await;
             }
             ClientRequest::SetDefaultModel { request_id, params } => {
                 self.set_default_model(request_id, params).await;
             }
-            ClientRequest::GetUserAgent { request_id } => {
+            ClientRequest::GetUserAgent {
+                request_id,
+                params: _,
+            } => {
                 self.get_user_agent(request_id).await;
             }
-            ClientRequest::UserInfo { request_id } => {
+            ClientRequest::UserInfo {
+                request_id,
+                params: _,
+            } => {
                 self.get_user_info(request_id).await;
             }
             ClientRequest::FuzzyFileSearch { request_id, params } => {
