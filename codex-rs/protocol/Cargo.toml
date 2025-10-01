@@ -16,6 +16,7 @@ icu_decimal = { workspace = true }
 icu_locale_core = { workspace = true }
 mcp-types = { workspace = true }
 mime_guess = { workspace = true }
+paste = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true, features = ["macros", "base64"] }
