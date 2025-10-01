@@ -93,12 +93,12 @@ export class CodexExec {
         yield line as string;
       }
 
-      const exitCode = new Promise((resolve) => {
+      const exitCode = new Promise((resolve, reject) => {
         child.once("exit", (code) => { 
           if (code === 0) {
             resolve(code);
           } else {
-            throw new Error(`Codex Exec exited with code ${code}: ${stderr}`);
+            reject(new Error(`Codex Exec exited with code ${code}: ${stderr}`));
           }
         });
       });

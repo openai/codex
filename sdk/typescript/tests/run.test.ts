@@ -272,8 +272,6 @@ describe("Codex", () => {
       ],
     });
 
-
-    const {  restore } = codexExecSpy();
     try {
       const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
       const client = new Codex({
@@ -283,15 +281,13 @@ describe("Codex", () => {
       });
 
       const thread = client.startThread();
-      //expect(async () => {
-        await thread.run("use custom working directory", {
+      await expect(
+        thread.run("use custom working directory", {
           workingDirectory,
-        });
-    //  }).toThrow(/Codex Exec exited with code 1: Not inside a trusted directory/);
+        }),
+      ).rejects.toThrow(/Not inside a trusted directory/);
 
-    
     } finally {
-      restore();
       await close();
     }
   });  
