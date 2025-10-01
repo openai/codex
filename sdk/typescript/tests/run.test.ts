@@ -23,7 +23,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       const result = await thread.run("Hello, world!");
@@ -60,7 +60,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       await thread.run("first input");
@@ -103,7 +103,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       await thread.run("first input");
@@ -149,7 +149,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const originalThread = client.startThread();
       await originalThread.run("first input");
@@ -193,7 +193,7 @@ describe("Codex", () => {
     const { args: spawnArgs, restore } = codexExecSpy();
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       await thread.run("apply options", {
