@@ -29,4 +29,4 @@ export { Codex } from "./codex";
 
 export type { CodexOptions } from "./codexOptions";
 
-export type { TheadOptions as TurnOptions, ApprovalMode, SandboxMode } from "./threadOptions";
+export type { TheadOptions, ApprovalMode, SandboxMode } from "./threadOptions";
