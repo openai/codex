@@ -18,7 +18,7 @@ use crate::rollout::list::Cursor;
 use crate::rollout::list::get_conversation;
 use crate::rollout::list::get_conversations;
 use anyhow::Result;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;

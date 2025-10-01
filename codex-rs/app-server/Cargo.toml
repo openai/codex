@@ -22,10 +22,8 @@ codex-core = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
-# We should only be using mcp-types for JSON-RPC types: it would be nice to
-# split this out into a separate crate at some point.
-mcp-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [
