@@ -15,6 +15,7 @@ use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::BackgroundProcessStatusEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -617,6 +618,17 @@ impl ChatWidget {
 
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
+        if self.session_header.set_latest_background_event(message) {
+            self.request_redraw();
+        }
+    }
+
+    fn on_background_process_status(&mut self, running: u64) {
+        let count = running.min(usize::MAX as u64) as usize;
+        self.bottom_pane.set_background_process_count(count);
+        if self.session_header.set_background_process_count(count) {
+            self.request_redraw();
+        }
     }
 
     fn on_stream_error(&mut self, message: String) {
@@ -862,16 +874,19 @@ impl ChatWidget {
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let bottom_min = self.bottom_pane.desired_height(area.width).min(area.height);
+        let header_max = area.height.saturating_sub(bottom_min);
+        let header_height = self
+            .session_header
+            .desired_height(area.width)
+            .min(header_max);
         let remaining = area.height.saturating_sub(bottom_min);
+        let active_available = remaining.saturating_sub(header_height);
 
         let active_desired = self
             .active_cell
             .as_ref()
             .map_or(0, |c| c.desired_height(area.width) + 1);
-        let active_height = active_desired.min(remaining);
-        // Note: no header area; remaining is not used beyond computing active height.
-
-        let header_height = 0u16;
+        let active_height = active_desired.min(active_available);
 
         Layout::vertical([
             Constraint::Length(header_height),
@@ -1004,11 +1019,16 @@ impl ChatWidget {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        self.bottom_pane.desired_height(width)
-            + self
-                .active_cell
-                .as_ref()
-                .map_or(0, |c| c.desired_height(width) + 1)
+        let header = self.session_header.desired_height(width);
+        let active = self
+            .active_cell
+            .as_ref()
+            .map_or(0, |c| c.desired_height(width).saturating_add(1));
+
+        self.bottom_pane
+            .desired_height(width)
+            .saturating_add(active)
+            .saturating_add(header)
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -1429,6 +1449,9 @@ impl ChatWidget {
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
+            EventMsg::BackgroundProcessStatus(BackgroundProcessStatusEvent { running }) => {
+                self.on_background_process_status(running)
+            }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
@@ -2115,7 +2138,8 @@ impl ChatWidget {
 
 impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
+        let [header_area, active_cell_area, bottom_pane_area] = self.layout_areas(area);
+        self.session_header.render(header_area, buf);
         (&self.bottom_pane).render(bottom_pane_area, buf);
         if !active_cell_area.is_empty()
             && let Some(cell) = &self.active_cell

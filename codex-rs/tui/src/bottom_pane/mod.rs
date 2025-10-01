@@ -69,6 +69,7 @@ pub(crate) struct BottomPane {
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
     context_window_percent: Option<u8>,
+    background_process_count: usize,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -102,6 +103,7 @@ impl BottomPane {
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
+            background_process_count: 0,
         }
     }
 
@@ -335,6 +337,7 @@ impl BottomPane {
             }
             if let Some(status) = self.status.as_mut() {
                 status.set_queued_messages(self.queued_user_messages.clone());
+                status.set_background_process_count(self.background_process_count);
             }
             self.request_redraw();
         } else {
@@ -360,6 +363,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_background_process_count(&mut self, count: usize) {
+        if self.background_process_count == count {
+            return;
+        }
+        self.background_process_count = count;
+        if let Some(status) = self.status.as_mut() {
+            status.set_background_process_count(count);
+        }
+        self.request_redraw();
+    }
+
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
@@ -371,6 +385,7 @@ impl BottomPane {
         self.queued_user_messages = queued.clone();
         if let Some(status) = self.status.as_mut() {
             status.set_queued_messages(queued);
+            status.set_background_process_count(self.background_process_count);
         }
         self.request_redraw();
     }
@@ -716,8 +731,8 @@ mod tests {
             top.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            top.trim_start().starts_with("• Working"),
-            "expected top row to start with '• Working': {top:?}"
+            top.trim_start().starts_with("Working"),
+            "expected top row to start with 'Working': {top:?}"
         );
         assert!(
             top.contains("Working"),

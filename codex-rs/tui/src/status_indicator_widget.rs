@@ -10,6 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
@@ -18,12 +19,15 @@ use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
+    /// Count of currently running background processes.
+    background_process_count: usize,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -54,6 +58,7 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             queued_messages: Vec::new(),
+            background_process_count: 0,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -109,6 +114,13 @@ impl StatusIndicatorWidget {
         self.frame_requester.schedule_frame();
     }
 
+    pub(crate) fn set_background_process_count(&mut self, count: usize) {
+        if self.background_process_count != count {
+            self.background_process_count = count;
+            self.frame_requester.schedule_frame();
+        }
+    }
+
     pub(crate) fn pause_timer(&mut self) {
         self.pause_timer_at(Instant::now());
     }
@@ -160,14 +172,13 @@ impl WidgetRef for StatusIndicatorWidget {
         let pretty_elapsed = fmt_elapsed_compact(elapsed);
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let mut spans = vec!["• ".dim()];
+        let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];
         spans.extend(shimmer_spans(&self.header));
-        spans.extend(vec![
-            " ".into(),
-            format!("({pretty_elapsed} • ").dim(),
-            key_hint::plain(KeyCode::Esc).into(),
-            " to interrupt)".dim(),
-        ]);
+        spans.push(" ".into());
+        let count = self.background_process_count;
+        spans.push(format!("({pretty_elapsed} • background: {count} • ").dim());
+        spans.push("Esc".dim().bold());
+        spans.push(" to interrupt)".dim());
 
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -189,11 +200,12 @@ impl WidgetRef for StatusIndicatorWidget {
             }
         }
         if !self.queued_messages.is_empty() {
+            let shortcut = key_hint::alt(KeyCode::Up);
             lines.push(
                 Line::from(vec![
-                    "   ".into(),
-                    key_hint::alt(KeyCode::Up).into(),
-                    " edit".into(),
+                    Span::from("   "),
+                    Span::from(shortcut),
+                    Span::from(" edit"),
                 ])
                 .dim(),
             );

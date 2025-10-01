@@ -96,6 +96,7 @@ use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
+use crate::protocol::BackgroundProcessStatusEvent;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -516,6 +517,9 @@ impl Session {
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        sess.background_processes()
+            .set_session(Arc::downgrade(&sess));
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -1005,6 +1009,14 @@ impl Session {
             msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
                 message: message.into(),
             }),
+        };
+        self.send_event(event).await;
+    }
+
+    pub(crate) async fn notify_background_process_count(&self, running: u64) {
+        let event = Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::BackgroundProcessStatus(BackgroundProcessStatusEvent { running }),
         };
         self.send_event(event).await;
     }
@@ -2612,8 +2624,7 @@ async fn handle_custom_tool_call(
             .await
         }
         "background_process" => {
-            handle_background_process_tool_call(sess, turn_context, sub_id, call_id, input)
-                .await
+            handle_background_process_tool_call(sess, turn_context, sub_id, call_id, input).await
         }
         _ => {
             debug!("unexpected CustomToolCall from stream");
@@ -2675,12 +2686,8 @@ async fn handle_background_process_tool_call(
             };
 
             let exec_params = maybe_translate_shell_command(exec_params, sess, turn_context);
-            let exec_context = make_exec_context_for_background(
-                sub_id.clone(),
-                call_id.clone(),
-                command,
-                cwd,
-            );
+            let exec_context =
+                make_exec_context_for_background(sub_id.clone(), call_id.clone(), command, cwd);
 
             let approved_snapshot = {
                 let state = sess.state.lock().await;
@@ -2701,12 +2708,11 @@ async fn handle_background_process_tool_call(
                 )
                 .await?;
 
-            sess
-                .notify_background_event(
-                    &sub_id,
-                    format!("Started background process {}", response.process_id),
-                )
-                .await;
+            sess.notify_background_event(
+                &sub_id,
+                format!("Started background process {}", response.process_id),
+            )
+            .await;
 
             serde_json::to_string(&json!({
                 "status": "started",
@@ -2767,12 +2773,11 @@ async fn handle_background_process_tool_call(
             })?;
 
             sess.background_processes().kill(&process_id).await?;
-            sess
-                .notify_background_event(
-                    &sub_id,
-                    format!("Requested termination for background process {process_id}"),
-                )
-                .await;
+            sess.notify_background_event(
+                &sub_id,
+                format!("Requested termination for background process {process_id}"),
+            )
+            .await;
 
             serde_json::to_string(&json!({
                 "status": "killed",

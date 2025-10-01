@@ -2,6 +2,8 @@
 //!
 //! Project-level documentation is primarily stored in files named `AGENTS.md`.
 //! Additional fallback filenames can be configured via `project_doc_fallback_filenames`.
+//! If the user has a `CODEX.md` file in their home directory, it is included as
+//! the first document so personal guidance precedes per-repository rules.
 //! We include the concatenation of all files found along the path from the
 //! repository root to the current working directory as follows:
 //!
@@ -14,6 +16,7 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
+use dirs::home_dir;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
@@ -21,6 +24,9 @@ use tracing::error;
 
 /// Default filename scanned for project-level docs.
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
+
+/// Optional home-level instructions.
+const HOME_PROJECT_DOC_FILENAME: &str = "CODEX.md";
 
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
@@ -173,6 +179,25 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
         }
     }
 
+    // Include home-level instructions first so they always precede
+    // repository-specific guidance.
+    if let Some(mut home_path) = home_dir() {
+        home_path.push(HOME_PROJECT_DOC_FILENAME);
+        if !found.iter().any(|p| p == &home_path) {
+            match std::fs::symlink_metadata(&home_path) {
+                Ok(md) if md.file_type().is_file() || md.file_type().is_symlink() => {
+                    found.insert(0, home_path);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(found)
 }
 
@@ -198,7 +223,49 @@ mod tests {
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
     use std::fs;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
     use tempfile::TempDir;
+
+    struct HomeEnvGuard {
+        prev: Option<String>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for HomeEnvGuard {
+        fn drop(&mut self) {
+            if let Some(prev) = &self.prev {
+                // SAFETY: restoring environment variable for test isolation.
+                unsafe { std::env::set_var("HOME", prev) };
+            } else {
+                // SAFETY: clearing environment variable for test isolation.
+                unsafe { std::env::remove_var("HOME") };
+            }
+        }
+    }
+
+    static HOME_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn set_home_for_test(path: &std::path::Path) -> HomeEnvGuard {
+        let guard = HOME_ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("HOME_ENV_LOCK poisoned");
+        let prev = std::env::var("HOME").ok();
+        // SAFETY: tests require overriding HOME for doc discovery; guarded by a
+        // mutex to avoid concurrent mutation.
+        unsafe { std::env::set_var("HOME", path) };
+        HomeEnvGuard {
+            prev,
+            _guard: guard,
+        }
+    }
+
+    fn set_empty_home() -> (TempDir, HomeEnvGuard) {
+        let home = tempfile::tempdir().expect("home tempdir");
+        let guard = set_home_for_test(home.path());
+        (home, guard)
+    }
 
     /// Helper that returns a `Config` pointing at `root` and using `limit` as
     /// the maximum number of bytes to embed from AGENTS.md. The caller can
@@ -238,6 +305,7 @@ mod tests {
     /// AGENTS.md missing – should yield `None`.
     #[tokio::test]
     async fn no_doc_file_returns_none() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let res = get_user_instructions(&make_config(&tmp, 4096, None)).await;
@@ -251,6 +319,7 @@ mod tests {
     /// Small file within the byte-limit is returned unmodified.
     #[tokio::test]
     async fn doc_smaller_than_limit_is_returned() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "hello world").unwrap();
 
@@ -267,6 +336,7 @@ mod tests {
     /// Oversize file is truncated to `project_doc_max_bytes`.
     #[tokio::test]
     async fn doc_larger_than_limit_is_truncated() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         const LIMIT: usize = 1024;
         let tmp = tempfile::tempdir().expect("tempdir");
 
@@ -285,6 +355,7 @@ mod tests {
     /// placed at the repository root (identified by `.git`).
     #[tokio::test]
     async fn finds_doc_in_repo_root() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         let repo = tempfile::tempdir().expect("tempdir");
 
         // Simulate a git repository. Note .git can be a file or a directory.
@@ -312,6 +383,7 @@ mod tests {
     /// Explicitly setting the byte-limit to zero disables project docs.
     #[tokio::test]
     async fn zero_byte_limit_disables_docs() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
 
@@ -326,6 +398,7 @@ mod tests {
     /// should be concatenated with the separator.
     #[tokio::test]
     async fn merges_existing_instructions_with_project_doc() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "proj doc").unwrap();
 
@@ -344,6 +417,7 @@ mod tests {
     /// missing we expect the original instructions to be returned unchanged.
     #[tokio::test]
     async fn keeps_existing_instructions_when_doc_missing() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         let tmp = tempfile::tempdir().expect("tempdir");
 
         const INSTRUCTIONS: &str = "some instructions";
@@ -353,10 +427,43 @@ mod tests {
         assert_eq!(res, Some(INSTRUCTIONS.to_string()));
     }
 
+    #[tokio::test]
+    async fn home_doc_is_included_when_present() {
+        let project = tempfile::tempdir().expect("project tempdir");
+        let home = tempfile::tempdir().expect("home tempdir");
+        fs::write(home.path().join(HOME_PROJECT_DOC_FILENAME), "home guidance").unwrap();
+
+        let _guard = set_home_for_test(home.path());
+
+        let res = get_user_instructions(&make_config(&project, 4096, None))
+            .await
+            .expect("doc expected");
+
+        assert_eq!(res, "home guidance");
+    }
+
+    #[tokio::test]
+    async fn home_doc_precedes_project_docs() {
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        fs::write(repo.path().join("AGENTS.md"), "repo rules").unwrap();
+
+        let home = tempfile::tempdir().expect("home tempdir");
+        fs::write(home.path().join(HOME_PROJECT_DOC_FILENAME), "home guidance").unwrap();
+
+        let _guard = set_home_for_test(home.path());
+
+        let res = get_user_instructions(&make_config(&repo, 4096, None))
+            .await
+            .expect("doc expected");
+
+        assert_eq!(res, "home guidance\n\nrepo rules");
+    }
+
     /// When both the repository root and the working directory contain
     /// AGENTS.md files, their contents are concatenated from root to cwd.
     #[tokio::test]
     async fn concatenates_root_and_cwd_docs() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         let repo = tempfile::tempdir().expect("tempdir");
 
         // Simulate a git repository.
@@ -384,6 +491,7 @@ mod tests {
     /// When AGENTS.md is absent but a configured fallback exists, the fallback is used.
     #[tokio::test]
     async fn uses_configured_fallback_when_agents_missing() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("EXAMPLE.md"), "example instructions").unwrap();
 
@@ -399,6 +507,7 @@ mod tests {
     /// AGENTS.md remains preferred when both AGENTS.md and fallbacks are present.
     #[tokio::test]
     async fn agents_md_preferred_over_fallbacks() {
+        let (_home_tmp, _home_guard) = set_empty_home();
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("AGENTS.md"), "primary").unwrap();
         fs::write(tmp.path().join("EXAMPLE.md"), "secondary").unwrap();

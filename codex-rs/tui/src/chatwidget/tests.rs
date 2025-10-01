@@ -16,6 +16,8 @@ use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::BackgroundProcessStatusEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -697,6 +699,67 @@ fn exec_history_cell_shows_working_then_failed() {
     assert!(blob.to_lowercase().contains("bloop"), "expected error text");
 }
 
+#[test]
+fn background_status_bar_shows_running_count() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "sub-status".into(),
+        msg: EventMsg::BackgroundProcessStatus(BackgroundProcessStatusEvent { running: 2 }),
+    });
+
+    let header = render_header_row(&chat, 80);
+    assert!(
+        header.contains("Model:"),
+        "expected model segment in header: {header:?}"
+    );
+    assert!(
+        header.contains("background: 2"),
+        "expected background count in header: {header:?}"
+    );
+}
+
+#[test]
+fn background_status_bar_shows_latest_event() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "sub-event".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Started background process 42".to_string(),
+        }),
+    });
+
+    let header = render_header_row(&chat, 80);
+    assert!(
+        header.contains("last: Started background process 42"),
+        "expected latest event text in header: {header:?}"
+    );
+}
+
+#[test]
+fn background_status_bar_hides_without_status() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "sub-status".into(),
+        msg: EventMsg::BackgroundProcessStatus(BackgroundProcessStatusEvent { running: 2 }),
+    });
+    let visible = render_header_row(&chat, 80);
+    assert!(visible.contains("background:"));
+
+    chat.handle_codex_event(Event {
+        id: "sub-status".into(),
+        msg: EventMsg::BackgroundProcessStatus(BackgroundProcessStatusEvent { running: 0 }),
+    });
+
+    let hidden = render_header_row(&chat, 80);
+    assert!(
+        hidden.trim().is_empty(),
+        "expected header hidden when no data: {hidden:?}"
+    );
+}
+
 /// Selecting the custom prompt option from the review popup sends
 /// OpenReviewCustomPrompt to the app event channel.
 #[test]
@@ -1047,6 +1110,24 @@ fn reasoning_popup_escape_returns_to_model_popup() {
     let after_escape = render_bottom_popup(&chat, 80);
     assert!(after_escape.contains("Select Model"));
     assert!(!after_escape.contains("Select Reasoning Level"));
+}
+
+fn render_header_row(chat: &ChatWidget, width: u16) -> String {
+    let height = chat.desired_height(width).max(1);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    (chat).render_ref(area, &mut buf);
+    let mut row = String::new();
+    let y = 0u16;
+    for x in 0..area.width {
+        let symbol = buf[(x, y)].symbol();
+        if symbol.is_empty() {
+            row.push(' ');
+        } else {
+            row.push_str(symbol);
+        }
+    }
+    row
 }
 
 #[test]

@@ -253,7 +253,7 @@ fn create_background_process_tool() -> OpenAiTool {
         JsonSchema::Object {
             properties: BTreeMap::new(),
             required: None,
-            additional_properties: Some(true),
+            additional_properties: Some(true.into()),
         },
     );
     properties.insert(
@@ -290,7 +290,7 @@ fn create_background_process_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["action".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(false.into()),
         },
     })
 }
@@ -889,6 +889,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
+                "background_process",
                 "web_search",
                 "view_image",
                 "test_server/do_something_cool",
@@ -896,7 +897,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[3],
+            tools[4],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {

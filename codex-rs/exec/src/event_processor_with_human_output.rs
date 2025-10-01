@@ -503,6 +503,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_println!(self, "task aborted: review ended");
                 }
             },
+            EventMsg::BackgroundProcessStatus(_) => {
+                // Background process counts are not currently surfaced in the exec view.
+            }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::ConversationPath(_) => {}
             EventMsg::UserMessage(_) => {}

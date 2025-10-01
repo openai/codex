@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::Weak;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -16,7 +18,7 @@ use serde::Deserialize;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -26,12 +28,10 @@ use crate::exec::ExecParams;
 use crate::exec::SandboxType;
 use crate::function_tool::FunctionCallError;
 use crate::landlock::spawn_command_under_linux_sandbox;
-use crate::protocol::AskForApproval;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
-use crate::safety::assess_safety_for_untrusted_command;
 use crate::seatbelt::spawn_command_under_seatbelt;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
@@ -120,9 +120,9 @@ struct ManagedBackgroundProcess {
     cwd: PathBuf,
     started_at: SystemTime,
     sandbox_type: SandboxType,
-    child: Arc<Mutex<Child>>,
+    child: Arc<AsyncMutex<Child>>,
     state: Arc<RwLock<BackgroundProcessState>>,
-    log: Arc<Mutex<ProcessLog>>,
+    log: Arc<AsyncMutex<ProcessLog>>,
     stdout_task: JoinHandle<()>,
     stderr_task: JoinHandle<()>,
     monitor_task: JoinHandle<()>,
@@ -191,15 +191,29 @@ pub(crate) struct StartProcessResponse {
     pub(crate) process_id: String,
 }
 
-#[derive(Default)]
 pub(crate) struct BackgroundProcessManager {
     next_id: AtomicU64,
-    processes: Mutex<HashMap<String, Arc<ManagedBackgroundProcess>>>,
+    processes: AsyncMutex<HashMap<String, Arc<ManagedBackgroundProcess>>>,
+    running_count: Arc<AtomicU64>,
+    session_handle: Arc<StdMutex<Option<Weak<Session>>>>,
 }
 
 impl BackgroundProcessManager {
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            next_id: AtomicU64::new(0),
+            processes: AsyncMutex::new(HashMap::new()),
+            running_count: Arc::new(AtomicU64::new(0)),
+            session_handle: Arc::new(StdMutex::new(None)),
+        }
+    }
+
+    pub(crate) fn set_session(&self, session: Weak<Session>) {
+        let mut guard = self
+            .session_handle
+            .lock()
+            .expect("background process session_handle lock poisoned");
+        *guard = Some(session);
     }
 
     pub(crate) async fn start(
@@ -207,7 +221,7 @@ impl BackgroundProcessManager {
         session: &Session,
         turn_context: &crate::codex::TurnContext,
         exec_context: ExecCommandContext,
-        mut exec_params: ExecParams,
+        exec_params: ExecParams,
         approved_commands: HashSet<Vec<String>>,
         codex_linux_sandbox_exe: Option<PathBuf>,
     ) -> Result<StartProcessResponse, FunctionCallError> {
@@ -282,7 +296,7 @@ impl BackgroundProcessManager {
             SafetyCheck::Reject { reason } => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "background process rejected: {reason}"
-                )))
+                )));
             }
         };
 
@@ -302,15 +316,20 @@ impl BackgroundProcessManager {
             FunctionCallError::RespondToModel("failed to capture stderr".to_string())
         })?;
 
-        let child = Arc::new(Mutex::new(child));
+        let child = Arc::new(AsyncMutex::new(child));
         let state = Arc::new(RwLock::new(BackgroundProcessState::Running));
-        let log = Arc::new(Mutex::new(ProcessLog::default()));
+        let log = Arc::new(AsyncMutex::new(ProcessLog::default()));
 
         let stdout_task =
             spawn_log_task(Arc::clone(&log), BufReader::new(stdout), LogStream::Stdout);
         let stderr_task =
             spawn_log_task(Arc::clone(&log), BufReader::new(stderr), LogStream::Stderr);
-        let monitor_task = spawn_monitor_task(Arc::clone(&child), Arc::clone(&state));
+        let monitor_task = spawn_monitor_task(
+            Arc::clone(&child),
+            Arc::clone(&state),
+            Arc::clone(&self.running_count),
+            Arc::clone(&self.session_handle),
+        );
 
         let managed = Arc::new(ManagedBackgroundProcess {
             id: process_id.clone(),
@@ -326,8 +345,13 @@ impl BackgroundProcessManager {
             monitor_task,
         });
 
-        let mut processes = self.processes.lock().await;
-        processes.insert(process_id.clone(), managed);
+        {
+            let mut processes = self.processes.lock().await;
+            processes.insert(process_id.clone(), managed);
+        }
+
+        self.running_count.fetch_add(1, Ordering::SeqCst);
+        notify_running_count(&self.session_handle, &self.running_count).await;
 
         Ok(StartProcessResponse { process_id })
     }
@@ -445,7 +469,7 @@ async fn spawn_background_child(
 }
 
 fn spawn_log_task<R>(
-    log: Arc<Mutex<ProcessLog>>,
+    log: Arc<AsyncMutex<ProcessLog>>,
     mut reader: BufReader<R>,
     stream: LogStream,
 ) -> JoinHandle<()>
@@ -468,8 +492,10 @@ where
 }
 
 fn spawn_monitor_task(
-    child: Arc<Mutex<Child>>,
+    child: Arc<AsyncMutex<Child>>,
     state: Arc<RwLock<BackgroundProcessState>>,
+    running_count: Arc<AtomicU64>,
+    session_handle: Arc<StdMutex<Option<Weak<Session>>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -483,12 +509,14 @@ fn spawn_monitor_task(
                     #[cfg(not(unix))]
                     let signal = None;
                     drop(guard);
-                    let mut state_guard = state.write().await;
-                    *state_guard = BackgroundProcessState::Exited {
-                        exit_code,
-                        signal,
-                        finished_at,
-                    };
+                    {
+                        let mut state_guard = state.write().await;
+                        *state_guard = BackgroundProcessState::Exited {
+                            exit_code,
+                            signal,
+                            finished_at,
+                        };
+                    }
                     break;
                 }
                 Ok(None) => {
@@ -496,17 +524,43 @@ fn spawn_monitor_task(
                 }
                 Err(err) => {
                     drop(guard);
-                    let mut state_guard = state.write().await;
-                    *state_guard = BackgroundProcessState::Failed {
-                        message: err.to_string(),
-                        finished_at: SystemTime::now(),
-                    };
+                    {
+                        let mut state_guard = state.write().await;
+                        *state_guard = BackgroundProcessState::Failed {
+                            message: err.to_string(),
+                            finished_at: SystemTime::now(),
+                        };
+                    }
                     break;
                 }
             }
             tokio::time::sleep(WAIT_POLL_INTERVAL).await;
         }
+
+        let _ = running_count.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            value.checked_sub(1)
+        });
+        notify_running_count(&session_handle, &running_count).await;
     })
+}
+
+async fn notify_running_count(
+    session_handle: &Arc<StdMutex<Option<Weak<Session>>>>,
+    running_count: &Arc<AtomicU64>,
+) {
+    let weak_session = {
+        let guard = session_handle
+            .lock()
+            .expect("background process session_handle lock poisoned");
+        guard.clone()
+    };
+
+    if let Some(weak) = weak_session
+        && let Some(session) = weak.upgrade()
+    {
+        let running = running_count.load(Ordering::SeqCst);
+        session.notify_background_process_count(running).await;
+    }
 }
 
 pub(crate) fn make_exec_context_for_background(
