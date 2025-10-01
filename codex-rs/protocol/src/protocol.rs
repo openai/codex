@@ -125,6 +125,10 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// Enable or disable automatic conversation compaction.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auto_compact: Option<bool>,
     },
 
     /// Approve a command execution

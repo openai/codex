@@ -73,6 +73,9 @@ pub(crate) enum AppEvent {
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
 
+    /// Update whether automatic compaction is enabled for the session.
+    UpdateAutoCompactEnabled(bool),
+
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
 

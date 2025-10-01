@@ -1124,6 +1124,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::AutoCompact => {
+                self.open_auto_compact_popup();
+            }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
@@ -1732,6 +1735,7 @@ impl ChatWidget {
                     model: Some(model_for_action.clone()),
                     effort: Some(effort_for_action),
                     summary: None,
+                    auto_compact: None,
                 }));
                 tx.send(AppEvent::UpdateModel(model_for_action.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -1788,6 +1792,7 @@ impl ChatWidget {
                     model: None,
                     effort: None,
                     summary: None,
+                    auto_compact: None,
                 }));
                 tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
                 tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
@@ -1805,6 +1810,48 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Approval Mode".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_auto_compact_popup(&mut self) {
+        let current_enabled = self.config.auto_compact_enabled;
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for (label, enabled) in [("On", true), ("Off", false)] {
+            let is_current = enabled == current_enabled;
+            let description = if enabled {
+                "Automatically summarizes when token usage approaches the configured limit."
+                    .to_string()
+            } else {
+                "Keeps full conversation history until you manually run /compact.".to_string()
+            };
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    auto_compact: Some(enabled),
+                }));
+                tx.send(AppEvent::UpdateAutoCompactEnabled(enabled));
+            })];
+            items.push(SelectionItem {
+                name: label.to_string(),
+                description: Some(description),
+                is_current,
+                actions,
+                dismiss_on_select: true,
+                search_value: None,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Auto-compact".to_string(),
+            subtitle: Some("Control automatic summarization of the conversation".to_string()),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
             ..Default::default()
         });
@@ -1829,6 +1876,10 @@ impl ChatWidget {
     pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
         self.config.model = model.to_string();
+    }
+
+    pub(crate) fn set_auto_compact_enabled(&mut self, enabled: bool) {
+        self.config.auto_compact_enabled = enabled;
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
