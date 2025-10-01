@@ -1,3 +1,4 @@
+use codex_app_server_protocol::AuthMode;
 use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
 use codex_core::auth::CLIENT_ID;
@@ -8,7 +9,6 @@ use codex_core::config::ConfigOverrides;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
-use codex_protocol::mcp_protocol::AuthMode;
 use std::path::PathBuf;
 
 pub async fn login_with_chatgpt(codex_home: PathBuf) -> std::io::Result<()> {

@@ -2,16 +2,12 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
-use codex_protocol::mcp_protocol::ServerNotification;
-use mcp_types::JSONRPC_VERSION;
-use mcp_types::JSONRPCError;
-use mcp_types::JSONRPCErrorError;
-use mcp_types::JSONRPCMessage;
-use mcp_types::JSONRPCNotification;
-use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
-use mcp_types::RequestId;
-use mcp_types::Result;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::Result;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestPayload;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -38,8 +34,7 @@ impl OutgoingMessageSender {
 
     pub(crate) async fn send_request(
         &self,
-        method: &str,
-        params: Option<serde_json::Value>,
+        request: ServerRequestPayload,
     ) -> oneshot::Receiver<Result> {
         let id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::Relaxed));
         let outgoing_message_id = id.clone();
@@ -49,11 +44,8 @@ impl OutgoingMessageSender {
             request_id_to_callback.insert(id, tx_approve);
         }
 
-        let outgoing_message = OutgoingMessage::Request(OutgoingRequest {
-            id: outgoing_message_id,
-            method: method.to_string(),
-            params,
-        });
+        let outgoing_message =
+            OutgoingMessage::Request(request.request_with_id(outgoing_message_id));
         let _ = self.sender.send(outgoing_message);
         rx_approve
     }
@@ -116,72 +108,16 @@ impl OutgoingMessageSender {
 }
 
 /// Outgoing message from the server to the client.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
 pub(crate) enum OutgoingMessage {
-    Request(OutgoingRequest),
+    Request(ServerRequest),
     Notification(OutgoingNotification),
     /// AppServerNotification is specific to the case where this is run as an
     /// "app server" as opposed to an MCP server.
     AppServerNotification(ServerNotification),
     Response(OutgoingResponse),
     Error(OutgoingError),
-}
-
-impl From<OutgoingMessage> for JSONRPCMessage {
-    fn from(val: OutgoingMessage) -> Self {
-        use OutgoingMessage::*;
-        match val {
-            Request(OutgoingRequest { id, method, params }) => {
-                JSONRPCMessage::Request(JSONRPCRequest {
-                    jsonrpc: JSONRPC_VERSION.into(),
-                    id,
-                    method,
-                    params,
-                })
-            }
-            Notification(OutgoingNotification { method, params }) => {
-                JSONRPCMessage::Notification(JSONRPCNotification {
-                    jsonrpc: JSONRPC_VERSION.into(),
-                    method,
-                    params,
-                })
-            }
-            AppServerNotification(notification) => {
-                let method = notification.to_string();
-                let params = match notification.to_params() {
-                    Ok(params) => Some(params),
-                    Err(err) => {
-                        warn!("failed to serialize notification params: {err}");
-                        None
-                    }
-                };
-                JSONRPCMessage::Notification(JSONRPCNotification {
-                    jsonrpc: JSONRPC_VERSION.into(),
-                    method,
-                    params,
-                })
-            }
-            Response(OutgoingResponse { id, result }) => {
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    jsonrpc: JSONRPC_VERSION.into(),
-                    id,
-                    result,
-                })
-            }
-            Error(OutgoingError { id, error }) => JSONRPCMessage::Error(JSONRPCError {
-                jsonrpc: JSONRPC_VERSION.into(),
-                id,
-                error,
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct OutgoingRequest {
-    pub id: RequestId,
-    pub method: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -205,7 +141,7 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
-    use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
+    use codex_app_server_protocol::LoginChatGptCompleteNotification;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use uuid::Uuid;
@@ -221,18 +157,17 @@ mod tests {
                 error: None,
             });
 
-        let jsonrpc_notification: JSONRPCMessage =
-            OutgoingMessage::AppServerNotification(notification).into();
+        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
         assert_eq!(
-            JSONRPCMessage::Notification(JSONRPCNotification {
-                jsonrpc: "2.0".into(),
-                method: "loginChatGptComplete".into(),
-                params: Some(json!({
+            json!({
+                "method": "loginChatGptComplete",
+                "params": {
                     "loginId": Uuid::nil(),
                     "success": true,
-                })),
+                },
             }),
-            jsonrpc_notification,
+            serde_json::to_value(jsonrpc_notification)
+                .expect("ensure the strum macros serialize the method field correctly"),
             "ensure the strum macros serialize the method field correctly"
         );
     }
