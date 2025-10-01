@@ -713,7 +713,7 @@ Ordered list of additional filenames to look for when `AGENTS.md` is missing at 
 project_doc_fallback_filenames = ["CLAUDE.md", ".exampleagentrules.md"]
 ```
 
-When a fallback is used, the TUI displays a warning reminding you that `AGENTS.md` remains the preferred location for Codex-specific instructions because fallback files may reduce model performance.
+We recommend migrating instructions to AGENTS.md; other filenames may reduce model performance.
 
 ## tui
 
