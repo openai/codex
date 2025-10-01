@@ -32,7 +32,7 @@ fn make_jwt(payload: serde_json::Value) -> String {
 
 async fn mock_usercode_success(server: &MockServer) {
     Mock::given(method("POST"))
-        .and(path("/deviceauth/usercode"))
+        .and(path("/api/accounts/deviceauth/usercode"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "device_auth_id": "device-auth-123",
             "user_code": "CODE-12345",
@@ -45,7 +45,7 @@ async fn mock_usercode_success(server: &MockServer) {
 
 async fn mock_usercode_failure(server: &MockServer, status: u16) {
     Mock::given(method("POST"))
-        .and(path("/deviceauth/usercode"))
+        .and(path("/api/accounts/deviceauth/usercode"))
         .respond_with(ResponseTemplate::new(status))
         .mount(server)
         .await;
@@ -58,7 +58,7 @@ async fn mock_poll_token_two_step(
 ) {
     let c = counter.clone();
     Mock::given(method("POST"))
-        .and(path("/deviceauth/token"))
+        .and(path("/api/accounts/deviceauth/token"))
         .respond_with(move |_: &Request| {
             let attempt = c.fetch_add(1, Ordering::SeqCst);
             if attempt == 0 {
@@ -214,7 +214,7 @@ async fn device_code_login_integration_handles_error_payload() {
     // // /deviceauth/token → returns error payload with status 401
     mock_poll_token_single(
         &mock_server,
-        "/deviceauth/token",
+        "/api/accounts/deviceauth/token",
         ResponseTemplate::new(401).set_body_json(json!({
             "error": "authorization_declined",
             "error_description": "Denied"

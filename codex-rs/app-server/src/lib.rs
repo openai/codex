@@ -8,7 +8,7 @@ use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 
-use mcp_types::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCMessage;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -111,15 +111,15 @@ pub async fn run_main(
     let stdout_writer_handle = tokio::spawn(async move {
         let mut stdout = io::stdout();
         while let Some(outgoing_message) = outgoing_rx.recv().await {
-            let msg: JSONRPCMessage = outgoing_message.into();
-            match serde_json::to_string(&msg) {
-                Ok(json) => {
+            let Ok(value) = serde_json::to_value(outgoing_message) else {
+                error!("Failed to convert OutgoingMessage to JSON value");
+                continue;
+            };
+            match serde_json::to_string(&value) {
+                Ok(mut json) => {
+                    json.push('\n');
                     if let Err(e) = stdout.write_all(json.as_bytes()).await {
                         error!("Failed to write to stdout: {e}");
-                        break;
-                    }
-                    if let Err(e) = stdout.write_all(b"\n").await {
-                        error!("Failed to write newline to stdout: {e}");
                         break;
                     }
                 }
