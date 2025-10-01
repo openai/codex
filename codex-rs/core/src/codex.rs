@@ -8,6 +8,12 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::background_process::BackgroundProcessAction;
+use crate::background_process::BackgroundProcessInvocation;
+use crate::background_process::BackgroundProcessManager;
+use crate::background_process::background_state_to_json;
+use crate::background_process::make_exec_context_for_background;
+use crate::background_process::system_time_to_unix_millis;
 use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::function_tool::FunctionCallError;
@@ -34,6 +40,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
 use serde_json::Value;
+use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -498,6 +505,7 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            background_process_manager: BackgroundProcessManager::new(),
         };
 
         let sess = Arc::new(Session {
@@ -1081,6 +1089,10 @@ impl Session {
 
     fn user_shell(&self) -> &shell::Shell {
         &self.services.user_shell
+    }
+
+    pub(crate) fn background_processes(&self) -> &BackgroundProcessManager {
+        &self.services.background_process_manager
     }
 
     fn show_raw_agent_reasoning(&self) -> bool {
@@ -2523,6 +2535,10 @@ async fn handle_function_call(
             .await
         }
         "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
+        "background_process" => {
+            handle_background_process_tool_call(sess, turn_context, sub_id, call_id, arguments)
+                .await
+        }
         EXEC_COMMAND_TOOL_NAME => {
             // TODO(mbolin): Sandbox check.
             let exec_params: ExecCommandParams = serde_json::from_str(&arguments).map_err(|e| {
@@ -2595,11 +2611,174 @@ async fn handle_custom_tool_call(
             )
             .await
         }
+        "background_process" => {
+            handle_background_process_tool_call(sess, turn_context, sub_id, call_id, input)
+                .await
+        }
         _ => {
             debug!("unexpected CustomToolCall from stream");
             Err(FunctionCallError::RespondToModel(format!(
                 "unsupported custom tool call: {name}"
             )))
+        }
+    }
+}
+
+async fn handle_background_process_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    sub_id: String,
+    call_id: String,
+    input: String,
+) -> Result<String, FunctionCallError> {
+    let invocation: BackgroundProcessInvocation = serde_json::from_str(&input).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to parse arguments: {err}"))
+    })?;
+
+    match invocation.action {
+        BackgroundProcessAction::Start => {
+            let command = invocation.command.ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "command is required when action is \"start\"".to_string(),
+                )
+            })?;
+            if command.is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "command must not be empty".to_string(),
+                ));
+            }
+
+            if invocation.with_escalated_permissions.unwrap_or(false)
+                && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
+            {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+                    policy = turn_context.approval_policy
+                )));
+            }
+
+            let cwd = turn_context.resolve_path(invocation.cwd.clone());
+            let mut env = create_env(&turn_context.shell_environment_policy);
+            if let Some(custom_env) = invocation.env {
+                for (key, value) in custom_env {
+                    env.insert(key, value);
+                }
+            }
+
+            let exec_params = ExecParams {
+                command: command.clone(),
+                cwd: cwd.clone(),
+                timeout_ms: None,
+                env,
+                with_escalated_permissions: invocation.with_escalated_permissions,
+                justification: invocation.justification,
+            };
+
+            let exec_params = maybe_translate_shell_command(exec_params, sess, turn_context);
+            let exec_context = make_exec_context_for_background(
+                sub_id.clone(),
+                call_id.clone(),
+                command,
+                cwd,
+            );
+
+            let approved_snapshot = {
+                let state = sess.state.lock().await;
+                state.approved_commands_ref().clone()
+            };
+
+            let codex_linux_sandbox_exe = sess.services.codex_linux_sandbox_exe.clone();
+
+            let response = sess
+                .background_processes()
+                .start(
+                    sess,
+                    turn_context,
+                    exec_context,
+                    exec_params,
+                    approved_snapshot,
+                    codex_linux_sandbox_exe,
+                )
+                .await?;
+
+            sess
+                .notify_background_event(
+                    &sub_id,
+                    format!("Started background process {}", response.process_id),
+                )
+                .await;
+
+            serde_json::to_string(&json!({
+                "status": "started",
+                "process_id": response.process_id,
+            }))
+            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
+        }
+        BackgroundProcessAction::List => {
+            let summaries = sess.background_processes().list().await;
+            let processes: Vec<_> = summaries
+                .into_iter()
+                .map(|summary| {
+                    json!({
+                        "process_id": summary.id,
+                        "command": summary.command,
+                        "cwd": summary.cwd.display().to_string(),
+                        "sandbox": format!("{:?}", summary.sandbox_type),
+                        "started_at_ms": system_time_to_unix_millis(summary.started_at),
+                        "state": background_state_to_json(&summary.state),
+                    })
+                })
+                .collect();
+
+            serde_json::to_string(&json!({
+                "processes": processes,
+            }))
+            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
+        }
+        BackgroundProcessAction::Logs => {
+            let process_id = invocation.process_id.ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "process_id is required when action is \"logs\"".to_string(),
+                )
+            })?;
+
+            let entries = sess.background_processes().logs(&process_id).await?;
+            let logs: Vec<_> = entries
+                .into_iter()
+                .map(|entry| {
+                    json!({
+                        "stream": entry.stream,
+                        "text": entry.text,
+                    })
+                })
+                .collect();
+
+            serde_json::to_string(&json!({
+                "process_id": process_id,
+                "logs": logs,
+            }))
+            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
+        }
+        BackgroundProcessAction::Kill => {
+            let process_id = invocation.process_id.ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "process_id is required when action is \"kill\"".to_string(),
+                )
+            })?;
+
+            sess.background_processes().kill(&process_id).await?;
+            sess
+                .notify_background_event(
+                    &sub_id,
+                    format!("Requested termination for background process {process_id}"),
+                )
+                .await;
+
+            serde_json::to_string(&json!({
+                "status": "killed",
+                "process_id": process_id,
+            }))
+            .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
         }
     }
 }
@@ -3619,6 +3798,7 @@ mod tests {
             codex_linux_sandbox_exe: None,
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            background_process_manager: BackgroundProcessManager::new(),
         };
         let session = Session {
             conversation_id,
@@ -3688,6 +3868,7 @@ mod tests {
             codex_linux_sandbox_exe: None,
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            background_process_manager: BackgroundProcessManager::new(),
         };
         let session = Arc::new(Session {
             conversation_id,
