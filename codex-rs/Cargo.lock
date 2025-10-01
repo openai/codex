@@ -1061,7 +1061,7 @@ dependencies = [
  "portable-pty",
  "predicates",
  "pretty_assertions",
- "rand",
+ "rand 0.9.2",
  "regex-lite",
  "reqwest",
  "seccompiler",
@@ -1200,7 +1200,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-core",
  "core_test_support",
- "rand",
+ "rand 0.9.2",
  "reqwest",
  "serde",
  "serde_json",
@@ -1409,7 +1409,7 @@ dependencies = [
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
- "rand",
+ "rand 0.9.2",
  "ratatui",
  "regex-lite",
  "serde",
@@ -4114,7 +4114,7 @@ dependencies = [
  "futures-util",
  "opentelemetry",
  "percent-encoding",
- "rand",
+ "rand 0.9.2",
  "serde_json",
  "thiserror 2.0.16",
  "tokio",
@@ -4568,7 +4568,7 @@ dependencies = [
  "bytes",
  "getrandom 0.3.3",
  "lru-slab",
- "rand",
+ "rand 0.9.2",
  "ring",
  "rustc-hash",
  "rustls",
@@ -4670,7 +4670,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
- "rand_core",
+ "rand_core 0.9.3",
 ]
 
 [[package]]
@@ -4898,7 +4898,7 @@ dependencies = [
  "paste",
  "pin-project-lite",
  "process-wrap",
- "rand",
+ "rand 0.9.2",
  "reqwest",
  "rmcp-macros",
  "schemars 1.0.4",
