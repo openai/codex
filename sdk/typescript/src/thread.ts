@@ -41,6 +41,8 @@ export class Thread {
       threadId: this.id,
       model: options?.model,
       sandboxMode: options?.sandboxMode,
+      workingDirectory: options?.workingDirectory,
+      skipGitRepoCheck: options?.skipGitRepoCheck,
     });
     for await (const item of generator) {
       const parsed = JSON.parse(item) as ThreadEvent;
