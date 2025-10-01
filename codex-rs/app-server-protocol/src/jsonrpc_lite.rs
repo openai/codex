@@ -11,6 +11,7 @@ pub const JSONRPC_VERSION: &str = "2.0";
 #[serde(untagged)]
 pub enum RequestId {
     String(String),
+    #[ts(type = "number")]
     Integer(i64),
 }
 
