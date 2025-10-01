@@ -11,6 +11,8 @@ use crate::bottom_pane::list_selection_view::SelectionViewParams;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
+use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::text_formatting::truncate_text;
@@ -294,8 +296,12 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header.push(reason.italic().into());
                     header.push(Line::from(""));
                 }
-                let command_snippet = exec_snippet(&command);
-                header.push(Line::from(format!("$ {command_snippet}")));
+                let full_cmd = strip_bash_lc_and_escape(&command);
+                let mut full_cmd_lines = highlight_bash_to_lines(&full_cmd);
+                if let Some(first) = full_cmd_lines.first_mut() {
+                    first.spans.insert(0, Span::from("$ "));
+                }
+                header.extend(full_cmd_lines);
                 Self {
                     variant: ApprovalVariant::Exec { id, command },
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),

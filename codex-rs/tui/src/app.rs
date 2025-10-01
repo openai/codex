@@ -4,9 +4,11 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::diff_render::DiffSummary;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
+use crate::render::highlight::highlight_bash_to_lines;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -380,8 +382,14 @@ impl App {
                         "P A T C H".to_string(),
                     ));
                 }
-                ApprovalRequest::Exec { .. } => {
-                    todo!()
+                ApprovalRequest::Exec { command, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let full_cmd = strip_bash_lc_and_escape(&command);
+                    let full_cmd_lines = highlight_bash_to_lines(&full_cmd);
+                    self.overlay = Some(Overlay::new_static_with_lines(
+                        full_cmd_lines,
+                        "E X E C".to_string(),
+                    ));
                 }
             },
         }
