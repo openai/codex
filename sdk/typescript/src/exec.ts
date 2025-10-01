@@ -48,10 +48,8 @@ export class CodexExec {
     }
 
     if (args.threadId) {
-      commandArgs.push("resume", args.threadId, args.input);
-    } else {
-      commandArgs.push(args.input);
-    }
+      commandArgs.push("resume", args.threadId);
+    } 
 
     const env = {
       ...process.env,
@@ -69,16 +67,23 @@ export class CodexExec {
 
     let spawnError: unknown | null = null;
     child.once("error", (err) => (spawnError = err));
+    
+    if (!child.stdin) {
+      child.kill();
+      throw new Error("Child process has no stdin");
+    }
+    child.stdin.write(args.input);
+    child.stdin.end();
 
     if (!child.stdout) {
       child.kill();
       throw new Error("Child process has no stdout");
     }
+    const stderrChunks: Buffer[] = [];
 
-    let stderr: string = "";
     if (child.stderr) {
       child.stderr.on("data", (data) => {
-        stderr += data;
+        stderrChunks.push(data);
       });
     }
 
@@ -98,7 +103,8 @@ export class CodexExec {
           if (code === 0) {
             resolve(code);
           } else {
-            reject(new Error(`Codex Exec exited with code ${code}: ${stderr}`));
+            const stderrBuffer = Buffer.concat(stderrChunks);
+            reject(new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString('utf8')}`));
           }
         });
       });
