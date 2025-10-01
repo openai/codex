@@ -27,6 +27,8 @@ use futures::prelude::*;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+const USER_SUMMARY_MAX_SNIPPET_BYTES: usize = 600;
+const USER_SUMMARY_MAX_ENTRIES: usize = 2;
 
 #[derive(Template)]
 #[template(path = "compact/history_bridge.md", escape = "none")]
@@ -196,19 +198,39 @@ pub(crate) fn build_compacted_history(
     summary_text: &str,
 ) -> Vec<ResponseItem> {
     let mut history = initial_context;
-    let mut user_messages_text = if user_messages.is_empty() {
-        "(none)".to_string()
+
+    let mut condensed_user_messages = Vec::new();
+    for message in user_messages.iter().rev() {
+        if condensed_user_messages.len() == USER_SUMMARY_MAX_ENTRIES {
+            break;
+        }
+        let sanitized = message.split_whitespace().collect::<Vec<_>>().join(" ");
+        if sanitized.is_empty() {
+            continue;
+        }
+        let snippet = truncate_middle(&sanitized, USER_SUMMARY_MAX_SNIPPET_BYTES).0;
+        condensed_user_messages.push(snippet);
+    }
+    condensed_user_messages.reverse();
+
+    let mut user_messages_text = if condensed_user_messages.is_empty() {
+        "- (no recent user requests)".to_string()
     } else {
-        user_messages.join("\n\n")
+        condensed_user_messages
+            .into_iter()
+            .map(|line| format!("- {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
-    // Truncate the concatenated prior user messages so the bridge message
-    // stays well under the context window (approx. 4 bytes/token).
+    // Truncate the formatted user messages to stay well under the context window
+    // (approx. 4 bytes/token).
     let max_bytes = COMPACT_USER_MESSAGE_MAX_TOKENS * 4;
     if user_messages_text.len() > max_bytes {
         user_messages_text = truncate_middle(&user_messages_text, max_bytes).0;
     }
-    let summary_text = if summary_text.is_empty() {
-        "(no summary available)".to_string()
+
+    let summary_text = if summary_text.trim().is_empty() {
+        "- (no assistant summary available)".to_string()
     } else {
         summary_text.to_string()
     };
