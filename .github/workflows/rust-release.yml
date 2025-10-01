@@ -216,15 +216,18 @@ jobs:
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
       - name: Setup Node.js for npm packaging
         uses: actions/setup-node@v5
         with:
           node-version: 22
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       # stage_npm_packages.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@v2
