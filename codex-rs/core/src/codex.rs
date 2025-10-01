@@ -1,11 +1,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::time::Duration;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
@@ -44,7 +42,6 @@ use tracing::warn;
 use crate::ModelProviderInfo;
 use crate::apply_patch;
 use crate::apply_patch::ApplyPatchExec;
-use crate::apply_patch::CODEX_APPLY_PATCH_ARG1;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
@@ -57,19 +54,21 @@ use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::error::SandboxErr;
-use crate::error::get_error_message_ui;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
+#[cfg(test)]
 use crate::exec::StreamOutput;
-use crate::exec::process_exec_tool_call;
 use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
 use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
+use crate::executor::ExecutionMode;
+use crate::executor::Executor;
+use crate::executor::ExecutorConfig;
+use crate::executor::normalize_exec_result;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
@@ -113,9 +112,6 @@ use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
-use crate::safety::SafetyCheck;
-use crate::safety::assess_command_safety;
-use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
@@ -128,7 +124,6 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_otel::otel_event_manager::OtelEventManager;
-use codex_otel::otel_event_manager::ToolDecisionSource;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -486,9 +481,13 @@ impl Session {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: notify,
             rollout: Mutex::new(Some(rollout_recorder)),
-            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            executor: Executor::new(ExecutorConfig::new(
+                turn_context.sandbox_policy.clone(),
+                turn_context.cwd.clone(),
+                config.codex_linux_sandbox_exe.clone(),
+            )),
         };
 
         let sess = Arc::new(Session {
@@ -573,6 +572,11 @@ impl Session {
         }
     }
 
+    /// Emit an exec approval request event and await the user's decision.
+    ///
+    /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
+    /// to the correct in-flight turn. If the task is aborted, this returns the
+    /// default `ReviewDecision` (`Denied`).
     pub async fn request_command_approval(
         &self,
         sub_id: String,
@@ -668,11 +672,6 @@ impl Session {
                 warn!("No pending approval found for sub_id: {sub_id}");
             }
         }
-    }
-
-    pub async fn add_approved_command(&self, cmd: Vec<String>) {
-        let mut state = self.state.lock().await;
-        state.add_approved_command(cmd);
     }
 
     /// Records input items: always append to conversation history and
@@ -832,6 +831,7 @@ impl Session {
             command_for_display,
             cwd,
             apply_patch,
+            ..
         } = exec_command_context;
         let msg = match apply_patch {
             Some(ApplyPatchCommandContext {
@@ -928,45 +928,29 @@ impl Session {
     /// command even on error.
     ///
     /// Returns the output of the exec tool call.
-    async fn run_exec_with_events<'a>(
+    async fn run_exec_with_events(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
-        begin_ctx: ExecCommandContext,
-        exec_args: ExecInvokeArgs<'a>,
-    ) -> crate::error::Result<ExecToolCallOutput> {
-        let is_apply_patch = begin_ctx.apply_patch.is_some();
-        let sub_id = begin_ctx.sub_id.clone();
-        let call_id = begin_ctx.call_id.clone();
+        prepared: PreparedExec,
+        approval_policy: AskForApproval,
+    ) -> Result<ExecToolCallOutput, ExecError> {
+        let PreparedExec { context, request } = prepared;
+        let is_apply_patch = context.apply_patch.is_some();
+        let sub_id = context.sub_id.clone();
+        let call_id = context.call_id.clone();
 
-        self.on_exec_command_begin(turn_diff_tracker, begin_ctx.clone())
+        self.on_exec_command_begin(turn_diff_tracker, context.clone())
             .await;
 
-        let result = process_exec_tool_call(
-            exec_args.params,
-            exec_args.sandbox_type,
-            exec_args.sandbox_policy,
-            exec_args.sandbox_cwd,
-            exec_args.codex_linux_sandbox_exe,
-            exec_args.stdout_stream,
-        )
-        .await;
+        let result = self
+            .services
+            .executor
+            .run(request, self, approval_policy, &context)
+            .await;
 
-        let output_stderr;
-        let borrowed: &ExecToolCallOutput = match &result {
-            Ok(output) => output,
-            Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
-            Err(e) => {
-                output_stderr = ExecToolCallOutput {
-                    exit_code: -1,
-                    stdout: StreamOutput::new(String::new()),
-                    stderr: StreamOutput::new(get_error_message_ui(e)),
-                    aggregated_output: StreamOutput::new(get_error_message_ui(e)),
-                    duration: Duration::default(),
-                    timed_out: false,
-                };
-                &output_stderr
-            }
-        };
+        let normalized = normalize_exec_result(&result);
+        let borrowed = normalized.event_output();
+
         self.on_exec_command_end(
             turn_diff_tracker,
             &sub_id,
@@ -976,13 +960,15 @@ impl Session {
         )
         .await;
 
+        drop(normalized);
+
         result
     }
 
     /// Helper that emits a BackgroundEvent with the given message. This keeps
     /// the call‑sites terse so adding more diagnostics does not clutter the
     /// core agent logic.
-    async fn notify_background_event(&self, sub_id: &str, message: impl Into<String>) {
+    pub(crate) async fn notify_background_event(&self, sub_id: &str, message: impl Into<String>) {
         let event = Event {
             id: sub_id.to_string(),
             msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
@@ -1070,7 +1056,7 @@ impl Session {
         &self.services.notifier
     }
 
-    fn user_shell(&self) -> &shell::Shell {
+    pub(crate) fn user_shell(&self) -> &shell::Shell {
         &self.services.user_shell
     }
 
@@ -1092,6 +1078,8 @@ pub(crate) struct ExecCommandContext {
     pub(crate) command_for_display: Vec<String>,
     pub(crate) cwd: PathBuf,
     pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
+    pub(crate) tool_name: String,
+    pub(crate) otel_event_manager: OtelEventManager,
 }
 
 #[derive(Clone, Debug)]
@@ -1298,8 +1286,19 @@ async fn submission_loop(
                     let previous_env_context = EnvironmentContext::from(turn_context.as_ref());
                     let new_env_context = EnvironmentContext::from(&fresh_turn_context);
                     if !new_env_context.equals_except_shell(&previous_env_context) {
-                        sess.record_conversation_items(&[ResponseItem::from(new_env_context)])
+                        let env_response_item = ResponseItem::from(new_env_context);
+                        sess.record_conversation_items(std::slice::from_ref(&env_response_item))
                             .await;
+                        for msg in map_response_item_to_event_messages(
+                            &env_response_item,
+                            sess.show_raw_agent_reasoning(),
+                        ) {
+                            let event = Event {
+                                id: sub.id.clone(),
+                                msg,
+                            };
+                            sess.send_event(event).await;
+                        }
                     }
 
                     // Install the new persistent context for subsequent tasks/turns.
@@ -2610,33 +2609,6 @@ fn parse_container_exec_arguments(
         })
 }
 
-pub struct ExecInvokeArgs<'a> {
-    pub params: ExecParams,
-    pub sandbox_type: SandboxType,
-    pub sandbox_policy: &'a SandboxPolicy,
-    pub sandbox_cwd: &'a Path,
-    pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
-    pub stdout_stream: Option<StdoutStream>,
-}
-
-fn maybe_translate_shell_command(
-    params: ExecParams,
-    sess: &Session,
-    turn_context: &TurnContext,
-) -> ExecParams {
-    let should_translate = matches!(sess.user_shell(), crate::shell::Shell::PowerShell(_))
-        || turn_context.shell_environment_policy.use_profile;
-
-    if should_translate
-        && let Some(command) = sess
-            .user_shell()
-            .format_default_shell_invocation(params.command.clone())
-    {
-        return ExecParams { command, ..params };
-    }
-    params
-}
-
 async fn handle_container_exec_with_params(
     tool_name: &str,
     params: ExecParams,
@@ -2682,152 +2654,10 @@ async fn handle_container_exec_with_params(
         MaybeApplyPatchVerified::NotApplyPatch => None,
     };
 
-    let (params, safety, command_for_display) = match &apply_patch_exec {
-        Some(ApplyPatchExec {
-            action: ApplyPatchAction { patch, cwd, .. },
-            user_explicitly_approved_this_action,
-        }) => {
-            let path_to_codex = std::env::current_exe()
-                .ok()
-                .map(|p| p.to_string_lossy().to_string());
-            let Some(path_to_codex) = path_to_codex else {
-                return Err(FunctionCallError::RespondToModel(
-                    "failed to determine path to codex executable".to_string(),
-                ));
-            };
-
-            let params = ExecParams {
-                command: vec![
-                    path_to_codex,
-                    CODEX_APPLY_PATCH_ARG1.to_string(),
-                    patch.clone(),
-                ],
-                cwd: cwd.clone(),
-                timeout_ms: params.timeout_ms,
-                env: HashMap::new(),
-                with_escalated_permissions: params.with_escalated_permissions,
-                justification: params.justification.clone(),
-            };
-            let safety = if *user_explicitly_approved_this_action {
-                SafetyCheck::AutoApprove {
-                    sandbox_type: SandboxType::None,
-                    user_explicitly_approved: true,
-                }
-            } else {
-                assess_safety_for_untrusted_command(
-                    turn_context.approval_policy,
-                    &turn_context.sandbox_policy,
-                    params.with_escalated_permissions.unwrap_or(false),
-                )
-            };
-            (
-                params,
-                safety,
-                vec!["apply_patch".to_string(), patch.clone()],
-            )
-        }
-        None => {
-            let safety = {
-                let state = sess.state.lock().await;
-                assess_command_safety(
-                    &params.command,
-                    turn_context.approval_policy,
-                    &turn_context.sandbox_policy,
-                    state.approved_commands_ref(),
-                    params.with_escalated_permissions.unwrap_or(false),
-                )
-            };
-            let command_for_display = params.command.clone();
-            (params, safety, command_for_display)
-        }
-    };
-
-    let sandbox_type = match safety {
-        SafetyCheck::AutoApprove {
-            sandbox_type,
-            user_explicitly_approved,
-        } => {
-            otel_event_manager.tool_decision(
-                tool_name,
-                call_id.as_str(),
-                ReviewDecision::Approved,
-                if user_explicitly_approved {
-                    ToolDecisionSource::User
-                } else {
-                    ToolDecisionSource::Config
-                },
-            );
-
-            sandbox_type
-        }
-        SafetyCheck::AskUser => {
-            let decision = sess
-                .request_command_approval(
-                    sub_id.clone(),
-                    call_id.clone(),
-                    params.command.clone(),
-                    params.cwd.clone(),
-                    params.justification.clone(),
-                )
-                .await;
-            match decision {
-                ReviewDecision::Approved => {
-                    otel_event_manager.tool_decision(
-                        tool_name,
-                        call_id.as_str(),
-                        ReviewDecision::Approved,
-                        ToolDecisionSource::User,
-                    );
-                }
-                ReviewDecision::ApprovedForSession => {
-                    otel_event_manager.tool_decision(
-                        tool_name,
-                        call_id.as_str(),
-                        ReviewDecision::ApprovedForSession,
-                        ToolDecisionSource::User,
-                    );
-                    sess.add_approved_command(params.command.clone()).await;
-                }
-                ReviewDecision::Denied => {
-                    otel_event_manager.tool_decision(
-                        tool_name,
-                        call_id.as_str(),
-                        ReviewDecision::Denied,
-                        ToolDecisionSource::User,
-                    );
-                    return Err(FunctionCallError::RespondToModel(
-                        "exec command rejected by user".to_string(),
-                    ));
-                }
-                ReviewDecision::Abort => {
-                    otel_event_manager.tool_decision(
-                        tool_name,
-                        call_id.as_str(),
-                        ReviewDecision::Abort,
-                        ToolDecisionSource::User,
-                    );
-                    return Err(FunctionCallError::RespondToModel(
-                        "exec command aborted by user".to_string(),
-                    ));
-                }
-            }
-            // No sandboxing is applied because the user has given
-            // explicit approval. Often, we end up in this case because
-            // the command cannot be run in a sandbox, such as
-            // installing a new dependency that requires network access.
-            SandboxType::None
-        }
-        SafetyCheck::Reject { reason } => {
-            otel_event_manager.tool_decision(
-                tool_name,
-                call_id.as_str(),
-                ReviewDecision::Denied,
-                ToolDecisionSource::Config,
-            );
-            return Err(FunctionCallError::RespondToModel(format!(
-                "exec command rejected: {reason:?}"
-            )));
-        }
+    let command_for_display = if let Some(exec) = apply_patch_exec.as_ref() {
+        vec!["apply_patch".to_string(), exec.action.patch.clone()]
+    } else {
+        params.command.clone()
     };
 
     let exec_command_context = ExecCommandContext {
@@ -2835,38 +2665,47 @@ async fn handle_container_exec_with_params(
         call_id: call_id.clone(),
         command_for_display: command_for_display.clone(),
         cwd: params.cwd.clone(),
-        apply_patch: apply_patch_exec.map(
+        apply_patch: apply_patch_exec.as_ref().map(
             |ApplyPatchExec {
                  action,
                  user_explicitly_approved_this_action,
              }| ApplyPatchCommandContext {
-                user_explicitly_approved_this_action,
-                changes: convert_apply_patch_to_protocol(&action),
+                user_explicitly_approved_this_action: *user_explicitly_approved_this_action,
+                changes: convert_apply_patch_to_protocol(action),
             },
         ),
+        tool_name: tool_name.to_string(),
+        otel_event_manager,
     };
 
-    let params = maybe_translate_shell_command(params, sess, turn_context);
+    let mode = match apply_patch_exec {
+        Some(exec) => ExecutionMode::ApplyPatch(exec),
+        None => ExecutionMode::Shell,
+    };
+
+    sess.services.executor.update_environment(
+        turn_context.sandbox_policy.clone(),
+        turn_context.cwd.clone(),
+    );
+
+    let prepared_exec = PreparedExec::new(
+        exec_command_context,
+        params,
+        command_for_display,
+        mode,
+        Some(StdoutStream {
+            sub_id: sub_id.clone(),
+            call_id: call_id.clone(),
+            tx_event: sess.tx_event.clone(),
+        }),
+        turn_context.shell_environment_policy.use_profile,
+    );
+
     let output_result = sess
         .run_exec_with_events(
             turn_diff_tracker,
-            exec_command_context.clone(),
-            ExecInvokeArgs {
-                params: params.clone(),
-                sandbox_type,
-                sandbox_policy: &turn_context.sandbox_policy,
-                sandbox_cwd: &turn_context.cwd,
-                codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
-                stdout_stream: if exec_command_context.apply_patch.is_some() {
-                    None
-                } else {
-                    Some(StdoutStream {
-                        sub_id: sub_id.clone(),
-                        call_id: call_id.clone(),
-                        tx_event: sess.tx_event.clone(),
-                    })
-                },
-            },
+            prepared_exec,
+            turn_context.approval_policy,
         )
         .await;
 
@@ -2880,151 +2719,13 @@ async fn handle_container_exec_with_params(
                 Err(FunctionCallError::RespondToModel(content))
             }
         }
-        Err(CodexErr::Sandbox(error)) => {
-            handle_sandbox_error(
-                tool_name,
-                turn_diff_tracker,
-                params,
-                exec_command_context,
-                error,
-                sandbox_type,
-                sess,
-                turn_context,
-                &otel_event_manager,
-            )
-            .await
-        }
-        Err(e) => Err(FunctionCallError::RespondToModel(format!(
-            "execution error: {e:?}"
+        Err(ExecError::Function(err)) => Err(err),
+        Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
+            FunctionCallError::RespondToModel(format_exec_output(&output)),
+        ),
+        Err(ExecError::Codex(err)) => Err(FunctionCallError::RespondToModel(format!(
+            "execution error: {err:?}"
         ))),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn handle_sandbox_error(
-    tool_name: &str,
-    turn_diff_tracker: &mut TurnDiffTracker,
-    params: ExecParams,
-    exec_command_context: ExecCommandContext,
-    error: SandboxErr,
-    sandbox_type: SandboxType,
-    sess: &Session,
-    turn_context: &TurnContext,
-    otel_event_manager: &OtelEventManager,
-) -> Result<String, FunctionCallError> {
-    let call_id = exec_command_context.call_id.clone();
-    let sub_id = exec_command_context.sub_id.clone();
-    let cwd = exec_command_context.cwd.clone();
-
-    if let SandboxErr::Timeout { output } = &error {
-        let content = format_exec_output(output);
-        return Err(FunctionCallError::RespondToModel(content));
-    }
-
-    // Early out if either the user never wants to be asked for approval, or
-    // we're letting the model manage escalation requests. Otherwise, continue
-    match turn_context.approval_policy {
-        AskForApproval::Never | AskForApproval::OnRequest => {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "failed in sandbox {sandbox_type:?} with execution error: {error:?}"
-            )));
-        }
-        AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
-    }
-
-    // Note that when `error` is `SandboxErr::Denied`, it could be a false
-    // positive. That is, it may have exited with a non-zero exit code, not
-    // because the sandbox denied it, but because that is its expected behavior,
-    // i.e., a grep command that did not match anything. Ideally we would
-    // include additional metadata on the command to indicate whether non-zero
-    // exit codes merit a retry.
-
-    // For now, we categorically ask the user to retry without sandbox and
-    // emit the raw error as a background event.
-    sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
-        .await;
-
-    let decision = sess
-        .request_command_approval(
-            sub_id.clone(),
-            call_id.clone(),
-            params.command.clone(),
-            cwd.clone(),
-            Some("command failed; retry without sandbox?".to_string()),
-        )
-        .await;
-
-    match decision {
-        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
-            // Persist this command as pre‑approved for the
-            // remainder of the session so future
-            // executions skip the sandbox directly.
-            // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
-            sess.add_approved_command(params.command.clone()).await;
-            // Inform UI we are retrying without sandbox.
-            sess.notify_background_event(&sub_id, "retrying command without sandbox")
-                .await;
-
-            otel_event_manager.tool_decision(
-                tool_name,
-                call_id.as_str(),
-                decision,
-                ToolDecisionSource::User,
-            );
-
-            // This is an escalated retry; the policy will not be
-            // examined and the sandbox has been set to `None`.
-            let retry_output_result = sess
-                .run_exec_with_events(
-                    turn_diff_tracker,
-                    exec_command_context.clone(),
-                    ExecInvokeArgs {
-                        params,
-                        sandbox_type: SandboxType::None,
-                        sandbox_policy: &turn_context.sandbox_policy,
-                        sandbox_cwd: &turn_context.cwd,
-                        codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
-                        stdout_stream: if exec_command_context.apply_patch.is_some() {
-                            None
-                        } else {
-                            Some(StdoutStream {
-                                sub_id: sub_id.clone(),
-                                call_id: call_id.clone(),
-                                tx_event: sess.tx_event.clone(),
-                            })
-                        },
-                    },
-                )
-                .await;
-
-            match retry_output_result {
-                Ok(retry_output) => {
-                    let ExecToolCallOutput { exit_code, .. } = &retry_output;
-                    let content = format_exec_output(&retry_output);
-                    if *exit_code == 0 {
-                        Ok(content)
-                    } else {
-                        Err(FunctionCallError::RespondToModel(content))
-                    }
-                }
-                Err(e) => Err(FunctionCallError::RespondToModel(format!(
-                    "retry failed: {e}"
-                ))),
-            }
-        }
-        decision @ (ReviewDecision::Denied | ReviewDecision::Abort) => {
-            otel_event_manager.tool_decision(
-                tool_name,
-                call_id.as_str(),
-                decision,
-                ToolDecisionSource::User,
-            );
-
-            // Fall through to original failure handling.
-            Err(FunctionCallError::RespondToModel(
-                "exec command rejected by user".to_string(),
-            ))
-        }
     }
 }
 
@@ -3286,6 +2987,8 @@ pub(crate) async fn exit_review_mode(
         .await;
 }
 
+use crate::executor::errors::ExecError;
+use crate::executor::linkers::PreparedExec;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -3599,9 +3302,13 @@ mod tests {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
             rollout: Mutex::new(None),
-            codex_linux_sandbox_exe: None,
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            executor: Executor::new(ExecutorConfig::new(
+                turn_context.sandbox_policy.clone(),
+                turn_context.cwd.clone(),
+                None,
+            )),
         };
         let session = Session {
             conversation_id,
@@ -3668,9 +3375,13 @@ mod tests {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
             rollout: Mutex::new(None),
-            codex_linux_sandbox_exe: None,
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            executor: Executor::new(ExecutorConfig::new(
+                config.sandbox_policy.clone(),
+                config.cwd.clone(),
+                None,
+            )),
         };
         let session = Arc::new(Session {
             conversation_id,
