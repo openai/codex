@@ -12,7 +12,7 @@ use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
-use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
+use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::NewConversationParams;
 use codex_protocol::mcp_protocol::NewConversationResponse;
 use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
@@ -21,6 +21,7 @@ use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
+use codex_protocol::mcp_protocol::ServerRequest;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
@@ -290,11 +291,28 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
     .await
     .expect("waiting for exec approval request timeout")
     .expect("exec approval request");
-    assert_eq!(request.method, EXEC_COMMAND_APPROVAL_METHOD);
+    let ServerRequest::ExecCommandApproval { request_id, params } = request else {
+        panic!("expected ExecCommandApproval request, got: {request:?}");
+    };
+
+    assert_eq!(
+        ExecCommandApprovalParams {
+            conversation_id,
+            call_id: "call1".to_string(),
+            command: vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            cwd: working_directory.clone(),
+            reason: None,
+        },
+        params
+    );
 
     // Approve so the first turn can complete
     mcp.send_response(
-        request.id,
+        request_id,
         serde_json::json!({ "decision": codex_core::protocol::ReviewDecision::Approved }),
     )
     .await

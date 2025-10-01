@@ -26,6 +26,7 @@ use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
 use codex_protocol::mcp_protocol::ResumeConversationParams;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
+use codex_protocol::mcp_protocol::ServerRequest;
 use codex_protocol::mcp_protocol::SetDefaultModelParams;
 
 use mcp_types::JSONRPC_VERSION;
@@ -373,7 +374,7 @@ impl McpProcess {
         Ok(message)
     }
 
-    pub async fn read_stream_until_request_message(&mut self) -> anyhow::Result<JSONRPCRequest> {
+    pub async fn read_stream_until_request_message(&mut self) -> anyhow::Result<ServerRequest> {
         eprintln!("in read_stream_until_request_message()");
 
         loop {
@@ -384,7 +385,9 @@ impl McpProcess {
                     eprintln!("notification: {message:?}");
                 }
                 JSONRPCMessage::Request(jsonrpc_request) => {
-                    return Ok(jsonrpc_request);
+                    return jsonrpc_request.try_into().with_context(
+                        || "failed to deserialize ServerRequest from JSONRPCRequest",
+                    );
                 }
                 JSONRPCMessage::Error(_) => {
                     anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");

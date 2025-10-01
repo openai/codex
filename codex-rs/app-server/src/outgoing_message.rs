@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::ServerRequestPayload;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCError;
 use mcp_types::JSONRPCErrorError;
@@ -38,8 +39,7 @@ impl OutgoingMessageSender {
 
     pub(crate) async fn send_request(
         &self,
-        method: &str,
-        params: Option<serde_json::Value>,
+        request: ServerRequestPayload,
     ) -> oneshot::Receiver<Result> {
         let id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::Relaxed));
         let outgoing_message_id = id.clone();
@@ -48,6 +48,14 @@ impl OutgoingMessageSender {
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
             request_id_to_callback.insert(id, tx_approve);
         }
+
+        let method = request.method();
+        let params_value = request.into_params_value();
+        let params = if params_value.is_null() {
+            None
+        } else {
+            Some(params_value)
+        };
 
         let outgoing_message = OutgoingMessage::Request(OutgoingRequest {
             id: outgoing_message_id,

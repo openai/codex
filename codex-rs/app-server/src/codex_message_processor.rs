@@ -36,7 +36,6 @@ use codex_core::protocol::ReviewDecision;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
-use codex_protocol::mcp_protocol::APPLY_PATCH_APPROVAL_METHOD;
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
@@ -47,11 +46,10 @@ use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::mcp_protocol::ConversationSummary;
-use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
-use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
+use codex_protocol::mcp_protocol::ExecOneOffCommandResponse;
 use codex_protocol::mcp_protocol::FuzzyFileSearchParams;
 use codex_protocol::mcp_protocol::FuzzyFileSearchResponse;
 use codex_protocol::mcp_protocol::GetUserAgentResponse;
@@ -76,6 +74,7 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::ServerRequestPayload;
 use codex_protocol::mcp_protocol::SessionConfiguredNotification;
 use codex_protocol::mcp_protocol::SetDefaultModelParams;
 use codex_protocol::mcp_protocol::SetDefaultModelResponse;
@@ -632,7 +631,7 @@ impl CodexMessageProcessor {
             .await
             {
                 Ok(output) => {
-                    let response = ExecArbitraryCommandResponse {
+                    let response = ExecOneOffCommandResponse {
                         exit_code: output.exit_code,
                         stdout: output.stdout.text,
                         stderr: output.stderr.text,
@@ -1268,9 +1267,8 @@ async fn apply_bespoke_event_handling(
                 reason,
                 grant_root,
             };
-            let value = serde_json::to_value(&params).unwrap_or_default();
             let rx = outgoing
-                .send_request(APPLY_PATCH_APPROVAL_METHOD, Some(value))
+                .send_request(ServerRequestPayload::ApplyPatchApproval(params))
                 .await;
             // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
             tokio::spawn(async move {
@@ -1290,9 +1288,8 @@ async fn apply_bespoke_event_handling(
                 cwd,
                 reason,
             };
-            let value = serde_json::to_value(&params).unwrap_or_default();
             let rx = outgoing
-                .send_request(EXEC_COMMAND_APPROVAL_METHOD, Some(value))
+                .send_request(ServerRequestPayload::ExecCommandApproval(params))
                 .await;
 
             // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
