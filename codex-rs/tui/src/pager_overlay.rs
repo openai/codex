@@ -91,6 +91,7 @@ struct PagerView {
     scroll_offset: usize,
     title: String,
     last_content_height: Option<usize>,
+    last_rendered_height: Option<usize>,
     /// If set, on next render ensure this chunk is visible.
     pending_scroll_chunk: Option<usize>,
 }
@@ -102,6 +103,7 @@ impl PagerView {
             scroll_offset,
             title,
             last_content_height: None,
+            last_rendered_height: None,
             pending_scroll_chunk: None,
         }
     }
@@ -119,6 +121,7 @@ impl PagerView {
         let content_area = self.content_area(area);
         self.update_last_content_height(content_area.height);
         let content_height = self.content_height(content_area.width);
+        self.last_rendered_height = Some(content_height);
         // If there is a pending request to scroll a specific chunk into view,
         // satisfy it now that wrapping is up to date for this width.
         if let Some(idx) = self.pending_scroll_chunk.take() {
@@ -287,8 +290,13 @@ impl PagerView {
         if self.renderables.is_empty() {
             return true;
         }
-        let visible = height.min(self.renderables.len());
-        let max_scroll = self.renderables.len().saturating_sub(visible);
+        let Some(total_height) = self.last_rendered_height else {
+            return false;
+        };
+        if total_height <= height {
+            return true;
+        }
+        let max_scroll = total_height.saturating_sub(height);
         self.scroll_offset >= max_scroll
     }
 
@@ -878,5 +886,27 @@ mod tests {
         pv.ensure_chunk_visible(0, area);
 
         assert_eq!(pv.scroll_offset, 0);
+    }
+
+    #[test]
+    fn pager_view_is_scrolled_to_bottom_accounts_for_wrapped_height() {
+        let mut pv = PagerView::new(vec![paragraph_block("a", 10)], "T".to_string(), 0);
+        let area = Rect::new(0, 0, 20, 8);
+        let mut buf = Buffer::empty(area);
+
+        pv.render(area, &mut buf);
+
+        assert!(
+            !pv.is_scrolled_to_bottom(),
+            "expected view to report not at bottom when offset < max"
+        );
+
+        pv.scroll_offset = usize::MAX;
+        pv.render(area, &mut buf);
+
+        assert!(
+            pv.is_scrolled_to_bottom(),
+            "expected view to report at bottom after scrolling to end"
+        );
     }
 }

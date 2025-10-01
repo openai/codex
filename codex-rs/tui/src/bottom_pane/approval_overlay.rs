@@ -12,7 +12,6 @@ use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::render::highlight::highlight_bash_to_lines;
-use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::text_formatting::truncate_text;
