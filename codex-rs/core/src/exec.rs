@@ -471,7 +471,7 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
 #[cfg(unix)]
 fn synthetic_exit_code_status(code: i32) -> ExitStatus {
     use std::os::unix::process::ExitStatusExt;
-    std::process::ExitStatus::from_raw((code as i32) << 8)
+    std::process::ExitStatus::from_raw(code << 8)
 }
 
 #[cfg(windows)]

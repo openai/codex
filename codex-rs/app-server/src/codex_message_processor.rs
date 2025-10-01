@@ -79,6 +79,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::TurnAbortReason;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -1308,6 +1309,22 @@ async fn apply_bespoke_event_handling(
             if !pending.is_empty() {
                 let response = InterruptConversationResponse {
                     abort_reason: turn_aborted_event.reason,
+                };
+                for rid in pending {
+                    outgoing.send_response(rid, response.clone()).await;
+                }
+            }
+        }
+        // Graceful cancel path: ExecCommandEnd has been emitted with partial output,
+        // so fulfill any pending interrupt requests with Interrupted.
+        EventMsg::ExecCommandEnd(_) => {
+            let pending = {
+                let mut map = pending_interrupts.lock().await;
+                map.remove(&conversation_id).unwrap_or_default()
+            };
+            if !pending.is_empty() {
+                let response = InterruptConversationResponse {
+                    abort_reason: TurnAbortReason::Interrupted,
                 };
                 for rid in pending {
                     outgoing.send_response(rid, response.clone()).await;
