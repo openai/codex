@@ -27,6 +27,7 @@ codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
 dirs = { workspace = true }
+dunce = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
