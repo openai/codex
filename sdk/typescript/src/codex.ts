@@ -31,7 +31,6 @@ export class Codex {
    * @param id The id of the thread to resume.
    * @returns A new thread instance.
    */
-
   resumeThread(id: string): Thread {
     return new Thread(this.exec, this.options, id);
   }
