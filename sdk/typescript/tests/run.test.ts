@@ -6,7 +6,6 @@ import { codexExecSpy } from "./codexExecSpy";
 import { describe, expect, it } from "@jest/globals";
 
 import { Codex } from "../src/codex";
-import { CodexExec } from "../src/exec";
 
 import {
   assistantMessage,
@@ -214,7 +213,6 @@ describe("Codex", () => {
 
       expectPair(commandArgs, ["--sandbox", "workspace-write"]);
       expectPair(commandArgs, ["--model", "gpt-test-1"]);
-  
     } finally {
       restore();
       await close();
@@ -249,16 +247,13 @@ describe("Codex", () => {
         skipGitRepoCheck: true,
       });
 
-      
       const commandArgs = spawnArgs[0];
       expectPair(commandArgs, ["--cd", workingDirectory]);
-
     } finally {
       restore();
       await close();
     }
   });
-
 
   it("throws if working directory is not git and no skipGitRepoCheck is provided", async () => {
     const { url, close } = await startResponsesTestProxy({
@@ -286,13 +281,11 @@ describe("Codex", () => {
           workingDirectory,
         }),
       ).rejects.toThrow(/Not inside a trusted directory/);
-
     } finally {
       await close();
     }
-  });  
+  });
 });
-
 
 function expectPair(args: string[] | undefined, pair: [string, string]) {
   if (!args) {
