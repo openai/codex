@@ -14,12 +14,8 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
-#[cfg(windows)]
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
-
-#[cfg(not(windows))]
-use std::fs::canonicalize as normalize_path;
 use tokio::io::AsyncReadExt;
 use tracing::error;
 
