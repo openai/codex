@@ -1,4 +1,4 @@
-import * as child_process from "child_process";
+import * as child_process from "node:child_process";
 
 jest.mock("child_process", () => {
   const actual = jest.requireActual<typeof import("child_process")>("child_process");
