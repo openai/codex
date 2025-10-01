@@ -225,6 +225,16 @@ async fn run_codex_tool_session_inner(
                             Some(msg) => msg,
                             None => "".to_string(),
                         };
+                        let conversation_id = running_requests_id_to_codex_uuid
+                            .lock()
+                            .await
+                            .get(&request_id)
+                            .copied();
+                        let structured_content = conversation_id.map(|id| {
+                            json!({
+                                "conversationId": id.to_string()
+                            })
+                        });
                         let result = CallToolResult {
                             content: vec![ContentBlock::TextContent(TextContent {
                                 r#type: "text".to_string(),
@@ -232,7 +242,7 @@ async fn run_codex_tool_session_inner(
                                 annotations: None,
                             })],
                             is_error: None,
-                            structured_content: None,
+                            structured_content,
                         };
                         outgoing.send_response(request_id.clone(), result).await;
                         // unregister the id so we don't keep it in the map
