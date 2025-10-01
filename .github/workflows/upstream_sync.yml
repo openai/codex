@@ -1,0 +1,45 @@
+name: Upstream Sync (merge upstream/main)
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 7 * * 1'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Add upstream
+        run: |
+          git remote add upstream https://github.com/openai/codex.git || true
+          git fetch upstream main
+      - name: Merge upstream/main into feature branch
+        run: |
+          BRANCH="feat/prehook-mvp"
+          git checkout "$BRANCH"
+          git merge --no-ff upstream/main -m "chore(sync): merge upstream/main into $BRANCH"
+          echo "merged=1" >> $GITHUB_OUTPUT
+      - name: Run minimal tests
+        run: |
+          sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cd codex-rs
+          cargo test -p codex-prehook -q
+          cargo test -p codex-exec --tests -q
+          cargo test -p codex-cli --tests -q
+      - name: Push changes
+        run: |
+          git push origin HEAD
+      - name: Comment on PR (if exists)
+        if: always()
+        run: |
+          echo "If PR #4522 is open against upstream, a local merge has been pushed to keep the fork in sync." 
