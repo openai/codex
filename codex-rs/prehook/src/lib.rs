@@ -4,8 +4,7 @@ use anyhow::anyhow;
 use serde::Deserialize;
 use serde::Serialize;
 use std::io::IsTerminal;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
+// On Unix, `tokio::process::Command` exposes `pre_exec` directly; no trait import needed.
 use std::path::PathBuf;
 use tokio::process::Command;
 use tokio::time::Duration;
@@ -245,13 +244,15 @@ fn default_sanitized_env() -> std::collections::HashMap<String, String> {
         "HOME", "LOGNAME", "PATH", "SHELL", "USER", "LANG", "LC_ALL", "TERM", "TMPDIR", "TZ",
         "PWD", "COLUMNS", "LINES",
     ];
-    let deny =
-        Regex::new(r"(?i)(TOKEN|SECRET|PASSWORD|WEBHOOK|API[_-]?KEY|ACCESS[_-]?KEY)").unwrap();
+    let deny = Regex::new(r"(?i)(TOKEN|SECRET|PASSWORD|WEBHOOK|API[_-]?KEY|ACCESS[_-]?KEY)")
+        .unwrap_or_else(|_| Regex::new(r"(?!)").expect("fallback regex must compile"));
     for k in allow.iter() {
         if let Ok(v) = std::env::var(k)
-            && !deny.is_match(k) && !deny.is_match(&v) {
-                out.insert((*k).to_string(), v);
-            }
+            && !deny.is_match(k)
+            && !deny.is_match(&v)
+        {
+            out.insert((*k).to_string(), v);
+        }
     }
     for drop in [
         "GITHUB_TOKEN",
@@ -291,9 +292,7 @@ impl PreHook for ScriptPreHook {
         #[cfg(unix)]
         unsafe {
             cmd_builder.pre_exec(|| {
-                unsafe {
-                    libc::setpgid(0, 0);
-                }
+                libc::setpgid(0, 0);
                 Ok(())
             });
         }
@@ -411,12 +410,11 @@ impl PreHook for McpPreHook {
                 if let Some(path) = server.strip_prefix("stdio:") {
                     let parts: Vec<&str> = path.split_whitespace().collect();
                     let p = std::ffi::OsString::from(
-                        parts.first().ok_or_else(|| anyhow!("invalid stdio: path"))?,
+                        parts
+                            .first()
+                            .ok_or_else(|| anyhow!("invalid stdio: path"))?,
                     );
-                    let a = parts[1..]
-                        .iter()
-                        .map(std::ffi::OsString::from)
-                        .collect();
+                    let a = parts[1..].iter().map(std::ffi::OsString::from).collect();
                     (p, a)
                 } else {
                     return Err(anyhow!("unsupported MCP server scheme (expected stdio:)"));
@@ -465,27 +463,24 @@ impl PreHook for McpPreHook {
             for block in res.content {
                 if let mcp_types::ContentBlock::TextContent(tc) = block
                     && tc.text.len() <= 64 * 1024
-                        && let Ok(outcome) = serde_json::from_str::<Outcome>(&tc.text) {
-                            match &outcome {
-                                Outcome::RateLimit { retry_after_ms, .. }
-                                    if *retry_after_ms > 300_000 =>
-                                {
-                                    return Err(anyhow!(
-                                        "rate_limit.retry_after_ms too large (>300000 ms)"
-                                    ));
-                                }
-                                Outcome::Augment { context_items, .. }
-                                    if context_items.len() > 128 =>
-                                {
-                                    return Err(anyhow!("augment.context_items too long (>128)"));
-                                }
-                                _ => {}
-                            }
-                            warn!(
-                                "prehook(mcp): parsed Outcome from text block fallback; prefer structured_content JSON"
-                            );
-                            return Ok(outcome);
+                    && let Ok(outcome) = serde_json::from_str::<Outcome>(&tc.text)
+                {
+                    match &outcome {
+                        Outcome::RateLimit { retry_after_ms, .. } if *retry_after_ms > 300_000 => {
+                            return Err(anyhow!(
+                                "rate_limit.retry_after_ms too large (>300000 ms)"
+                            ));
                         }
+                        Outcome::Augment { context_items, .. } if context_items.len() > 128 => {
+                            return Err(anyhow!("augment.context_items too long (>128)"));
+                        }
+                        _ => {}
+                    }
+                    warn!(
+                        "prehook(mcp): parsed Outcome from text block fallback; prefer structured_content JSON"
+                    );
+                    return Ok(outcome);
+                }
             }
             Err(anyhow!("MCP tool did not return structured_content JSON"))
         };

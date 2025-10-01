@@ -446,9 +446,10 @@ impl PickerState {
                     }
                     // match project tag (directory basename recorded in SessionMeta)
                     if let Some(ref proj) = r.project
-                        && proj.to_lowercase().contains(&q) {
-                            return true;
-                        }
+                        && proj.to_lowercase().contains(&q)
+                    {
+                        return true;
+                    }
                     // match full path
                     let p = r.path.to_string_lossy().to_lowercase();
                     p.contains(&q)
@@ -635,9 +636,10 @@ fn head_to_row(item: &ConversationItem) -> Row {
         if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
             let cwd = meta_line.meta.cwd;
             if let Some(name) = cwd.file_name().and_then(|s| s.to_str())
-                && !name.is_empty() {
-                    project = Some(name.to_string());
-                }
+                && !name.is_empty()
+            {
+                project = Some(name.to_string());
+            }
             break;
         }
     }
