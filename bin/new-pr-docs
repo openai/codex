@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: $0 <owner> <repo> <number> <branch>"
+  echo "Example: $0 openai codex 4522 feat-prehook-mvp"
+}
+
+if [[ ${1:-} == "-h" || $# -lt 4 ]]; then usage; exit 1; fi
+owner=$1
+repo=$2
+number=$3
+branch=$4
+base="local/docs/PRs/${owner}-${repo}/${number}-${branch}"
+mkdir -p "$base/comments" "$base/assets"
+
+body="$base/PR_BODY.md"
+if [[ ! -f "$body" ]]; then
+  cat > "$body" <<EOF
+# PR ${number}: ${branch}
+
+Why
+- ...
+
+What changed
+- ...
+
+How to verify
+- ...
+
+EOF
+fi
+
+# Update index.md idempotently
+index="local/docs/PRs/index.md"
+line="- ${owner}-${repo}/${number}-${branch} — (draft)"
+grep -Fq "$line" "$index" 2>/dev/null || {
+  printf "%s
+  - PR body: `local/docs/PRs/${owner}-${repo}/${number}-${branch}/PR_BODY.md`
+  - Comments: `local/docs/PRs/${owner}-${repo}/${number}-${branch}/comments/`\n" "$line" >> "$index"
+}
+
+echo "Scaffolded: $base"

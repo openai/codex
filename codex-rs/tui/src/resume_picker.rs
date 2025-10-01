@@ -71,7 +71,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
     if env::var("CODEX_TUI_PLAIN").as_deref() == Ok("1") {
         match RolloutRecorder::list_conversations(codex_home, PAGE_SIZE, None).await {
             Ok(page) => {
-                let rows: Vec<Row> = page.items.iter().map(|it| head_to_row(it)).collect();
+                let rows: Vec<Row> = page.items.iter().map(head_to_row).collect();
                 let no_color = env::var("NO_COLOR").is_ok();
                 let dumb = env::var("TERM").unwrap_or_default() == "dumb";
                 let use_color = !no_color && !dumb;
@@ -79,7 +79,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
                     let mark = if i == 0 { "> " } else { "  " };
                     let ts =
                         r.ts.as_ref()
-                            .map(|dt| human_time_ago(dt.clone()))
+                            .map(|dt| human_time_ago(*dt))
                             .unwrap_or_else(|| "-".to_string());
                     let tag = r.project.as_deref().unwrap_or("<cwd>");
                     // Sanitize preview to a single line, limited length similar to TUI
@@ -445,11 +445,10 @@ impl PickerState {
                         return true;
                     }
                     // match project tag (directory basename recorded in SessionMeta)
-                    if let Some(ref proj) = r.project {
-                        if proj.to_lowercase().contains(&q) {
+                    if let Some(ref proj) = r.project
+                        && proj.to_lowercase().contains(&q) {
                             return true;
                         }
-                    }
                     // match full path
                     let p = r.path.to_string_lossy().to_lowercase();
                     p.contains(&q)
@@ -635,11 +634,10 @@ fn head_to_row(item: &ConversationItem) -> Row {
     for value in &item.head {
         if let Ok(meta_line) = serde_json::from_value::<SessionMetaLine>(value.clone()) {
             let cwd = meta_line.meta.cwd;
-            if let Some(name) = cwd.file_name().and_then(|s| s.to_str()) {
-                if !name.is_empty() {
+            if let Some(name) = cwd.file_name().and_then(|s| s.to_str())
+                && !name.is_empty() {
                     project = Some(name.to_string());
                 }
-            }
             break;
         }
     }
@@ -779,7 +777,7 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
         // Build line: marker, time, optional [project], preview
         let mut spans: Vec<Span<'static>> = vec![marker, ts, "  ".into()];
         if let Some(tag) = &row.project {
-            spans.push(format!("[{}]", tag).cyan().bold());
+            spans.push(format!("[{tag}]").cyan().bold());
             spans.push("  ".into());
         }
         spans.push(preview.into());

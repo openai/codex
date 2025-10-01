@@ -32,6 +32,7 @@ codex-protocol-ts = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
 codex-tui = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
+codex-prehook = { workspace = true }
 ctor = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }

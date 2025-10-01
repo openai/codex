@@ -80,6 +80,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         prehook_mcp_tool,
         prehook_script_cmd,
         prehook_timeout_ms,
+        prehook_mcp_connect_timeout_ms,
+        prehook_mcp_call_timeout_ms,
     } = cli;
 
     // Determine the prompt source (parent or subcommand) and read from stdin if needed.
@@ -252,6 +254,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             sanitized_env: std::collections::HashMap::new(),
         };
         let dispatcher = prehook::PreHookDispatcher::new(cfg);
+        // Copy for logging without relying on private fields.
+        let backend_for_log;
+        let tool_for_log;
+        {
+            // Pull from our cfg clone inside dispatcher using what we constructed above.
+            // PreHookDispatcher does not expose config; we mirror from the values we set.
+            backend_for_log = prehook_backend.clone();
+            tool_for_log = prehook_mcp_tool.clone().unwrap_or_else(|| "".to_string());
+        }
         let started = std::time::Instant::now();
         let res = dispatcher.run(&ctx).await;
         let duration_ms = started.elapsed().as_millis() as u64;
@@ -259,27 +270,27 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             Ok(prehook::Outcome::Allow { .. }) => {}
             Ok(prehook::Outcome::Augment { .. }) => {
                 // MVP: ignore augmentation in exec; continue
-                tracing::info!(backend=%dispatcher.cfg.backend, decision="augment", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
+                tracing::info!(backend=%backend_for_log, decision="augment", duration_ms, correlation_id=%ctx.id, tool=%tool_for_log, "prehook");
             }
             Ok(prehook::Outcome::Defer { .. }) => {
-                tracing::info!(backend=%dispatcher.cfg.backend, decision="defer", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
+                tracing::info!(backend=%backend_for_log, decision="defer", duration_ms, correlation_id=%ctx.id, tool=%tool_for_log, "prehook");
                 eprintln!(
                     "Prehook returned defer in exec mode; aborting (use chained backend to fallback)."
                 );
                 std::process::exit(EXIT_DEFER);
             }
             Ok(prehook::Outcome::Ask { message }) => {
-                tracing::info!(backend=%dispatcher.cfg.backend, decision="ask", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
+                tracing::info!(backend=%backend_for_log, decision="ask", duration_ms, correlation_id=%ctx.id, tool=%tool_for_log, "prehook");
                 eprintln!("Prehook requires approval: {message}");
                 std::process::exit(EXIT_ASK);
             }
             Ok(prehook::Outcome::Patch { .. }) => {
-                tracing::info!(backend=%dispatcher.cfg.backend, decision="patch", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
+                tracing::info!(backend=%backend_for_log, decision="patch", duration_ms, correlation_id=%ctx.id, tool=%tool_for_log, "prehook");
                 eprintln!("Prehook suggested a patch; unsupported in exec mode. Aborting.");
                 std::process::exit(EXIT_PATCH);
             }
             Ok(prehook::Outcome::Deny { reason }) => {
-                tracing::info!(backend=%dispatcher.cfg.backend, decision="deny", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
+                tracing::info!(backend=%backend_for_log, decision="deny", duration_ms, correlation_id=%ctx.id, tool=%tool_for_log, "prehook");
                 eprintln!("Prehook denied execution: {reason}");
                 std::process::exit(EXIT_DENY);
             }
@@ -287,7 +298,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 retry_after_ms,
                 message,
             }) => {
-                tracing::info!(backend=%dispatcher.cfg.backend, decision="rate_limit", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), retry_after_ms, "prehook");
+                tracing::info!(backend=%backend_for_log, decision="rate_limit", duration_ms, correlation_id=%ctx.id, tool=%tool_for_log, retry_after_ms, "prehook");
                 if let Some(m) = message {
                     eprintln!("Prehook rate limit: {m}");
                 }
@@ -297,16 +308,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             Err(e) => {
                 match on_error {
                     prehook::OnErrorPolicy::Fail => {
-                        tracing::info!(backend=%dispatcher.cfg.backend, decision="error_fail", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), error=%format!("{e:#}"), "prehook");
+                        tracing::info!(backend=%backend_for_log, decision="error_fail", duration_ms, correlation_id=%ctx.id, tool=%tool_for_log, error=%format!("{e:#}"), "prehook");
                         eprintln!("Prehook error: {e:#}");
                         std::process::exit(EXIT_DENY);
                     }
                     prehook::OnErrorPolicy::Warn => {
-                        tracing::info!(backend=%dispatcher.cfg.backend, decision="error_warn", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), error=%format!("{e:#}"), "prehook");
+                        tracing::info!(backend=%backend_for_log, decision="error_warn", duration_ms, correlation_id=%ctx.id, tool=%tool_for_log, error=%format!("{e:#}"), "prehook");
                         eprintln!("Warning: prehook error: {e:#}");
                     }
                     prehook::OnErrorPolicy::Skip => {
-                        tracing::info!(backend=%dispatcher.cfg.backend, decision="error_skip", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), error=%format!("{e:#}"), "prehook");
+                        tracing::info!(backend=%backend_for_log, decision="error_skip", duration_ms, correlation_id=%ctx.id, tool=%tool_for_log, error=%format!("{e:#}"), "prehook");
                         // silently continue
                     }
                 }

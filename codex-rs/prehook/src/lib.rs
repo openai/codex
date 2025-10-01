@@ -248,11 +248,10 @@ fn default_sanitized_env() -> std::collections::HashMap<String, String> {
     let deny =
         Regex::new(r"(?i)(TOKEN|SECRET|PASSWORD|WEBHOOK|API[_-]?KEY|ACCESS[_-]?KEY)").unwrap();
     for k in allow.iter() {
-        if let Ok(v) = std::env::var(k) {
-            if !deny.is_match(k) && !deny.is_match(&v) {
+        if let Ok(v) = std::env::var(k)
+            && !deny.is_match(k) && !deny.is_match(&v) {
                 out.insert((*k).to_string(), v);
             }
-        }
     }
     for drop in [
         "GITHUB_TOKEN",
@@ -291,15 +290,12 @@ impl PreHook for ScriptPreHook {
             .envs(default_sanitized_env());
         #[cfg(unix)]
         unsafe {
-            #[cfg(unix)]
-            {
-                cmd_builder.pre_exec(|| {
-                    unsafe {
-                        libc::setpgid(0, 0);
-                    }
-                    Ok(())
-                });
-            }
+            cmd_builder.pre_exec(|| {
+                unsafe {
+                    libc::setpgid(0, 0);
+                }
+                Ok(())
+            });
         }
         let mut child = cmd_builder
             .spawn()
@@ -413,13 +409,13 @@ impl PreHook for McpPreHook {
             // Only stdio: scheme supported in MVP
             let (prog, args): (std::ffi::OsString, Vec<std::ffi::OsString>) =
                 if let Some(path) = server.strip_prefix("stdio:") {
-                    let parts: Vec<&str> = path.trim().split_whitespace().collect();
+                    let parts: Vec<&str> = path.split_whitespace().collect();
                     let p = std::ffi::OsString::from(
-                        parts.get(0).ok_or_else(|| anyhow!("invalid stdio: path"))?,
+                        parts.first().ok_or_else(|| anyhow!("invalid stdio: path"))?,
                     );
                     let a = parts[1..]
                         .iter()
-                        .map(|s| std::ffi::OsString::from(s))
+                        .map(std::ffi::OsString::from)
                         .collect();
                     (p, a)
                 } else {
@@ -467,9 +463,9 @@ impl PreHook for McpPreHook {
             }
             // Fallback: try to parse the first text content block as JSON
             for block in res.content {
-                if let mcp_types::ContentBlock::TextContent(tc) = block {
-                    if tc.text.len() <= 64 * 1024 {
-                        if let Ok(outcome) = serde_json::from_str::<Outcome>(&tc.text) {
+                if let mcp_types::ContentBlock::TextContent(tc) = block
+                    && tc.text.len() <= 64 * 1024
+                        && let Ok(outcome) = serde_json::from_str::<Outcome>(&tc.text) {
                             match &outcome {
                                 Outcome::RateLimit { retry_after_ms, .. }
                                     if *retry_after_ms > 300_000 =>
@@ -490,8 +486,6 @@ impl PreHook for McpPreHook {
                             );
                             return Ok(outcome);
                         }
-                    }
-                }
             }
             Err(anyhow!("MCP tool did not return structured_content JSON"))
         };
@@ -595,6 +589,31 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn script_prehook_times_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = dir.path().join("sleep.sh");
+        let mut f = std::fs::File::create(&script_path).unwrap();
+        writeln!(f, "#!/usr/bin/env bash").unwrap();
+        writeln!(f, "sleep 2").unwrap();
+        drop(f);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut p = std::fs::metadata(&script_path).unwrap().permissions();
+            p.set_mode(0o755);
+            std::fs::set_permissions(&script_path, p).unwrap();
+        }
+        let cfg = ScriptConfig {
+            cmd: Some(script_path.to_string_lossy().to_string()),
+            args: vec![],
+            timeout_ms: 100,
+        };
+        let hook = ScriptPreHook::new(cfg, OnErrorPolicy::Fail);
+        let ctx = Context::new(CommandKind::Exec, PathBuf::from("/"), vec!["noop".into()]);
+        let res = hook.run(&ctx).await;
+        assert!(res.is_err(), "expected timeout error");
+    }
     #[tokio::test]
     async fn script_prehook_parses_outcome() {
         // Create a tiny script that echoes a Deny JSON from stdin context.

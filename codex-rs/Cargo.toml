@@ -68,6 +68,7 @@ codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-tui = { path = "tui" }
+codex-prehook = { path = "prehook" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-readiness = { path = "utils/readiness" }
 core_test_support = { path = "core/tests/common" }

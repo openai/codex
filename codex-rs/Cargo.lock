@@ -758,6 +758,7 @@ dependencies = [
  "codex-exec",
  "codex-login",
  "codex-mcp-server",
+ "codex-prehook",
  "codex-process-hardening",
  "codex-protocol",
  "codex-protocol-ts",
