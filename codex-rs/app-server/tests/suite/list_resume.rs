@@ -3,16 +3,16 @@ use std::path::Path;
 
 use app_test_support::McpProcess;
 use app_test_support::to_response;
-use codex_protocol::mcp_protocol::ListConversationsParams;
-use codex_protocol::mcp_protocol::ListConversationsResponse;
-use codex_protocol::mcp_protocol::NewConversationParams; // reused for overrides shape
-use codex_protocol::mcp_protocol::ResumeConversationParams;
-use codex_protocol::mcp_protocol::ResumeConversationResponse;
-use codex_protocol::mcp_protocol::ServerNotification;
-use codex_protocol::mcp_protocol::SessionConfiguredNotification;
-use mcp_types::JSONRPCNotification;
-use mcp_types::JSONRPCResponse;
-use mcp_types::RequestId;
+use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ListConversationsParams;
+use codex_app_server_protocol::ListConversationsResponse;
+use codex_app_server_protocol::NewConversationParams; // reused for overrides shape
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ResumeConversationParams;
+use codex_app_server_protocol::ResumeConversationResponse;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SessionConfiguredNotification;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;

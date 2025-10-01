@@ -108,6 +108,7 @@ pub(crate) struct ChatComposer {
     custom_prompts: Vec<CustomPrompt>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    context_window_percent: Option<u8>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -150,6 +151,7 @@ impl ChatComposer {
             custom_prompts: Vec::new(),
             footer_mode: FooterMode::ShortcutPrompt,
             footer_hint_override: None,
+            context_window_percent: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -1317,6 +1319,7 @@ impl ChatComposer {
             esc_backtrack_hint: self.esc_backtrack_hint,
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
+            context_window_percent: self.context_window_percent,
         }
     }
 
@@ -1445,6 +1448,12 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+    }
+
+    pub(crate) fn set_context_window_percent(&mut self, percent: Option<u8>) {
+        if self.context_window_percent != percent {
+            self.context_window_percent = percent;
+        }
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {

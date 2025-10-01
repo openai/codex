@@ -10,7 +10,7 @@ workspace = true
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-core = { workspace = true }
-codex-protocol = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 serde = { workspace = true, features = ["derive"] }

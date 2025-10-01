@@ -1,6 +1,6 @@
 use app_test_support::McpProcess;
-use mcp_types::JSONRPCResponse;
-use mcp_types::RequestId;
+use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;

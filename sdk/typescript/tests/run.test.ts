@@ -1,3 +1,5 @@
+import fs from "fs";
+import os from "os";
 import path from "path";
 
 import { codexExecSpy } from "./codexExecSpy";
@@ -23,7 +25,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       const result = await thread.run("Hello, world!");
@@ -60,7 +62,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       await thread.run("first input");
@@ -103,7 +105,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       await thread.run("first input");
@@ -149,7 +151,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const originalThread = client.startThread();
       await originalThread.run("first input");
@@ -193,7 +195,7 @@ describe("Codex", () => {
     const { args: spawnArgs, restore } = codexExecSpy();
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       await thread.run("apply options", {
@@ -211,14 +213,79 @@ describe("Codex", () => {
 
       expectPair(commandArgs, ["--sandbox", "workspace-write"]);
       expectPair(commandArgs, ["--model", "gpt-test-1"]);
-  
     } finally {
       restore();
       await close();
     }
   });
-});
 
+  it("runs in provided working directory", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Working directory applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
+      const client = new Codex({
+        codexPathOverride: codexExecPath,
+        baseUrl: url,
+        apiKey: "test",
+      });
+
+      const thread = client.startThread();
+      await thread.run("use custom working directory", {
+        workingDirectory,
+        skipGitRepoCheck: true,
+      });
+
+      const commandArgs = spawnArgs[0];
+      expectPair(commandArgs, ["--cd", workingDirectory]);
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
+  it("throws if working directory is not git and no skipGitRepoCheck is provided", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Working directory applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    try {
+      const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
+      const client = new Codex({
+        codexPathOverride: codexExecPath,
+        baseUrl: url,
+        apiKey: "test",
+      });
+
+      const thread = client.startThread();
+      await expect(
+        thread.run("use custom working directory", {
+          workingDirectory,
+        }),
+      ).rejects.toThrow(/Not inside a trusted directory/);
+    } finally {
+      await close();
+    }
+  });
+});
 
 function expectPair(args: string[] | undefined, pair: [string, string]) {
   if (!args) {
