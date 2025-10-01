@@ -710,7 +710,7 @@ Maximum number of bytes to read from an `AGENTS.md` file to include in the instr
 Ordered list of additional filenames to look for when `AGENTS.md` is missing at a given directory level. The CLI always checks `AGENTS.md` first; the configured fallbacks are tried in the order provided. This lets monorepos that already use alternate instruction files (for example, `CLAUDE.md`) work out of the box while you migrate to `AGENTS.md` over time.
 
 ```toml
-project_doc_fallback_filenames = ["CLAUDE.md", "cursorrules.md"]
+project_doc_fallback_filenames = ["CLAUDE.md", ".exampleagentrules.md"]
 ```
 
 When a fallback is used, the TUI displays a warning reminding you that `AGENTS.md` remains the preferred location for Codex-specific instructions because fallback files may reduce model performance.
