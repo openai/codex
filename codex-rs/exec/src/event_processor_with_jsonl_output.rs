@@ -51,7 +51,7 @@ use codex_core::protocol::WebSearchEndEvent;
 use tracing::error;
 use tracing::warn;
 
-pub struct ExperimentalEventProcessorWithJsonOutput {
+pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_event_id: AtomicU64,
     // Tracks running commands by call_id, including the associated item id.
@@ -83,7 +83,7 @@ struct RunningMcpToolCall {
     item_id: String,
 }
 
-impl ExperimentalEventProcessorWithJsonOutput {
+impl EventProcessorWithJsonOutput {
     pub fn new(last_message_path: Option<PathBuf>) -> Self {
         Self {
             last_message_path,
@@ -420,7 +420,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
     }
 }
 
-impl EventProcessor for ExperimentalEventProcessorWithJsonOutput {
+impl EventProcessor for EventProcessorWithJsonOutput {
     fn print_config_summary(&mut self, _: &Config, _: &str, ev: &SessionConfiguredEvent) {
         self.process_event(Event {
             id: "".to_string(),
