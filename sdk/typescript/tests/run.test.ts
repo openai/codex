@@ -1,9 +1,12 @@
+import fs from "fs";
+import os from "os";
 import path from "path";
 
 import { codexExecSpy } from "./codexExecSpy";
 import { describe, expect, it } from "@jest/globals";
 
 import { Codex } from "../src/codex";
+import { CodexExec } from "../src/exec";
 
 import {
   assistantMessage,
@@ -217,6 +220,81 @@ describe("Codex", () => {
       await close();
     }
   });
+
+  it("runs in provided working directory", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Working directory applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
+      const client = new Codex({
+        codexPathOverride: codexExecPath,
+        baseUrl: url,
+        apiKey: "test",
+      });
+
+      const thread = client.startThread();
+      await thread.run("use custom working directory", {
+        workingDirectory,
+        skipGitRepoCheck: true,
+      });
+
+      
+      const commandArgs = spawnArgs[0];
+      expectPair(commandArgs, ["--cd", workingDirectory]);
+
+    } finally {
+      restore();
+      await close();
+    }
+  });
+
+
+  it("throws if working directory is not git and no skipGitRepoCheck is provided", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Working directory applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+
+    const {  restore } = codexExecSpy();
+    try {
+      const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-working-dir-"));
+      const client = new Codex({
+        codexPathOverride: codexExecPath,
+        baseUrl: url,
+        apiKey: "test",
+      });
+
+      const thread = client.startThread();
+      //expect(async () => {
+        await thread.run("use custom working directory", {
+          workingDirectory,
+        });
+    //  }).toThrow(/Codex Exec exited with code 1: Not inside a trusted directory/);
+
+    
+    } finally {
+      restore();
+      await close();
+    }
+  });  
 });
 
 

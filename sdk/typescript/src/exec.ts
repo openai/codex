@@ -12,8 +12,14 @@ export type CodexExecArgs = {
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
+  // --model
   model?: string;
+  // --sandbox
   sandboxMode?: SandboxMode;
+  // --cd
+  workingDirectory?: string;
+  // --skip-git-repo-check
+  skipGitRepoCheck?: boolean;
 };
 
 export class CodexExec {
@@ -31,6 +37,14 @@ export class CodexExec {
 
     if (args.sandboxMode) {
       commandArgs.push("--sandbox", args.sandboxMode);
+    }
+
+    if (args.workingDirectory) {
+      commandArgs.push("--cd", args.workingDirectory);
+    }
+
+    if (args.skipGitRepoCheck) {
+      commandArgs.push("--skip-git-repo-check");
     }
 
     if (args.threadId) {
@@ -61,6 +75,13 @@ export class CodexExec {
       throw new Error("Child process has no stdout");
     }
 
+    let stderr: string = "";
+    if (child.stderr) {
+      child.stderr.on("data", (data) => {
+        stderr += data;
+      });
+    }
+
     const rl = readline.createInterface({
       input: child.stdout,
       crlfDelay: Infinity,
@@ -77,7 +98,7 @@ export class CodexExec {
           if (code === 0) {
             resolve(code);
           } else {
-            throw new Error(`Codex Exec exited with code ${code}`);
+            throw new Error(`Codex Exec exited with code ${code}: ${stderr}`);
           }
         });
       });
