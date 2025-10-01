@@ -111,6 +111,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::config_types::AutoCompactMode;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -1166,9 +1167,9 @@ async fn submission_loop(
 
                 // Build updated config for the client
                 let mut updated_config = (*config).clone();
-                if let Some(auto_compact_enabled) = auto_compact {
-                    updated_config.auto_compact_enabled = auto_compact_enabled;
-                    Arc::make_mut(&mut config).auto_compact_enabled = auto_compact_enabled;
+                if let Some(auto_compact_mode) = auto_compact {
+                    updated_config.auto_compact_mode = auto_compact_mode;
+                    Arc::make_mut(&mut config).auto_compact_mode = auto_compact_mode;
                 }
                 updated_config.model = effective_model.clone();
                 updated_config.model_family = effective_family.clone();
@@ -1661,7 +1662,7 @@ pub(crate) async fn run_task(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let mut auto_compact_recently_attempted = false;
+    let mut auto_retry_in_progress = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -1836,28 +1837,60 @@ pub(crate) async fn run_task(
                 }
 
                 if token_limit_reached {
-                    if auto_compact_recently_attempted {
-                        let limit_str = limit.to_string();
-                        let current_tokens = total_usage_tokens
-                            .map(|tokens| tokens.to_string())
-                            .unwrap_or_else(|| "unknown".to_string());
-                        let event = Event {
-                            id: sub_id.clone(),
-                            msg: EventMsg::Error(ErrorEvent {
-                                message: format!(
-                                    "Conversation is still above the token limit after automatic summarization (limit {limit_str}, current {current_tokens}). Please start a new session or trim your input."
-                                ),
-                            }),
-                        };
-                        sess.send_event(event).await;
-                        break;
+                    let limit_str = limit.to_string();
+                    let current_tokens = total_usage_tokens
+                        .map(|tokens| tokens.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    match turn_context.client.get_auto_compact_mode() {
+                        AutoCompactMode::Auto | AutoCompactMode::SmartAuto => {
+                            if auto_retry_in_progress {
+                                let event = Event {
+                                    id: sub_id.clone(),
+                                    msg: EventMsg::Error(ErrorEvent {
+                                        message: format!(
+                                            "Conversation is still above the token limit after automatic summarization (limit {limit_str}, current {current_tokens}). Please start a new session or trim your input."
+                                        ),
+                                    }),
+                                };
+                                sess.send_event(event).await;
+                                break;
+                            }
+                            auto_retry_in_progress = true;
+                            compact::run_inline_auto_compact_task(
+                                sess.clone(),
+                                turn_context.clone(),
+                            )
+                            .await;
+                            continue;
+                        }
+                        AutoCompactMode::Manual => {
+                            let event = Event {
+                                id: sub_id.clone(),
+                                msg: EventMsg::Error(ErrorEvent {
+                                    message: format!(
+                                        "Conversation reached the token limit (limit {limit_str}, current {current_tokens}). Auto-compaction is set to manual; run /compact when you are ready or start a new session."
+                                    ),
+                                }),
+                            };
+                            sess.send_event(event).await;
+                            break;
+                        }
+                        AutoCompactMode::Off => {
+                            let event = Event {
+                                id: sub_id.clone(),
+                                msg: EventMsg::Error(ErrorEvent {
+                                    message: format!(
+                                        "Conversation reached the token limit (limit {limit_str}, current {current_tokens}). Auto-compaction is disabled; please run /compact manually or start a new session."
+                                    ),
+                                }),
+                            };
+                            sess.send_event(event).await;
+                            break;
+                        }
                     }
-                    auto_compact_recently_attempted = true;
-                    compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
-                    continue;
                 }
 
-                auto_compact_recently_attempted = false;
+                auto_retry_in_progress = false;
 
                 if responses.is_empty() {
                     last_agent_message = get_last_assistant_message_from_turn(

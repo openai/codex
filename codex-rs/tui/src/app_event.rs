@@ -4,6 +4,7 @@ use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
+use codex_protocol::config_types::AutoCompactMode;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
@@ -73,8 +74,8 @@ pub(crate) enum AppEvent {
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
 
-    /// Update whether automatic compaction is enabled for the session.
-    UpdateAutoCompactEnabled(bool),
+    /// Update the auto-compaction mode for the session.
+    UpdateAutoCompactMode(AutoCompactMode),
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),

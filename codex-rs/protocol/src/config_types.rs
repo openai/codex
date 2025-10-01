@@ -45,6 +45,20 @@ pub enum Verbosity {
     High,
 }
 
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, TS, EnumIter,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum AutoCompactMode {
+    #[default]
+    Auto,
+    Off,
+    Manual,
+    #[serde(rename = "smart-auto")]
+    SmartAuto,
+}
+
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display, TS)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]

@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use crate::config::AutoCompactToml;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -16,7 +17,8 @@ pub struct ConfigProfile {
     pub model_provider: Option<String>,
     pub approval_policy: Option<AskForApproval>,
     /// Override for automatic conversation compaction.
-    pub auto_compact: Option<bool>,
+    #[serde(default)]
+    pub auto_compact: Option<AutoCompactToml>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,

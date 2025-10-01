@@ -43,6 +43,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::AutoCompactMode;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -1816,16 +1817,33 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_auto_compact_popup(&mut self) {
-        let current_enabled = self.config.auto_compact_enabled;
+        let current_mode = self.config.auto_compact_mode;
         let mut items: Vec<SelectionItem> = Vec::new();
-        for (label, enabled) in [("On", true), ("Off", false)] {
-            let is_current = enabled == current_enabled;
-            let description = if enabled {
-                "Automatically summarizes when token usage approaches the configured limit."
-                    .to_string()
-            } else {
-                "Keeps full conversation history until you manually run /compact.".to_string()
-            };
+        let options: &[(AutoCompactMode, &str, &str)] = &[
+            (
+                AutoCompactMode::Auto,
+                "Automatic",
+                "Summarize automatically when token usage approaches the limit.",
+            ),
+            (
+                AutoCompactMode::Manual,
+                "Manual",
+                "Warn when the limit is reached but wait for you to run /compact.",
+            ),
+            (
+                AutoCompactMode::Off,
+                "Off",
+                "Never summarize automatically; rely on /compact or new sessions.",
+            ),
+            (
+                AutoCompactMode::SmartAuto,
+                "Smart auto",
+                "Reserved for future adaptive compaction behaviour (acts like auto).",
+            ),
+        ];
+
+        for (mode, label, description) in options {
+            let is_current = *mode == current_mode;
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                     cwd: None,
@@ -1834,13 +1852,13 @@ impl ChatWidget {
                     model: None,
                     effort: None,
                     summary: None,
-                    auto_compact: Some(enabled),
+                    auto_compact: Some(*mode),
                 }));
-                tx.send(AppEvent::UpdateAutoCompactEnabled(enabled));
+                tx.send(AppEvent::UpdateAutoCompactMode(*mode));
             })];
             items.push(SelectionItem {
-                name: label.to_string(),
-                description: Some(description),
+                name: (*label).to_string(),
+                description: Some((*description).to_string()),
                 is_current,
                 actions,
                 dismiss_on_select: true,
@@ -1878,8 +1896,8 @@ impl ChatWidget {
         self.config.model = model.to_string();
     }
 
-    pub(crate) fn set_auto_compact_enabled(&mut self, enabled: bool) {
-        self.config.auto_compact_enabled = enabled;
+    pub(crate) fn set_auto_compact_mode(&mut self, mode: AutoCompactMode) {
+        self.config.auto_compact_mode = mode;
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

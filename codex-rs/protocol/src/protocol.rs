@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::ConversationId;
+use crate::config_types::AutoCompactMode;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
@@ -126,9 +127,9 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
 
-        /// Enable or disable automatic conversation compaction.
+        /// Updated auto-compaction mode.
         #[serde(skip_serializing_if = "Option::is_none")]
-        auto_compact: Option<bool>,
+        auto_compact: Option<AutoCompactMode>,
     },
 
     /// Approve a command execution

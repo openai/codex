@@ -738,20 +738,18 @@ This is analogous to `model_context_window`, but for the maximum number of outpu
 
 ## auto_compact
 
-Codex can automatically summarize the current conversation when token usage crosses a safety threshold. By default the threshold is derived from the selected model family, but you can override it with `model_auto_compact_token_limit`.
+Codex can automatically summarize the current conversation when token usage crosses a safety threshold. By default the threshold is derived from the selected model family, but you can override both the mode and the token trigger.
 
-- `model_auto_compact_token_limit` sets a custom token threshold. When omitted, Codex uses the provider's recommended limit.
-- `auto_compact` controls whether automatic summarization runs when the threshold is exceeded. It defaults to `true`.
+- `[autocompact].mode` accepts `"auto"`, `"manual"`, `"off"`, or `"smart-auto"` (currently behaves like `auto`). The default is `auto`.
+- `[autocompact].threshold_tokens` lets you set a custom token limit for triggering compaction. When omitted, Codex uses the provider's recommended limit (you can also continue to use the legacy `model_auto_compact_token_limit` key).
 
 ```toml
-# Disable automatic summarization; `/compact` remains available.
-auto_compact = false
-
-# Optional custom threshold (tokens in the model's context window)
-model_auto_compact_token_limit = 200_000
+[autocompact]
+mode = "manual"           # auto | manual | off | smart-auto
+threshold_tokens = 240_000 # optional per-model override
 ```
 
-You can also toggle this behaviour at runtime from the TUI with the `/auto-compact` slash command.
+When `mode = "manual"`, Codex emits a warning once the limit is reached but waits for you to run `/compact`. `mode = "off"` prevents automatic summarization entirely. You can adjust the active mode at runtime from the TUI with the `/auto-compact` slash command.
 
 ## project_doc_max_bytes
 
@@ -795,8 +793,9 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                    |
 | `model_context_window`                           | number                                                            | Context window tokens.                                                                                                     |
 | `model_max_output_tokens`                        | number                                                            | Max output tokens.                                                                                                         |
-| `model_auto_compact_token_limit` | number | Token threshold for automatic summarization. |
-| `auto_compact` | boolean | Enable/disable automatic summarization (default: true). |
+| `model_auto_compact_token_limit` | number | Token threshold for automatic summarization (legacy alias). |
+| `autocompact.mode` | `auto` \| `manual` \| `off` \| `smart-auto` | Control when Codex summarizes automatically. |
+| `autocompact.threshold_tokens` | number | Custom token threshold before auto-compaction triggers. |
 | `approval_policy`                                | `untrusted` \| `on-failure` \| `on-request` \| `never`            | When to prompt for approval.                                                                                               |
 | `sandbox_mode`                                   | `read-only` \| `workspace-write` \| `danger-full-access`          | OS sandbox policy.                                                                                                         |
 | `sandbox_workspace_write.writable_roots`         | array<string>                                                     | Extra writable roots in workspace‑write.                                                                                   |

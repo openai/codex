@@ -50,6 +50,7 @@ use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
 use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::config_types::AutoCompactMode;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
@@ -114,12 +115,13 @@ impl ModelClient {
     }
 
     pub fn get_auto_compact_token_limit(&self) -> Option<i64> {
-        if !self.config.auto_compact_enabled {
-            return None;
-        }
         self.config.model_auto_compact_token_limit.or_else(|| {
             get_model_info(&self.config.model_family).and_then(|info| info.auto_compact_token_limit)
         })
+    }
+
+    pub fn get_auto_compact_mode(&self) -> AutoCompactMode {
+        self.config.auto_compact_mode
     }
 
     /// Dispatches to either the Responses or Chat implementation depending on
