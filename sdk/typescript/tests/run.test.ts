@@ -275,9 +275,9 @@ describe("Codex", () => {
       const thread = client.startThread({
         workingDirectory,
       });
-      await expect(
-        thread.run("use custom working directory"),
-      ).rejects.toThrow(/Not inside a trusted directory/);
+      await expect(thread.run("use custom working directory")).rejects.toThrow(
+        /Not inside a trusted directory/,
+      );
     } finally {
       await close();
     }

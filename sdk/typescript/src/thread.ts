@@ -37,7 +37,12 @@ export class Thread {
   }
 
   /* @internal */
-  constructor(exec: CodexExec, options: CodexOptions, threadOptions: TheadOptions, id: string | null = null) {
+  constructor(
+    exec: CodexExec,
+    options: CodexOptions,
+    threadOptions: TheadOptions,
+    id: string | null = null,
+  ) {
     this._exec = exec;
     this._options = options;
     this._id = id;
@@ -49,9 +54,7 @@ export class Thread {
     return { events: this.runStreamedInternal(input) };
   }
 
-  private async *runStreamedInternal(
-    input: string,
-  ): AsyncGenerator<ThreadEvent> {
+  private async *runStreamedInternal(input: string): AsyncGenerator<ThreadEvent> {
     const options = this._threadOptions;
     const generator = this._exec.run({
       input,
