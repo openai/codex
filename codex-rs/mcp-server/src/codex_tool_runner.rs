@@ -43,6 +43,7 @@ pub async fn run_codex_tool_session(
     outgoing: Arc<OutgoingMessageSender>,
     conversation_manager: Arc<ConversationManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
+    current_conversation_id: Arc<Mutex<Option<ConversationId>>>,
 ) {
     let NewConversation {
         conversation_id,
@@ -88,6 +89,10 @@ pub async fn run_codex_tool_session(
         .lock()
         .await
         .insert(id.clone(), conversation_id);
+
+    // Store this as the current conversation for this MCP session
+    *current_conversation_id.lock().await = Some(conversation_id);
+
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
