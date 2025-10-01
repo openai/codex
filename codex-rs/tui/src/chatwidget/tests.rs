@@ -2,6 +2,7 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
+use crate::tui::FrameRequester;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -81,66 +82,6 @@ fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json
     }
     payload
 }
-
-/*
-#[test]
-fn final_answer_without_newline_is_flushed_immediately() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
-
-    // Set up a VT100 test terminal to capture ANSI visual output
-    let width: u16 = 80;
-    // Increased height to keep the initial banner/help lines in view even if
-    // the session renders an extra header line or minor layout changes occur.
-    let height: u16 = 2500;
-    let viewport = Rect::new(0, height - 1, width, 1);
-    let backend = ratatui::backend::TestBackend::new(width, height);
-    let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
-        .expect("failed to construct terminal");
-    terminal.set_viewport_area(viewport);
-
-    // Simulate a streaming answer without any newline characters.
-    chat.handle_codex_event(Event {
-        id: "sub-a".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "Hi! How can I help with codex-rs or anything else today?".into(),
-        }),
-    });
-
-    // Now simulate the final AgentMessage which should flush the pending line immediately.
-    chat.handle_codex_event(Event {
-        id: "sub-a".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: "Hi! How can I help with codex-rs or anything else today?".into(),
-        }),
-    });
-
-    // Drain history insertions and verify the final line is present.
-    let cells = drain_insert_history(&mut rx);
-    assert!(
-        cells.iter().any(|lines| {
-            let s = lines
-                .iter()
-                .flat_map(|l| l.spans.iter())
-                .map(|sp| sp.content.clone())
-                .collect::<String>();
-            s.contains("codex")
-        }),
-        "expected 'codex' header to be emitted",
-    );
-    let found_final = cells.iter().any(|lines| {
-        let s = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|sp| sp.content.clone())
-            .collect::<String>();
-        s.contains("Hi! How can I help with codex-rs or anything else today?")
-    });
-    assert!(
-        found_final,
-        "expected final answer text to be flushed to history"
-    );
-}
-*/
 
 #[test]
 fn resumed_initial_messages_render_history() {
@@ -451,14 +392,17 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
         msg: EventMsg::ExecApprovalRequest(ev),
     });
 
-    // Snapshot the Proposed Command cell emitted into history
-    let proposed = drain_insert_history(&mut rx)
-        .pop()
-        .expect("expected proposed command cell");
-    assert_snapshot!(
-        "exec_approval_history_proposed_short",
-        lines_to_single_string(&proposed)
+    let proposed_cells = drain_insert_history(&mut rx);
+    assert!(
+        proposed_cells.is_empty(),
+        "expected approval request to render via modal without emitting history cells"
     );
+
+    // The approval modal should display the command snippet for user confirmation.
+    let area = Rect::new(0, 0, 80, chat.desired_height(80));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    (&chat).render_ref(area, &mut buf);
+    assert_snapshot!("exec_approval_modal_exec", format!("{buf:?}"));
 
     // Approve via keyboard and verify a concise decision history line is added
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
@@ -475,7 +419,7 @@ fn exec_approval_emits_proposed_command_and_decision_history() {
 fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
-    // Multiline command: should render proposed command fully in history with prefixes
+    // Multiline command: modal should show full command, history records decision only
     let ev_multi = ExecApprovalRequestEvent {
         call_id: "call-multi".into(),
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
@@ -488,12 +432,29 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         id: "sub-multi".into(),
         msg: EventMsg::ExecApprovalRequest(ev_multi),
     });
-    let proposed_multi = drain_insert_history(&mut rx)
-        .pop()
-        .expect("expected proposed multiline command cell");
-    assert_snapshot!(
-        "exec_approval_history_proposed_multiline",
-        lines_to_single_string(&proposed_multi)
+    let proposed_multi = drain_insert_history(&mut rx);
+    assert!(
+        proposed_multi.is_empty(),
+        "expected multiline approval request to render via modal without emitting history cells"
+    );
+
+    let area = Rect::new(0, 0, 80, chat.desired_height(80));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    (&chat).render_ref(area, &mut buf);
+    let mut saw_first_line = false;
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+        }
+        if row.contains("echo line1") {
+            saw_first_line = true;
+            break;
+        }
+    }
+    assert!(
+        saw_first_line,
+        "expected modal to show first line of multiline snippet"
     );
 
     // Deny via keyboard; decision snippet should be single-line and elided with " ..."
@@ -518,7 +479,11 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
         id: "sub-long".into(),
         msg: EventMsg::ExecApprovalRequest(ev_long),
     });
-    drain_insert_history(&mut rx); // proposed cell not needed for this assertion
+    let proposed_long = drain_insert_history(&mut rx);
+    assert!(
+        proposed_long.is_empty(),
+        "expected long approval request to avoid emitting history cells before decision"
+    );
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
     let aborted_long = drain_insert_history(&mut rx)
         .pop()
@@ -934,18 +899,21 @@ fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
     (chat).render_ref(area, &mut buf);
-    let mut row = String::new();
-    // Row 0 is the top spacer for the bottom pane; row 1 contains the header line
-    let y = 1u16.min(height.saturating_sub(1));
-    for x in 0..area.width {
-        let s = buf[(x, y)].symbol();
-        if s.is_empty() {
-            row.push(' ');
-        } else {
-            row.push_str(s);
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            let s = buf[(x, y)].symbol();
+            if s.is_empty() {
+                row.push(' ');
+            } else {
+                row.push_str(s);
+            }
+        }
+        if !row.trim().is_empty() {
+            return row;
         }
     }
-    row
+    String::new()
 }
 
 #[test]
@@ -1180,12 +1148,19 @@ fn approval_modal_exec_snapshot() {
     // Render to a fixed-size test terminal and snapshot.
     // Call desired_height first and use that exact height for rendering.
     let height = chat.desired_height(80);
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
-        .expect("create terminal");
+    let mut terminal =
+        crate::custom_terminal::Terminal::with_options(VT100Backend::new(80, height))
+            .expect("create terminal");
+    let viewport = Rect::new(0, 0, 80, height);
+    terminal.set_viewport_area(viewport);
+
     terminal
         .draw(|f| f.render_widget_ref(&chat, f.area()))
         .expect("draw approval modal");
-    assert_snapshot!("approval_modal_exec", terminal.backend());
+    assert_snapshot!(
+        "approval_modal_exec",
+        terminal.backend().vt100().screen().contents()
+    );
 }
 
 // Snapshot test: command approval modal without a reason
@@ -1469,12 +1444,26 @@ fn apply_patch_events_emit_history_cells() {
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
     let cells = drain_insert_history(&mut rx);
-    assert!(!cells.is_empty(), "expected pending patch cell to be sent");
-    let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Proposed Change"),
-        "missing proposed change header: {blob:?}"
+        cells.is_empty(),
+        "expected approval request to surface via modal without emitting history cells"
     );
+
+    let area = Rect::new(0, 0, 80, chat.desired_height(80));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    (&chat).render_ref(area, &mut buf);
+    let mut saw_summary = false;
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+        }
+        if row.contains("foo.txt (+1 -0)") {
+            saw_summary = true;
+            break;
+        }
+    }
+    assert!(saw_summary, "expected approval modal to show diff summary");
 
     // 2) Begin apply -> per-file apply block cell (no global header)
     let mut changes2 = HashMap::new();
@@ -1561,8 +1550,8 @@ fn apply_patch_manual_approval_adjusts_header() {
     assert!(!cells.is_empty(), "expected apply block cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Change Approved foo.txt"),
-        "expected change approved summary: {blob:?}"
+        blob.contains("Added foo.txt") || blob.contains("Edited foo.txt"),
+        "expected apply summary header for foo.txt: {blob:?}"
     );
 }
 
@@ -1586,9 +1575,11 @@ fn apply_patch_manual_flow_snapshot() {
             grant_root: None,
         }),
     });
-    let proposed_lines = drain_insert_history(&mut rx)
-        .pop()
-        .expect("proposed patch cell");
+    let history_before_apply = drain_insert_history(&mut rx);
+    assert!(
+        history_before_apply.is_empty(),
+        "expected approval modal to defer history emission"
+    );
 
     let mut apply_changes = HashMap::new();
     apply_changes.insert(
@@ -1609,10 +1600,6 @@ fn apply_patch_manual_flow_snapshot() {
         .pop()
         .expect("approved patch cell");
 
-    assert_snapshot!(
-        "apply_patch_manual_flow_history_proposed",
-        lines_to_single_string(&proposed_lines)
-    );
     assert_snapshot!(
         "apply_patch_manual_flow_history_approved",
         lines_to_single_string(&approved_lines)
@@ -1802,24 +1789,42 @@ fn apply_patch_request_shows_diff_summary() {
         }),
     });
 
-    // Drain history insertions and verify the diff summary is present
+    // No history entries yet; the modal should contain the diff summary
     let cells = drain_insert_history(&mut rx);
     assert!(
-        !cells.is_empty(),
-        "expected a history cell with the proposed patch summary"
-    );
-    let blob = lines_to_single_string(cells.last().unwrap());
-
-    // Header should summarize totals
-    assert!(
-        blob.contains("Proposed Change README.md (+2 -0)"),
-        "missing or incorrect diff header: {blob:?}"
+        cells.is_empty(),
+        "expected approval request to render via modal instead of history"
     );
 
-    // Per-file summary line should include the file path and counts
+    let area = Rect::new(0, 0, 80, chat.desired_height(80));
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    (&chat).render_ref(area, &mut buf);
+
+    let mut saw_header = false;
+    let mut saw_line1 = false;
+    let mut saw_line2 = false;
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+        }
+        if row.contains("README.md (+2 -0)") {
+            saw_header = true;
+        }
+        if row.contains("+line one") {
+            saw_line1 = true;
+        }
+        if row.contains("+line two") {
+            saw_line2 = true;
+        }
+        if saw_header && saw_line1 && saw_line2 {
+            break;
+        }
+    }
+    assert!(saw_header, "expected modal to show diff header with totals");
     assert!(
-        blob.contains("README.md"),
-        "missing per-file diff summary: {blob:?}"
+        saw_line1 && saw_line2,
+        "expected modal to show per-line diff summary"
     );
 }
 

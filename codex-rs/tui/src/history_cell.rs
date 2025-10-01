@@ -5,7 +5,6 @@ use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
-use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::MarkdownCitationContext;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
@@ -49,12 +48,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
-
-#[derive(Clone, Debug)]
-pub(crate) enum PatchEventType {
-    ApprovalRequest,
-    ApplyBegin { auto_approved: bool },
-}
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -277,19 +270,13 @@ pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct PatchHistoryCell {
-    event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
 }
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        create_diff_summary(
-            &self.changes,
-            self.event_type.clone(),
-            &self.cwd,
-            width as usize,
-        )
+        create_diff_summary(&self.changes, &self.cwd, width as usize)
     }
 }
 
@@ -1016,12 +1003,10 @@ impl HistoryCell for PlanUpdateCell {
 /// a proposed patch. The summary lines should already be formatted (e.g.
 /// "A path/to/file.rs").
 pub(crate) fn new_patch_event(
-    event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
     cwd: &Path,
 ) -> PatchHistoryCell {
     PatchHistoryCell {
-        event_type,
         changes,
         cwd: cwd.to_path_buf(),
     }
@@ -1048,27 +1033,6 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
             },
         ));
     }
-
-    PlainHistoryCell { lines }
-}
-
-/// Create a new history cell for a proposed command approval.
-/// Renders a header and the command preview similar to how proposed patches
-/// show a header and summary.
-pub(crate) fn new_proposed_command(command: &[String]) -> PlainHistoryCell {
-    let cmd = strip_bash_lc_and_escape(command);
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(vec!["• ".dim(), "Proposed Command".bold()]));
-
-    let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd);
-    let initial_prefix: Span<'static> = "  └ ".dim();
-    let subsequent_prefix: Span<'static> = "    ".into();
-    lines.extend(prefix_lines(
-        highlighted_lines,
-        initial_prefix,
-        subsequent_prefix,
-    ));
 
     PlainHistoryCell { lines }
 }

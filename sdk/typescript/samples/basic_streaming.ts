@@ -7,11 +7,11 @@ import { Codex } from "@openai/codex-sdk";
 import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
 import path from "node:path";
 
-const executablePath =
+const codexPathOverride =
   process.env.CODEX_EXECUTABLE ??
   path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
 
-const codex = new Codex({ executablePath });
+const codex = new Codex({ codexPathOverride });
 const thread = codex.startThread();
 const rl = createInterface({ input, output });
 
