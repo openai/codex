@@ -2,6 +2,7 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
+use crate::tui::FrameRequester;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
