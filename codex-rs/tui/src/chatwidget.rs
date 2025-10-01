@@ -1135,33 +1135,32 @@ impl ChatWidget {
 
                 self.app_event_tx.send(AppEvent::CodexEvent(Event {
                     id: "1".to_string(),
-                    msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                        call_id: "1".to_string(),
-                        // command: vec!["git".into(), "apply".into()],
-                        command: ["bash","-lc","python3 <<'PY'\nimport math\nfrom dataclasses import dataclass\nfrom typing import Iterable, List, Sequence, Tuple\n\n\n@dataclass\nclass Viewport:\n    center_x: float\n    center_y: float\n    scale: float\n    width: int\n    height: int\n\n    def x_range(self) -> Tuple[float, float]:\n        half_width = self.scale * self.width / 2\n        return (self.center_x - half_width, self.center_x + half_width)\n\n    def y_range(self) -> Tuple[float, float]:\n        half_height = self.scale * self.height / 2\n        return (self.center_y - half_height, self.center_y + half_height)\n\n\n@dataclass\nclass FractalConfig:\n    viewport: Viewport\n    max_iter: int\n    escape_radius: float\n\n\ndef mandelbrot_escape_time(c_real: float, c_imag: float, max_iter: int, escape_radius: float) -> int:\n    z_real = 0.0\n    z_imag = 0.0\n    escape_radius_sq = escape_radius * escape_radius\n    for iteration in range(max_iter):\n        z_real_sq = z_real * z_real\n        z_imag_sq = z_imag * z_imag\n        if z_real_sq + z_imag_sq > escape_radius_sq:\n            return iteration\n        new_real = z_real_sq - z_imag_sq + c_real\n        new_imag = 2 * z_real * z_imag + c_imag\n        z_real, z_imag = new_real, new_imag\n    return max_iter\n\n\ndef smooth_color(iteration: int, z_real: float, z_imag: float, max_iter: int) -> float:\n    if iteration >= max_iter:\n        return float(iteration)\n    modulus = math.sqrt(z_real * z_real + z_imag * z_imag)\n    if modulus == 0:\n        return float(iteration)\n    log_zn = math.log(modulus * modulus) / 2\n    nu = math.log(log_zn / math.log(2)) / math.log(2)\n    return iteration + 1 - nu\n\n\ndef escape_time_smooth(c_real: float, c_imag: float, max_iter: int, escape_radius: float) -> float:\n    z_real = 0.0\n    z_imag = 0.0\n    escape_radius_sq = escape_radius * escape_radius\n    for iteration in range(max_iter):\n        z_real_sq = z_real * z_real\n        z_imag_sq = z_imag * z_imag\n        if z_real_sq + z_imag_sq > escape_radius_sq:\n            return smooth_color(iteration, z_real, z_imag, max_iter)\n        new_real = z_real_sq - z_imag_sq + c_real\n        new_imag = 2 * z_real * z_imag + c_imag\n        z_real, z_imag = new_real, new_imag\n    return float(max_iter)\n\n\ndef lerp(value: float, low: float, high: float) -> float:\n    return low + (high - low) * value\n\n\ndef map_point_to_complex(x: int, y: int, viewport: Viewport) -> Tuple[float, float]:\n    x_min, x_max = viewport.x_range()\n    y_min, y_max = viewport.y_range()\n    real = lerp(x / (viewport.width - 1), x_min, x_max)\n    imag = lerp(y / (viewport.height - 1), y_min, y_max)\n    return real, imag\n\n\ndef build_gradient() -> Sequence[str]:\n    gradient = [\n        \" \",\n        \".\",\n        \",\",\n        \"-\",\n        \"~\",\n        \":\",\n        \";\",\n        \"!\",\n        \"*\",\n        \"+\",\n        \"=\",\n        \"%\",\n        \"#\",\n        \"@\",\n    ]\n    return gradient\n\n\ndef normalize(value: float, max_value: float) -> float:\n    if max_value == 0:\n        return 0.0\n    return min(max(value / max_value, 0.0), 1.0)\n\n\ndef choose_char(normalized: float, gradient: Sequence[str]) -> str:\n    index = int(normalized * (len(gradient) - 1) + 0.5)\n    return gradient[index]\n\n\ndef render_fractal(config: FractalConfig, gradient: Sequence[str]) -> List[str]:\n    lines: List[str] = []\n    for row in range(config.viewport.height):\n        y = config.viewport.height - row - 1\n        parts: List[str] = []\n        for x in range(config.viewport.width):\n            real, imag = map_point_to_complex(x, y, config.viewport)\n            smoothed = escape_time_smooth(real, imag, config.max_iter, config.escape_radius)\n            normalized = normalize(smoothed, config.max_iter)\n            parts.append(choose_char(normalized, gradient))\n        lines.append(\"\".join(parts))\n    return lines\n\n\ndef annotate(lines: Iterable[str], title: str, caption: str) -> List[str]:\n    border = \"+\" + \"-\" * len(lines[0]) + \"+\"\n    annotated = [border]\n    annotated.append(\"|\" + title.center(len(lines[0])) + \"|\")\n    annotated.append(border)\n    annotated.extend(\"|\" + line + \"|\" for line in lines)\n    annotated.append(border)\n    annotated.append(caption)\n    return annotated\n\n\ndef describe_viewport(viewport: Viewport) -> str:\n    return (\n        f\"center=({viewport.center_x:.6f}, {viewport.center_y:.6f}), \"\n        f\"scale={viewport.scale:.6f}, size={viewport.width}x{viewport.height}\"\n    )\n\n\ndef print_lines(lines: Iterable[str]) -> None:\n    for line in lines:\n        print(line)\n\n\ndef main() -> None:\n    viewport = Viewport(\n        center_x=-0.743643887037151,\n        center_y=0.13182590420533,\n        scale=0.002,\n        width=96,\n        height=48,\n    )\n    config = FractalConfig(\n        viewport=viewport,\n        max_iter=200,\n        escape_radius=4.0,\n    )\n    gradient = build_gradient()\n    fractal_lines = render_fractal(config, gradient)\n    caption = describe_viewport(config.viewport)\n    framed_lines = annotate(fractal_lines, \"Mandelbrot\", caption)\n    print_lines(framed_lines)\n\n\nif __name__ == \"__main__\":\n    main()\nPY"].iter().map(std::string::ToString::to_string).collect(),
-                        cwd: self.config.cwd.clone(),
-                        reason: Some("test".to_string()),
-                    }),
-                    // msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                    // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                     //     call_id: "1".to_string(),
-                    //     changes: HashMap::from([
-                    //         (
-                    //             PathBuf::from("/tmp/test.txt"),
-                    //             FileChange::Add {
-                    //                 content: "test\n".to_string().repeat(100),
-                    //             },
-                    //         ),
-                    //         (
-                    //             PathBuf::from("/tmp/test2.txt"),
-                    //             FileChange::Update {
-                    //                 unified_diff: "+test\n-test2".to_string(),
-                    //                 move_path: None,
-                    //             },
-                    //         ),
-                    //     ]),
-                    //     reason: Some("This is a test reason, a stand-in for what the model might produce as information about why it is requesting permission.".to_string()),
-                    //     grant_root: None,
+                    //     command: vec!["git".into(), "apply".into()],
+                    //     cwd: self.config.cwd.clone(),
+                    //     reason: Some("test".to_string()),
                     // }),
+                    msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                        call_id: "1".to_string(),
+                        changes: HashMap::from([
+                            (
+                                PathBuf::from("/tmp/test.txt"),
+                                FileChange::Add {
+                                    content: "test".to_string(),
+                                },
+                            ),
+                            (
+                                PathBuf::from("/tmp/test2.txt"),
+                                FileChange::Update {
+                                    unified_diff: "+test\n-test2".to_string(),
+                                    move_path: None,
+                                },
+                            ),
+                        ]),
+                        reason: None,
+                        grant_root: Some(PathBuf::from("/tmp")),
+                    }),
                 }));
             }
         }
