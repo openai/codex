@@ -14,6 +14,7 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
+use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
@@ -109,7 +110,7 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
 /// is zero, returns an empty list.
 pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBuf>> {
     let mut dir = config.cwd.clone();
-    if let Ok(canon) = dir.canonicalize() {
+    if let Ok(canon) = normalize_path(&dir) {
         dir = canon;
     }
 
