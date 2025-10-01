@@ -16,6 +16,7 @@ pub enum SlashCommand {
     Approvals,
     Review,
     New,
+    Resume,
     Init,
     Compact,
     Undo,
@@ -46,6 +47,7 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
+            SlashCommand::Resume => "open the session picker to resume a past chat",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
         }
@@ -62,6 +64,7 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Init
+            | SlashCommand::Resume
             | SlashCommand::Compact
             | SlashCommand::Undo
             | SlashCommand::Model
