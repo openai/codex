@@ -33,6 +33,8 @@ npx @modelcontextprotocol/inspector codex mcp-server
 
 Use `codex mcp` to add/list/get/remove MCP server launchers defined in `config.toml`, and `codex mcp-server` to run the MCP server directly.
 
+Note: A pre‑execution hook (prehook) MVP is proposed in PR #4522. It is disabled by default and can delegate to an MCP tool or a script; see that PR for details. (Docs note only.)
+
 ### Notifications
 
 You can enable notifications by configuring a script that is run whenever the agent finishes a turn. The [notify documentation](../docs/config.md#notify) includes a detailed example that explains how to get desktop notifications via [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS.
