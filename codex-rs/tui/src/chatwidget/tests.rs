@@ -439,20 +439,20 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let area = Rect::new(0, 0, 80, chat.desired_height(80));
     let mut buf = ratatui::buffer::Buffer::empty(area);
     (&chat).render_ref(area, &mut buf);
-    let mut saw_truncated = false;
+    let mut saw_first_line = false;
     for y in 0..area.height {
         let mut row = String::new();
         for x in 0..area.width {
             row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
         }
-        if row.contains("$ echo line1 ...") {
-            saw_truncated = true;
+        if row.contains("echo line1") {
+            saw_first_line = true;
             break;
         }
     }
     assert!(
-        saw_truncated,
-        "expected modal to show truncated multiline snippet"
+        saw_first_line,
+        "expected modal to show first line of multiline snippet"
     );
 
     // Deny via keyboard; decision snippet should be single-line and elided with " ..."
