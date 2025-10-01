@@ -159,16 +159,22 @@ async fn test_list_conversations_latest_first() {
                 path: p1,
                 head: head_3,
                 tail: Vec::new(),
+                created_at: Some("2025-01-03T12-00-00".into()),
+                updated_at: Some("2025-01-03T12-00-00".into()),
             },
             ConversationItem {
                 path: p2,
                 head: head_2,
                 tail: Vec::new(),
+                created_at: Some("2025-01-02T12-00-00".into()),
+                updated_at: Some("2025-01-02T12-00-00".into()),
             },
             ConversationItem {
                 path: p3,
                 head: head_1,
                 tail: Vec::new(),
+                created_at: Some("2025-01-01T12-00-00".into()),
+                updated_at: Some("2025-01-01T12-00-00".into()),
             },
         ],
         next_cursor: Some(expected_cursor),
@@ -235,11 +241,15 @@ async fn test_pagination_cursor() {
                 path: p5,
                 head: head_5,
                 tail: Vec::new(),
+                created_at: Some("2025-03-05T09-00-00".into()),
+                updated_at: Some("2025-03-05T09-00-00".into()),
             },
             ConversationItem {
                 path: p4,
                 head: head_4,
                 tail: Vec::new(),
+                created_at: Some("2025-03-04T09-00-00".into()),
+                updated_at: Some("2025-03-04T09-00-00".into()),
             },
         ],
         next_cursor: Some(expected_cursor1.clone()),
@@ -287,11 +297,15 @@ async fn test_pagination_cursor() {
                 path: p3,
                 head: head_3,
                 tail: Vec::new(),
+                created_at: Some("2025-03-03T09-00-00".into()),
+                updated_at: Some("2025-03-03T09-00-00".into()),
             },
             ConversationItem {
                 path: p2,
                 head: head_2,
                 tail: Vec::new(),
+                created_at: Some("2025-03-02T09-00-00".into()),
+                updated_at: Some("2025-03-02T09-00-00".into()),
             },
         ],
         next_cursor: Some(expected_cursor2.clone()),
@@ -324,6 +338,8 @@ async fn test_pagination_cursor() {
             path: p1,
             head: head_1,
             tail: Vec::new(),
+            created_at: Some("2025-03-01T09-00-00".into()),
+            updated_at: Some("2025-03-01T09-00-00".into()),
         }],
         next_cursor: Some(expected_cursor3),
         num_scanned_files: 5, // scanned 05, 04 (anchor), 03, 02 (anchor), 01
@@ -367,6 +383,8 @@ async fn test_get_conversation_contents() {
             path: expected_path,
             head: expected_head,
             tail: Vec::new(),
+            created_at: Some(ts.into()),
+            updated_at: Some(ts.into()),
         }],
         next_cursor: Some(expected_cursor),
         num_scanned_files: 1,
@@ -449,18 +467,23 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
 
     let expected: Vec<serde_json::Value> = (total_messages - tail_len..total_messages)
         .map(|idx| {
-            serde_json::to_value(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("reply-{idx}"),
-                }],
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": format!("reply-{idx}"),
+                    }
+                ],
             })
-            .expect("serialize response item")
         })
         .collect();
 
     assert_eq!(item.tail, expected);
+    assert_eq!(item.created_at.as_deref(), Some(ts));
+    let expected_updated = format!("{ts}-{last:02}", last = total_messages - 1);
+    assert_eq!(item.updated_at.as_deref(), Some(expected_updated.as_str()));
 
     Ok(())
 }
@@ -526,18 +549,25 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
 
     let expected: Vec<serde_json::Value> = (0..3)
         .map(|idx| {
-            serde_json::to_value(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("short-{idx}"),
-                }],
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": format!("short-{idx}"),
+                    }
+                ],
             })
-            .expect("serialize response item")
         })
         .collect();
 
     assert_eq!(tail, &expected);
+    let expected_updated = format!("{ts}-{last:02}", last = 2);
+    assert_eq!(
+        page.items[0].updated_at.as_deref(),
+        Some(expected_updated.as_str())
+    );
 
     Ok(())
 }
@@ -615,18 +645,25 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
 
     let expected: Vec<serde_json::Value> = (0..4)
         .map(|idx| {
-            serde_json::to_value(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("response-{idx}"),
-                }],
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": format!("response-{idx}"),
+                    }
+                ],
             })
-            .expect("serialize response item")
         })
         .collect();
 
     assert_eq!(tail, &expected);
+    let expected_updated = format!("{ts}-{last:02}", last = 3);
+    assert_eq!(
+        page.items[0].updated_at.as_deref(),
+        Some(expected_updated.as_str())
+    );
 
     Ok(())
 }
@@ -676,11 +713,15 @@ async fn test_stable_ordering_same_second_pagination() {
                 path: p3,
                 head: head(u3),
                 tail: Vec::new(),
+                created_at: Some(ts.to_string()),
+                updated_at: Some(ts.to_string()),
             },
             ConversationItem {
                 path: p2,
                 head: head(u2),
                 tail: Vec::new(),
+                created_at: Some(ts.to_string()),
+                updated_at: Some(ts.to_string()),
             },
         ],
         next_cursor: Some(expected_cursor1.clone()),
@@ -704,6 +745,8 @@ async fn test_stable_ordering_same_second_pagination() {
             path: p1,
             head: head(u1),
             tail: Vec::new(),
+            created_at: Some(ts.to_string()),
+            updated_at: Some(ts.to_string()),
         }],
         next_cursor: Some(expected_cursor2),
         num_scanned_files: 3, // scanned u3, u2 (anchor), u1
