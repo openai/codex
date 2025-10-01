@@ -16,7 +16,6 @@ icu_decimal = { workspace = true }
 icu_locale_core = { workspace = true }
 mcp-types = { workspace = true }
 mime_guess = { workspace = true }
-paste = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true, features = ["macros", "base64"] }
@@ -33,7 +32,6 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 
 [package.metadata.cargo-shear]

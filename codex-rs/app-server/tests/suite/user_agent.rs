@@ -1,8 +1,8 @@
 use app_test_support::McpProcess;
 use app_test_support::to_response;
-use codex_protocol::mcp_protocol::GetUserAgentResponse;
-use mcp_types::JSONRPCResponse;
-use mcp_types::RequestId;
+use codex_app_server_protocol::GetUserAgentResponse;
+use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;

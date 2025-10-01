@@ -171,8 +171,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
- "codex-protocol",
- "mcp-types",
+ "codex-app-server-protocol",
  "serde",
  "serde_json",
  "tokio",
@@ -657,6 +656,7 @@ dependencies = [
  "app_test_support",
  "assert_cmd",
  "base64",
+ "codex-app-server-protocol",
  "codex-arg0",
  "codex-common",
  "codex-core",
@@ -665,7 +665,6 @@ dependencies = [
  "codex-protocol",
  "codex-utils-json-to-toml",
  "core_test_support",
- "mcp-types",
  "os_info",
  "pretty_assertions",
  "serde",
@@ -677,6 +676,21 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "codex-app-server-protocol"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-protocol",
+ "paste",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "strum_macros 0.27.2",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]
@@ -750,6 +764,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "codex-app-server",
+ "codex-app-server-protocol",
  "codex-arg0",
  "codex-chatgpt",
  "codex-cloud-tasks",
@@ -820,6 +835,7 @@ name = "codex-common"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "codex-app-server-protocol",
  "codex-core",
  "codex-protocol",
  "serde",
@@ -838,6 +854,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-file-search",
  "codex-mcp-client",
@@ -994,8 +1011,8 @@ dependencies = [
  "anyhow",
  "base64",
  "chrono",
+ "codex-app-server-protocol",
  "codex-core",
- "codex-protocol",
  "core_test_support",
  "rand 0.9.2",
  "reqwest",
@@ -1071,6 +1088,7 @@ name = "codex-otel"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "codex-app-server-protocol",
  "codex-protocol",
  "eventsource-stream",
  "opentelemetry",
@@ -1103,8 +1121,6 @@ dependencies = [
  "icu_locale_core",
  "mcp-types",
  "mime_guess",
- "paste",
- "pretty_assertions",
  "serde",
  "serde_json",
  "serde_with",
@@ -1123,7 +1139,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
- "codex-protocol",
+ "codex-app-server-protocol",
  "ts-rs",
 ]
 
@@ -1171,6 +1187,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-ansi-escape",
+ "codex-app-server-protocol",
  "codex-arg0",
  "codex-common",
  "codex-core",

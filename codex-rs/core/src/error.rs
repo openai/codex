@@ -1,7 +1,7 @@
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use serde_json;

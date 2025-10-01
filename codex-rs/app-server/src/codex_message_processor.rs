@@ -3,6 +3,52 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_app_server_protocol::AddConversationListenerParams;
+use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::ApplyPatchApprovalParams;
+use codex_app_server_protocol::ApplyPatchApprovalResponse;
+use codex_app_server_protocol::ArchiveConversationParams;
+use codex_app_server_protocol::ArchiveConversationResponse;
+use codex_app_server_protocol::AuthStatusChangeNotification;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConversationSummary;
+use codex_app_server_protocol::ExecCommandApprovalParams;
+use codex_app_server_protocol::ExecCommandApprovalResponse;
+use codex_app_server_protocol::ExecOneOffCommandParams;
+use codex_app_server_protocol::ExecOneOffCommandResponse;
+use codex_app_server_protocol::FuzzyFileSearchParams;
+use codex_app_server_protocol::FuzzyFileSearchResponse;
+use codex_app_server_protocol::GetUserAgentResponse;
+use codex_app_server_protocol::GetUserSavedConfigResponse;
+use codex_app_server_protocol::GitDiffToRemoteResponse;
+use codex_app_server_protocol::InputItem as WireInputItem;
+use codex_app_server_protocol::InterruptConversationParams;
+use codex_app_server_protocol::InterruptConversationResponse;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ListConversationsParams;
+use codex_app_server_protocol::ListConversationsResponse;
+use codex_app_server_protocol::LoginApiKeyParams;
+use codex_app_server_protocol::LoginApiKeyResponse;
+use codex_app_server_protocol::LoginChatGptCompleteNotification;
+use codex_app_server_protocol::LoginChatGptResponse;
+use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::RemoveConversationListenerParams;
+use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::Result as JsonRpcResult;
+use codex_app_server_protocol::ResumeConversationParams;
+use codex_app_server_protocol::SendUserMessageParams;
+use codex_app_server_protocol::SendUserMessageResponse;
+use codex_app_server_protocol::SendUserTurnParams;
+use codex_app_server_protocol::SendUserTurnResponse;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SessionConfiguredNotification;
+use codex_app_server_protocol::SetDefaultModelParams;
+use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::UserInfoResponse;
+use codex_app_server_protocol::UserSavedConfig;
 use codex_core::AuthManager;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
@@ -36,57 +82,12 @@ use codex_core::protocol::ReviewDecision;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
-use codex_protocol::mcp_protocol::AddConversationListenerParams;
-use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
-use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
-use codex_protocol::mcp_protocol::ApplyPatchApprovalResponse;
-use codex_protocol::mcp_protocol::ArchiveConversationParams;
-use codex_protocol::mcp_protocol::ArchiveConversationResponse;
-use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
-use codex_protocol::mcp_protocol::ClientRequest;
-use codex_protocol::mcp_protocol::ConversationId;
-use codex_protocol::mcp_protocol::ConversationSummary;
-use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
-use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
-use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
-use codex_protocol::mcp_protocol::ExecOneOffCommandResponse;
-use codex_protocol::mcp_protocol::FuzzyFileSearchParams;
-use codex_protocol::mcp_protocol::FuzzyFileSearchResponse;
-use codex_protocol::mcp_protocol::GetUserAgentResponse;
-use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
-use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
-use codex_protocol::mcp_protocol::InputItem as WireInputItem;
-use codex_protocol::mcp_protocol::InterruptConversationParams;
-use codex_protocol::mcp_protocol::InterruptConversationResponse;
-use codex_protocol::mcp_protocol::ListConversationsParams;
-use codex_protocol::mcp_protocol::ListConversationsResponse;
-use codex_protocol::mcp_protocol::LoginApiKeyParams;
-use codex_protocol::mcp_protocol::LoginApiKeyResponse;
-use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
-use codex_protocol::mcp_protocol::LoginChatGptResponse;
-use codex_protocol::mcp_protocol::NewConversationParams;
-use codex_protocol::mcp_protocol::NewConversationResponse;
-use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
-use codex_protocol::mcp_protocol::RemoveConversationSubscriptionResponse;
-use codex_protocol::mcp_protocol::ResumeConversationParams;
-use codex_protocol::mcp_protocol::SendUserMessageParams;
-use codex_protocol::mcp_protocol::SendUserMessageResponse;
-use codex_protocol::mcp_protocol::SendUserTurnParams;
-use codex_protocol::mcp_protocol::SendUserTurnResponse;
-use codex_protocol::mcp_protocol::ServerNotification;
-use codex_protocol::mcp_protocol::ServerRequestPayload;
-use codex_protocol::mcp_protocol::SessionConfiguredNotification;
-use codex_protocol::mcp_protocol::SetDefaultModelParams;
-use codex_protocol::mcp_protocol::SetDefaultModelResponse;
-use codex_protocol::mcp_protocol::UserInfoResponse;
-use codex_protocol::mcp_protocol::UserSavedConfig;
+use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InputMessageKind;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_utils_json_to_toml::json_to_toml;
-use mcp_types::JSONRPCErrorError;
-use mcp_types::RequestId;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::PathBuf;
@@ -385,7 +386,7 @@ impl CodexMessageProcessor {
             self.outgoing
                 .send_response(
                     request_id,
-                    codex_protocol::mcp_protocol::CancelLoginChatGptResponse {},
+                    codex_app_server_protocol::CancelLoginChatGptResponse {},
                 )
                 .await;
         } else {
@@ -421,7 +422,7 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(
                 request_id,
-                codex_protocol::mcp_protocol::LogoutChatGptResponse {},
+                codex_app_server_protocol::LogoutChatGptResponse {},
             )
             .await;
 
@@ -439,7 +440,7 @@ impl CodexMessageProcessor {
     async fn get_auth_status(
         &self,
         request_id: RequestId,
-        params: codex_protocol::mcp_protocol::GetAuthStatusParams,
+        params: codex_app_server_protocol::GetAuthStatusParams,
     ) {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
@@ -454,7 +455,7 @@ impl CodexMessageProcessor {
         let requires_openai_auth = self.config.model_provider.requires_openai_auth;
 
         let response = if !requires_openai_auth {
-            codex_protocol::mcp_protocol::GetAuthStatusResponse {
+            codex_app_server_protocol::GetAuthStatusResponse {
                 auth_method: None,
                 auth_token: None,
                 requires_openai_auth: Some(false),
@@ -474,13 +475,13 @@ impl CodexMessageProcessor {
                             (None, None)
                         }
                     };
-                    codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                    codex_app_server_protocol::GetAuthStatusResponse {
                         auth_method: reported_auth_method,
                         auth_token: token_opt,
                         requires_openai_auth: Some(true),
                     }
                 }
-                None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                None => codex_app_server_protocol::GetAuthStatusResponse {
                     auth_method: None,
                     auth_token: None,
                     requires_openai_auth: Some(true),
@@ -807,7 +808,7 @@ impl CodexMessageProcessor {
                 });
 
                 // Reply with conversation id + model and initial messages (when present)
-                let response = codex_protocol::mcp_protocol::ResumeConversationResponse {
+                let response = codex_app_server_protocol::ResumeConversationResponse {
                     conversation_id,
                     model: session_configured.model.clone(),
                     initial_messages,
@@ -1360,7 +1361,7 @@ fn derive_config_from_params(
 
 async fn on_patch_approval_response(
     event_id: String,
-    receiver: oneshot::Receiver<mcp_types::Result>,
+    receiver: oneshot::Receiver<JsonRpcResult>,
     codex: Arc<CodexConversation>,
 ) {
     let response = receiver.await;
@@ -1402,7 +1403,7 @@ async fn on_patch_approval_response(
 
 async fn on_exec_approval_response(
     event_id: String,
-    receiver: oneshot::Receiver<mcp_types::Result>,
+    receiver: oneshot::Receiver<JsonRpcResult>,
     conversation: Arc<CodexConversation>,
 ) {
     let response = receiver.await;

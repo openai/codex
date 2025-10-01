@@ -455,7 +455,7 @@ fn print_completion(cmd: CompletionCommand) {
 mod tests {
     use super::*;
     use codex_core::protocol::TokenUsage;
-    use codex_protocol::mcp_protocol::ConversationId;
+    use codex_protocol::ConversationId;
 
     fn finalize_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");

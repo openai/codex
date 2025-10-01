@@ -11,30 +11,30 @@ use tokio::process::ChildStdout;
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
-use codex_protocol::mcp_protocol::AddConversationListenerParams;
-use codex_protocol::mcp_protocol::ArchiveConversationParams;
-use codex_protocol::mcp_protocol::CancelLoginChatGptParams;
-use codex_protocol::mcp_protocol::ClientInfo;
-use codex_protocol::mcp_protocol::ClientNotification;
-use codex_protocol::mcp_protocol::GetAuthStatusParams;
-use codex_protocol::mcp_protocol::InitializeParams;
-use codex_protocol::mcp_protocol::InterruptConversationParams;
-use codex_protocol::mcp_protocol::ListConversationsParams;
-use codex_protocol::mcp_protocol::LoginApiKeyParams;
-use codex_protocol::mcp_protocol::NewConversationParams;
-use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
-use codex_protocol::mcp_protocol::ResumeConversationParams;
-use codex_protocol::mcp_protocol::SendUserMessageParams;
-use codex_protocol::mcp_protocol::SendUserTurnParams;
-use codex_protocol::mcp_protocol::ServerRequest;
-use codex_protocol::mcp_protocol::SetDefaultModelParams;
+use codex_app_server_protocol::AddConversationListenerParams;
+use codex_app_server_protocol::ArchiveConversationParams;
+use codex_app_server_protocol::CancelLoginChatGptParams;
+use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::GetAuthStatusParams;
+use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::InterruptConversationParams;
+use codex_app_server_protocol::ListConversationsParams;
+use codex_app_server_protocol::LoginApiKeyParams;
+use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::RemoveConversationListenerParams;
+use codex_app_server_protocol::ResumeConversationParams;
+use codex_app_server_protocol::SendUserMessageParams;
+use codex_app_server_protocol::SendUserTurnParams;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SetDefaultModelParams;
 
-use mcp_types::JSONRPC_VERSION;
-use mcp_types::JSONRPCMessage;
-use mcp_types::JSONRPCNotification;
-use mcp_types::JSONRPCRequest;
-use mcp_types::JSONRPCResponse;
-use mcp_types::RequestId;
+use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::JSONRPCRequest;
+use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::RequestId;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
 
@@ -318,7 +318,6 @@ impl McpProcess {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
 
         let message = JSONRPCMessage::Request(JSONRPCRequest {
-            jsonrpc: JSONRPC_VERSION.into(),
             id: RequestId::Integer(request_id),
             method: method.to_string(),
             params,
@@ -332,12 +331,8 @@ impl McpProcess {
         id: RequestId,
         result: serde_json::Value,
     ) -> anyhow::Result<()> {
-        self.send_jsonrpc_message(JSONRPCMessage::Response(JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id,
-            result,
-        }))
-        .await
+        self.send_jsonrpc_message(JSONRPCMessage::Response(JSONRPCResponse { id, result }))
+            .await
     }
 
     pub async fn send_notification(
@@ -346,7 +341,6 @@ impl McpProcess {
     ) -> anyhow::Result<()> {
         let value = serde_json::to_value(notification)?;
         self.send_jsonrpc_message(JSONRPCMessage::Notification(JSONRPCNotification {
-            jsonrpc: JSONRPC_VERSION.into(),
             method: value
                 .get("method")
                 .and_then(|m| m.as_str())
@@ -429,7 +423,7 @@ impl McpProcess {
     pub async fn read_stream_until_error_message(
         &mut self,
         request_id: RequestId,
-    ) -> anyhow::Result<mcp_types::JSONRPCError> {
+    ) -> anyhow::Result<JSONRPCError> {
         loop {
             let message = self.read_jsonrpc_message().await?;
             match message {
