@@ -220,8 +220,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         if let Some(t) = prehook_mcp_tool.clone() {
             cfg.mcp.tool = Some(t);
         }
-        cfg.mcp.connect_timeout_ms = prehook_timeout_ms.min(2_000);
-        cfg.mcp.call_timeout_ms = prehook_timeout_ms;
+        cfg.mcp.connect_timeout_ms =
+            prehook_mcp_connect_timeout_ms.unwrap_or(prehook_timeout_ms.min(2_000));
+        cfg.mcp.call_timeout_ms = prehook_mcp_call_timeout_ms.unwrap_or(prehook_timeout_ms);
         if let Some(cmd) = prehook_script_cmd.clone() {
             cfg.script.cmd = Some(cmd);
         }
@@ -251,26 +252,34 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             sanitized_env: std::collections::HashMap::new(),
         };
         let dispatcher = prehook::PreHookDispatcher::new(cfg);
-        match dispatcher.run(&ctx).await {
+        let started = std::time::Instant::now();
+        let res = dispatcher.run(&ctx).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+        match res {
             Ok(prehook::Outcome::Allow { .. }) => {}
             Ok(prehook::Outcome::Augment { .. }) => {
                 // MVP: ignore augmentation in exec; continue
+                tracing::info!(backend=%dispatcher.cfg.backend, decision="augment", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
             }
             Ok(prehook::Outcome::Defer { .. }) => {
+                tracing::info!(backend=%dispatcher.cfg.backend, decision="defer", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
                 eprintln!(
                     "Prehook returned defer in exec mode; aborting (use chained backend to fallback)."
                 );
                 std::process::exit(EXIT_DEFER);
             }
             Ok(prehook::Outcome::Ask { message }) => {
+                tracing::info!(backend=%dispatcher.cfg.backend, decision="ask", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
                 eprintln!("Prehook requires approval: {message}");
                 std::process::exit(EXIT_ASK);
             }
             Ok(prehook::Outcome::Patch { .. }) => {
+                tracing::info!(backend=%dispatcher.cfg.backend, decision="patch", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
                 eprintln!("Prehook suggested a patch; unsupported in exec mode. Aborting.");
                 std::process::exit(EXIT_PATCH);
             }
             Ok(prehook::Outcome::Deny { reason }) => {
+                tracing::info!(backend=%dispatcher.cfg.backend, decision="deny", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), "prehook");
                 eprintln!("Prehook denied execution: {reason}");
                 std::process::exit(EXIT_DENY);
             }
@@ -278,6 +287,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 retry_after_ms,
                 message,
             }) => {
+                tracing::info!(backend=%dispatcher.cfg.backend, decision="rate_limit", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), retry_after_ms, "prehook");
                 if let Some(m) = message {
                     eprintln!("Prehook rate limit: {m}");
                 }
@@ -287,13 +297,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             Err(e) => {
                 match on_error {
                     prehook::OnErrorPolicy::Fail => {
+                        tracing::info!(backend=%dispatcher.cfg.backend, decision="error_fail", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), error=%format!("{e:#}"), "prehook");
                         eprintln!("Prehook error: {e:#}");
                         std::process::exit(EXIT_DENY);
                     }
                     prehook::OnErrorPolicy::Warn => {
+                        tracing::info!(backend=%dispatcher.cfg.backend, decision="error_warn", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), error=%format!("{e:#}"), "prehook");
                         eprintln!("Warning: prehook error: {e:#}");
                     }
                     prehook::OnErrorPolicy::Skip => {
+                        tracing::info!(backend=%dispatcher.cfg.backend, decision="error_skip", duration_ms, correlation_id=%ctx.id, tool=%dispatcher.cfg.mcp.tool.clone().unwrap_or_default(), error=%format!("{e:#}"), "prehook");
                         // silently continue
                     }
                 }

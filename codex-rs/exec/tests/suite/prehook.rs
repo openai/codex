@@ -23,14 +23,19 @@ fn write_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::Pat
 #[tokio::test(flavor = "current_thread")]
 async fn prehook_script_deny_exits_10() {
     let test = test_codex_exec();
-    let script = write_script(test.cwd_path(), "deny.sh", "cat >/dev/null; printf '%s\n' '{\"decision\":\"deny\",\"reason\":\"nope\"}'");
+    let script = write_script(
+        test.cwd_path(),
+        "deny.sh",
+        "cat >/dev/null; printf '%s\n' '{\"decision\":\"deny\",\"reason\":\"nope\"}'",
+    );
 
-    test
-        .cmd()
+    test.cmd()
         .arg("--skip-git-repo-check")
         .arg("--prehook-enabled")
-        .arg("--prehook-backend").arg("script")
-        .arg("--prehook-script").arg(script)
+        .arg("--prehook-backend")
+        .arg("script")
+        .arg("--prehook-script")
+        .arg(script)
         .arg("hello")
         .assert()
         .code(10);
@@ -39,14 +44,19 @@ async fn prehook_script_deny_exits_10() {
 #[tokio::test(flavor = "current_thread")]
 async fn prehook_script_rate_limit_exits_14() {
     let test = test_codex_exec();
-    let script = write_script(test.cwd_path(), "rl.sh", "cat >/dev/null; printf '%s\n' '{\"decision\":\"rate_limit\",\"retry_after_ms\":1234}'");
+    let script = write_script(
+        test.cwd_path(),
+        "rl.sh",
+        "cat >/dev/null; printf '%s\n' '{\"decision\":\"rate_limit\",\"retry_after_ms\":1234}'",
+    );
 
-    test
-        .cmd()
+    test.cmd()
         .arg("--skip-git-repo-check")
         .arg("--prehook-enabled")
-        .arg("--prehook-backend").arg("script")
-        .arg("--prehook-script").arg(script)
+        .arg("--prehook-backend")
+        .arg("script")
+        .arg("--prehook-script")
+        .arg(script)
         .arg("hello")
         .assert()
         .code(14);
@@ -55,16 +65,20 @@ async fn prehook_script_rate_limit_exits_14() {
 #[tokio::test(flavor = "current_thread")]
 async fn prehook_script_defer_exits_13_in_exec() {
     let test = test_codex_exec();
-    let script = write_script(test.cwd_path(), "defer.sh", "cat >/dev/null; printf '%s\n' '{\"decision\":\"defer\"}'");
+    let script = write_script(
+        test.cwd_path(),
+        "defer.sh",
+        "cat >/dev/null; printf '%s\n' '{\"decision\":\"defer\"}'",
+    );
 
-    test
-        .cmd()
+    test.cmd()
         .arg("--skip-git-repo-check")
         .arg("--prehook-enabled")
-        .arg("--prehook-backend").arg("script")
-        .arg("--prehook-script").arg(script)
+        .arg("--prehook-backend")
+        .arg("script")
+        .arg("--prehook-script")
+        .arg(script)
         .arg("hello")
         .assert()
         .code(13);
 }
-

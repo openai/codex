@@ -3,15 +3,15 @@ use anyhow::Result;
 use anyhow::anyhow;
 use serde::Deserialize;
 use serde::Serialize;
+use std::io::IsTerminal;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use tokio::process::Command;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use tracing::warn;
-use std::io::IsTerminal;
 use uuid::Uuid;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 
 /// What to do when the prehook backend errors (unreachable, bad JSON, timeout, etc.).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -294,7 +294,9 @@ impl PreHook for ScriptPreHook {
             #[cfg(unix)]
             {
                 cmd_builder.pre_exec(|| {
-                    unsafe { libc::setpgid(0, 0); }
+                    unsafe {
+                        libc::setpgid(0, 0);
+                    }
                     Ok(())
                 });
             }
@@ -328,7 +330,9 @@ impl PreHook for ScriptPreHook {
             Err(_) => {
                 #[cfg(unix)]
                 if let Some(pid) = child.id() {
-                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+                    unsafe {
+                        libc::kill(-(pid as i32), libc::SIGKILL);
+                    }
                 }
                 let _ = child.kill().await;
                 return self.handle_err(anyhow!("prehook script timed out"));
@@ -345,7 +349,8 @@ impl PreHook for ScriptPreHook {
         // Basic caps/validation
         match &parsed {
             Outcome::RateLimit { retry_after_ms, .. } if *retry_after_ms > 300_000 => {
-                return self.handle_err(anyhow!("rate_limit.retry_after_ms too large (>300000 ms)"));
+                return self
+                    .handle_err(anyhow!("rate_limit.retry_after_ms too large (>300000 ms)"));
             }
             Outcome::Augment { context_items, .. } if context_items.len() > 128 => {
                 return self.handle_err(anyhow!("augment.context_items too long (>128)"));
@@ -466,18 +471,24 @@ impl PreHook for McpPreHook {
                     if tc.text.len() <= 64 * 1024 {
                         if let Ok(outcome) = serde_json::from_str::<Outcome>(&tc.text) {
                             match &outcome {
-                                Outcome::RateLimit { retry_after_ms, .. } if *retry_after_ms > 300_000 => {
-                                    return Err(anyhow!("rate_limit.retry_after_ms too large (>300000 ms)"));
+                                Outcome::RateLimit { retry_after_ms, .. }
+                                    if *retry_after_ms > 300_000 =>
+                                {
+                                    return Err(anyhow!(
+                                        "rate_limit.retry_after_ms too large (>300000 ms)"
+                                    ));
                                 }
-                                Outcome::Augment { context_items, .. } if context_items.len() > 128 => {
+                                Outcome::Augment { context_items, .. }
+                                    if context_items.len() > 128 =>
+                                {
                                     return Err(anyhow!("augment.context_items too long (>128)"));
                                 }
                                 _ => {}
                             }
-                        warn!(
-                            "prehook(mcp): parsed Outcome from text block fallback; prefer structured_content JSON"
-                        );
-                        return Ok(outcome);
+                            warn!(
+                                "prehook(mcp): parsed Outcome from text block fallback; prefer structured_content JSON"
+                            );
+                            return Ok(outcome);
                         }
                     }
                 }
