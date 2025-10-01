@@ -5,4 +5,6 @@ export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 export type TurnOptions = {
   model?: string;
   sandboxMode?: SandboxMode;
+  workingDirectory?: string;
+  skipGitRepoCheck?: boolean;
 };

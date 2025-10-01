@@ -12,8 +12,14 @@ export type CodexExecArgs = {
   baseUrl?: string;
   apiKey?: string;
   threadId?: string | null;
+  // --model
   model?: string;
+  // --sandbox
   sandboxMode?: SandboxMode;
+  // --cd
+  workingDirectory?: string;
+  // --skip-git-repo-check
+  skipGitRepoCheck?: boolean;
 };
 
 export class CodexExec {
@@ -33,11 +39,17 @@ export class CodexExec {
       commandArgs.push("--sandbox", args.sandboxMode);
     }
 
-    if (args.threadId) {
-      commandArgs.push("resume", args.threadId, args.input);
-    } else {
-      commandArgs.push(args.input);
+    if (args.workingDirectory) {
+      commandArgs.push("--cd", args.workingDirectory);
     }
+
+    if (args.skipGitRepoCheck) {
+      commandArgs.push("--skip-git-repo-check");
+    }
+
+    if (args.threadId) {
+      commandArgs.push("resume", args.threadId);
+    } 
 
     const env = {
       ...process.env,
@@ -55,10 +67,24 @@ export class CodexExec {
 
     let spawnError: unknown | null = null;
     child.once("error", (err) => (spawnError = err));
+    
+    if (!child.stdin) {
+      child.kill();
+      throw new Error("Child process has no stdin");
+    }
+    child.stdin.write(args.input);
+    child.stdin.end();
 
     if (!child.stdout) {
       child.kill();
       throw new Error("Child process has no stdout");
+    }
+    const stderrChunks: Buffer[] = [];
+
+    if (child.stderr) {
+      child.stderr.on("data", (data) => {
+        stderrChunks.push(data);
+      });
     }
 
     const rl = readline.createInterface({
@@ -72,12 +98,13 @@ export class CodexExec {
         yield line as string;
       }
 
-      const exitCode = new Promise((resolve) => {
-        child.once("exit", (code) => { 
+      const exitCode = new Promise((resolve, reject) => {
+        child.once("exit", (code) => {
           if (code === 0) {
             resolve(code);
           } else {
-            throw new Error(`Codex Exec exited with code ${code}`);
+            const stderrBuffer = Buffer.concat(stderrChunks);
+            reject(new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString('utf8')}`));
           }
         });
       });
