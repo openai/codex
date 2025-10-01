@@ -262,9 +262,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         help.push(": Apply  ".dim());
     }
     help.push("o : Set Env  ".dim());
-    help.push("Ctrl+N".dim());
-    help.push(format!(": Attempts {}x  ", app.best_of_n).dim());
     if app.new_task.is_some() {
+        help.push("Ctrl+N".dim());
+        help.push(format!(": Attempts {}x  ", app.best_of_n).dim());
         help.push("(editing new task)  ".dim());
     } else {
         help.push("n : New Task  ".dim());
@@ -1004,32 +1004,40 @@ pub fn draw_best_of_modal(frame: &mut Frame, area: Rect, app: &mut App) {
     use ratatui::widgets::Wrap;
 
     let inner = overlay_outer(area);
+    const MAX_WIDTH: u16 = 40;
+    const MIN_WIDTH: u16 = 20;
+    const MAX_HEIGHT: u16 = 12;
+    const MIN_HEIGHT: u16 = 6;
+    let modal_width = inner.width.min(MAX_WIDTH).max(inner.width.min(MIN_WIDTH));
+    let modal_height = inner
+        .height
+        .min(MAX_HEIGHT)
+        .max(inner.height.min(MIN_HEIGHT));
+    let modal_x = inner.x + (inner.width.saturating_sub(modal_width)) / 2;
+    let modal_y = inner.y + (inner.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
     let title = Line::from(vec!["Parallel Attempts".magenta().bold()]);
     let block = overlay_block().title(title);
 
-    frame.render_widget(Clear, inner);
-    frame.render_widget(block.clone(), inner);
-    let content = overlay_content(inner);
+    frame.render_widget(Clear, modal_area);
+    frame.render_widget(block.clone(), modal_area);
+    let content = overlay_content(modal_area);
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
         .split(content);
 
-    let hint = Paragraph::new(Line::from(
-        "Use ↑/↓ to choose, 1-4 jump; Enter confirm, Esc cancel"
-            .cyan()
-            .dim(),
-    ))
-    .wrap(Wrap { trim: true });
+    let hint = Paragraph::new(Line::from("Use ↑/↓ to choose, 1-4 jump".cyan().dim()))
+        .wrap(Wrap { trim: true });
     frame.render_widget(hint, rows[0]);
 
     let selected = app.best_of_modal.as_ref().map(|m| m.selected).unwrap_or(0);
     let options = [1usize, 2, 3, 4];
     let mut items: Vec<ListItem> = Vec::new();
     for &attempts in &options {
-        let mut spans: Vec<ratatui::text::Span> =
-            vec![format!("{attempts} attempt{}", if attempts == 1 { "" } else { "s" }).into()];
+        let noun = if attempts == 1 { "attempt" } else { "attempts" };
+        let mut spans: Vec<ratatui::text::Span> = vec![format!("{attempts} {noun:<8}").into()];
         spans.push("  ".into());
         spans.push(format!("{attempts}x parallel").dim());
         if attempts == app.best_of_n {

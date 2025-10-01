@@ -1,9 +1,9 @@
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_app_server_protocol::AuthMode;
+use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::mcp_protocol::AuthMode;
-use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InputItem;

@@ -30,7 +30,7 @@ use tokio::io::AsyncReadExt;
 use crate::config::Config;
 use crate::config_types::HistoryPersistence;
 
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]

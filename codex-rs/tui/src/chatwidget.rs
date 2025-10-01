@@ -41,7 +41,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -256,6 +256,8 @@ pub(crate) struct ChatWidget {
     ghost_snapshots_disabled: bool,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
+
+    last_rendered_width: std::cell::Cell<Option<usize>>,
 }
 
 struct UserMessage {
@@ -394,8 +396,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        if info.is_some() {
-            self.token_info = info;
+        if let Some(info) = info {
+            let context_window = info
+                .model_context_window
+                .or(self.config.model_context_window);
+            let percent = context_window.map(|window| {
+                info.last_token_usage
+                    .percent_of_context_window_remaining(window)
+            });
+            self.bottom_pane.set_context_window_percent(percent);
+            self.token_info = Some(info);
         }
     }
 
@@ -658,7 +668,10 @@ impl ChatWidget {
                 self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
                 self.needs_final_message_separator = false;
             }
-            self.stream_controller = Some(StreamController::new(self.config.clone()));
+            self.stream_controller = Some(StreamController::new(
+                self.config.clone(),
+                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
+            ));
         }
         if let Some(controller) = self.stream_controller.as_mut()
             && controller.push(&delta)
@@ -912,6 +925,7 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            last_rendered_width: std::cell::Cell::new(None),
         }
     }
 
@@ -974,6 +988,7 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            last_rendered_width: std::cell::Cell::new(None),
         }
     }
 
@@ -1447,7 +1462,7 @@ impl ChatWidget {
                 } else {
                     // Show explanation when there are no structured findings.
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
-                    append_markdown(&explanation, &mut rendered, &self.config);
+                    append_markdown(&explanation, None, &mut rendered, &self.config);
                     let body_cell = AgentMessageCell::new(rendered, false);
                     self.app_event_tx
                         .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
@@ -1456,7 +1471,7 @@ impl ChatWidget {
                 let message_text =
                     codex_core::review_format::format_review_findings_block(&output.findings, None);
                 let mut message_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-                append_markdown(&message_text, &mut message_lines, &self.config);
+                append_markdown(&message_text, None, &mut message_lines, &self.config);
                 let body_cell = AgentMessageCell::new(message_lines, true);
                 self.app_event_tx
                     .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
@@ -1548,16 +1563,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_status_output(&mut self) {
-        let default_usage;
-        let usage_ref = if let Some(ti) = &self.token_info {
-            &ti.total_token_usage
+        let default_usage = TokenUsage::default();
+        let (total_usage, context_usage) = if let Some(ti) = &self.token_info {
+            (&ti.total_token_usage, Some(&ti.last_token_usage))
         } else {
-            default_usage = TokenUsage::default();
-            &default_usage
+            (&default_usage, Some(&default_usage))
         };
         self.add_to_history(crate::status::new_status_output(
             &self.config,
-            usage_ref,
+            total_usage,
+            context_usage,
             &self.conversation_id,
             self.rate_limit_snapshot.as_ref(),
         ));
@@ -1998,6 +2013,7 @@ impl WidgetRef for &ChatWidget {
                 tool.render_ref(area, buf);
             }
         }
+        self.last_rendered_width.set(Some(area.width as usize));
     }
 }
 

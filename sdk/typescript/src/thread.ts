@@ -10,10 +10,16 @@ export type Turn = {
   finalResponse: string;
 };
 
+/** Alias for `Turn` to describe the result of `run()`. */
+export type RunResult = Turn;
+
 /** The result of the `runStreamed` method. */
 export type StreamedTurn = {
   events: AsyncGenerator<ThreadEvent>;
 };
+
+/** Alias for `StreamedTurn` to describe the result of `runStreamed()`. */
+export type RunStreamedResult = StreamedTurn;
 
 /** An input to send to the agent. */
 export type Input = string;
@@ -51,6 +57,8 @@ export class Thread {
       threadId: this._id,
       model: options?.model,
       sandboxMode: options?.sandboxMode,
+      workingDirectory: options?.workingDirectory,
+      skipGitRepoCheck: options?.skipGitRepoCheck,
     });
     for await (const item of generator) {
       let parsed: ThreadEvent;
