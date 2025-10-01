@@ -244,6 +244,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             repo_root: codex_core::git_info::get_git_repo_root(&config.cwd),
             relpath: None,
             task_metadata: None,
+            correlation_id: None,
+            tty: Some(std::io::stdout().is_terminal()),
+            ci: Some(std::env::var("CI").is_ok()),
+            dry_run: Some(false),
+            sanitized_env: std::collections::HashMap::new(),
         };
         let dispatcher = prehook::PreHookDispatcher::new(cfg);
         match dispatcher.run(&ctx).await {

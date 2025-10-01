@@ -8,7 +8,10 @@ use tokio::process::Command;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use tracing::warn;
+use std::io::IsTerminal;
 use uuid::Uuid;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 /// What to do when the prehook backend errors (unreachable, bad JSON, timeout, etc.).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,6 +68,16 @@ pub struct Context {
     pub repo_root: Option<PathBuf>,
     pub relpath: Option<PathBuf>,
     pub task_metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    pub correlation_id: Option<String>,
+    #[serde(default)]
+    pub tty: Option<bool>,
+    #[serde(default)]
+    pub ci: Option<bool>,
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    #[serde(default)]
+    pub sanitized_env: std::collections::HashMap<String, String>,
 }
 
 impl Context {
@@ -82,6 +95,11 @@ impl Context {
             repo_root: None,
             relpath: None,
             task_metadata: None,
+            correlation_id: None,
+            tty: Some(std::io::stdout().is_terminal()),
+            ci: Some(std::env::var("CI").is_ok()),
+            dry_run: Some(false),
+            sanitized_env: default_sanitized_env(),
         }
     }
 }
@@ -238,8 +256,15 @@ fn default_sanitized_env() -> std::collections::HashMap<String, String> {
     }
     for drop in [
         "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "GITLAB_TOKEN",
+        "OPENAI_API_KEY",
+        "HUGGINGFACE_HUB_TOKEN",
+        "HONEYCOMB_API_KEY",
+        "SENTRY_DSN",
         "SLACK_WEBHOOK_URL",
         "GOOGLE_APPLICATION_CREDENTIALS",
+        "DATABASE_URL",
     ] {
         out.remove(drop);
     }
@@ -257,12 +282,24 @@ impl PreHook for ScriptPreHook {
             });
         };
         let payload = serde_json::to_vec(ctx)?;
-        let mut child = Command::new(cmd)
+        let mut cmd_builder = Command::new(cmd);
+        cmd_builder
             .args(&self.cfg.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .env_clear()
-            .envs(default_sanitized_env())
+            .envs(default_sanitized_env());
+        #[cfg(unix)]
+        unsafe {
+            #[cfg(unix)]
+            {
+                cmd_builder.pre_exec(|| {
+                    unsafe { libc::setpgid(0, 0); }
+                    Ok(())
+                });
+            }
+        }
+        let mut child = cmd_builder
             .spawn()
             .with_context(|| format!("failed to spawn prehook script {cmd}"))?;
         {
@@ -290,11 +327,8 @@ impl PreHook for ScriptPreHook {
             Ok(Err(e)) => return self.handle_err(anyhow!(e)),
             Err(_) => {
                 #[cfg(unix)]
-                {
-                    // Best-effort attempt to kill the process group
-                    unsafe {
-                        libc::kill(0, libc::SIGKILL);
-                    }
+                if let Some(pid) = child.id() {
+                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
                 }
                 let _ = child.kill().await;
                 return self.handle_err(anyhow!("prehook script timed out"));
@@ -308,6 +342,16 @@ impl PreHook for ScriptPreHook {
         }
         let parsed: Outcome = serde_json::from_slice(&out.stdout)
             .map_err(|e| anyhow!("invalid prehook JSON: {e}"))?;
+        // Basic caps/validation
+        match &parsed {
+            Outcome::RateLimit { retry_after_ms, .. } if *retry_after_ms > 300_000 => {
+                return self.handle_err(anyhow!("rate_limit.retry_after_ms too large (>300000 ms)"));
+            }
+            Outcome::Augment { context_items, .. } if context_items.len() > 128 => {
+                return self.handle_err(anyhow!("augment.context_items too long (>128)"));
+            }
+            _ => {}
+        }
         Ok(parsed)
     }
 }
@@ -405,20 +449,40 @@ impl PreHook for McpPreHook {
             if let Some(v) = res.structured_content {
                 let outcome: Outcome = serde_json::from_value(v)
                     .map_err(|e| anyhow!("invalid MCP outcome JSON: {e}"))?;
+                match &outcome {
+                    Outcome::RateLimit { retry_after_ms, .. } if *retry_after_ms > 300_000 => {
+                        return Err(anyhow!("rate_limit.retry_after_ms too large (>300000 ms)"));
+                    }
+                    Outcome::Augment { context_items, .. } if context_items.len() > 128 => {
+                        return Err(anyhow!("augment.context_items too long (>128)"));
+                    }
+                    _ => {}
+                }
                 return Ok(outcome);
             }
             // Fallback: try to parse the first text content block as JSON
             for block in res.content {
                 if let mcp_types::ContentBlock::TextContent(tc) = block {
-                    if let Ok(outcome) = serde_json::from_str::<Outcome>(&tc.text) {
+                    if tc.text.len() <= 64 * 1024 {
+                        if let Ok(outcome) = serde_json::from_str::<Outcome>(&tc.text) {
+                            match &outcome {
+                                Outcome::RateLimit { retry_after_ms, .. } if *retry_after_ms > 300_000 => {
+                                    return Err(anyhow!("rate_limit.retry_after_ms too large (>300000 ms)"));
+                                }
+                                Outcome::Augment { context_items, .. } if context_items.len() > 128 => {
+                                    return Err(anyhow!("augment.context_items too long (>128)"));
+                                }
+                                _ => {}
+                            }
                         warn!(
                             "prehook(mcp): parsed Outcome from text block fallback; prefer structured_content JSON"
                         );
                         return Ok(outcome);
+                        }
                     }
                 }
             }
-            Err(anyhow!("MCP tool did not return structuredOutcome JSON"))
+            Err(anyhow!("MCP tool did not return structured_content JSON"))
         };
 
         match timeout(call_tmo, fut).await {
