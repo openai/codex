@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,6 +8,8 @@ use codex_core::config::Config;
 use codex_core::config_types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
+use codex_core::project_doc::discover_project_doc_paths;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -258,6 +261,7 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+    fallback_doc_warning_shown: bool,
 }
 
 struct UserMessage {
@@ -291,6 +295,73 @@ impl ChatWidget {
         }
     }
 
+    fn maybe_show_project_doc_fallback_warning(&mut self) {
+        if self.fallback_doc_warning_shown {
+            return;
+        }
+
+        if self.config.project_doc_max_bytes == 0 {
+            self.fallback_doc_warning_shown = true;
+            return;
+        }
+
+        let paths = match discover_project_doc_paths(&self.config) {
+            Ok(paths) => paths,
+            Err(_) => {
+                self.fallback_doc_warning_shown = true;
+                return;
+            }
+        };
+
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut fallback_names: Vec<String> = Vec::new();
+
+        for path in paths {
+            if let Some(name) = path.file_name().and_then(|os| os.to_str()) {
+                if name == DEFAULT_PROJECT_DOC_FILENAME {
+                    continue;
+                }
+                let name = name.to_string();
+                if seen.insert(name.clone()) {
+                    fallback_names.push(name);
+                }
+            }
+        }
+
+        self.fallback_doc_warning_shown = true;
+
+        if fallback_names.is_empty() {
+            return;
+        }
+
+        let label = if fallback_names.len() == 1 {
+            "file"
+        } else {
+            "files"
+        };
+        let formatted = Self::format_fallback_name_list(&fallback_names);
+        let message = format!(
+            "Loaded project instructions from fallback {label} {formatted}. Migrate instructions to AGENTS.md; other filenames may reduce model performance."
+        );
+
+        self.add_to_history(history_cell::new_warning_event(message));
+        self.request_redraw();
+    }
+
+    fn format_fallback_name_list(names: &[String]) -> String {
+        match names.len() {
+            0 => String::new(),
+            1 => names[0].clone(),
+            2 => format!("{} and {}", names[0], names[1]),
+            _ => {
+                let mut result = names[..names.len() - 1].join(", ");
+                result.push_str(", and ");
+                result.push_str(&names[names.len() - 1]);
+                result
+            }
+        }
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
@@ -304,6 +375,7 @@ impl ChatWidget {
             event,
             self.show_welcome_banner,
         ));
+        self.maybe_show_project_doc_fallback_warning();
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -918,6 +990,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            fallback_doc_warning_shown: false,
         }
     }
 
@@ -981,6 +1054,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            fallback_doc_warning_shown: false,
         }
     }
 
