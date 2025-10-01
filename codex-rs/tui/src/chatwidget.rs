@@ -396,8 +396,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
-        if info.is_some() {
-            self.token_info = info;
+        if let Some(info) = info {
+            let context_window = info
+                .model_context_window
+                .or(self.config.model_context_window);
+            let percent = context_window.map(|window| {
+                info.total_token_usage
+                    .percent_of_context_window_remaining(window)
+            });
+            self.bottom_pane.set_context_window_percent(percent);
+            self.token_info = Some(info);
         }
     }
 
