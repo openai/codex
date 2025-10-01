@@ -22,7 +22,8 @@ export type {
   ErrorItem,
 } from "./items";
 
-export { Thread, RunResult, RunStreamedResult, Input } from "./thread";
+export { Thread } from "./thread";
+export type { RunResult, RunStreamedResult, Input } from "./thread";
 
 export { Codex } from "./codex";
 

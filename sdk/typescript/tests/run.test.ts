@@ -218,7 +218,6 @@ describe("Codex", () => {
       await close();
     }
   });
-
   it("runs in provided working directory", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
@@ -286,7 +285,6 @@ describe("Codex", () => {
     }
   });
 });
-
 function expectPair(args: string[] | undefined, pair: [string, string]) {
   if (!args) {
     throw new Error("Args is undefined");
