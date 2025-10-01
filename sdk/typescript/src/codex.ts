@@ -7,11 +7,7 @@ export class Codex {
   private options: CodexOptions;
 
   constructor(options: CodexOptions) {
-    if (!options.executablePath) {
-      throw new Error("executablePath is required");
-    }
-
-    this.exec = new CodexExec(options.executablePath);
+    this.exec = new CodexExec(options.codexPathOverride);
     this.options = options;
   }
 
