@@ -96,8 +96,8 @@ export class CodexExec {
   }
 }
 
-const script_filename = fileURLToPath(import.meta.url);
-const script_dirname = path.dirname(script_filename);
+const scriptFileName = fileURLToPath(import.meta.url);
+const scriptDirName = path.dirname(scriptFileName);
 
 function findCodexPath() {
   const { platform, arch } = process;
@@ -149,7 +149,7 @@ function findCodexPath() {
     throw new Error(`Unsupported platform: ${platform} (${arch})`);
   }
 
-  const vendorRoot = path.join(script_dirname, "..", "vendor");
+  const vendorRoot = path.join(scriptDirName, "..", "vendor");
   const archRoot = path.join(vendorRoot, targetTriple);
   const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
   const binaryPath = path.join(archRoot, "codex", codexBinaryName);

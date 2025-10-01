@@ -1,6 +1,5 @@
 export type CodexOptions = {
-  /* @internal */
-  _executablePathOverride?: string;
+  codexPathOverride?: string;
   baseUrl?: string;
   apiKey?: string;
 };

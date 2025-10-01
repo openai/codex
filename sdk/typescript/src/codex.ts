@@ -7,7 +7,7 @@ export class Codex {
   private options: CodexOptions;
 
   constructor(options: CodexOptions) {
-    this.exec = new CodexExec(options._executablePathOverride);
+    this.exec = new CodexExec(options.codexExecPathOverride);
     this.options = options;
   }
 
