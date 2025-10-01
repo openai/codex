@@ -1,5 +1,6 @@
 import path from "path";
 
+import { codexExecSpy } from "./codexExecSpy";
 import { describe, expect, it } from "@jest/globals";
 
 import { Codex } from "../src/codex";
@@ -22,7 +23,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       const result = await thread.run("Hello, world!");
@@ -59,7 +60,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       await thread.run("first input");
@@ -71,6 +72,52 @@ describe("Codex", () => {
       expect(secondRequest).toBeDefined();
       const payload = secondRequest!.json;
 
+      const assistantEntry = payload.input.find(
+        (entry: { role: string }) => entry.role === "assistant",
+      );
+      expect(assistantEntry).toBeDefined();
+      const assistantText = assistantEntry?.content?.find(
+        (item: { type: string; text: string }) => item.type === "output_text",
+      )?.text;
+      expect(assistantText).toBe("First response");
+    } finally {
+      await close();
+    }
+  });
+
+  it("continues the thread when run is called twice with options", async () => {
+    const { url, close, requests } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("First response", "item_1"),
+          responseCompleted("response_1"),
+        ),
+        sse(
+          responseStarted("response_2"),
+          assistantMessage("Second response", "item_2"),
+          responseCompleted("response_2"),
+        ),
+      ],
+    });
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run("first input");
+      await thread.run("second input", {
+        model: "gpt-test-1",
+      });
+
+      // Check second request continues the same thread
+      expect(requests.length).toBeGreaterThanOrEqual(2);
+      const secondRequest = requests[1];
+      expect(secondRequest).toBeDefined();
+      const payload = secondRequest!.json;
+
+      expect(payload.model).toBe("gpt-test-1");
       const assistantEntry = payload.input.find(
         (entry: { role: string }) => entry.role === "assistant",
       );
@@ -102,7 +149,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const originalThread = client.startThread();
       await originalThread.run("first input");
@@ -130,4 +177,56 @@ describe("Codex", () => {
       await close();
     }
   });
+
+  it("passes turn options to exec", async () => {
+    const { url, close, requests } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Turn options applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run("apply options", {
+        model: "gpt-test-1",
+        sandboxMode: "workspace-write",
+      });
+
+      const payload = requests[0];
+      expect(payload).toBeDefined();
+      const json = payload!.json as { model?: string } | undefined;
+
+      expect(json?.model).toBe("gpt-test-1");
+      expect(spawnArgs.length).toBeGreaterThan(0);
+      const commandArgs = spawnArgs[0];
+
+      expectPair(commandArgs, ["--sandbox", "workspace-write"]);
+      expectPair(commandArgs, ["--model", "gpt-test-1"]);
+  
+    } finally {
+      restore();
+      await close();
+    }
+  });
 });
+
+
+function expectPair(args: string[] | undefined, pair: [string, string]) {
+  if (!args) {
+    throw new Error("Args is undefined");
+  }
+  const index = args.indexOf(pair[0]);
+  if (index === -1) {
+    throw new Error(`Pair ${pair[0]} not found in args`);
+  }
+  expect(args[index + 1]).toBe(pair[1]);
+}

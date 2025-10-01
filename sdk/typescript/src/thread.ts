@@ -2,6 +2,7 @@ import { CodexOptions } from "./codexOptions";
 import { ThreadEvent } from "./events";
 import { CodexExec } from "./exec";
 import { ThreadItem } from "./items";
+import { TurnOptions } from "./turnOptions";
 
 export type RunResult = {
   items: ThreadItem[];
@@ -25,16 +26,21 @@ export class Thread {
     this.id = id;
   }
 
-  async runStreamed(input: string): Promise<RunStreamedResult> {
-    return { events: this.runStreamedInternal(input) };
+  async runStreamed(input: string, options?: TurnOptions): Promise<RunStreamedResult> {
+    return { events: this.runStreamedInternal(input, options) };
   }
 
-  private async *runStreamedInternal(input: string): AsyncGenerator<ThreadEvent> {
+  private async *runStreamedInternal(
+    input: string,
+    options?: TurnOptions,
+  ): AsyncGenerator<ThreadEvent> {
     const generator = this.exec.run({
       input,
       baseUrl: this.options.baseUrl,
       apiKey: this.options.apiKey,
       threadId: this.id,
+      model: options?.model,
+      sandboxMode: options?.sandboxMode,
     });
     for await (const item of generator) {
       const parsed = JSON.parse(item) as ThreadEvent;
@@ -45,8 +51,8 @@ export class Thread {
     }
   }
 
-  async run(input: string): Promise<RunResult> {
-    const generator = this.runStreamedInternal(input);
+  async run(input: string, options?: TurnOptions): Promise<RunResult> {
+    const generator = this.runStreamedInternal(input, options);
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
     for await (const event of generator) {
