@@ -228,7 +228,7 @@ fn context_window_line(percent: Option<u8>) -> Line<'static> {
             spans.push(" context left".dim());
         }
         None => {
-            spans.push("context usage unavailable".dim());
+            spans.push("? for shortcuts".dim());
         }
     }
     Line::from(spans)
