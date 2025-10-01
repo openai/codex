@@ -11,14 +11,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::account::StatusAccountDisplay;
 
-#[cfg(windows)]
 fn normalize_agents_display_path(path: &Path) -> String {
     dunce::simplified(path).display().to_string()
-}
-
-#[cfg(not(windows))]
-fn normalize_agents_display_path(path: &Path) -> String {
-    path.display().to_string()
 }
 
 pub(crate) fn compose_model_display(
