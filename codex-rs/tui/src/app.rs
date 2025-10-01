@@ -16,7 +16,7 @@ use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -451,7 +451,7 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
     use codex_core::protocol::SessionConfiguredEvent;
-    use codex_protocol::mcp_protocol::ConversationId;
+    use codex_protocol::ConversationId;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;

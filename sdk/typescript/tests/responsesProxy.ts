@@ -25,6 +25,7 @@ export type ResponsesProxy = {
 };
 
 export type ResponsesApiRequest = {
+  model?: string;
   input: Array<{
     role: string;
     content?: Array<{ type: string; text: string }>;

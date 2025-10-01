@@ -9,8 +9,7 @@ path = "lib.rs"
 [dependencies]
 anyhow = { workspace = true }
 assert_cmd = { workspace = true }
-codex-protocol = { workspace = true }
-mcp-types = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [

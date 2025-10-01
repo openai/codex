@@ -3,6 +3,7 @@ members = [
     "backend-client",
     "ansi-escape",
     "app-server",
+    "app-server-protocol",
     "apply-patch",
     "arg0",
     "codex-backend-openapi-models",
@@ -48,6 +49,7 @@ edition = "2024"
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-app-server = { path = "app-server" }
+codex-app-server-protocol = { path = "app-server-protocol" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-chatgpt = { path = "chatgpt" }
@@ -125,6 +127,7 @@ opentelemetry-semantic-conventions = "0.30.0"
 opentelemetry_sdk = "0.30.0"
 os_info = "3.12.0"
 owo-colors = "4.2.0"
+paste = "1.0.15"
 path-absolutize = "3.1.1"
 path-clean = "1.0.1"
 pathdiff = "0.2"

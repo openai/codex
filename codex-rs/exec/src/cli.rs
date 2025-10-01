@@ -64,19 +64,8 @@ pub struct Cli {
     pub color: Color,
 
     /// Print events to stdout as JSONL.
-    #[arg(
-        long = "json",
-        default_value_t = false,
-        conflicts_with = "experimental_json"
-    )]
+    #[arg(long = "json", alias = "experimental-json", default_value_t = false)]
     pub json: bool,
-
-    #[arg(
-        long = "experimental-json",
-        default_value_t = false,
-        conflicts_with = "json"
-    )]
-    pub experimental_json: bool,
 
     /// Whether to include the plan tool in the conversation.
     #[arg(long = "include-plan-tool", default_value_t = false)]

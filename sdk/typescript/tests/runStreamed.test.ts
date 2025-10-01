@@ -23,7 +23,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       const result = await thread.runStreamed("Hello, world!");
@@ -82,7 +82,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       const first = await thread.runStreamed("first input");
@@ -128,7 +128,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const originalThread = client.startThread();
       const first = await originalThread.runStreamed("first input");

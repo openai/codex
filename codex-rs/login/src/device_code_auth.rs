@@ -148,15 +148,14 @@ fn print_colored_warning_device_code() {
 /// Full device code login flow.
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let client = reqwest::Client::new();
-    let auth_base_url = opts.issuer.trim_end_matches('/').to_owned();
+    let auth_base_url = format!("{}/api/accounts", opts.issuer.trim_end_matches('/'));
     print_colored_warning_device_code();
     println!("⏳ Generating a new 9-digit device code for authentication...\n");
     let uc = request_user_code(&client, &auth_base_url, &opts.client_id).await?;
 
     println!(
         "To authenticate, visit: {}/deviceauth/authorize and enter code: {}",
-        opts.issuer.trim_end_matches('/'),
-        uc.user_code
+        auth_base_url, uc.user_code
     );
 
     let code_resp = poll_for_token(

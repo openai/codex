@@ -6,7 +6,7 @@ use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;

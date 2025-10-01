@@ -32,6 +32,8 @@ use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
 use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::bottom_pane::prompt_args::prompt_argument_names;
+use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
@@ -45,6 +47,7 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
+use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
@@ -70,6 +73,16 @@ pub enum InputResult {
 struct AttachedImage {
     placeholder: String,
     path: PathBuf,
+}
+
+enum PromptSelectionMode {
+    Completion,
+    Submit,
+}
+
+enum PromptSelectionAction {
+    Insert { text: String, cursor: Option<usize> },
+    Submit { text: String },
 }
 
 pub(crate) struct ChatComposer {
@@ -449,17 +462,17 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
-                                let name = prompt.name.clone();
-                                let starts_with_cmd = first_line
-                                    .trim_start()
-                                    .starts_with(format!("/{PROMPTS_CMD_PREFIX}:{name}").as_str());
-                                if !starts_with_cmd {
-                                    self.textarea.set_text(
-                                        format!("/{PROMPTS_CMD_PREFIX}:{name} ").as_str(),
-                                    );
-                                }
-                                if !self.textarea.text().is_empty() {
-                                    cursor_target = Some(self.textarea.text().len());
+                                match prompt_selection_action(
+                                    prompt,
+                                    first_line,
+                                    PromptSelectionMode::Completion,
+                                ) {
+                                    PromptSelectionAction::Insert { text, cursor } => {
+                                        let target = cursor.unwrap_or(text.len());
+                                        self.textarea.set_text(&text);
+                                        cursor_target = Some(target);
+                                    }
+                                    PromptSelectionAction::Submit { .. } => {}
                                 }
                             }
                         }
@@ -497,28 +510,21 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
-                                let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
-
-                                if !has_numeric {
-                                    // No placeholders at all: auto-submit the literal content
-                                    self.textarea.set_text("");
-                                    return (InputResult::Submitted(prompt.content.clone()), true);
-                                }
-                                // Numeric placeholders present.
-                                // If the user already typed positional args on the first line,
-                                // expand immediately and submit; otherwise insert "/name " so
-                                // they can type args.
-                                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                                if let Some(expanded) =
-                                    expand_if_numeric_with_positional_args(prompt, first_line)
-                                {
-                                    self.textarea.set_text("");
-                                    return (InputResult::Submitted(expanded), true);
-                                } else {
-                                    let name = prompt.name.clone();
-                                    let text = format!("/{PROMPTS_CMD_PREFIX}:{name} ");
-                                    self.textarea.set_text(&text);
-                                    self.textarea.set_cursor(self.textarea.text().len());
+                                match prompt_selection_action(
+                                    prompt,
+                                    first_line,
+                                    PromptSelectionMode::Submit,
+                                ) {
+                                    PromptSelectionAction::Submit { text } => {
+                                        self.textarea.set_text("");
+                                        return (InputResult::Submitted(text), true);
+                                    }
+                                    PromptSelectionAction::Insert { text, cursor } => {
+                                        let target = cursor.unwrap_or(text.len());
+                                        self.textarea.set_text(&text);
+                                        self.textarea.set_cursor(target);
+                                        return (InputResult::None, true);
+                                    }
                                 }
                             }
                             return (InputResult::None, true);
@@ -932,6 +938,7 @@ impl ChatComposer {
                     return (InputResult::None, true);
                 }
                 let mut text = self.textarea.text().to_string();
+                let original_input = text.clone();
                 self.textarea.set_text("");
 
                 // Replace all pending pastes in the text
@@ -945,13 +952,20 @@ impl ChatComposer {
                 // If there is neither text nor attachments, suppress submission entirely.
                 let has_attachments = !self.attached_images.is_empty();
                 text = text.trim().to_string();
-
-                if let Some(expanded) =
-                    expand_custom_prompt(&text, &self.custom_prompts).unwrap_or_default()
-                {
+                let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
+                    Ok(expanded) => expanded,
+                    Err(err) => {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(err.user_message()),
+                        )));
+                        self.textarea.set_text(&original_input);
+                        self.textarea.set_cursor(original_input.len());
+                        return (InputResult::None, true);
+                    }
+                };
+                if let Some(expanded) = expanded_prompt {
                     text = expanded;
                 }
-
                 if text.is_empty() && !has_attachments {
                     return (InputResult::None, true);
                 }
@@ -1513,6 +1527,54 @@ impl WidgetRef for ChatComposer {
     }
 }
 
+fn prompt_selection_action(
+    prompt: &CustomPrompt,
+    first_line: &str,
+    mode: PromptSelectionMode,
+) -> PromptSelectionAction {
+    let named_args = prompt_argument_names(&prompt.content);
+    let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
+
+    match mode {
+        PromptSelectionMode::Completion => {
+            if !named_args.is_empty() {
+                let (text, cursor) =
+                    prompt_command_with_arg_placeholders(&prompt.name, &named_args);
+                return PromptSelectionAction::Insert {
+                    text,
+                    cursor: Some(cursor),
+                };
+            }
+            if has_numeric {
+                let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
+                return PromptSelectionAction::Insert { text, cursor: None };
+            }
+            let text = format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name);
+            PromptSelectionAction::Insert { text, cursor: None }
+        }
+        PromptSelectionMode::Submit => {
+            if !named_args.is_empty() {
+                let (text, cursor) =
+                    prompt_command_with_arg_placeholders(&prompt.name, &named_args);
+                return PromptSelectionAction::Insert {
+                    text,
+                    cursor: Some(cursor),
+                };
+            }
+            if has_numeric {
+                if let Some(expanded) = expand_if_numeric_with_positional_args(prompt, first_line) {
+                    return PromptSelectionAction::Submit { text: expanded };
+                }
+                let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
+                return PromptSelectionAction::Insert { text, cursor: None };
+            }
+            PromptSelectionAction::Submit {
+                text: prompt.content.clone(),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1528,7 +1590,6 @@ mod tests {
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
-    use crate::bottom_pane::footer::footer_height;
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
@@ -2667,6 +2728,174 @@ mod tests {
     }
 
     #[test]
+    fn custom_prompt_submission_expands_arguments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes on $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text("/prompts:my-prompt USER=Alice BRANCH=main");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            InputResult::Submitted("Review Alice changes on main".to_string()),
+            result
+        );
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_submission_accepts_quoted_values() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Pair $USER with $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text("/prompts:my-prompt USER=\"Alice Smith\" BRANCH=dev-main");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            InputResult::Submitted("Pair Alice Smith with dev-main".to_string()),
+            result
+        );
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_invalid_args_reports_error() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text("/prompts:my-prompt USER=Alice stray");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(
+            "/prompts:my-prompt USER=Alice stray",
+            composer.textarea.text()
+        );
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.contains("expected key=value"));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "expected error history cell to be sent");
+    }
+
+    #[test]
+    fn custom_prompt_missing_required_args_reports_error() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes on $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        // Provide only one of the required args
+        composer.textarea.set_text("/prompts:my-prompt USER=Alice");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("/prompts:my-prompt USER=Alice", composer.textarea.text());
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.to_lowercase().contains("missing required args"));
+                assert!(message.contains("BRANCH"));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(
+            found_error,
+            "expected missing args error history cell to be sent"
+        );
+    }
+
+    #[test]
     fn selecting_custom_prompt_with_args_expands_placeholders() {
         // Support $1..$9 and $ARGUMENTS in prompt content.
         let prompt_text = "Header: $1\nArgs: $ARGUMENTS\nNinth: $9\n";
@@ -2702,6 +2931,37 @@ mod tests {
 
         let expected = "Header: foo\nArgs: foo bar\nNinth: \n".to_string();
         assert_eq!(InputResult::Submitted(expected), result);
+    }
+
+    #[test]
+    fn numeric_prompt_positional_args_does_not_error() {
+        // Ensure that a prompt with only numeric placeholders does not trigger
+        // key=value parsing errors when given positional arguments.
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "elegant".to_string(),
+            path: "/tmp/elegant.md".to_string().into(),
+            content: "Echo: $ARGUMENTS".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        // Type positional args; should submit with numeric expansion, no errors.
+        composer.textarea.set_text("/prompts:elegant hi");
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::Submitted("Echo: hi".to_string()), result);
+        assert!(composer.textarea.is_empty());
     }
 
     #[test]
