@@ -135,7 +135,7 @@ async fn test_list_conversations_latest_first() {
     )
     .unwrap();
 
-    let page = get_conversations(home, 10, None, INTERACTIVE_SESSION_SOURCES)
+    let page = get_conversations(home, 10, None, INTERACTIVE_SESSION_SOURCES, None)
         .await
         .unwrap();
 
@@ -276,7 +276,7 @@ async fn test_pagination_cursor() {
     )
     .unwrap();
 
-    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES)
+    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES, None)
         .await
         .unwrap();
     let p5 = home
@@ -339,6 +339,7 @@ async fn test_pagination_cursor() {
         2,
         page1.next_cursor.as_ref(),
         INTERACTIVE_SESSION_SOURCES,
+        None,
     )
     .await
     .unwrap();
@@ -402,6 +403,7 @@ async fn test_pagination_cursor() {
         2,
         page2.next_cursor.as_ref(),
         INTERACTIVE_SESSION_SOURCES,
+        None,
     )
     .await
     .unwrap();
@@ -446,7 +448,7 @@ async fn test_get_conversation_contents() {
     let ts = "2025-04-01T10-30-00";
     write_session_file(home, ts, uuid, 2, Some(SessionSource::VSCode)).unwrap();
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES)
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES, None)
         .await
         .unwrap();
     let path = &page.items[0].path;
@@ -565,7 +567,7 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
     }
     drop(file);
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES, None).await?;
     let item = page.items.first().expect("conversation item");
     let tail_len = item.tail.len();
     assert_eq!(tail_len, 10usize.min(total_messages));
@@ -648,7 +650,7 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
     }
     drop(file);
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES, None).await?;
     let tail = &page.items.first().expect("conversation item").tail;
 
     assert_eq!(tail.len(), 3);
@@ -747,7 +749,7 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
     writeln!(file, "{}", serde_json::to_string(&shutdown_event)?)?;
     drop(file);
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES, None).await?;
     let tail = &page.items.first().expect("conversation item").tail;
 
     let expected: Vec<serde_json::Value> = (0..4)
@@ -789,7 +791,7 @@ async fn test_stable_ordering_same_second_pagination() {
     write_session_file(home, ts, u2, 0, Some(SessionSource::VSCode)).unwrap();
     write_session_file(home, ts, u3, 0, Some(SessionSource::VSCode)).unwrap();
 
-    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES)
+    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES, None)
         .await
         .unwrap();
 
@@ -845,6 +847,7 @@ async fn test_stable_ordering_same_second_pagination() {
         2,
         page1.next_cursor.as_ref(),
         INTERACTIVE_SESSION_SOURCES,
+        None,
     )
     .await
     .unwrap();

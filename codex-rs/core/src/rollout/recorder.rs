@@ -92,13 +92,15 @@ impl RolloutRecorderParams {
 
 impl RolloutRecorder {
     /// List conversations (rollout files) under the provided Codex home directory.
+    /// If `cwd_filter` is provided, only conversations from that working directory are included.
     pub async fn list_conversations(
         codex_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
         allowed_sources: &[SessionSource],
+        cwd_filter: Option<&Path>,
     ) -> std::io::Result<ConversationsPage> {
-        get_conversations(codex_home, page_size, cursor, allowed_sources).await
+        get_conversations(codex_home, page_size, cursor, allowed_sources, cwd_filter).await
     }
 
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory

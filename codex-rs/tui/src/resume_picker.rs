@@ -51,6 +51,7 @@ struct PageLoadRequest {
     cursor: Option<Cursor>,
     request_token: usize,
     search_token: Option<usize>,
+    cwd_filter: Option<PathBuf>,
 }
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
@@ -66,7 +67,12 @@ enum BackgroundEvent {
 /// Interactive session picker that lists recorded rollout files with simple
 /// search and pagination. Shows the first user input as the preview, relative
 /// time (e.g., "5 seconds ago"), and the absolute path.
-pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<ResumeSelection> {
+/// If `cwd_filter` is provided, only conversations from that directory are shown.
+pub async fn run_resume_picker(
+    tui: &mut Tui,
+    codex_home: &Path,
+    cwd_filter: Option<&Path>,
+) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
 
@@ -79,6 +85,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 INTERACTIVE_SESSION_SOURCES,
+                request.cwd_filter.as_deref(),
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -91,6 +98,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
 
     let mut state = PickerState::new(
         codex_home.to_path_buf(),
+        cwd_filter.map(|p| p.to_path_buf()),
         alt.tui.frame_requester(),
         page_loader,
     );
@@ -154,6 +162,7 @@ impl Drop for AltScreenGuard<'_> {
 
 struct PickerState {
     codex_home: PathBuf,
+    cwd_filter: Option<PathBuf>,
     requester: FrameRequester,
     pagination: PaginationState,
     all_rows: Vec<Row>,
@@ -227,9 +236,15 @@ struct Row {
 }
 
 impl PickerState {
-    fn new(codex_home: PathBuf, requester: FrameRequester, page_loader: PageLoader) -> Self {
+    fn new(
+        codex_home: PathBuf,
+        cwd_filter: Option<PathBuf>,
+        requester: FrameRequester,
+        page_loader: PageLoader,
+    ) -> Self {
         Self {
             codex_home,
+            cwd_filter,
             requester,
             pagination: PaginationState {
                 next_cursor: None,
@@ -331,6 +346,7 @@ impl PickerState {
             PAGE_SIZE,
             None,
             INTERACTIVE_SESSION_SOURCES,
+            self.cwd_filter.as_deref(),
         )
         .await?;
         self.reset_pagination();
@@ -554,6 +570,7 @@ impl PickerState {
             cursor: Some(cursor),
             request_token,
             search_token,
+            cwd_filter: self.cwd_filter.clone(),
         });
     }
 
@@ -1135,8 +1152,12 @@ mod tests {
     #[test]
     fn pageless_scrolling_deduplicates_and_keeps_order() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
 
         state.reset_pagination();
         state.ingest_page(page(
@@ -1197,8 +1218,12 @@ mod tests {
             request_sink.lock().unwrap().push(req);
         });
 
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
         state.reset_pagination();
         state.ingest_page(page(
             vec![
@@ -1222,8 +1247,12 @@ mod tests {
     #[test]
     fn page_navigation_uses_view_rows() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
 
         let mut items = Vec::new();
         for idx in 0..20 {
@@ -1266,8 +1295,12 @@ mod tests {
     #[test]
     fn up_at_bottom_does_not_scroll_when_visible() {
         let loader: PageLoader = Arc::new(|_| {});
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
 
         let mut items = Vec::new();
         for idx in 0..10 {
@@ -1306,8 +1339,12 @@ mod tests {
             request_sink.lock().unwrap().push(req);
         });
 
-        let mut state =
-            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            None,
+            FrameRequester::test_dummy(),
+            loader,
+        );
         state.reset_pagination();
         state.ingest_page(page(
             vec![make_item(
