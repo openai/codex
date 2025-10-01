@@ -1358,7 +1358,9 @@ impl ChatComposer {
                 .find(|(_, c)| c.is_whitespace())
                 .map(|(i, _)| i)
                 .unwrap_or(first_line.len());
-            cursor <= token_end
+            // Keep the popup alive if the caret is still inside the command name, or if the
+            // remainder contains only whitespace (e.g. "/approvals " with the cursor at the end).
+            cursor <= token_end || first_line[token_end..].trim().is_empty()
         } else {
             false
         };
@@ -2232,6 +2234,46 @@ mod tests {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
+        }
+        assert!(composer.textarea.is_empty(), "composer should be cleared");
+    }
+
+    #[test]
+    fn slash_dispatch_with_trailing_space_still_runs_command() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'a', 'p', 'p', 'r', 'o', 'v', 'a', 'l', 's', ' '],
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Command(cmd) => {
+                assert_eq!(cmd.command(), "approvals");
+            }
+            InputResult::Submitted(text) => {
+                panic!(
+                    "expected command dispatch for '/approvals ', but composer submitted literal text: {text}"
+                )
+            }
+            InputResult::None => {
+                panic!("expected Command result for '/approvals '");
+            }
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
