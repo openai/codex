@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn } from "node:child_process";
 
 import readline from "node:readline";
 
@@ -49,7 +49,7 @@ export class CodexExec {
 
     if (args.threadId) {
       commandArgs.push("resume", args.threadId);
-    } 
+    }
 
     const env = {
       ...process.env,
@@ -67,7 +67,7 @@ export class CodexExec {
 
     let spawnError: unknown | null = null;
     child.once("error", (err) => (spawnError = err));
-    
+
     if (!child.stdin) {
       child.kill();
       throw new Error("Child process has no stdin");
@@ -104,7 +104,9 @@ export class CodexExec {
             resolve(code);
           } else {
             const stderrBuffer = Buffer.concat(stderrChunks);
-            reject(new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString('utf8')}`));
+            reject(
+              new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString("utf8")}`),
+            );
           }
         });
       });
