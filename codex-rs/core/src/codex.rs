@@ -19,7 +19,7 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ReviewRequest;
@@ -3301,7 +3301,7 @@ mod tests {
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
-    use codex_protocol::mcp_protocol::AuthMode;
+    use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
 

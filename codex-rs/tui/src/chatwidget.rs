@@ -41,7 +41,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;

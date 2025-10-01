@@ -1,78 +1,26 @@
 use std::collections::HashMap;
-use std::fmt::Display;
 use std::path::PathBuf;
 
-use crate::config_types::ReasoningEffort;
-use crate::config_types::ReasoningSummary;
-use crate::config_types::SandboxMode;
-use crate::config_types::Verbosity;
-use crate::protocol::AskForApproval;
-use crate::protocol::EventMsg;
-use crate::protocol::FileChange;
-use crate::protocol::ReviewDecision;
-use crate::protocol::SandboxPolicy;
-use crate::protocol::TurnAbortReason;
-use mcp_types::JSONRPCNotification;
-use mcp_types::JSONRPCRequest;
-use mcp_types::RequestId;
+use crate::JSONRPCNotification;
+use crate::JSONRPCRequest;
+use crate::RequestId;
+use codex_protocol::ConversationId;
+use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::Verbosity;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnAbortReason;
 use paste::paste;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, TS, Hash)]
-#[ts(type = "string")]
-pub struct ConversationId {
-    uuid: Uuid,
-}
-
-impl ConversationId {
-    pub fn new() -> Self {
-        Self {
-            uuid: Uuid::now_v7(),
-        }
-    }
-
-    pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
-        Ok(Self {
-            uuid: Uuid::parse_str(s)?,
-        })
-    }
-}
-
-impl Default for ConversationId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Display for ConversationId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.uuid)
-    }
-}
-
-impl Serialize for ConversationId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.collect_str(&self.uuid)
-    }
-}
-
-impl<'de> Deserialize<'de> for ConversationId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        let uuid = Uuid::parse_str(&value).map_err(serde::de::Error::custom)?;
-        Ok(Self { uuid })
-    }
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(type = "string")]
@@ -658,31 +606,15 @@ pub enum InputItem {
 /// Generates an `enum ServerRequest` where each variant is a request that the
 /// server can send to the client along with the corresponding params and
 /// response types. It also generates helper types used by the app/server
-/// infrastructure (method constants, payload enum, and export helpers).
+/// infrastructure (payload enum, request constructor, and export helpers).
 macro_rules! server_request_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident => $method:literal
+            $variant:ident
         ),* $(,)?
     ) => {
         paste! {
-            $(pub const [<$variant:snake:upper _METHOD>]: &str = $method;)*
-
-            /// Method names for server-initiated requests (camelCase to match JSON-RPC).
-            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-            pub enum ServerRequestMethod {
-                $( $variant ),*
-            }
-
-            impl ServerRequestMethod {
-                pub const fn as_str(self) -> &'static str {
-                    match self {
-                        $(ServerRequestMethod::$variant => $method,)*
-                    }
-                }
-            }
-
             /// Request initiated from the server and sent to the client.
             #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
             #[serde(tag = "method", rename_all = "camelCase")]
@@ -703,19 +635,7 @@ macro_rules! server_request_definitions {
             }
 
             impl ServerRequestPayload {
-                pub fn method(&self) -> &'static str {
-                    match self {
-                        $(Self::$variant(..) => $method,)*
-                    }
-                }
-
-                pub fn into_params_value(self) -> serde_json::Value {
-                    match self {
-                        $(Self::$variant(params) => serde_json::to_value(params).unwrap_or_default(),)*
-                    }
-                }
-
-                pub fn into_request(self, request_id: RequestId) -> ServerRequest {
+                pub fn request_with_id(self, request_id: RequestId) -> ServerRequest {
                     match self {
                         $(Self::$variant(params) => ServerRequest::$variant { request_id, params },)*
                     }
@@ -744,9 +664,9 @@ impl TryFrom<JSONRPCRequest> for ServerRequest {
 
 server_request_definitions! {
     /// Request to approve a patch.
-    ApplyPatchApproval => "applyPatchApproval",
+    ApplyPatchApproval,
     /// Request to exec a command.
-    ExecCommandApproval => "execCommandApproval",
+    ExecCommandApproval,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -939,12 +859,6 @@ mod tests {
     }
 
     #[test]
-    fn test_conversation_id_default_is_not_zeroes() {
-        let id = ConversationId::default();
-        assert_ne!(id.uuid, Uuid::nil());
-    }
-
-    #[test]
     fn conversation_id_serializes_as_plain_string() -> Result<()> {
         let id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
 
@@ -1011,8 +925,7 @@ mod tests {
         );
 
         let payload = ServerRequestPayload::ExecCommandApproval(params);
-        assert_eq!("execCommandApproval", EXEC_COMMAND_APPROVAL_METHOD);
-        assert_eq!(EXEC_COMMAND_APPROVAL_METHOD, payload.method());
+        assert_eq!(payload.request_with_id(RequestId::Integer(7)), request);
         Ok(())
     }
 }

@@ -5,26 +5,26 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_shell_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::AddConversationListenerParams;
+use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::ExecCommandApprovalParams;
+use codex_app_server_protocol::JSONRPCNotification;
+use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::NewConversationParams;
+use codex_app_server_protocol::NewConversationResponse;
+use codex_app_server_protocol::RemoveConversationListenerParams;
+use codex_app_server_protocol::RemoveConversationSubscriptionResponse;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SendUserMessageParams;
+use codex_app_server_protocol::SendUserMessageResponse;
+use codex_app_server_protocol::SendUserTurnParams;
+use codex_app_server_protocol::SendUserTurnResponse;
+use codex_app_server_protocol::ServerRequest;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_protocol::mcp_protocol::AddConversationListenerParams;
-use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
-use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
-use codex_protocol::mcp_protocol::NewConversationParams;
-use codex_protocol::mcp_protocol::NewConversationResponse;
-use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
-use codex_protocol::mcp_protocol::RemoveConversationSubscriptionResponse;
-use codex_protocol::mcp_protocol::SendUserMessageParams;
-use codex_protocol::mcp_protocol::SendUserMessageResponse;
-use codex_protocol::mcp_protocol::SendUserTurnParams;
-use codex_protocol::mcp_protocol::SendUserTurnResponse;
-use codex_protocol::mcp_protocol::ServerRequest;
-use mcp_types::JSONRPCNotification;
-use mcp_types::JSONRPCResponse;
-use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
 use std::env;
 use tempfile::TempDir;
@@ -116,7 +116,7 @@ async fn test_codex_jsonrpc_conversation_flow() {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![codex_protocol::mcp_protocol::InputItem::Text {
+            items: vec![codex_app_server_protocol::InputItem::Text {
                 text: "text".to_string(),
             }],
         })
@@ -266,7 +266,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![codex_protocol::mcp_protocol::InputItem::Text {
+            items: vec![codex_app_server_protocol::InputItem::Text {
                 text: "run python".to_string(),
             }],
         })
@@ -331,7 +331,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
     let send_turn_id = mcp
         .send_send_user_turn_request(SendUserTurnParams {
             conversation_id,
-            items: vec![codex_protocol::mcp_protocol::InputItem::Text {
+            items: vec![codex_app_server_protocol::InputItem::Text {
                 text: "run python again".to_string(),
             }],
             cwd: working_directory.clone(),

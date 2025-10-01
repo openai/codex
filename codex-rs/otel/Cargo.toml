@@ -4,9 +4,9 @@ name = "codex-otel"
 version = { workspace = true }
 
 [lib]
+doctest = false
 name = "codex_otel"
 path = "src/lib.rs"
-doctest = false
 
 [lints]
 workspace = true
@@ -15,25 +15,30 @@ workspace = true
 # Compile-time gate for OTLP support; disabled by default.
 # Downstream crates can enable via `features = ["otel"]`.
 default = []
-otel = [
-    "opentelemetry",
-    "opentelemetry_sdk",
-    "opentelemetry-otlp",
-    "tonic",
-]
+otel = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "tonic"]
 
 [dependencies]
-codex-protocol = { path = "../protocol" }
 chrono = { workspace = true }
-tracing = { workspace = true }
-opentelemetry = { workspace = true, features = ["logs"], optional = true }
-opentelemetry_sdk = { workspace = true, features = ["logs", "rt-tokio"], optional = true }
-opentelemetry-otlp = { workspace = true, features = ["grpc-tonic", "http-proto", "http-json", "reqwest", "reqwest-rustls"], optional = true }
-opentelemetry-semantic-conventions = { workspace = true }
-tonic = { workspace = true, optional = true }
-serde = { workspace = true, features = ["derive"] }
-strum_macros = { workspace = true }
-reqwest = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
-tokio = { workspace = true }
+opentelemetry = { workspace = true, features = ["logs"], optional = true }
+opentelemetry-otlp = { workspace = true, features = [
+    "grpc-tonic",
+    "http-proto",
+    "http-json",
+    "reqwest",
+    "reqwest-rustls",
+], optional = true }
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = [
+    "logs",
+    "rt-tokio",
+], optional = true }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+strum_macros = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true, optional = true }
+tracing = { workspace = true }
