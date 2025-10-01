@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio::task::AbortHandle;
 
 use codex_protocol::models::ResponseInputItem;
@@ -16,6 +17,8 @@ use crate::tasks::SessionTask;
 pub(crate) struct ActiveTurn {
     pub(crate) tasks: IndexMap<String, RunningTask>,
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
+    /// Optional notifier to cooperatively cancel the currently running exec command.
+    pub(crate) exec_cancel: Option<Arc<Notify>>,
 }
 
 impl Default for ActiveTurn {
@@ -23,6 +26,7 @@ impl Default for ActiveTurn {
         Self {
             tasks: IndexMap::new(),
             turn_state: Arc::new(Mutex::new(TurnState::default())),
+            exec_cancel: None,
         }
     }
 }

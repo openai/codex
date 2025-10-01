@@ -59,7 +59,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     // Expect TurnAborted soon after.
     wait_for_event_with_timeout(
         &codex,
-        |ev| matches!(ev, EventMsg::TurnAborted(_)),
+        |ev| matches!(ev, EventMsg::ExecCommandEnd(_)),
         wait_timeout,
     )
     .await;

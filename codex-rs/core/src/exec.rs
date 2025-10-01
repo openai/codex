@@ -10,10 +10,12 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_channel::Sender;
+use std::sync::Arc;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
+use tokio::sync::Notify;
 
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -86,6 +88,7 @@ pub async fn process_exec_tool_call(
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
+    cancel_notifier: Option<Arc<Notify>>,
 ) -> Result<ExecToolCallOutput> {
     let start = Instant::now();
 
@@ -93,7 +96,15 @@ pub async fn process_exec_tool_call(
 
     let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
     {
-        SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
+        SandboxType::None => {
+            exec(
+                params,
+                sandbox_policy,
+                stdout_stream.clone(),
+                cancel_notifier.clone(),
+            )
+            .await
+        }
         SandboxType::MacosSeatbelt => {
             let ExecParams {
                 command,
@@ -110,7 +121,13 @@ pub async fn process_exec_tool_call(
                 env,
             )
             .await?;
-            consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
+            consume_truncated_output(
+                child,
+                timeout_duration,
+                stdout_stream.clone(),
+                cancel_notifier.clone(),
+            )
+            .await
         }
         SandboxType::LinuxSeccomp => {
             let ExecParams {
@@ -134,7 +151,7 @@ pub async fn process_exec_tool_call(
             )
             .await?;
 
-            consume_truncated_output(child, timeout_duration, stdout_stream).await
+            consume_truncated_output(child, timeout_duration, stdout_stream, cancel_notifier).await
         }
     };
     let duration = start.elapsed();
@@ -204,7 +221,7 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exit_code: i32) -> bool {
 
     // Quick rejects: well-known non-sandbox shell exit codes
     // 127: command not found, 2: misuse of shell builtins
-    if exit_code == 127 {
+    if exit_code == 127 || exit_code == 130 {
         return false;
     }
 
@@ -263,6 +280,7 @@ async fn exec(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
+    cancel_notifier: Option<Arc<Notify>>,
 ) -> Result<RawExecToolCallOutput> {
     let timeout = params.timeout_duration();
     let ExecParams {
@@ -286,7 +304,7 @@ async fn exec(
         env,
     )
     .await?;
-    consume_truncated_output(child, timeout, stdout_stream).await
+    consume_truncated_output(child, timeout, stdout_stream, cancel_notifier).await
 }
 
 /// Consumes the output of a child process, truncating it so it is suitable for
@@ -295,6 +313,7 @@ async fn consume_truncated_output(
     mut child: Child,
     timeout: Duration,
     stdout_stream: Option<StdoutStream>,
+    cancel_notifier: Option<Arc<Notify>>,
 ) -> Result<RawExecToolCallOutput> {
     // Both stdout and stderr were configured with `Stdio::piped()`
     // above, therefore `take()` should normally return `Some`.  If it doesn't
@@ -326,6 +345,14 @@ async fn consume_truncated_output(
         Some(agg_tx.clone()),
     ));
 
+    let cancel_fut = async {
+        if let Some(n) = cancel_notifier.as_ref() {
+            n.notified().await;
+        } else {
+            futures::future::pending::<()>().await;
+        }
+    };
+
     let (exit_status, timed_out) = tokio::select! {
         result = tokio::time::timeout(timeout, child.wait()) => {
             match result {
@@ -343,8 +370,12 @@ async fn consume_truncated_output(
         }
         _ = tokio::signal::ctrl_c() => {
             child.start_kill()?;
-            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+            (synthetic_exit_code_status(130), false)
         }
+        _ = cancel_fut => {
+            child.start_kill()?;
+            (synthetic_exit_code_status(130), false)
+        },
     };
 
     let stdout = stdout_handle.await??;
@@ -435,4 +466,17 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
     #[expect(clippy::unwrap_used)]
     std::process::ExitStatus::from_raw(code.try_into().unwrap())
+}
+
+#[cfg(unix)]
+fn synthetic_exit_code_status(code: i32) -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+    std::process::ExitStatus::from_raw((code as i32) << 8)
+}
+
+#[cfg(windows)]
+fn synthetic_exit_code_status(code: i32) -> ExitStatus {
+    use std::os::windows::process::ExitStatusExt;
+    #[expect(clippy::unwrap_used)]
+    std::process::ExitStatus::from_raw((code as u32).try_into().unwrap())
 }

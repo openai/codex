@@ -68,6 +68,7 @@ async fn test_exec_stdout_stream_events_echo() {
         cwd.as_path(),
         &None,
         Some(stdout_stream),
+        None,
     )
     .await;
 
@@ -120,6 +121,7 @@ async fn test_exec_stderr_stream_events_echo() {
         cwd.as_path(),
         &None,
         Some(stdout_stream),
+        None,
     )
     .await;
 
@@ -175,6 +177,7 @@ async fn test_aggregated_output_interleaves_in_order() {
         cwd.as_path(),
         &None,
         None,
+        None,
     )
     .await
     .expect("process_exec_tool_call");
@@ -213,6 +216,7 @@ async fn test_exec_timeout_returns_partial_output() {
         cwd.as_path(),
         &None,
         None,
+        None,
     )
     .await;
 
@@ -226,4 +230,58 @@ async fn test_exec_timeout_returns_partial_output() {
     assert_eq!(output.aggregated_output.text, "before\n");
     assert!(output.duration >= Duration::from_millis(200));
     assert!(output.timed_out);
+}
+
+#[tokio::test]
+async fn test_exec_cancel_returns_partial_output() {
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+    let cmd = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf 'before\n'; sleep 2; printf 'after\n'".to_string(),
+    ];
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let params = ExecParams {
+        command: cmd,
+        cwd: cwd.clone(),
+        timeout_ms: Some(5_000),
+        env: HashMap::new(),
+        with_escalated_permissions: None,
+        justification: None,
+    };
+
+    let policy = SandboxPolicy::new_read_only_policy();
+    let cancel = Arc::new(Notify::new());
+    let cancel2 = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        cancel2.notify_waiters();
+    });
+
+    let result = process_exec_tool_call(
+        params,
+        SandboxType::None,
+        &policy,
+        cwd.as_path(),
+        &None,
+        None,
+        Some(cancel),
+    )
+    .await
+    .expect("process_exec_tool_call");
+
+    assert_ne!(result.exit_code, 0);
+    assert_eq!(
+        result.stdout.text,
+        "before
+"
+    );
+    assert!(result.stderr.text.is_empty());
+    assert_eq!(
+        result.aggregated_output.text,
+        "before
+"
+    );
 }
