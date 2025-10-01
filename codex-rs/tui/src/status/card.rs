@@ -60,12 +60,13 @@ struct StatusHistoryCell {
 
 pub(crate) fn new_status_output(
     config: &Config,
-    usage: &TokenUsage,
+    total_usage: &TokenUsage,
+    context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
-    let card = StatusHistoryCell::new(config, usage, session_id, rate_limits);
+    let card = StatusHistoryCell::new(config, total_usage, context_usage, session_id, rate_limits);
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
 }
@@ -73,7 +74,8 @@ pub(crate) fn new_status_output(
 impl StatusHistoryCell {
     fn new(
         config: &Config,
-        usage: &TokenUsage,
+        total_usage: &TokenUsage,
+        context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
     ) -> Self {
@@ -92,18 +94,18 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let account = compose_account_display(config);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
-        let context_window = config
-            .model_context_window
-            .map(|window| StatusContextWindowData {
+        let context_window = config.model_context_window.and_then(|window| {
+            context_usage.map(|usage| StatusContextWindowData {
                 percent_remaining: usage.percent_of_context_window_remaining(window),
                 tokens_in_context: usage.tokens_in_context_window(),
                 window,
-            });
+            })
+        });
 
         let token_usage = StatusTokenUsageData {
-            total: usage.blended_total(),
-            input: usage.non_cached_input(),
-            output: usage.output_tokens,
+            total: total_usage.blended_total(),
+            input: total_usage.non_cached_input(),
+            output: total_usage.output_tokens,
             context_window,
         };
         let rate_limits = compose_rate_limit_data(rate_limits);
