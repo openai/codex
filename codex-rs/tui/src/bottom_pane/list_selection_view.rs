@@ -196,7 +196,7 @@ impl ListSelectionView {
                     };
                     GenericDisplayRow {
                         name: display_name,
-                        display_shortcut: item.display_shortcut.clone(),
+                        display_shortcut: item.display_shortcut,
                         match_indices: None,
                         is_current: item.is_current,
                         description: item.description.clone(),
@@ -326,7 +326,8 @@ impl Renderable for ListSelectionView {
 
         let rows_height = measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width);
 
-        let mut height = self.header.desired_height(width);
+        // Subtract 4 for the padding on the left and right of the header.
+        let mut height = self.header.desired_height(width.saturating_sub(4));
         height = height.saturating_add(rows_height + 3);
         if self.is_searchable {
             height = height.saturating_add(1);
@@ -352,7 +353,10 @@ impl Renderable for ListSelectionView {
             .style(user_message_style(terminal_palette::default_bg()))
             .render(content_area, buf);
 
-        let header_height = self.header.desired_height(content_area.width);
+        let header_height = self
+            .header
+            // Subtract 4 for the padding on the left and right of the header.
+            .desired_height(content_area.width.saturating_sub(4));
         let rows = self.build_rows();
         let rows_height =
             measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, content_area.width);
