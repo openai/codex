@@ -139,6 +139,9 @@ def notify_bus(command: str, payload: dict | None = None):
 
 def main():
     cfg = load_cfg()
+    if not cfg or cfg.get('enabled') is False:
+        print("monitors: disabled by config or missing config")
+        return 0
     state = load_state()
     monitors = cfg.get('monitor', {})
     now = time.time()

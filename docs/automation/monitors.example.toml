@@ -1,3 +1,6 @@
+[enabled]
+enabled = false
+
 [monitor.datadog_alerts]
 type = "http"
 method = "GET"
