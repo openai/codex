@@ -78,9 +78,10 @@ jobs:
               return;
             }
 
-            const lines = ['Potential duplicates detected:'
+            const lines = [
+              'Potential duplicates detected:'
               ...numbers.map((value) => `- #${value}`),
-              ''
+              '',
               '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];
 
             await github.rest.issues.createComment({
