@@ -13,15 +13,17 @@ except Exception as e:
     raise SystemExit(0)
 
 ROOT = Path(__file__).resolve().parent.parent
-CFG = ROOT / 'local/automation/monitors.toml'
+CFG_PRIMARY = ROOT / 'local/automation/monitors.toml'
+CFG_FALLBACK = ROOT / 'docs/automation/monitors.example.toml'
 STATE = ROOT / '.git/.monitors_state.json'
 
 
 def load_cfg():
-    if not CFG.exists():
-        print(f"no monitors config: {CFG}")
+    cfg_path = CFG_PRIMARY if CFG_PRIMARY.exists() else CFG_FALLBACK
+    if not cfg_path.exists():
+        print(f"no monitors config: {cfg_path}")
         return {}
-    with CFG.open('rb') as f:
+    with cfg_path.open('rb') as f:
         return tomllib.load(f)
 
 
@@ -144,4 +146,3 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
-

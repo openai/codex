@@ -1,0 +1,10 @@
+upstream_repo = "openai/codex"
+pr_number = 4522
+
+[allow]
+events = ["schedule", "workflow_dispatch", "issue_comment", "check_suite", "workflow_run"]
+comment_commands = ["/status", "/rerun"]
+allow_any_user = true
+
+[rate_limit]
+min_seconds_between_posts = 120

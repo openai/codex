@@ -12,7 +12,9 @@ except Exception as e:
     sys.exit(0)
 
 ROOT = Path(__file__).resolve().parent.parent
-CFG = ROOT / "local/automation/agent_bus.toml"
+# Prefer local/automation (private); fall back to docs/automation examples
+CFG_PRIMARY = ROOT / "local/automation/agent_bus.toml"
+CFG_FALLBACK = ROOT / "docs/automation/agent_bus.example.toml"
 LOCK = ROOT / ".git/.agent_bus_last"
 
 from scripts.connectors.github_conn import pr_status, pr_comment, rerun_placeholder
@@ -21,7 +23,8 @@ from scripts.connectors.mcp_conn import call_tool_stdio
 
 
 def load_cfg():
-    with CFG.open('rb') as f:
+    cfg_path = CFG_PRIMARY if CFG_PRIMARY.exists() else CFG_FALLBACK
+    with cfg_path.open('rb') as f:
         return tomllib.load(f)
 
 
@@ -88,8 +91,8 @@ def handle_command(cfg, command: str):
 
 
 def main():
-    if not CFG.exists():
-        print(f"[agent-bus] missing config: {CFG}")
+    if not (CFG_PRIMARY.exists() or CFG_FALLBACK.exists()):
+        print(f"[agent-bus] missing config: {CFG_PRIMARY} or {CFG_FALLBACK}")
         return 0
     cfg = load_cfg()
     if rate_limited(cfg):

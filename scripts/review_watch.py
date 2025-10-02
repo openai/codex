@@ -12,11 +12,13 @@ except Exception as e:
     sys.exit(0)
 
 ROOT = Path(__file__).resolve().parent.parent
-CFG = ROOT / "local/automation/review_watch_config.toml"
+CFG_PRIMARY = ROOT / "local/automation/review_watch_config.toml"
+CFG_FALLBACK = ROOT / "docs/automation/review_watch.example.toml"
 LOCK = ROOT / ".git/.review_watch_last_post"
 
 def load_cfg():
-    with CFG.open('rb') as f:
+    cfg_path = CFG_PRIMARY if CFG_PRIMARY.exists() else CFG_FALLBACK
+    with cfg_path.open('rb') as f:
         return tomllib.load(f)
 
 def allowed_event(cfg: dict, event_name: str) -> bool:
@@ -85,4 +87,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-

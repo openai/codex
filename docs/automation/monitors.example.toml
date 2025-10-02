@@ -1,0 +1,29 @@
+[monitor.datadog_alerts]
+type = "http"
+method = "GET"
+url = "https://api.datadoghq.com/api/v1/monitor?group_states=alert"
+headers = { "DD-API-KEY" = "${ENV:DD_API_KEY}", "DD-APPLICATION-KEY" = "${ENV:DD_APP_KEY}" }
+poll_interval_sec = 300
+match_any_contains = ["\"overall_state\":\"Alert\""]
+route_command = "/notify"
+
+[monitor.jenkins_build]
+type = "http"
+method = "GET"
+url = "https://jenkins.example.com/job/my-job/lastBuild/api/json"
+headers = { "Authorization" = "Basic ${ENV:JENKINS_BASIC_AUTH}" }
+poll_interval_sec = 180
+json_path = "result"
+operator = "ne"
+value = "SUCCESS"
+route_command = "/notify"
+
+[monitor.custom_health]
+type = "http"
+method = "GET"
+url = "https://service.example.com/health"
+poll_interval_sec = 120
+json_path = "status"
+operator = "eq"
+value = "degraded"
+route_command = "/notify"
