@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 
 import readline from "node:readline";
 
-import { SandboxMode } from "./turnOptions";
+import { SandboxMode } from "./threadOptions";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 

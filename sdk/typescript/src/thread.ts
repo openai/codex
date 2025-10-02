@@ -2,7 +2,7 @@ import { CodexOptions } from "./codexOptions";
 import { ThreadEvent } from "./events";
 import { CodexExec } from "./exec";
 import { ThreadItem } from "./items";
-import { TurnOptions } from "./turnOptions";
+import { ThreadOptions } from "./threadOptions";
 
 /** Completed turn. */
 export type Turn = {
@@ -29,27 +29,33 @@ export class Thread {
   private _exec: CodexExec;
   private _options: CodexOptions;
   private _id: string | null;
+  private _threadOptions: ThreadOptions;
 
   /** Returns the ID of the thread. Populated after the first turn starts. */
   public get id(): string | null {
     return this._id;
   }
 
-  constructor(exec: CodexExec, options: CodexOptions, id: string | null = null) {
+  /* @internal */
+  constructor(
+    exec: CodexExec,
+    options: CodexOptions,
+    threadOptions: ThreadOptions,
+    id: string | null = null,
+  ) {
     this._exec = exec;
     this._options = options;
     this._id = id;
+    this._threadOptions = threadOptions;
   }
 
   /** Provides the input to the agent and streams events as they are produced during the turn. */
-  async runStreamed(input: string, options?: TurnOptions): Promise<StreamedTurn> {
-    return { events: this.runStreamedInternal(input, options) };
+  async runStreamed(input: string): Promise<StreamedTurn> {
+    return { events: this.runStreamedInternal(input) };
   }
 
-  private async *runStreamedInternal(
-    input: string,
-    options?: TurnOptions,
-  ): AsyncGenerator<ThreadEvent> {
+  private async *runStreamedInternal(input: string): AsyncGenerator<ThreadEvent> {
+    const options = this._threadOptions;
     const generator = this._exec.run({
       input,
       baseUrl: this._options.baseUrl,
@@ -75,8 +81,8 @@ export class Thread {
   }
 
   /** Provides the input to the agent and returns the completed turn. */
-  async run(input: string, options?: TurnOptions): Promise<Turn> {
-    const generator = this.runStreamedInternal(input, options);
+  async run(input: string): Promise<Turn> {
+    const generator = this.runStreamedInternal(input);
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
     for await (const event of generator) {

@@ -51,3 +51,21 @@ const result = await thread.run("Implement the fix");
 
 console.log(result);
 ```
+
+### Working directory
+
+By default, Codex will run in the current working directory. You can change the working directory by passing the `workingDirectory` option to the when creating a thread.
+
+```typescript
+const thread = codex.startThread({
+  workingDirectory: "/path/to/working/directory",
+});
+```
+
+To avoid unrecoverable errors, Codex requires the working directory to be a git repository. You can skip the git repository check by passing the `skipGitRepoCheck` option to the when creating a thread.
+
+```typescript
+const thread = codex.startThread({
+  skipGitRepoCheck: true,
+});
+```
