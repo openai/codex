@@ -268,7 +268,9 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
     let chosen = if path_in_same_repo {
         pathdiff::diff_paths(path, cwd).unwrap_or_else(|| path.to_path_buf())
     } else {
-        relativize_to_home(path).unwrap_or_else(|| path.to_path_buf())
+        relativize_to_home(path)
+            .map(|p| PathBuf::from_iter([Path::new("~"), p.as_path()]))
+            .unwrap_or_else(|| path.to_path_buf())
     };
     chosen.display().to_string()
 }

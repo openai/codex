@@ -39,6 +39,7 @@ use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
+use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::ConversationId;
@@ -536,6 +537,15 @@ impl ChatWidget {
             event.changes,
             &self.config.cwd,
         ));
+    }
+
+    fn on_view_image_tool_call(&mut self, event: ViewImageToolCallEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_view_image_tool_call(
+            event.path,
+            &self.config.cwd,
+        ));
+        self.request_redraw();
     }
 
     fn on_patch_apply_end(&mut self, event: codex_core::protocol::PatchApplyEndEvent) {
@@ -1398,6 +1408,7 @@ impl ChatWidget {
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
+            EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),

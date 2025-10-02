@@ -35,6 +35,7 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::ViewImageToolCallEvent;
 use codex_protocol::ConversationId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -792,6 +793,25 @@ fn custom_prompt_enter_empty_does_not_send() {
 
     // No AppEvent::CodexOp should be sent
     assert!(rx.try_recv().is_err(), "no app event should be sent");
+}
+
+#[test]
+fn view_image_tool_call_adds_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let image_path = chat.config.cwd.join("example.png");
+
+    chat.handle_codex_event(Event {
+        id: "sub-image".into(),
+        msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+            call_id: "call-image".into(),
+            path: image_path,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single history cell");
+    let combined = lines_to_single_string(&cells[0]);
+    assert_snapshot!("local_image_attachment_history_snapshot", combined);
 }
 
 // Snapshot test: interrupting a running exec finalizes the active cell with a red ✗
