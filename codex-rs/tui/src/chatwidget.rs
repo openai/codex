@@ -1749,7 +1749,7 @@ impl ChatWidget {
                 is_current: is_current_model && choice.stored == highlight_choice,
                 actions,
                 dismiss_on_select: true,
-                search_value: None,
+                ..Default::default()
             });
         }
 
