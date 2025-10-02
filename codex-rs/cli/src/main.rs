@@ -85,6 +85,9 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
+    /// Show current configuration, account, and usage details without launching the TUI.
+    Status(StatusCommand),
+
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
@@ -168,6 +171,12 @@ enum LoginSubcommand {
 
 #[derive(Debug, Parser)]
 struct LogoutCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+}
+
+#[derive(Debug, Parser)]
+struct StatusCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
 }
@@ -280,6 +289,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 config_overrides,
             );
             codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::Status(mut status_cli)) => {
+            prepend_config_flags(
+                &mut status_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            codex_cli::status::run_status(status_cli.config_overrides);
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(

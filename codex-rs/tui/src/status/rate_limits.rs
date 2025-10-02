@@ -13,20 +13,20 @@ const STATUS_LIMIT_BAR_FILLED: &str = "█";
 const STATUS_LIMIT_BAR_EMPTY: &str = "░";
 
 #[derive(Debug, Clone)]
-pub(crate) struct StatusRateLimitRow {
+pub struct StatusRateLimitRow {
     pub label: String,
     pub percent_used: f64,
     pub resets_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum StatusRateLimitData {
+pub enum StatusRateLimitData {
     Available(Vec<StatusRateLimitRow>),
     Missing,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RateLimitWindowDisplay {
+pub struct RateLimitWindowDisplay {
     pub used_percent: f64,
     pub resets_at: Option<String>,
     pub window_minutes: Option<u64>,
@@ -49,12 +49,12 @@ impl RateLimitWindowDisplay {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RateLimitSnapshotDisplay {
+pub struct RateLimitSnapshotDisplay {
     pub primary: Option<RateLimitWindowDisplay>,
     pub secondary: Option<RateLimitWindowDisplay>,
 }
 
-pub(crate) fn rate_limit_snapshot_display(
+pub fn rate_limit_snapshot_display(
     snapshot: &RateLimitSnapshot,
     captured_at: DateTime<Local>,
 ) -> RateLimitSnapshotDisplay {
@@ -70,9 +70,7 @@ pub(crate) fn rate_limit_snapshot_display(
     }
 }
 
-pub(crate) fn compose_rate_limit_data(
-    snapshot: Option<&RateLimitSnapshotDisplay>,
-) -> StatusRateLimitData {
+pub fn compose_rate_limit_data(snapshot: Option<&RateLimitSnapshotDisplay>) -> StatusRateLimitData {
     match snapshot {
         Some(snapshot) => {
             let mut rows = Vec::with_capacity(2);
@@ -113,7 +111,7 @@ pub(crate) fn compose_rate_limit_data(
     }
 }
 
-pub(crate) fn render_status_limit_progress_bar(percent_used: f64) -> String {
+pub fn render_status_limit_progress_bar(percent_used: f64) -> String {
     let ratio = (percent_used / 100.0).clamp(0.0, 1.0);
     let filled = (ratio * STATUS_LIMIT_BAR_SEGMENTS as f64).round() as usize;
     let filled = filled.min(STATUS_LIMIT_BAR_SEGMENTS);
@@ -125,7 +123,7 @@ pub(crate) fn render_status_limit_progress_bar(percent_used: f64) -> String {
     )
 }
 
-pub(crate) fn format_status_limit_summary(percent_used: f64) -> String {
+pub fn format_status_limit_summary(percent_used: f64) -> String {
     format!("{percent_used:.0}% used")
 }
 

@@ -11,10 +11,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::account::StatusAccountDisplay;
 
-pub(crate) fn compose_model_display(
-    config: &Config,
-    entries: &[(&str, String)],
-) -> (String, Vec<String>) {
+pub fn compose_model_display(config: &Config, entries: &[(&str, String)]) -> (String, Vec<String>) {
     let mut details: Vec<String> = Vec::new();
     if let Some((_, effort)) = entries.iter().find(|(k, _)| *k == "reasoning effort") {
         details.push(format!("reasoning {}", effort.to_ascii_lowercase()));
@@ -31,7 +28,7 @@ pub(crate) fn compose_model_display(
     (config.model.clone(), details)
 }
 
-pub(crate) fn compose_agents_summary(config: &Config) -> String {
+pub fn compose_agents_summary(config: &Config) -> String {
     match discover_project_doc_paths(config) {
         Ok(paths) => {
             let mut rels: Vec<String> = Vec::new();
@@ -75,7 +72,7 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
     }
 }
 
-pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDisplay> {
+pub fn compose_account_display(config: &Config) -> Option<StatusAccountDisplay> {
     let auth_file = get_auth_file(&config.codex_home);
     let auth = try_read_auth_json(&auth_file).ok()?;
 
@@ -95,7 +92,7 @@ pub(crate) fn compose_account_display(config: &Config) -> Option<StatusAccountDi
     None
 }
 
-pub(crate) fn format_tokens_compact(value: u64) -> String {
+pub fn format_tokens_compact(value: u64) -> String {
     if value == 0 {
         return "0".to_string();
     }
@@ -134,7 +131,7 @@ pub(crate) fn format_tokens_compact(value: u64) -> String {
     format!("{formatted}{suffix}")
 }
 
-pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize>) -> String {
+pub fn format_directory_display(directory: &Path, max_width: Option<usize>) -> String {
     let formatted = if let Some(rel) = relativize_to_home(directory) {
         if rel.as_os_str().is_empty() {
             "~".to_string()
@@ -157,7 +154,7 @@ pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize
     formatted
 }
 
-pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> String {
+pub fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> String {
     let time = dt.format("%H:%M").to_string();
     if dt.date_naive() == captured_at.date_naive() {
         time
