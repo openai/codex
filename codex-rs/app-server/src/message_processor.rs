@@ -55,6 +55,30 @@ impl MessageProcessor {
         }
     }
 
+    /// Create a `MessageProcessor` that shares a provided [`AuthManager`] and
+    /// [`ConversationManager`] across multiple connections.
+    pub(crate) fn new_with_shared(
+        outgoing: OutgoingMessageSender,
+        codex_linux_sandbox_exe: Option<PathBuf>,
+        config: Arc<Config>,
+        auth_manager: Arc<AuthManager>,
+        conversation_manager: Arc<ConversationManager>,
+    ) -> Self {
+        let outgoing = Arc::new(outgoing);
+        let codex_message_processor = CodexMessageProcessor::new(
+            auth_manager,
+            conversation_manager,
+            outgoing.clone(),
+            codex_linux_sandbox_exe,
+            config,
+        );
+        Self {
+            outgoing,
+            codex_message_processor,
+            initialized: false,
+        }
+    }
+
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
         let request_id = request.id.clone();
         if let Ok(request_json) = serde_json::to_value(request)

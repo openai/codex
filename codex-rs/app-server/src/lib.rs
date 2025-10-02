@@ -28,6 +28,7 @@ mod error_code;
 mod fuzzy_file_search;
 mod message_processor;
 mod outgoing_message;
+pub mod public_api;
 
 /// Size of the bounded channels used to communicate between tasks. The value
 /// is a balance between throughput and memory usage – 128 messages should be
@@ -47,7 +48,7 @@ pub async fn run_main(
 
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
-    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({

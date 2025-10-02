@@ -42,6 +42,14 @@ install:
 test:
     cargo nextest run --no-fail-fast
 
+# Fast, targeted tests for the new WS server and in-process engine
+test-ws:
+    cargo test -p codex-app-server-ws -- --nocapture
+
+# Targeted tests for app-server (JSON-RPC) without running the whole workspace
+test-app-server:
+    cargo test -p codex-app-server -- --nocapture
+
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"
