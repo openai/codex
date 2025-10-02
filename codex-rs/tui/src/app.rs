@@ -320,24 +320,28 @@ impl App {
                     self.config.model_family = family;
                 }
             }
+            AppEvent::OpenReasoningPopup { model, presets } => {
+                self.chat_widget.open_reasoning_popup(model, presets);
+            }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
                 match persist_model_selection(&self.config.codex_home, profile, &model, effort)
                     .await
                 {
                     Ok(()) => {
+                        let effort_label = effort
+                            .map(|eff| format!(" with {eff} reasoning"))
+                            .unwrap_or_else(|| " with default reasoning".to_string());
                         if let Some(profile) = profile {
                             self.chat_widget.add_info_message(
-                                format!("Model changed to {model}{reasoning_effort} for {profile} profile", reasoning_effort = effort.map(|e| format!(" {e}")).unwrap_or_default()),
+                                format!(
+                                    "Model changed to {model}{effort_label} for {profile} profile"
+                                ),
                                 None,
                             );
                         } else {
                             self.chat_widget.add_info_message(
-                                format!(
-                                    "Model changed to {model}{reasoning_effort}",
-                                    reasoning_effort =
-                                        effort.map(|e| format!(" {e}")).unwrap_or_default()
-                                ),
+                                format!("Model changed to {model}{effort_label}"),
                                 None,
                             );
                         }
