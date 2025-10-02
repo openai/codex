@@ -917,7 +917,8 @@ impl InitialHistory {
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, TS, Default)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum SessionSource {
     Cli,
     #[default]
