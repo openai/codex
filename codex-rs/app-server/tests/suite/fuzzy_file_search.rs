@@ -21,8 +21,15 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     std::fs::write(root.path().join("abcde"), "x").context("write file abcde")?;
     std::fs::write(root.path().join("abexy"), "x").context("write file abexy")?;
     std::fs::write(root.path().join("zzz.txt"), "x").context("write file zzz")?;
-    std::fs::create_dir_all(root.path().join("sub")).context("create sub dir")?;
-    std::fs::write(root.path().join("sub").join("abce"), "x").context("write file sub/abce")?;
+    let sub_dir = root.path().join("sub");
+    std::fs::create_dir_all(&sub_dir).context("create sub dir")?;
+    let sub_abce_path = sub_dir.join("abce");
+    std::fs::write(&sub_abce_path, "x").context("write file sub/abce")?;
+    let sub_abce_rel = sub_abce_path
+        .strip_prefix(root.path())
+        .context("strip root prefix from sub/abce")?
+        .to_string_lossy()
+        .to_string();
 
     // Start MCP server and initialize.
     let mut mcp = McpProcess::new(codex_home.path())
@@ -70,7 +77,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                 },
                 {
                     "root": root_path.clone(),
-                    "path": "sub/abce",
+                    "path": sub_abce_rel,
                     "file_name": "abce",
                     "score": 72,
                     "indices": [4, 5, 7],
