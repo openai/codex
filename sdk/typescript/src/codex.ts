@@ -1,6 +1,7 @@
 import { CodexOptions } from "./codexOptions";
 import { CodexExec } from "./exec";
 import { Thread } from "./thread";
+import { ThreadOptions } from "./threadOptions";
 
 /**
  * Codex is the main class for interacting with the Codex agent.
@@ -20,8 +21,8 @@ export class Codex {
    * Starts a new conversation with an agent.
    * @returns A new thread instance.
    */
-  startThread(): Thread {
-    return new Thread(this.exec, this.options);
+  startThread(options: ThreadOptions = {}): Thread {
+    return new Thread(this.exec, this.options, options);
   }
 
   /**
@@ -31,7 +32,7 @@ export class Codex {
    * @param id The id of the thread to resume.
    * @returns A new thread instance.
    */
-  resumeThread(id: string): Thread {
-    return new Thread(this.exec, this.options, id);
+  resumeThread(id: string, options: ThreadOptions = {}): Thread {
+    return new Thread(this.exec, this.options, options, id);
   }
 }
