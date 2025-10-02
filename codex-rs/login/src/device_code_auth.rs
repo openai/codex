@@ -11,6 +11,10 @@ use crate::server::ServerOptions;
 use std::io::Write;
 use std::io::{self};
 
+const ANSI_YELLOW: &str = "\x1b[93m";
+const ANSI_BOLD: &str = "\x1b[1m";
+const ANSI_RESET: &str = "\x1b[0m";
+
 #[derive(Deserialize)]
 struct UserCodeResp {
     device_auth_id: String,
@@ -135,14 +139,11 @@ async fn poll_for_token(
 }
 
 fn print_colored_warning_device_code() {
-    const YELLOW: &str = "\x1b[93m";
-    const BOLD: &str = "\x1b[1m";
-    const RESET: &str = "\x1b[0m";
     let mut stdout = io::stdout().lock();
     let _ = write!(
         stdout,
-        "{YELLOW}{BOLD}Device code authentication is a fallback path.{RESET}{YELLOW}\n\
-Only use it when a browser login is not available.\n{BOLD}Keep the code secret; do not share it.{RESET}{RESET}\n\n"
+        "{ANSI_YELLOW}{ANSI_BOLD}Device code authentication is a fallback path.{ANSI_RESET}{ANSI_YELLOW}\n\
+Only use it when a browser login is not available.\n{ANSI_BOLD}Keep the code secret; do not share it.{ANSI_RESET}{ANSI_RESET}\n\n"
     );
     let _ = stdout.flush();
 }
@@ -155,10 +156,8 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     print_colored_warning_device_code();
     let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
 
-    const BOLD: &str = "\x1b[1m";
-    const RESET: &str = "\x1b[0m";
     println!(
-        "To authenticate:\n  1. Open in your browser: {BOLD}https://auth.openai.com/codex/device{RESET}\n  2. Enter the one-time code below within 15 minutes:\n\n     {BOLD}{}{RESET}\n",
+        "To authenticate:\n  1. Open in your browser: {ANSI_BOLD}https://auth.openai.com/codex/device{ANSI_RESET}\n  2. Enter the one-time code below within 15 minutes:\n\n     {ANSI_BOLD}{}{ANSI_RESET}\n",
         uc.user_code
     );
 
