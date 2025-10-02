@@ -39,6 +39,7 @@ pub async fn perform_oauth_login(server_name: &str, server_url: &str) -> Result<
         tiny_http::ListenAddr::IP(std::net::SocketAddr::V6(addr)) => {
             format!("http://[{}]:{}/callback", addr.ip(), addr.port())
         }
+        #[cfg(not(target_os = "windows"))]
         _ => return Err(anyhow!("unable to determine callback address")),
     };
 
