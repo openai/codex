@@ -9,6 +9,70 @@ use tokio::fs;
 use tokio::task;
 use toml::Value as TomlValue;
 
+#[cfg(test)]
+mod test_support {
+    /// Test-only override plumbing so integration tests can bypass the
+    /// environment variable and supply a managed config path directly.
+    use super::*;
+    use std::panic::AssertUnwindSafe;
+    use std::panic::catch_unwind;
+    use std::panic::resume_unwind;
+    use std::path::Path;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
+    static MANAGED_CONFIG_PATH_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    static MANAGED_CONFIG_PATH_SERIALIZER: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn managed_config_path_override_storage() -> &'static Mutex<Option<PathBuf>> {
+        MANAGED_CONFIG_PATH_OVERRIDE.get_or_init(|| Mutex::new(None))
+    }
+
+    fn managed_config_path_serializer() -> &'static Mutex<()> {
+        MANAGED_CONFIG_PATH_SERIALIZER.get_or_init(|| Mutex::new(()))
+    }
+
+    fn replace_managed_config_path_override(value: Option<PathBuf>) -> Option<PathBuf> {
+        let mut guard = match managed_config_path_override_storage().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        std::mem::replace(&mut *guard, value)
+    }
+
+    pub(super) fn current_managed_config_path_override() -> Option<PathBuf> {
+        match managed_config_path_override_storage().lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    pub(super) fn with_managed_config_path_override<R>(
+        path: Option<&Path>,
+        f: impl FnOnce() -> R + std::panic::UnwindSafe,
+    ) -> R {
+        let serializer_guard = match managed_config_path_serializer().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        let previous = replace_managed_config_path_override(path.map(std::path::Path::to_path_buf));
+        let result = catch_unwind(AssertUnwindSafe(f));
+        replace_managed_config_path_override(previous);
+        drop(serializer_guard);
+        match result {
+            Ok(output) => output,
+            Err(payload) => resume_unwind(payload),
+        }
+    }
+}
+
+#[cfg(test)]
+use test_support::current_managed_config_path_override;
+#[cfg(test)]
+pub(super) use test_support::with_managed_config_path_override;
+
 const CONFIG_TOML_FILE: &str = "config.toml";
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_MANAGED_CONFIG_PATH";
 #[cfg(unix)]
@@ -178,6 +242,13 @@ fn load_managed_admin_config() -> io::Result<Option<TomlValue>> {
 /// Determine the managed-config layer location. Tests and custom installs can
 /// override the default system path with `CODEX_MANAGED_CONFIG_PATH`.
 fn managed_config_path(codex_home: &Path) -> PathBuf {
+    #[cfg(test)]
+    {
+        if let Some(path) = current_managed_config_path_override() {
+            return path;
+        }
+    }
+
     if let Some(path) = env::var(MANAGED_CONFIG_PATH_ENV_VAR)
         .ok()
         .filter(|path| !path.is_empty())
@@ -195,25 +266,6 @@ fn managed_config_path(codex_home: &Path) -> PathBuf {
     {
         codex_home.join("managed_config.toml")
     }
-}
-
-#[cfg(test)]
-fn with_managed_config_path_override<R>(path: Option<&Path>, f: impl FnOnce() -> R) -> R {
-    use scopeguard::guard;
-
-    let previous = env::var(MANAGED_CONFIG_PATH_ENV_VAR).ok();
-    // Ensure the override does not leak past the test even if it panics.
-    let _restore = guard(previous, |prev| match prev {
-        Some(value) => unsafe { env::set_var(MANAGED_CONFIG_PATH_ENV_VAR, value) },
-        None => unsafe { env::remove_var(MANAGED_CONFIG_PATH_ENV_VAR) },
-    });
-
-    match path {
-        Some(p) => unsafe { env::set_var(MANAGED_CONFIG_PATH_ENV_VAR, p) },
-        None => unsafe { env::remove_var(MANAGED_CONFIG_PATH_ENV_VAR) },
-    }
-
-    f()
 }
 
 #[cfg(test)]

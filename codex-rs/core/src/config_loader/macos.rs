@@ -10,83 +10,83 @@ use std::io;
 use toml::Value as TomlValue;
 
 #[cfg(test)]
-use std::panic::AssertUnwindSafe;
-#[cfg(test)]
-use std::panic::catch_unwind;
-#[cfg(test)]
-use std::panic::resume_unwind;
-#[cfg(test)]
-use std::sync::Mutex;
-#[cfg(test)]
-use std::sync::OnceLock;
+mod test_support {
+    /// Test-only helpers that provide deterministic managed preferences.
+    use super::*;
+    use std::panic::AssertUnwindSafe;
+    use std::panic::catch_unwind;
+    use std::panic::resume_unwind;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
 
-#[cfg(test)]
-static TEST_MANAGED_PREFERENCES_OVERRIDE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-#[cfg(test)]
-static TEST_MANAGED_PREFERENCES_SERIALIZER: OnceLock<Mutex<()>> = OnceLock::new();
+    static TEST_MANAGED_PREFERENCES_OVERRIDE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    static TEST_MANAGED_PREFERENCES_SERIALIZER: OnceLock<Mutex<()>> = OnceLock::new();
 
-#[cfg(test)]
-fn test_managed_preferences_override_storage() -> &'static Mutex<Option<String>> {
-    TEST_MANAGED_PREFERENCES_OVERRIDE.get_or_init(|| Mutex::new(None))
-}
+    fn test_managed_preferences_override_storage() -> &'static Mutex<Option<String>> {
+        TEST_MANAGED_PREFERENCES_OVERRIDE.get_or_init(|| Mutex::new(None))
+    }
 
-#[cfg(test)]
-fn test_managed_preferences_serializer() -> &'static Mutex<()> {
-    TEST_MANAGED_PREFERENCES_SERIALIZER.get_or_init(|| Mutex::new(()))
-}
+    fn test_managed_preferences_serializer() -> &'static Mutex<()> {
+        TEST_MANAGED_PREFERENCES_SERIALIZER.get_or_init(|| Mutex::new(()))
+    }
 
-#[cfg(test)]
-fn replace_test_managed_preferences_override(value: Option<String>) -> Option<String> {
-    let mut guard = match test_managed_preferences_override_storage().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    std::mem::replace(&mut *guard, value)
-}
+    fn replace_test_managed_preferences_override(value: Option<String>) -> Option<String> {
+        let mut guard = match test_managed_preferences_override_storage().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        std::mem::replace(&mut *guard, value)
+    }
 
-#[cfg(test)]
-fn current_test_managed_preferences_override() -> Option<String> {
-    match test_managed_preferences_override_storage().lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
+    pub(super) fn current_test_managed_preferences_override() -> Option<String> {
+        match test_managed_preferences_override_storage().lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    pub(super) fn with_test_managed_preferences_override<R>(
+        value: Option<&str>,
+        f: impl FnOnce() -> R + std::panic::UnwindSafe,
+    ) -> R {
+        let serializer_guard = match test_managed_preferences_serializer().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        let previous =
+            replace_test_managed_preferences_override(value.map(std::string::ToString::to_string));
+        let result = catch_unwind(AssertUnwindSafe(f));
+        replace_test_managed_preferences_override(previous);
+        drop(serializer_guard);
+        match result {
+            Ok(output) => output,
+            Err(payload) => resume_unwind(payload),
+        }
+    }
+
+    pub(super) fn with_cleared_test_managed_preferences<R>(
+        f: impl FnOnce() -> R + std::panic::UnwindSafe,
+    ) -> R {
+        with_test_managed_preferences_override(None, f)
+    }
+
+    pub(super) fn with_encoded_test_managed_preferences<R>(
+        encoded: &str,
+        f: impl FnOnce() -> R + std::panic::UnwindSafe,
+    ) -> R {
+        with_test_managed_preferences_override(Some(encoded), f)
     }
 }
 
 #[cfg(test)]
-pub(super) fn with_test_managed_preferences_override<R>(
-    value: Option<&str>,
-    f: impl FnOnce() -> R + std::panic::UnwindSafe,
-) -> R {
-    let serializer_guard = match test_managed_preferences_serializer().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-
-    let previous =
-        replace_test_managed_preferences_override(value.map(std::string::ToString::to_string));
-    let result = catch_unwind(AssertUnwindSafe(f));
-    replace_test_managed_preferences_override(previous);
-    drop(serializer_guard);
-    match result {
-        Ok(output) => output,
-        Err(payload) => resume_unwind(payload),
-    }
-}
-
+use test_support::current_test_managed_preferences_override;
 #[cfg(test)]
-pub(super) fn with_cleared_test_managed_preferences<R>(
-    f: impl FnOnce() -> R + std::panic::UnwindSafe,
-) -> R {
-    with_test_managed_preferences_override(None, f)
-}
-
+pub(super) use test_support::with_cleared_test_managed_preferences;
 #[cfg(test)]
-pub(super) fn with_encoded_test_managed_preferences<R>(
-    encoded: &str,
-    f: impl FnOnce() -> R + std::panic::UnwindSafe,
-) -> R {
-    with_test_managed_preferences_override(Some(encoded), f)
-}
+pub(super) use test_support::with_encoded_test_managed_preferences;
+#[cfg(test)]
+pub(super) use test_support::with_test_managed_preferences_override;
 
 pub(super) fn load_managed_admin_config() -> io::Result<Option<TomlValue>> {
     #[cfg(test)]
