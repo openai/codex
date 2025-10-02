@@ -214,6 +214,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) initial_prompt: Option<String>,
     pub(crate) initial_images: Vec<PathBuf>,
+    pub(crate) window_title: Option<String>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
 }
@@ -226,6 +227,7 @@ pub(crate) struct ChatWidget {
     config: Config,
     auth_manager: Arc<AuthManager>,
     session_header: SessionHeader,
+    window_title: Option<String>,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
@@ -892,6 +894,7 @@ impl ChatWidget {
             app_event_tx,
             initial_prompt,
             initial_images,
+            window_title,
             enhanced_keys_supported,
             auth_manager,
         } = common;
@@ -915,6 +918,7 @@ impl ChatWidget {
             config: config.clone(),
             auth_manager,
             session_header: SessionHeader::new(config.model),
+            window_title,
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -953,6 +957,7 @@ impl ChatWidget {
             app_event_tx,
             initial_prompt,
             initial_images,
+            window_title,
             enhanced_keys_supported,
             auth_manager,
         } = common;
@@ -978,6 +983,7 @@ impl ChatWidget {
             config: config.clone(),
             auth_manager,
             session_header: SessionHeader::new(config.model),
+            window_title,
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1069,8 +1075,8 @@ impl ChatWidget {
                             self.submit_user_message(user_message);
                         }
                     }
-                    InputResult::Command(cmd) => {
-                        self.dispatch_command(cmd);
+                    InputResult::Command(cmd, args) => {
+                        self.dispatch_command(cmd, args);
                     }
                     InputResult::None => {}
                 }
@@ -1093,7 +1099,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand) {
+    fn dispatch_command(&mut self, cmd: SlashCommand, args: String) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -1158,6 +1164,18 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+            }
+            SlashCommand::Title => {
+                let title = args.trim();
+                if title.is_empty() {
+                    self.add_error_message("Usage: /title <text>".to_string());
+                } else {
+                    let title = title.to_string();
+                    self.window_title = Some(title.clone());
+                    self.app_event_tx
+                        .send(AppEvent::SetWindowTitle(title.clone()));
+                    self.add_info_message(format!("Window title set to '{title}'"), None);
+                }
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -1587,8 +1605,13 @@ impl ChatWidget {
             total_usage,
             context_usage,
             &self.conversation_id,
+            self.window_title.as_deref(),
             self.rate_limit_snapshot.as_ref(),
         ));
+    }
+
+    pub(crate) fn window_title(&self) -> Option<&str> {
+        self.window_title.as_deref()
     }
 
     /// Open a popup to choose the model (stage 1). After selecting a model,

@@ -54,6 +54,7 @@ struct StatusHistoryCell {
     agents_summary: String,
     account: Option<StatusAccountDisplay>,
     session_id: Option<String>,
+    window_title: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
 }
@@ -63,10 +64,18 @@ pub(crate) fn new_status_output(
     total_usage: &TokenUsage,
     context_usage: Option<&TokenUsage>,
     session_id: &Option<ConversationId>,
+    window_title: Option<&str>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
-    let card = StatusHistoryCell::new(config, total_usage, context_usage, session_id, rate_limits);
+    let card = StatusHistoryCell::new(
+        config,
+        total_usage,
+        context_usage,
+        session_id,
+        window_title,
+        rate_limits,
+    );
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
 }
@@ -77,6 +86,7 @@ impl StatusHistoryCell {
         total_usage: &TokenUsage,
         context_usage: Option<&TokenUsage>,
         session_id: &Option<ConversationId>,
+        window_title: Option<&str>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
     ) -> Self {
         let config_entries = create_config_summary_entries(config);
@@ -94,6 +104,7 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let account = compose_account_display(config);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
+        let window_title = window_title.map(std::string::ToString::to_string);
         let context_window = config.model_context_window.and_then(|window| {
             context_usage.map(|usage| StatusContextWindowData {
                 percent_remaining: usage.percent_of_context_window_remaining(window),
@@ -119,6 +130,7 @@ impl StatusHistoryCell {
             agents_summary,
             account,
             session_id,
+            window_title,
             token_usage,
             rate_limits,
         }
@@ -269,6 +281,9 @@ impl HistoryCell for StatusHistoryCell {
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
         }
+        if self.window_title.is_some() {
+            push_label(&mut labels, &mut seen, "Title");
+        }
         push_label(&mut labels, &mut seen, "Token usage");
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
@@ -299,6 +314,9 @@ impl HistoryCell for StatusHistoryCell {
 
         if let Some(session) = self.session_id.as_ref() {
             lines.push(formatter.line("Session", vec![Span::from(session.clone())]));
+        }
+        if let Some(title) = self.window_title.as_ref() {
+            lines.push(formatter.line("Title", vec![Span::from(title.clone())]));
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));

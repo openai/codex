@@ -103,7 +103,14 @@ fn status_snapshot_includes_reasoning_details() {
         .expect("timestamp");
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
+    let composite = new_status_output(
+        &config,
+        &usage,
+        Some(&usage),
+        &None,
+        None,
+        Some(&rate_display),
+    );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -112,6 +119,23 @@ fn status_snapshot_includes_reasoning_details() {
     }
     let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
+}
+
+#[test]
+fn status_output_includes_window_title() {
+    let temp_home = TempDir::new().expect("temp home");
+    let config = test_config(&temp_home);
+    let usage = TokenUsage::default();
+
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, Some("My Title"), None);
+    let rendered = render_lines(&composite.display_lines(80));
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Title:") && line.contains("My Title")),
+        "expected status output to include window title, got: {rendered:?}"
+    );
 }
 
 #[test]
@@ -144,7 +168,14 @@ fn status_snapshot_includes_monthly_limit() {
         .expect("timestamp");
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
+    let composite = new_status_output(
+        &config,
+        &usage,
+        Some(&usage),
+        &None,
+        None,
+        Some(&rate_display),
+    );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -170,7 +201,7 @@ fn status_card_token_usage_excludes_cached_tokens() {
         total_tokens: 2_100,
     };
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, None);
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, None, None);
     let rendered = render_lines(&composite.display_lines(120));
 
     assert!(
@@ -211,7 +242,14 @@ fn status_snapshot_truncates_in_narrow_terminal() {
         .expect("timestamp");
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
+    let composite = new_status_output(
+        &config,
+        &usage,
+        Some(&usage),
+        &None,
+        None,
+        Some(&rate_display),
+    );
     let mut rendered_lines = render_lines(&composite.display_lines(46));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -238,7 +276,7 @@ fn status_snapshot_shows_missing_limits_message() {
         total_tokens: 750,
     };
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, None);
+    let composite = new_status_output(&config, &usage, Some(&usage), &None, None, None);
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -274,7 +312,14 @@ fn status_snapshot_shows_empty_limits_message() {
         .expect("timestamp");
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
-    let composite = new_status_output(&config, &usage, Some(&usage), &None, Some(&rate_display));
+    let composite = new_status_output(
+        &config,
+        &usage,
+        Some(&usage),
+        &None,
+        None,
+        Some(&rate_display),
+    );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
         for line in &mut rendered_lines {
@@ -306,7 +351,7 @@ fn status_context_window_uses_last_usage() {
         total_tokens: 13_679,
     };
 
-    let composite = new_status_output(&config, &total_usage, Some(&last_usage), &None, None);
+    let composite = new_status_output(&config, &total_usage, Some(&last_usage), &None, None, None);
     let rendered_lines = render_lines(&composite.display_lines(80));
     let context_line = rendered_lines
         .into_iter()

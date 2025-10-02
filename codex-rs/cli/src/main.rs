@@ -456,6 +456,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     if let Some(prompt) = resume_cli.prompt {
         interactive.prompt = Some(prompt);
     }
+    if let Some(title) = resume_cli.title {
+        interactive.title = Some(title);
+    }
 
     interactive
         .config_overrides

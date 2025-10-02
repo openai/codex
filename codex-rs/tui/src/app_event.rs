@@ -43,6 +43,9 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Update the terminal window title.
+    SetWindowTitle(String),
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,

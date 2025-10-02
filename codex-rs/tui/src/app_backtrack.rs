@@ -335,6 +335,10 @@ impl App {
             app_event_tx: self.app_event_tx.clone(),
             initial_prompt: None,
             initial_images: Vec::new(),
+            window_title: self
+                .chat_widget
+                .window_title()
+                .map(std::string::ToString::to_string),
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
         };

@@ -66,7 +66,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
-    Command(SlashCommand),
+    Command(SlashCommand, String),
     None,
 }
 
@@ -508,8 +508,11 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_item() {
                     match sel {
                         CommandItem::Builtin(cmd) => {
+                            let args = parse_slash_name(first_line)
+                                .map(|(_, rest)| rest.to_string())
+                                .unwrap_or_default();
                             self.textarea.set_text("");
-                            return (InputResult::Command(cmd), true);
+                            return (InputResult::Command(cmd, args), true);
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
@@ -910,7 +913,7 @@ impl ChatComposer {
                         .find(|(n, _)| *n == name)
                 {
                     self.textarea.set_text("");
-                    return (InputResult::Command(cmd), true);
+                    return (InputResult::Command(cmd, String::new()), true);
                 }
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
@@ -985,6 +988,10 @@ impl ChatComposer {
                 };
                 if let Some(expanded) = expanded_prompt {
                     text = expanded;
+                } else if let Some((name, rest)) = parse_slash_name(&text)
+                    && let Ok(cmd) = name.parse::<SlashCommand>()
+                {
+                    return (InputResult::Command(cmd, rest.to_string()), true);
                 }
                 if text.is_empty() && !has_attachments {
                     return (InputResult::None, true);
@@ -2243,8 +2250,9 @@ mod tests {
         // When a slash command is dispatched, the composer should return a
         // Command result (not submit literal text) and clear its textarea.
         match result {
-            InputResult::Command(cmd) => {
+            InputResult::Command(cmd, args) => {
                 assert_eq!(cmd.command(), "init");
+                assert!(args.is_empty(), "/init should not include args");
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -2318,7 +2326,10 @@ mod tests {
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Command(cmd) => assert_eq!(cmd.command(), "diff"),
+            InputResult::Command(cmd, args) => {
+                assert_eq!(cmd.command(), "diff");
+                assert!(args.is_empty(), "/diff from Tab completion should not include args");
+            }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
@@ -2349,8 +2360,9 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         match result {
-            InputResult::Command(cmd) => {
+            InputResult::Command(cmd, args) => {
                 assert_eq!(cmd.command(), "mention");
+                assert!(args.is_empty(), "/mention should not include args");
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
@@ -2360,6 +2372,45 @@ mod tests {
         assert!(composer.textarea.is_empty(), "composer should be cleared");
         composer.insert_str("@");
         assert_eq!(composer.textarea.text(), "@");
+    }
+
+    #[test]
+    fn slash_title_dispatches_with_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 't', 'i', 't', 'l', 'e', ' ', 'M', 'y', ' ', 's', 'e', 's', 's', 'i', 'o', 'n',
+            ],
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Command(cmd, args) => {
+                assert_eq!(cmd.command(), "title");
+                assert_eq!(args, "My session");
+            }
+            InputResult::Submitted(text) => {
+                panic!("expected command dispatch, but composer submitted literal text: {text}");
+            }
+            InputResult::None => panic!("expected Command result for '/title'"),
+        }
+        assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
 
     #[test]

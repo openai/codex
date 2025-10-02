@@ -74,6 +74,7 @@ pub(crate) struct App {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
@@ -81,6 +82,7 @@ impl App {
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
+        initial_title: Option<String>,
         resume_selection: ResumeSelection,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
@@ -102,6 +104,7 @@ impl App {
                     app_event_tx: app_event_tx.clone(),
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
+                    window_title: initial_title.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                 };
@@ -124,6 +127,7 @@ impl App {
                     app_event_tx: app_event_tx.clone(),
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
+                    window_title: initial_title.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                 };
@@ -220,12 +224,17 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
+                let current_title = self
+                    .chat_widget
+                    .window_title()
+                    .map(std::string::ToString::to_string);
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: self.app_event_tx.clone(),
                     initial_prompt: None,
                     initial_images: Vec::new(),
+                    window_title: current_title,
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
                 };
@@ -305,6 +314,9 @@ impl App {
                     "D I F F".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::SetWindowTitle(title) => {
+                tui.set_window_title(&title);
             }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {

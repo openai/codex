@@ -230,6 +230,7 @@ async fn helpers_are_available_and_do_not_panic() {
         app_event_tx: tx,
         initial_prompt: None,
         initial_images: Vec::new(),
+        window_title: None,
         enhanced_keys_supported: false,
         auth_manager,
     };
@@ -265,6 +266,7 @@ fn make_chatwidget_manual() -> (
         config: cfg.clone(),
         auth_manager,
         session_header: SessionHeader::new(cfg.model),
+        window_title: None,
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
@@ -1088,7 +1090,7 @@ fn disabled_slash_command_while_task_running_snapshot() {
     chat.bottom_pane.set_task_running(true);
 
     // Dispatch a command that is unavailable while a task runs (e.g., /model)
-    chat.dispatch_command(SlashCommand::Model);
+    chat.dispatch_command(SlashCommand::Model, String::new());
 
     // Drain history and snapshot the rendered error line(s)
     let cells = drain_insert_history(&mut rx);
@@ -1100,7 +1102,66 @@ fn disabled_slash_command_while_task_running_snapshot() {
     assert_snapshot!(blob);
 }
 
-#[tokio::test]
+#[test]
+fn title_command_without_args_emits_error() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Title, String::new());
+
+    let mut saw_set_title = false;
+    let mut messages = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::SetWindowTitle(_) => saw_set_title = true,
+            AppEvent::InsertHistoryCell(cell) => {
+                let lines = cell.display_lines(80);
+                messages.push(lines_to_single_string(&lines));
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        !saw_set_title,
+        "should not emit SetWindowTitle when args are missing"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|text| text.contains("Usage: /title <text>")),
+        "expected usage guidance in history"
+    );
+}
+
+#[test]
+fn title_command_sends_event_and_info() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Title, "Project Codex".to_string());
+
+    let mut titles = Vec::new();
+    let mut messages = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::SetWindowTitle(title) => titles.push(title),
+            AppEvent::InsertHistoryCell(cell) => {
+                let lines = cell.display_lines(80);
+                messages.push(lines_to_single_string(&lines));
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(titles, vec!["Project Codex".to_string()]);
+    assert!(
+        messages
+            .iter()
+            .any(|text| text.contains("Window title set to 'Project Codex'")),
+        "expected confirmation message"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn binary_size_transcript_snapshot() {
     // the snapshot in this test depends on gpt-5-codex. Skip for now. We will consider
     // creating snapshots for other models in the future.

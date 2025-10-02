@@ -28,6 +28,7 @@ use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
+use crossterm::terminal::SetTitle;
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
@@ -304,6 +305,10 @@ impl Tui {
 
     pub fn enhanced_keys_supported(&self) -> bool {
         self.enhanced_keys_supported
+    }
+
+    pub fn set_window_title(&mut self, title: &str) {
+        let _ = execute!(self.terminal.backend_mut(), SetTitle(title));
     }
 
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {

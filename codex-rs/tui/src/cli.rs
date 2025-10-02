@@ -10,6 +10,10 @@ pub struct Cli {
     #[arg(value_name = "PROMPT")]
     pub prompt: Option<String>,
 
+    /// Set the terminal window title on launch.
+    #[arg(long = "title", value_name = "TEXT")]
+    pub title: Option<String>,
+
     /// Optional image(s) to attach to the initial prompt.
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     pub images: Vec<PathBuf>,
