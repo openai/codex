@@ -4,6 +4,7 @@ use anyhow::Result;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
+use serde_json::json;
 use tempfile::TempDir;
 
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
@@ -58,38 +59,35 @@ fn list_and_get_render_expected_output() -> Result<()> {
     assert!(json_output.status.success());
     let stdout = String::from_utf8(json_output.stdout)?;
     let parsed: JsonValue = serde_json::from_str(&stdout)?;
-    let array = parsed.as_array().expect("expected array");
-    assert_eq!(array.len(), 1);
-    let entry = &array[0];
-    assert_eq!(entry.get("name"), Some(&JsonValue::String("docs".into())));
     assert_eq!(
-        entry.get("command"),
-        Some(&JsonValue::String("docs-server".into()))
-    );
-
-    let args = entry
-        .get("args")
-        .and_then(|v| v.as_array())
-        .expect("args array");
-    assert_eq!(
-        args,
-        &vec![
-            JsonValue::String("--port".into()),
-            JsonValue::String("4000".into())
+        parsed,
+        json!([
+          {
+            "name": "docs",
+            "transport": {
+              "type": "stdio",
+              "command": "docs-server",
+              "args": [
+                "--port",
+                "4000"
+              ],
+              "env": {
+                "TOKEN": "secret"
+              }
+            },
+            "startup_timeout_sec": null,
+            "tool_timeout_sec": null
+          }
         ]
+        )
     );
-
-    let env = entry
-        .get("env")
-        .and_then(|v| v.as_object())
-        .expect("env map");
-    assert_eq!(env.get("TOKEN"), Some(&JsonValue::String("secret".into())));
 
     let mut get_cmd = codex_command(codex_home.path())?;
     let get_output = get_cmd.args(["mcp", "get", "docs"]).output()?;
     assert!(get_output.status.success());
     let stdout = String::from_utf8(get_output.stdout)?;
     assert!(stdout.contains("docs"));
+    assert!(stdout.contains("transport: stdio"));
     assert!(stdout.contains("command: docs-server"));
     assert!(stdout.contains("args: --port 4000"));
     assert!(stdout.contains("env: TOKEN=secret"));

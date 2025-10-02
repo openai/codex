@@ -17,7 +17,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
-use crate::ui_consts::LIVE_PREFIX_COLS;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
@@ -34,7 +33,7 @@ pub(crate) struct StatusIndicatorWidget {
 
 // Format elapsed seconds into a compact human-friendly form used by the status line.
 // Examples: 0s, 59s, 1m 00s, 59m 59s, 1h 00m 00s, 2h 03m 09s
-fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
+pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     if elapsed_secs < 60 {
         return format!("{elapsed_secs}s");
     }
@@ -142,7 +141,7 @@ impl StatusIndicatorWidget {
         elapsed.as_secs()
     }
 
-    fn elapsed_seconds(&self) -> u64 {
+    pub fn elapsed_seconds(&self) -> u64 {
         self.elapsed_seconds_at(Instant::now())
     }
 }
@@ -160,7 +159,7 @@ impl WidgetRef for StatusIndicatorWidget {
         let pretty_elapsed = fmt_elapsed_compact(elapsed);
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];
+        let mut spans = vec!["  ".into()];
         spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),

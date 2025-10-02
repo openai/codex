@@ -15,6 +15,7 @@ pub mod codex;
 mod codex_conversation;
 pub mod token_data;
 pub use codex_conversation::CodexConversation;
+mod command_safety;
 pub mod config;
 pub mod config_edit;
 pub mod config_profile;
@@ -26,10 +27,9 @@ pub mod error;
 pub mod exec;
 mod exec_command;
 pub mod exec_env;
+pub mod executor;
 mod flags;
 pub mod git_info;
-pub mod internal_storage;
-mod is_safe_command;
 pub mod landlock;
 mod mcp_connection_manager;
 mod mcp_tool_call;
@@ -75,10 +75,14 @@ pub use rollout::find_conversation_path_by_id_str;
 pub use rollout::list::ConversationItem;
 pub use rollout::list::ConversationsPage;
 pub use rollout::list::Cursor;
+mod function_tool;
+mod state;
+mod tasks;
 mod user_notification;
 pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
+pub use command_safety::is_safe_command;
 pub use safety::get_platform_sandbox;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
@@ -100,3 +104,5 @@ pub use codex_protocol::models::LocalShellExecAction;
 pub use codex_protocol::models::LocalShellStatus;
 pub use codex_protocol::models::ReasoningItemContent;
 pub use codex_protocol::models::ResponseItem;
+
+pub mod otel_init;

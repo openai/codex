@@ -1,6 +1,5 @@
-use codex_core::config::GPT_5_CODEX_MEDIUM_MODEL;
+use codex_app_server_protocol::AuthMode;
 use codex_core::protocol_config_types::ReasoningEffort;
-use codex_protocol::mcp_protocol::AuthMode;
 
 /// A simple preset pairing a model slug with a reasoning effort.
 #[derive(Debug, Clone, Copy)]
@@ -30,7 +29,7 @@ const PRESETS: &[ModelPreset] = &[
         label: "gpt-5-codex medium",
         description: "",
         model: "gpt-5-codex",
-        effort: None,
+        effort: Some(ReasoningEffort::Medium),
     },
     ModelPreset {
         id: "gpt-5-codex-high",
@@ -69,13 +68,6 @@ const PRESETS: &[ModelPreset] = &[
     },
 ];
 
-pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
-    match auth_mode {
-        Some(AuthMode::ApiKey) => PRESETS
-            .iter()
-            .copied()
-            .filter(|p| p.model != GPT_5_CODEX_MEDIUM_MODEL)
-            .collect(),
-        _ => PRESETS.to_vec(),
-    }
+pub fn builtin_model_presets(_auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
+    PRESETS.to_vec()
 }
