@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+try:
+    import tomllib  # py3.11+
+except Exception as e:
+    print(f"[review-gate] Python 3.11+ required: {e}", file=sys.stderr)
+    sys.exit(0)
+
+ROOT = Path(__file__).resolve().parent.parent
+CFG_PRIMARY = ROOT / "local/automation/agent_bus.toml"
+CFG_FALLBACK = ROOT / "docs/automation/agent_bus.example.toml"
+
+from scripts.connectors.github_conn import pr_status, pr_comment
+
+
+def load_cfg():
+    cfg_path = CFG_PRIMARY if CFG_PRIMARY.exists() else CFG_FALLBACK
+    with cfg_path.open('rb') as f:
+        return tomllib.load(f)
+
+
+def allowed_actor(cfg: dict, login: str | None) -> bool:
+    if not login:
+        return False
+    owners = cfg.get('review', {}).get('owners') or []
+    if not owners:
+        return True  # if owners not specified, allow any commenter
+    # owners entries can be '@user' or 'user'
+    norm = login.lower()
+    owners_norm = set(o.lower().lstrip('@') for o in owners)
+    return norm in owners_norm
+
+
+def all_barriers_green(status_data: dict, barriers: list[str]) -> tuple[bool, list[str]]:
+    missing: list[str] = []
+    roll = status_data.get('statusCheckRollup') or []
+    by_name = {}
+    for c in roll:
+        name = c.get('workflowName') or c.get('name') or ''
+        conclusion = (c.get('conclusion') or '').upper()
+        by_name[name] = conclusion
+    for b in barriers or []:
+        concl = by_name.get(b)
+        if concl != 'SUCCESS':
+            missing.append(b)
+    return (len(missing) == 0, missing)
+
+
+def gh_issue_create(title: str, body: str, labels: list[str] | None = None):
+    import subprocess
+    cmd = ["gh", "issue", "create", "-t", title, "-b", body]
+    for lab in (labels or []):
+        cmd += ["-l", lab]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    out, err = p.communicate()
+    if p.returncode != 0:
+        raise RuntimeError(f"gh issue create failed: {p.returncode}\n{err}\n{out}")
+    print(out)
+
+
+def main():
+    if not (CFG_PRIMARY.exists() or CFG_FALLBACK.exists()):
+        print(f"[review-gate] missing config: {CFG_PRIMARY} or {CFG_FALLBACK}")
+        return 0
+    cfg = load_cfg()
+    upstream = cfg.get('upstream_repo')
+    pr_num = int(cfg.get('pr_number'))
+    gh_token = os.environ.get('UPSTREAM_GH_TOKEN')
+    review_cfg = cfg.get('review', {})
+    barriers = review_cfg.get('barriers') or []
+    actions = review_cfg.get('actions') or {"approve": "/apply", "defer": "/defer", "decline": "/decline"}
+
+    # Fetch PR status once
+    status = pr_status(upstream, pr_num, gh_token)
+    ok, missing = all_barriers_green(status, barriers)
+
+    event_name = os.environ.get('GITHUB_EVENT_NAME', 'schedule')
+    if event_name == 'issue_comment':
+        event_path = os.environ.get('GITHUB_EVENT_PATH')
+        payload = json.loads(Path(event_path).read_text()) if event_path and Path(event_path).exists() else {}
+        body = (payload.get('comment') or {}).get('body') or ''
+        actor = (payload.get('comment') or {}).get('user', {}).get('login')
+        if not allowed_actor(cfg, actor):
+            print(f"[review-gate] actor '{actor}' not allowed; skipping")
+            return 0
+        body_stripped = body.strip()
+        # Map owner intent to command, only when barriers are satisfied
+        if body_stripped in ("/apply", "/defer", "/decline"):
+            if not ok:
+                pr_comment(upstream, pr_num, f"[review-gate] Barriers not satisfied; missing: {', '.join(missing)}", gh_token)
+                return 0
+            # create agent-task issue in fork repo using the default GH_TOKEN
+            title = f"agent-task: {body_stripped} PR {pr_num}"
+            issue_body = f"{body_stripped}\n{{\n  \"pr\": {pr_num},\n  \"repo\": \"{upstream}\"\n}}\n"
+            gh_issue_create(title, issue_body, labels=["agent-task"])
+            pr_comment(upstream, pr_num, f"[review-gate] queued task: {body_stripped}", gh_token)
+            return 0
+        else:
+            print("[review-gate] no actionable comment; ignoring")
+            return 0
+
+    # For workflow_run/check_suite/schedule: just post a status summary and list missing barriers when not ok
+    if ok:
+        pr_comment(upstream, pr_num, "[review-gate] All required checks are green.", gh_token)
+    else:
+        pr_comment(upstream, pr_num, f"[review-gate] Missing checks: {', '.join(missing)}", gh_token)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+
