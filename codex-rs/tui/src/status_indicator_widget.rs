@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_core::protocol::Op;
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -164,7 +165,7 @@ impl WidgetRef for StatusIndicatorWidget {
         spans.extend(vec![
             " ".into(),
             format!("({pretty_elapsed} • ").dim(),
-            "Esc".dim().bold(),
+            key_hint::plain(KeyCode::Esc).into(),
             " to interrupt)".dim(),
         ]);
 
@@ -188,8 +189,14 @@ impl WidgetRef for StatusIndicatorWidget {
             }
         }
         if !self.queued_messages.is_empty() {
-            let shortcut = key_hint::alt("↑");
-            lines.push(Line::from(vec!["   ".into(), shortcut, " edit".into()]).dim());
+            lines.push(
+                Line::from(vec![
+                    "   ".into(),
+                    key_hint::alt(KeyCode::Up).into(),
+                    " edit".into(),
+                ])
+                .dim(),
+            );
         }
 
         let paragraph = Paragraph::new(lines);

@@ -43,7 +43,7 @@ pub(crate) struct SelectionItem {
 pub(crate) struct SelectionViewParams {
     pub title: Option<String>,
     pub subtitle: Option<String>,
-    pub footer_hint: Option<String>,
+    pub footer_hint: Option<Line<'static>>,
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
@@ -65,7 +65,7 @@ impl Default for SelectionViewParams {
 }
 
 pub(crate) struct ListSelectionView {
-    footer_hint: Option<String>,
+    footer_hint: Option<Line<'static>>,
     items: Vec<SelectionItem>,
     state: ScrollState,
     complete: bool,
@@ -416,7 +416,7 @@ impl Renderable for ListSelectionView {
                 width: footer_area.width.saturating_sub(2),
                 height: footer_area.height,
             };
-            Line::from(hint.clone().dim()).render(hint_area, buf);
+            hint.clone().dim().render(hint_area, buf);
         }
     }
 }
@@ -425,7 +425,7 @@ impl Renderable for ListSelectionView {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
+    use crate::bottom_pane::popup_consts::standard_popup_hint_line;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
@@ -455,7 +455,7 @@ mod tests {
             SelectionViewParams {
                 title: Some("Select Approval Mode".to_string()),
                 subtitle: subtitle.map(str::to_string),
-                footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
                 items,
                 ..Default::default()
             },
@@ -517,7 +517,7 @@ mod tests {
         let mut view = ListSelectionView::new(
             SelectionViewParams {
                 title: Some("Select Approval Mode".to_string()),
-                footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
                 items,
                 is_searchable: true,
                 search_placeholder: Some("Type to search branches".to_string()),

@@ -3,18 +3,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::history_cell::HistoryCell;
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::render::renderable::Renderable;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Style;
-use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -61,23 +59,40 @@ impl Overlay {
     }
 }
 
+const KEY_UP: KeyBinding = key_hint::plain(KeyCode::Up);
+const KEY_DOWN: KeyBinding = key_hint::plain(KeyCode::Down);
+const KEY_PAGE_UP: KeyBinding = key_hint::plain(KeyCode::PageUp);
+const KEY_PAGE_DOWN: KeyBinding = key_hint::plain(KeyCode::PageDown);
+const KEY_SPACE: KeyBinding = key_hint::plain(KeyCode::Char(' '));
+const KEY_HOME: KeyBinding = key_hint::plain(KeyCode::Home);
+const KEY_END: KeyBinding = key_hint::plain(KeyCode::End);
+const KEY_Q: KeyBinding = key_hint::plain(KeyCode::Char('q'));
+const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
+const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
+const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
+const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
+
 // Common pager navigation hints rendered on the first line
-const PAGER_KEY_HINTS: &[(&str, &str)] = &[
-    ("↑/↓", "scroll"),
-    ("PgUp/PgDn", "page"),
-    ("Home/End", "jump"),
+const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
+    (&[KEY_UP, KEY_DOWN], "to scroll"),
+    (&[KEY_PAGE_UP, KEY_PAGE_DOWN], "to page"),
+    (&[KEY_HOME, KEY_END], "to jump"),
 ];
 
-// Render a single line of key hints from (key, description) pairs.
-fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&str, &str)]) {
-    let key_hint_style = Style::default().fg(Color::Cyan);
+// Render a single line of key hints from (key(s), description) pairs.
+fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)]) {
     let mut spans: Vec<Span<'static>> = vec![" ".into()];
     let mut first = true;
-    for (key, desc) in pairs {
+    for (keys, desc) in pairs {
         if !first {
             spans.push("   ".into());
         }
-        spans.push(Span::from(key.to_string()).set_style(key_hint_style));
+        for (i, key) in keys.iter().enumerate() {
+            if i > 0 {
+                spans.push("/".into());
+            }
+            spans.push(Span::from(key));
+        }
         spans.push(" ".into());
         spans.push(Span::from(desc.to_string()));
         first = false;
@@ -214,48 +229,24 @@ impl PagerView {
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
         match key_event {
-            KeyEvent {
-                code: KeyCode::Up,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
+            e if KEY_UP.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
-            KeyEvent {
-                code: KeyCode::Down,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
+            e if KEY_DOWN.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
-            KeyEvent {
-                code: KeyCode::PageUp,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
+            e if KEY_PAGE_UP.is_press(e) => {
                 let area = self.content_area(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_sub(area.height as usize);
             }
-            KeyEvent {
-                code: KeyCode::PageDown | KeyCode::Char(' '),
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
+            e if KEY_PAGE_DOWN.is_press(e) || KEY_SPACE.is_press(e) => {
                 let area = self.content_area(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_add(area.height as usize);
             }
-            KeyEvent {
-                code: KeyCode::Home,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
+            e if KEY_HOME.is_press(e) => {
                 self.scroll_offset = 0;
             }
-            KeyEvent {
-                code: KeyCode::End,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            } => {
+            e if KEY_END.is_press(e) => {
                 self.scroll_offset = usize::MAX;
             }
             _ => {
@@ -434,9 +425,11 @@ impl TranscriptOverlay {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
         render_key_hints(line1, buf, PAGER_KEY_HINTS);
-        let mut pairs: Vec<(&str, &str)> = vec![("q", "quit"), ("Esc", "edit prev")];
+
+        let mut pairs: Vec<(&[KeyBinding], &str)> =
+            vec![(&[KEY_Q], "to quit"), (&[KEY_ESC], "to edit prev")];
         if self.highlight_cell.is_some() {
-            pairs.push(("⏎", "edit message"));
+            pairs.push((&[KEY_ENTER], "to edit message"));
         }
         render_key_hints(line2, buf, &pairs);
     }
@@ -454,23 +447,7 @@ impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
-                KeyEvent {
-                    code: KeyCode::Char('q'),
-                    kind: KeyEventKind::Press,
-                    ..
-                }
-                | KeyEvent {
-                    code: KeyCode::Char('t'),
-                    modifiers: crossterm::event::KeyModifiers::CONTROL,
-                    kind: KeyEventKind::Press,
-                    ..
-                }
-                | KeyEvent {
-                    code: KeyCode::Char('c'),
-                    modifiers: crossterm::event::KeyModifiers::CONTROL,
-                    kind: KeyEventKind::Press,
-                    ..
-                } => {
+                e if KEY_Q.is_press(e) || KEY_CTRL_C.is_press(e) || KEY_CTRL_T.is_press(e) => {
                     self.is_done = true;
                     Ok(())
                 }
@@ -516,7 +493,7 @@ impl StaticOverlay {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
         render_key_hints(line1, buf, PAGER_KEY_HINTS);
-        let pairs = [("q", "quit")];
+        let pairs: Vec<(&[KeyBinding], &str)> = vec![(&[KEY_Q], "to quit")];
         render_key_hints(line2, buf, &pairs);
     }
 
@@ -533,17 +510,7 @@ impl StaticOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
-                KeyEvent {
-                    code: KeyCode::Char('q'),
-                    kind: KeyEventKind::Press,
-                    ..
-                }
-                | KeyEvent {
-                    code: KeyCode::Char('c'),
-                    modifiers: crossterm::event::KeyModifiers::CONTROL,
-                    kind: KeyEventKind::Press,
-                    ..
-                } => {
+                e if KEY_Q.is_press(e) || KEY_CTRL_C.is_press(e) => {
                     self.is_done = true;
                     Ok(())
                 }

@@ -1,10 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::Context;
-use assert_cmd::prelude::*;
+use core_test_support::test_codex_exec::test_codex_exec;
 use serde_json::Value;
-use std::process::Command;
+use std::path::Path;
 use std::string::ToString;
-use tempfile::TempDir;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -72,18 +71,15 @@ fn extract_conversation_id(path: &std::path::Path) -> String {
 
 #[test]
 fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
-    let home = TempDir::new()?;
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_responses_fixture.sse");
+    let test = test_codex_exec();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
 
     // 1) First run: create a session with a unique marker in the content.
     let marker = format!("resume-last-{}", Uuid::new_v4());
     let prompt = format!("echo {marker}");
 
-    Command::cargo_bin("codex-exec")
-        .context("should find binary for codex-exec")?
-        .env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
+    test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
@@ -94,7 +90,7 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
         .success();
 
     // Find the created session file containing the marker.
-    let sessions_dir = home.path().join("sessions");
+    let sessions_dir = test.home_path().join("sessions");
     let path = find_session_file_containing_marker(&sessions_dir, &marker)
         .expect("no session file found after first run");
 
@@ -102,11 +98,7 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
     let marker2 = format!("resume-last-2-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
 
-    let mut binding = assert_cmd::Command::cargo_bin("codex-exec")
-        .context("should find binary for codex-exec")?;
-    let cmd = binding
-        .env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
+    test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
@@ -114,8 +106,9 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
         .arg(env!("CARGO_MANIFEST_DIR"))
         .arg(&prompt2)
         .arg("resume")
-        .arg("--last");
-    cmd.assert().success();
+        .arg("--last")
+        .assert()
+        .success();
 
     // Ensure the same file was updated and contains both markers.
     let resumed_path = find_session_file_containing_marker(&sessions_dir, &marker2)
@@ -132,18 +125,15 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
 
 #[test]
 fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
-    let home = TempDir::new()?;
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_responses_fixture.sse");
+    let test = test_codex_exec();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
 
     // 1) First run: create a session
     let marker = format!("resume-by-id-{}", Uuid::new_v4());
     let prompt = format!("echo {marker}");
 
-    Command::cargo_bin("codex-exec")
-        .context("should find binary for codex-exec")?
-        .env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
+    test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
@@ -153,7 +143,7 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    let sessions_dir = home.path().join("sessions");
+    let sessions_dir = test.home_path().join("sessions");
     let path = find_session_file_containing_marker(&sessions_dir, &marker)
         .expect("no session file found after first run");
     let session_id = extract_conversation_id(&path);
@@ -166,11 +156,7 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
     let marker2 = format!("resume-by-id-2-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
 
-    let mut binding = assert_cmd::Command::cargo_bin("codex-exec")
-        .context("should find binary for codex-exec")?;
-    let cmd = binding
-        .env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
+    test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
@@ -178,8 +164,9 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
         .arg(env!("CARGO_MANIFEST_DIR"))
         .arg(&prompt2)
         .arg("resume")
-        .arg(&session_id);
-    cmd.assert().success();
+        .arg(&session_id)
+        .assert()
+        .success();
 
     let resumed_path = find_session_file_containing_marker(&sessions_dir, &marker2)
         .expect("no resumed session file containing marker2");
@@ -195,17 +182,14 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
 
 #[test]
 fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
-    let home = TempDir::new()?;
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cli_responses_fixture.sse");
+    let test = test_codex_exec();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_responses_fixture.sse");
 
     let marker = format!("resume-config-{}", Uuid::new_v4());
     let prompt = format!("echo {marker}");
 
-    Command::cargo_bin("codex-exec")
-        .context("should find binary for codex-exec")?
-        .env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
+    test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
@@ -219,17 +203,15 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    let sessions_dir = home.path().join("sessions");
+    let sessions_dir = test.home_path().join("sessions");
     let path = find_session_file_containing_marker(&sessions_dir, &marker)
         .expect("no session file found after first run");
 
     let marker2 = format!("resume-config-2-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
 
-    let output = Command::cargo_bin("codex-exec")
-        .context("should find binary for codex-exec")?
-        .env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
+    let output = test
+        .cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")

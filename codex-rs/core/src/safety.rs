@@ -125,10 +125,9 @@ pub fn assess_command_safety(
     // the session _because_ they know it needs to run outside a sandbox.
 
     if is_known_safe_command(command) || approved.contains(command) {
-        let user_explicitly_approved = approved.contains(command);
         return SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
-            user_explicitly_approved,
+            user_explicitly_approved: false,
         };
     }
 
@@ -381,7 +380,7 @@ mod tests {
             safety_check,
             SafetyCheck::AutoApprove {
                 sandbox_type: SandboxType::None,
-                user_explicitly_approved: true,
+                user_explicitly_approved: false,
             }
         );
     }
