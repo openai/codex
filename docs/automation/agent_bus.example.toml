@@ -38,3 +38,9 @@ barriers = ["build-test","Format / etc","ubuntu-24.04 - x86_64-unknown-linux-gnu
 
 # Map owner commands to review intents (defaults shown)
 # actions = { approve="/apply", defer="/defer", decline="/decline" }
+
+# Gate behavior (optional)
+# If true, actionable review commands will still execute even when required checks are failing.
+# When fire_on_fail=true and approve_on_fail=false, "/apply" will submit REQUEST_CHANGES instead of APPROVE.
+# fire_on_fail = false
+# approve_on_fail = false

@@ -72,6 +72,8 @@ def main():
     review_cfg = cfg.get('review', {})
     barriers = review_cfg.get('barriers') or []
     actions = review_cfg.get('actions') or {"approve": "/apply", "defer": "/defer", "decline": "/decline"}
+    fire_on_fail = bool(review_cfg.get('fire_on_fail', False))
+    approve_on_fail = bool(review_cfg.get('approve_on_fail', False))
     # Map configured action commands to review intents
     approve_cmd = actions.get("approve", "/apply")
     defer_cmd = actions.get("defer", "/defer")
@@ -96,17 +98,24 @@ def main():
             if not actor_in_owners(cfg, actor):
                 print(f"[review-gate] actor '{actor}' not in owners; skipping actionable review command")
                 return 0
-        # Map owner intent to formal PR review, only when barriers are satisfied
+        # Map owner intent to formal PR review. If fire_on_fail is set, proceed even when barriers are missing.
         if body_stripped in actionable_cmds:
             if not ok:
                 pr_comment(upstream, pr_num, f"[review-gate] Barriers not satisfied; missing: {', '.join(missing)}", gh_token)
-                return 0
+                if not fire_on_fail:
+                    return 0
             review_msg = None
             if "\n" in body:
                 review_msg = body.split("\n", 1)[1].strip() or None
             if body_stripped in approve_cmds:
-                pr_review(upstream, pr_num, "approve", review_msg or "[review-gate] Approved.", gh_token)
-                pr_comment(upstream, pr_num, "[review-gate] Submitted APPROVE review.", gh_token)
+                if ok or approve_on_fail:
+                    pr_review(upstream, pr_num, "approve", review_msg or "[review-gate] Approved.", gh_token)
+                    pr_comment(upstream, pr_num, "[review-gate] Submitted APPROVE review.", gh_token)
+                else:
+                    # If not allowed to approve on failure, submit REQUEST_CHANGES but still fire
+                    note = "[review-gate] Requested changes (checks not green)."
+                    pr_review(upstream, pr_num, "request_changes", review_msg or note, gh_token)
+                    pr_comment(upstream, pr_num, note, gh_token)
             else:
                 pr_review(upstream, pr_num, "request_changes", review_msg or "[review-gate] Requested changes (deferred/declined).", gh_token)
                 pr_comment(upstream, pr_num, "[review-gate] Submitted REQUEST_CHANGES review.", gh_token)
