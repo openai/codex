@@ -211,8 +211,7 @@ impl McpConnectionManager {
             ) && !use_rmcp_client
             {
                 info!(
-                    "skipping MCP server `{}` because the legacy MCP client only supports stdio servers",
-                    server_name
+                    "skipping MCP server `{server_name}` because the legacy MCP client only supports stdio servers",
                 );
                 continue;
             }

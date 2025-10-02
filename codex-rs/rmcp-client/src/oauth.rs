@@ -177,7 +177,6 @@ fn save_oauth_tokens_with_store<C: CredentialStore>(
             Ok(())
         }
         Err(error) => {
-            println!("failed to save OAuth tokens to keyring: {error:?}");
             let message = error.message();
             warn!("failed to write OAuth tokens to keyring: {message}");
             save_oauth_tokens_to_file(tokens)
