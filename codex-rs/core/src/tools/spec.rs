@@ -1,10 +1,10 @@
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::model_family::ModelFamily;
-use crate::plan_tool::PLAN_TOOL;
-use crate::tool_apply_patch::ApplyPatchToolType;
-use crate::tool_apply_patch::create_apply_patch_freeform_tool;
-use crate::tool_apply_patch::create_apply_patch_json_tool;
+use crate::tools::handlers::PLAN_TOOL;
+use crate::tools::handlers::apply_patch::ApplyPatchToolType;
+use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
+use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::registry::ToolRegistryBuilder;
 use serde::Deserialize;
 use serde::Serialize;

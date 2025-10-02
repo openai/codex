@@ -31,8 +31,6 @@ use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
 use codex_core::config::Config;
-use codex_core::plan_tool::StepStatus;
-use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::Event;
@@ -50,6 +48,7 @@ use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use tracing::error;
 use tracing::warn;
+use codex_protocol::plan_tool::{StepStatus, UpdatePlanArgs};
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,

@@ -7,6 +7,8 @@ mod shell;
 mod unified_exec;
 mod view_image;
 
+pub use plan::PLAN_TOOL;
+
 pub use apply_patch::ApplyPatchHandler;
 pub use exec_stream::ExecStreamHandler;
 pub use mcp::McpHandler;
