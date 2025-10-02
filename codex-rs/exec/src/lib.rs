@@ -364,6 +364,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             }
         }
     }
+    event_processor.print_final_output();
     if error_seen {
         std::process::exit(1);
     }
