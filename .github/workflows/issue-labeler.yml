@@ -3,7 +3,7 @@ name: Issue Labeler
 on:
   issues:
     types:
-#      - opened
+      - opened
       - labeled
 
 jobs:
@@ -44,24 +44,29 @@ jobs:
     steps:
       - name: Apply labels
         run: |
-          output=${CODEX_OUTPUT//$'\r'/}
-          if [ -z "$output" ]; then
+          json=${CODEX_OUTPUT//$'\r'/}
+          if [ -z "$json" ]; then
             echo "Codex produced no output. Skipping label application."
             exit 0
           fi
 
-          if ! printf '%s' "$output" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            echo "Codex output was not a JSON array. Raw output: $output"
+          if ! printf '%s' "$json" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "Codex output was not a JSON array. Raw output: $json"
             exit 0
           fi
 
-          mapfile -t label_array < <(printf '%s' "$output" | jq -r '.[] | tostring')
-          if [ "${#label_array[@]}" -eq 0 ]; then
+          labels=$(printf '%s' "$json" | jq -r '.[] | tostring')
+          if [ -z "$labels" ]; then
             echo "Codex returned an empty array. Nothing to do."
             exit 0
           fi
 
-          gh issue edit "$ISSUE_NUMBER" --add-label "${label_array[@]}" || true
+          cmd=(gh issue edit "$ISSUE_NUMBER")
+          while IFS= read -r label; do
+            cmd+=(--add-label "$label")
+          done <<< "$labels"
+
+          "${cmd[@]}" || true
 
       - name: Remove codex-label trigger
         if: ${{ always() && github.event.action == 'labeled' && github.event.label.name == 'codex-label' }}
