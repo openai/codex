@@ -43,7 +43,7 @@ jobs:
         uses: openai/codex-action@main
         with:
           openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
-          prompt_file: codex-issue-dedup-prompt.txt
+          prompt_file: .github/prompts/issue-deduplicator.txt
           require_repo_write: false
 
   comment-on-issue:
