@@ -20,6 +20,8 @@ type = "http"
 base_url = "https://ops.example.com/hooks"
 headers = { X-Agent = "codex-bus/1" }
 allow_paths = ["/ci/notify", "/audit/event"]
+hmac_secret_env = "OPS_WEBHOOK_SECRET" # optional: HMAC-sign outbound JSON body
+hmac_header = "X-Hub-Signature-256"
 
 [agents.mcp_memory]
 type = "mcp"

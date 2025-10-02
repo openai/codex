@@ -6,6 +6,8 @@ headers = { "DD-API-KEY" = "${ENV:DD_API_KEY}", "DD-APPLICATION-KEY" = "${ENV:DD
 poll_interval_sec = 300
 match_any_contains = ["\"overall_state\":\"Alert\""]
 route_command = "/notify"
+cooldown_sec = 900
+include_sample = false
 
 [monitor.jenkins_build]
 type = "http"
@@ -17,6 +19,8 @@ json_path = "result"
 operator = "ne"
 value = "SUCCESS"
 route_command = "/notify"
+cooldown_sec = 600
+include_sample = false
 
 [monitor.custom_health]
 type = "http"
@@ -27,3 +31,5 @@ json_path = "status"
 operator = "eq"
 value = "degraded"
 route_command = "/notify"
+cooldown_sec = 600
+include_sample = false

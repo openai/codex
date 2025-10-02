@@ -45,6 +45,14 @@ def process_task(issue):
 
     env = os.environ.copy()
     env['AGENT_BUS_COMMAND'] = cmd
+    # Optional JSON payload on following lines
+    if payload:
+        try:
+            json.loads(payload)  # validate JSON before passing through
+            env['AGENT_BUS_PAYLOAD'] = payload
+        except Exception:
+            # Pass raw if not valid JSON
+            env['AGENT_BUS_PAYLOAD'] = payload
     # Let agent_bus read its TOML and route accordingly
     p = subprocess.Popen(["python3", str(ROOT / 'scripts/agent_bus.py')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     out, err = p.communicate()

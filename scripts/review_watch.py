@@ -65,8 +65,8 @@ def run_review_watch(cfg: dict):
     return rc
 
 def main():
-    if not CFG.exists():
-        print(f"[review-watch] Config missing: {CFG}")
+    if not (CFG_PRIMARY.exists() or CFG_FALLBACK.exists()):
+        print(f"[review-watch] Config missing: {CFG_PRIMARY} or {CFG_FALLBACK}")
         return 0
     cfg = load_cfg()
     event_name = os.environ.get('GITHUB_EVENT_NAME', 'schedule')

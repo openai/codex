@@ -3,6 +3,8 @@ import json
 import os
 import re
 import subprocess
+import hashlib
+import sys
 import time
 from pathlib import Path
 
@@ -109,6 +111,20 @@ def matches(cfg: dict, raw: str) -> bool:
     return False
 
 
+def fingerprint(cfg: dict, raw: str) -> str:
+    # Prefer json_path-derived value for dedup; else hash full body
+    if cfg.get("json_path"):
+        try:
+            js = json.loads(raw)
+            val = extract_json_path(js, cfg["json_path"])
+            s = str(val)
+        except Exception:
+            s = raw
+    else:
+        s = raw
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
 def notify_bus(command: str, payload: dict | None = None):
     env = os.environ.copy()
     env['AGENT_BUS_COMMAND'] = command
@@ -134,8 +150,21 @@ def main():
         try:
             headers = resolve_headers(m.get('headers', {}))
             _, out = http_request(m.get('method', 'GET'), m['url'], headers, None)
-            if matches(m, out):
-                notify_bus(m.get('route_command', '/notify'), payload={"monitor": name, "sample": out[:1000]})
+            fp = fingerprint(m, out)
+            last_fp = state.get(f"{name}__fp")
+            cooldown = int(m.get('cooldown_sec', 600))
+            last_trigger = state.get(f"{name}__ts", 0)
+            should_alert = matches(m, out)
+            if should_alert:
+                if fp == last_fp and (now - last_trigger) < cooldown:
+                    should_alert = False
+            if should_alert:
+                payload = {"monitor": name}
+                if bool(m.get('include_sample', False)):
+                    payload["sample"] = out[:1000]
+                notify_bus(m.get('route_command', '/notify'), payload=payload)
+                state[f"{name}__ts"] = now
+                state[f"{name}__fp"] = fp
         except Exception as e:
             print(f"monitor {name} error: {e}")
         finally:

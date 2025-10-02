@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CFG_PRIMARY = ROOT / "local/automation/agent_bus.toml"
 CFG_FALLBACK = ROOT / "docs/automation/agent_bus.example.toml"
 LOCK = ROOT / ".git/.agent_bus_last"
+HTTP_DEFAULT_PATH = "/ci/notify"
 
 from scripts.connectors.github_conn import pr_status, pr_comment, rerun_placeholder
 from scripts.connectors.http_conn import http_post
@@ -26,6 +27,16 @@ def load_cfg():
     cfg_path = CFG_PRIMARY if CFG_PRIMARY.exists() else CFG_FALLBACK
     with cfg_path.open('rb') as f:
         return tomllib.load(f)
+
+
+def http_path_allowed(cfg: dict, path: str) -> bool:
+    agents = cfg.get("agents", {})
+    http_ops = agents.get("http_ops") or {}
+    allow = set(http_ops.get("allow_paths") or [])
+    # Require explicit allowlist; refuse if none
+    if not allow:
+        return False
+    return path in allow
 
 
 def rate_limited(cfg):
@@ -83,8 +94,26 @@ def handle_command(cfg, command: str):
         touch_lock()
     elif command in ('/handoff', '/notify'):
         http = cfg.get('agents', {}).get('http_ops') or {}
-        payload = {"source": "agent-bus", "pr": pr, "repo": repo, "ts": int(time.time()), "command": command}
-        http_post(http.get('base_url'), '/ci/notify', payload, http.get('headers') or {})
+        path = HTTP_DEFAULT_PATH
+        if not http_path_allowed(cfg, path):
+            print(f"[agent-bus] http path not allowed by config: {path}")
+            return
+        payload = {
+            "source": "agent-bus",
+            "pr": pr,
+            "repo": repo,
+            "ts": int(time.time()),
+            "command": command,
+        }
+        http_post(
+            http.get('base_url'),
+            path,
+            payload,
+            headers=(http.get('headers') or {}),
+            allowed_paths=http.get('allow_paths') or [],
+            hmac_secret_env=http.get('hmac_secret_env'),
+            hmac_header=http.get('hmac_header', 'X-Hub-Signature-256'),
+        )
         touch_lock()
     else:
         print(f"[agent-bus] command '{command}' not implemented")
@@ -101,14 +130,31 @@ def main():
     # Accept command from env, default to /status
     command = os.environ.get('AGENT_BUS_COMMAND', '/status')
     payload = os.environ.get('AGENT_BUS_PAYLOAD')
-    # If payload present and command is /notify or /handoff, forward via http_ops
+    # If payload present and command is /notify or /handoff, forward via http_ops (still gated)
     if payload and command in ('/notify', '/handoff'):
+        # Enforce command allowlist before forwarding (prevents bypass via env)
+        allowed = set(cfg.get('security', {}).get('allow_commands', []))
+        if command not in allowed:
+            print(f"[agent-bus] command '{command}' not allowed by config (payload branch)")
+            return 0
         try:
             data = json.loads(payload)
         except Exception:
             data = {"payload": payload}
         http = cfg.get('agents', {}).get('http_ops') or {}
-        http_post(http.get('base_url'), '/ci/notify', data, http.get('headers') or {})
+        path = HTTP_DEFAULT_PATH
+        if not http_path_allowed(cfg, path):
+            print(f"[agent-bus] http path not allowed by config: {path}")
+            return 0
+        http_post(
+            http.get('base_url'),
+            path,
+            data,
+            headers=(http.get('headers') or {}),
+            allowed_paths=http.get('allow_paths') or [],
+            hmac_secret_env=http.get('hmac_secret_env'),
+            hmac_header=http.get('hmac_header', 'X-Hub-Signature-256'),
+        )
         touch_lock()
     else:
         handle_command(cfg, command)
