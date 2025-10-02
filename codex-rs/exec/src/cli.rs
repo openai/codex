@@ -89,11 +89,6 @@ pub enum Command {
 
 #[derive(Parser, Debug)]
 pub struct ResumeArgs {
-    /// Conversation/session id (UUID). When provided, resumes this session.
-    /// If omitted, use --last to pick the most recent recorded session.
-    #[arg(value_name = "SESSION_ID")]
-    pub session_id: Option<String>,
-
     /// Resume the most recent recorded session (newest) without specifying an id.
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     pub last: bool,
@@ -101,6 +96,11 @@ pub struct ResumeArgs {
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.
     #[arg(value_name = "PROMPT")]
     pub prompt: Option<String>,
+
+    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// If omitted, use --last to pick the most recent recorded session.
+    #[arg(value_name = "SESSION_ID")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
