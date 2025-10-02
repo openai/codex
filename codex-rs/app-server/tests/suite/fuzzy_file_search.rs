@@ -14,11 +14,13 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() {
     let codex_home = TempDir::new().expect("create temp codex home");
     let root = TempDir::new().expect("create temp search root");
 
-    // Create files designed to have deterministic ordering for query "abc".
+    // Create files designed to have deterministic ordering for query "abe".
     std::fs::write(root.path().join("abc"), "x").expect("write file abc");
-    std::fs::write(root.path().join("abcde"), "x").expect("write file abcx");
-    std::fs::write(root.path().join("abexy"), "x").expect("write file abcx");
+    std::fs::write(root.path().join("abcde"), "x").expect("write file abcde");
+    std::fs::write(root.path().join("abexy"), "x").expect("write file abexy");
     std::fs::write(root.path().join("zzz.txt"), "x").expect("write file zzz");
+    std::fs::create_dir_all(root.path().join("sub")).expect("create sub dir");
+    std::fs::write(root.path().join("sub").join("abce"), "x").expect("write file sub/abce");
 
     // Start MCP server and initialize.
     let mut mcp = McpProcess::new(codex_home.path()).await.expect("spawn mcp");
@@ -48,8 +50,27 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() {
         value,
         json!({
             "files": [
-                { "root": root_path.clone(), "path": "abexy", "score": 88, "indices": [0, 1, 2] },
-                { "root": root_path.clone(), "path": "abcde", "score": 74, "indices": [0, 1, 4] },
+                {
+                    "root": root_path.clone(),
+                    "path": "abexy",
+                    "file_name": "abexy",
+                    "score": 88,
+                    "indices": [0, 1, 2],
+                },
+                {
+                    "root": root_path.clone(),
+                    "path": "abcde",
+                    "file_name": "abcde",
+                    "score": 74,
+                    "indices": [0, 1, 4],
+                },
+                {
+                    "root": root_path.clone(),
+                    "path": "sub/abce",
+                    "file_name": "abce",
+                    "score": 72,
+                    "indices": [4, 5, 7],
+                },
             ]
         })
     );
