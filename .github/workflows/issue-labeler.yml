@@ -3,7 +3,7 @@ name: Issue Labeler
 on:
   issues:
     types:
-#      - opened - disabled while testing
+      - opened
       - labeled
 
 jobs:
