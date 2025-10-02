@@ -47,6 +47,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn test_config() -> Config {
@@ -610,6 +611,36 @@ fn alt_up_edits_most_recent_queued_message() {
         chat.queued_user_messages.front().unwrap().text,
         "first queued"
     );
+}
+
+#[test]
+fn streaming_final_answer_keeps_task_running_state() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_commit_tick();
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+
+    chat.bottom_pane
+        .set_composer_text("queued submission".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued submission"
+    );
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    match op_rx.try_recv() {
+        Ok(Op::Interrupt) => {}
+        other => panic!("expected Op::Interrupt, got {other:?}"),
+    }
+    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
 }
 
 #[test]
