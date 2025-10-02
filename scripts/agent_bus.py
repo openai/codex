@@ -44,9 +44,10 @@ def ts_bucket(ts: float, bucket_seconds: int = 300) -> int:
     return int(ts // bucket_seconds * bucket_seconds)
 
 
-def make_idempotency_key(repo: str, pr: int, route: str, ts_val: int) -> str:
+def make_idempotency_key(repo: str, pr: int, route: str, ts_val: int, path: str | None = None) -> str:
     import hashlib
-    raw = f"{repo}|{pr}|{route}|{ts_val}"
+    # Include path (if provided) to differentiate multiple allowed endpoints
+    raw = f"{repo}|{pr}|{route}|{path or ''}|{ts_val}"
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -111,7 +112,7 @@ def handle_command(cfg, command: str):
             return
         now = int(time.time())
         idem_ts = ts_bucket(now)
-        idem_key = make_idempotency_key(repo, pr, command, idem_ts)
+        idem_key = make_idempotency_key(repo, pr, command, idem_ts, path)
         payload = {
             "source": "agent-bus",
             "pr": pr,
@@ -167,7 +168,7 @@ def main():
         pr = int(cfg.get('pr_number'))
         now = int(time.time())
         idem_ts = ts_bucket(now)
-        idem_key = make_idempotency_key(repo, pr, command, idem_ts)
+        idem_key = make_idempotency_key(repo, pr, command, idem_ts, path)
         if isinstance(data, dict):
             data.setdefault("ts", now)
             data.setdefault("idempotency_key", idem_key)
