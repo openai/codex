@@ -795,13 +795,10 @@ async fn test_interactive_filter_excludes_non_interactive_sessions() {
         .map(|item| item.path.as_path())
         .collect();
 
-    let interactive_path = home
-        .join("sessions")
-        .join("2025")
-        .join("08")
-        .join("02")
-        .join("rollout-2025-08-02T10-00-00-00000000-0000-0000-0000-00000000002a.jsonl");
-    assert_eq!(paths, vec![interactive_path.as_path()]);
+    assert_eq!(paths.len(), 1);
+    assert!(paths.iter().all(|path| {
+        path.ends_with("rollout-2025-08-02T10-00-00-00000000-0000-0000-0000-00000000002a.jsonl")
+    }));
 
     let all_sessions = get_conversations(home, 10, None, false).await.unwrap();
     let all_paths: Vec<_> = all_sessions
@@ -809,7 +806,10 @@ async fn test_interactive_filter_excludes_non_interactive_sessions() {
         .into_iter()
         .map(|item| item.path)
         .collect();
-    assert!(all_paths.contains(&interactive_path));
+    assert_eq!(all_paths.len(), 2);
+    assert!(all_paths.iter().any(|path| {
+        path.ends_with("rollout-2025-08-02T10-00-00-00000000-0000-0000-0000-00000000002a.jsonl")
+    }));
     assert!(all_paths.iter().any(|path| {
         path.ends_with("rollout-2025-08-01T10-00-00-00000000-0000-0000-0000-00000000004d.jsonl")
     }));
