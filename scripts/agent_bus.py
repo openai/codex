@@ -97,10 +97,20 @@ def main():
         return 0
     # Accept command from env, default to /status
     command = os.environ.get('AGENT_BUS_COMMAND', '/status')
-    handle_command(cfg, command)
+    payload = os.environ.get('AGENT_BUS_PAYLOAD')
+    # If payload present and command is /notify or /handoff, forward via http_ops
+    if payload and command in ('/notify', '/handoff'):
+        try:
+            data = json.loads(payload)
+        except Exception:
+            data = {"payload": payload}
+        http = cfg.get('agents', {}).get('http_ops') or {}
+        http_post(http.get('base_url'), '/ci/notify', data, http.get('headers') or {})
+        touch_lock()
+    else:
+        handle_command(cfg, command)
     return 0
 
 
 if __name__ == '__main__':
     sys.exit(main())
-
