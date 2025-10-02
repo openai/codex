@@ -3,7 +3,6 @@
 
 import argparse
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -14,19 +13,25 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CODEX_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = CODEX_CLI_ROOT.parent
 RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
-GITHUB_REPO = "openai/codex"
+CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
 
-# The docs are not clear on what the expected value/format of
-# workflow/workflowName is:
-# https://cli.github.com/manual/gh_run_list
-WORKFLOW_NAME = ".github/workflows/rust-release.yml"
+PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
+    "codex": ["codex", "rg"],
+    "codex-responses-api-proxy": ["codex-responses-api-proxy"],
+    "codex-sdk": ["codex"],
+}
+COMPONENT_DEST_DIR: dict[str, str] = {
+    "codex": "codex",
+    "codex-responses-api-proxy": "codex-responses-api-proxy",
+    "rg": "path",
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
     parser.add_argument(
         "--package",
-        choices=("codex", "codex-responses-api-proxy"),
+        choices=("codex", "codex-responses-api-proxy", "codex-sdk"),
         default="codex",
         help="Which npm package to stage (default: codex).",
     )
@@ -37,13 +42,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--release-version",
         help=(
-            "Version to stage for npm release. When provided, the script also resolves the "
-            "matching rust-release workflow unless --workflow-url is supplied."
+            "Version to stage for npm release."
         ),
-    )
-    parser.add_argument(
-        "--workflow-url",
-        help="Optional GitHub Actions workflow run URL used to download native binaries.",
     )
     parser.add_argument(
         "--staging-dir",
@@ -63,6 +63,11 @@ def parse_args() -> argparse.Namespace:
         "--pack-output",
         type=Path,
         help="Path where the generated npm tarball should be written.",
+    )
+    parser.add_argument(
+        "--vendor-src",
+        type=Path,
+        help="Directory containing pre-installed native binaries to bundle (vendor root).",
     )
     return parser.parse_args()
 
@@ -86,29 +91,19 @@ def main() -> int:
     try:
         stage_sources(staging_dir, version, package)
 
-        workflow_url = args.workflow_url
-        resolved_head_sha: str | None = None
-        if not workflow_url:
-            if release_version:
-                workflow = resolve_release_workflow(version)
-                workflow_url = workflow["url"]
-                resolved_head_sha = workflow.get("headSha")
-            else:
-                workflow_url = resolve_latest_alpha_workflow_url()
-        elif release_version:
-            try:
-                workflow = resolve_release_workflow(version)
-                resolved_head_sha = workflow.get("headSha")
-            except Exception:
-                resolved_head_sha = None
+        vendor_src = args.vendor_src.resolve() if args.vendor_src else None
+        native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
 
-        if release_version and resolved_head_sha:
-            print(f"should `git checkout {resolved_head_sha}`")
+        if native_components:
+            if vendor_src is None:
+                components_str = ", ".join(native_components)
+                raise RuntimeError(
+                    "Native components "
+                    f"({components_str}) required for package '{package}'. Provide --vendor-src "
+                    "pointing to a directory containing pre-installed binaries."
+                )
 
-        if not workflow_url:
-            raise RuntimeError("Unable to determine workflow URL for native binaries.")
-
-        install_native_binaries(staging_dir, workflow_url, package)
+            copy_native_binaries(vendor_src, staging_dir, native_components)
 
         if release_version:
             staging_dir_str = str(staging_dir)
@@ -119,11 +114,19 @@ def main() -> int:
                     f"    node {staging_dir_str}/bin/codex.js --version\n"
                     f"    node {staging_dir_str}/bin/codex.js --help\n\n"
                 )
-            else:
+            elif package == "codex-responses-api-proxy":
                 print(
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the responses API proxy:\n"
                     f"    node {staging_dir_str}/bin/codex-responses-api-proxy.js --help\n\n"
+                )
+            else:
+                print(
+                    f"Staged version {version} for release in {staging_dir_str}\n\n"
+                    "Verify the SDK contents:\n"
+                    f"    ls {staging_dir_str}/dist\n"
+                    f"    ls {staging_dir_str}/vendor\n"
+                    "    node -e \"import('./dist/index.js').then(() => console.log('ok'))\"\n\n"
                 )
         else:
             print(f"Staged package in {staging_dir}")
@@ -152,10 +155,9 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
 
 
 def stage_sources(staging_dir: Path, version: str, package: str) -> None:
-    bin_dir = staging_dir / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-
     if package == "codex":
+        bin_dir = staging_dir / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
         rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
         if rg_manifest.exists():
@@ -167,6 +169,8 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
 
         package_json_path = CODEX_CLI_ROOT / "package.json"
     elif package == "codex-responses-api-proxy":
+        bin_dir = staging_dir / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
         launcher_src = RESPONSES_API_PROXY_NPM_ROOT / "bin" / "codex-responses-api-proxy.js"
         shutil.copy2(launcher_src, bin_dir / "codex-responses-api-proxy.js")
 
@@ -175,6 +179,9 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
             shutil.copy2(readme_src, staging_dir / "README.md")
 
         package_json_path = RESPONSES_API_PROXY_NPM_ROOT / "package.json"
+    elif package == "codex-sdk":
+        package_json_path = CODEX_SDK_ROOT / "package.json"
+        stage_codex_sdk_sources(staging_dir)
     else:
         raise RuntimeError(f"Unknown package '{package}'.")
 
@@ -182,91 +189,85 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         package_json = json.load(fh)
     package_json["version"] = version
 
+    if package == "codex-sdk":
+        scripts = package_json.get("scripts")
+        if isinstance(scripts, dict):
+            scripts.pop("prepare", None)
+
+        files = package_json.get("files")
+        if isinstance(files, list):
+            if "vendor" not in files:
+                files.append("vendor")
+        else:
+            package_json["files"] = ["dist", "vendor"]
+
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
         json.dump(package_json, out, indent=2)
         out.write("\n")
 
 
-def install_native_binaries(staging_dir: Path, workflow_url: str, package: str) -> None:
-    package_components = {
-        "codex": ["codex", "rg"],
-        "codex-responses-api-proxy": ["codex-responses-api-proxy"],
-    }
-
-    components = package_components.get(package)
-    if components is None:
-        raise RuntimeError(f"Unknown package '{package}'.")
-
-    cmd = ["./scripts/install_native_deps.py", "--workflow-url", workflow_url]
-    for component in components:
-        cmd.extend(["--component", component])
-    cmd.append(str(staging_dir))
-    subprocess.check_call(cmd, cwd=CODEX_CLI_ROOT)
+def run_command(cmd: list[str], cwd: Path | None = None) -> None:
+    print("+", " ".join(cmd))
+    subprocess.run(cmd, cwd=cwd, check=True)
 
 
-def resolve_latest_alpha_workflow_url() -> str:
-    version = determine_latest_alpha_version()
-    workflow = resolve_release_workflow(version)
-    return workflow["url"]
+def stage_codex_sdk_sources(staging_dir: Path) -> None:
+    package_root = CODEX_SDK_ROOT
+
+    run_command(["pnpm", "install", "--frozen-lockfile"], cwd=package_root)
+    run_command(["pnpm", "run", "build"], cwd=package_root)
+
+    dist_src = package_root / "dist"
+    if not dist_src.exists():
+        raise RuntimeError("codex-sdk build did not produce a dist directory.")
+
+    shutil.copytree(dist_src, staging_dir / "dist")
+
+    readme_src = package_root / "README.md"
+    if readme_src.exists():
+        shutil.copy2(readme_src, staging_dir / "README.md")
+
+    license_src = REPO_ROOT / "LICENSE"
+    if license_src.exists():
+        shutil.copy2(license_src, staging_dir / "LICENSE")
 
 
-def determine_latest_alpha_version() -> str:
-    releases = list_releases()
-    best_key: tuple[int, int, int, int] | None = None
-    best_version: str | None = None
-    pattern = re.compile(r"^rust-v(\d+)\.(\d+)\.(\d+)-alpha\.(\d+)$")
-    for release in releases:
-        tag = release.get("tag_name", "")
-        match = pattern.match(tag)
-        if not match:
+def copy_native_binaries(vendor_src: Path, staging_dir: Path, components: list[str]) -> None:
+    vendor_src = vendor_src.resolve()
+    if not vendor_src.exists():
+        raise RuntimeError(f"Vendor source directory not found: {vendor_src}")
+
+    components_set = {component for component in components if component in COMPONENT_DEST_DIR}
+    if not components_set:
+        return
+
+    vendor_dest = staging_dir / "vendor"
+    if vendor_dest.exists():
+        shutil.rmtree(vendor_dest)
+    vendor_dest.mkdir(parents=True, exist_ok=True)
+
+    for target_dir in vendor_src.iterdir():
+        if not target_dir.is_dir():
             continue
-        key = tuple(int(match.group(i)) for i in range(1, 5))
-        if best_key is None or key > best_key:
-            best_key = key
-            best_version = (
-                f"{match.group(1)}.{match.group(2)}.{match.group(3)}-alpha.{match.group(4)}"
-            )
 
-    if best_version is None:
-        raise RuntimeError("No alpha releases found when resolving workflow URL.")
-    return best_version
+        dest_target_dir = vendor_dest / target_dir.name
+        dest_target_dir.mkdir(parents=True, exist_ok=True)
 
+        for component in components_set:
+            dest_dir_name = COMPONENT_DEST_DIR.get(component)
+            if dest_dir_name is None:
+                continue
 
-def list_releases() -> list[dict]:
-    stdout = subprocess.check_output(
-        ["gh", "api", f"/repos/{GITHUB_REPO}/releases?per_page=100"],
-        text=True,
-    )
-    try:
-        releases = json.loads(stdout or "[]")
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Unable to parse releases JSON.") from exc
-    if not isinstance(releases, list):
-        raise RuntimeError("Unexpected response when listing releases.")
-    return releases
+            src_component_dir = target_dir / dest_dir_name
+            if not src_component_dir.exists():
+                raise RuntimeError(
+                    f"Missing native component '{component}' in vendor source: {src_component_dir}"
+                )
 
-
-def resolve_release_workflow(version: str) -> dict:
-    stdout = subprocess.check_output(
-        [
-            "gh",
-            "run",
-            "list",
-            "--branch",
-            f"rust-v{version}",
-            "--json",
-            "workflowName,url,headSha",
-            "--workflow",
-            WORKFLOW_NAME,
-            "--jq",
-            "first(.[])",
-        ],
-        text=True,
-    )
-    workflow = json.loads(stdout or "[]")
-    if not workflow:
-        raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
-    return workflow
+            dest_component_dir = dest_target_dir / dest_dir_name
+            if dest_component_dir.exists():
+                shutil.rmtree(dest_component_dir)
+            shutil.copytree(src_component_dir, dest_component_dir)
 
 
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:

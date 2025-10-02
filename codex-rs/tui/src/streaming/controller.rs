@@ -15,10 +15,10 @@ pub(crate) struct StreamController {
 }
 
 impl StreamController {
-    pub(crate) fn new(config: Config) -> Self {
+    pub(crate) fn new(config: Config, width: Option<usize>) -> Self {
         Self {
             config,
-            state: StreamState::new(),
+            state: StreamState::new(width),
             finishing_after_drain: false,
             header_emitted: false,
         }
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
         let cfg = test_config();
-        let mut ctrl = StreamController::new(cfg.clone());
+        let mut ctrl = StreamController::new(cfg.clone(), None);
         let mut lines = Vec::new();
 
         // Exact deltas from the session log (section: Loose vs. tight list items)
@@ -223,7 +223,7 @@ mod tests {
         // Full render of the same source
         let source: String = deltas.iter().copied().collect();
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(&source, &mut rendered, &cfg);
+        crate::markdown::append_markdown(&source, None, &mut rendered, &cfg);
         let rendered_strs = lines_to_plain_strings(&rendered);
 
         assert_eq!(streamed, rendered_strs);

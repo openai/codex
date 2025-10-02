@@ -2,8 +2,8 @@ mod mcp_process;
 mod mock_model_server;
 mod responses;
 
+use codex_app_server_protocol::JSONRPCResponse;
 pub use mcp_process::McpProcess;
-use mcp_types::JSONRPCResponse;
 pub use mock_model_server::create_mock_chat_completions_server;
 pub use responses::create_apply_patch_sse_response;
 pub use responses::create_final_assistant_message_sse_response;

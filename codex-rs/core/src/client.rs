@@ -5,9 +5,11 @@ use std::time::Duration;
 
 use crate::AuthManager;
 use crate::auth::CodexAuth;
+use crate::error::RetryLimitReachedError;
+use crate::error::UnexpectedResponseError;
 use bytes::Bytes;
-use codex_protocol::mcp_protocol::AuthMode;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_app_server_protocol::AuthMode;
+use codex_protocol::ConversationId;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
@@ -307,14 +309,17 @@ impl ModelClient {
             .log_request(attempt, || req_builder.send())
             .await;
 
+        let mut request_id = None;
         if let Ok(resp) = &res {
+            request_id = resp
+                .headers()
+                .get("cf-ray")
+                .map(|v| v.to_str().unwrap_or_default().to_string());
+
             trace!(
-                "Response status: {}, cf-ray: {}",
+                "Response status: {}, cf-ray: {:?}",
                 resp.status(),
-                resp.headers()
-                    .get("cf-ray")
-                    .map(|v| v.to_str().unwrap_or_default())
-                    .unwrap_or_default()
+                request_id
             );
         }
 
@@ -374,7 +379,11 @@ impl ModelClient {
                     // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
                     let body = res.text().await.unwrap_or_default();
                     return Err(StreamAttemptError::Fatal(CodexErr::UnexpectedStatus(
-                        status, body,
+                        UnexpectedResponseError {
+                            status,
+                            body,
+                            request_id: None,
+                        },
                     )));
                 }
 
@@ -405,6 +414,7 @@ impl ModelClient {
                 Err(StreamAttemptError::RetryableHttpError {
                     status,
                     retry_after,
+                    request_id,
                 })
             }
             Err(e) => Err(StreamAttemptError::RetryableTransportError(e.into())),
@@ -448,6 +458,7 @@ enum StreamAttemptError {
     RetryableHttpError {
         status: StatusCode,
         retry_after: Option<Duration>,
+        request_id: Option<String>,
     },
     RetryableTransportError(CodexErr),
     Fatal(CodexErr),
@@ -472,11 +483,13 @@ impl StreamAttemptError {
 
     fn into_error(self) -> CodexErr {
         match self {
-            Self::RetryableHttpError { status, .. } => {
+            Self::RetryableHttpError {
+                status, request_id, ..
+            } => {
                 if status == StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
                 } else {
-                    CodexErr::RetryLimit(status)
+                    CodexErr::RetryLimit(RetryLimitReachedError { status, request_id })
                 }
             }
             Self::RetryableTransportError(error) => error,
