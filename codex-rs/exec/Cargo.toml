@@ -28,10 +28,10 @@ codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }
 owo-colors = { workspace = true }
-supports-color = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
+supports-color = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
