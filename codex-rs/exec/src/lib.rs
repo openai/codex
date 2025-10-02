@@ -1,11 +1,8 @@
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
-mod event_processor_with_json_output;
-
-use std::io::IsTerminal;
-use std::io::Read;
-use std::path::PathBuf;
+pub mod event_processor_with_jsonl_output;
+pub mod exec_events;
 
 pub use cli::Cli;
 use codex_core::AuthManager;
@@ -24,18 +21,29 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
-use event_processor_with_json_output::EventProcessorWithJsonOutput;
+use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use serde_json::Value;
+use std::io::IsTerminal;
+use std::io::Read;
+use std::path::PathBuf;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
 
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    if let Err(err) = set_default_originator("codex_exec") {
+        tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
+    }
+
     let Cli {
         command,
         images,
@@ -51,6 +59,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
+        output_schema: output_schema_path,
+        include_plan_tool,
         config_overrides,
     } = cli;
 
@@ -96,6 +106,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
+    let output_schema = load_output_schema(output_schema_path);
+
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
         cli::Color::Never => (false, false),
@@ -105,19 +117,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ),
     };
 
-    // TODO(mbolin): Take a more thoughtful approach to logging.
+    // Build fmt layer (existing logging) to compose with OTEL layer.
     let default_level = "error";
-    let _ = tracing_subscriber::fmt()
-        // Fallback to the `default_level` log filter if the environment
-        // variable is not set _or_ contains an invalid value
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new(default_level))
-                .unwrap_or_else(|_| EnvFilter::new(default_level)),
-        )
+
+    // Build env_filter separately and attach via with_filter.
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(default_level))
+        .unwrap_or_else(|_| EnvFilter::new(default_level));
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(stderr_with_ansi)
         .with_writer(std::io::stderr)
-        .try_init();
+        .with_filter(env_filter);
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -157,7 +168,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model_provider,
         codex_linux_sandbox_exe,
         base_instructions: None,
-        include_plan_tool: None,
+        include_plan_tool: Some(include_plan_tool),
         include_apply_patch_tool: None,
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
@@ -173,14 +184,38 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    let mut event_processor: Box<dyn EventProcessor> = if json_mode {
-        Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
+
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
+
+    #[allow(clippy::print_stderr)]
+    let otel = match otel {
+        Ok(otel) => otel,
+        Err(e) => {
+            eprintln!("Could not create otel exporter: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(provider) = otel.as_ref() {
+        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
+        );
+
+        let _ = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(otel_layer)
+            .try_init();
     } else {
-        Box::new(EventProcessorWithHumanOutput::create_with_ansi(
+        let _ = tracing_subscriber::registry().with(fmt_layer).try_init();
+    }
+
+    let mut event_processor: Box<dyn EventProcessor> = match json_mode {
+        true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
+        _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stdout_with_ansi,
             &config,
             last_message_file.clone(),
-        ))
+        )),
     };
 
     if oss {
@@ -189,11 +224,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
     }
 
-    // Print the effective configuration and prompt so users can see what Codex
-    // is using.
-    event_processor.print_config_summary(&config, &prompt);
+    let default_cwd = config.cwd.to_path_buf();
+    let default_approval_policy = config.approval_policy;
+    let default_sandbox_policy = config.sandbox_policy.clone();
+    let default_model = config.model.clone();
+    let default_effort = config.model_reasoning_effort;
+    let default_summary = config.model_reasoning_summary;
 
-    if !skip_git_repo_check && get_git_repo_root(&config.cwd.to_path_buf()).is_none() {
+    if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }
@@ -218,11 +256,19 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 )
                 .await?
         } else {
-            conversation_manager.new_conversation(config).await?
+            conversation_manager
+                .new_conversation(config.clone())
+                .await?
         }
     } else {
-        conversation_manager.new_conversation(config).await?
+        conversation_manager
+            .new_conversation(config.clone())
+            .await?
     };
+    // Print the effective configuration and prompt so users can see what Codex
+    // is using.
+    event_processor.print_config_summary(&config, &prompt, &session_configured);
+
     info!("Codex initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
@@ -288,11 +334,28 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Send the prompt.
     let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
-    let initial_prompt_task_id = conversation.submit(Op::UserInput { items }).await?;
+    let initial_prompt_task_id = conversation
+        .submit(Op::UserTurn {
+            items,
+            cwd: default_cwd,
+            approval_policy: default_approval_policy,
+            sandbox_policy: default_sandbox_policy,
+            model: default_model,
+            effort: default_effort,
+            summary: default_summary,
+            final_output_json_schema: output_schema,
+        })
+        .await?;
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
 
     // Run the loop until the task is complete.
+    // Track whether a fatal error was reported by the server so we can
+    // exit with a non-zero status for automation-friendly signaling.
+    let mut error_seen = false;
     while let Some(event) = rx.recv().await {
+        if matches!(event.msg, EventMsg::Error(_)) {
+            error_seen = true;
+        }
         let shutdown: CodexStatus = event_processor.process_event(event);
         match shutdown {
             CodexStatus::Running => continue,
@@ -303,6 +366,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 break;
             }
         }
+    }
+    if error_seen {
+        std::process::exit(1);
     }
 
     Ok(())
@@ -325,5 +391,31 @@ async fn resolve_resume_path(
         Ok(path)
     } else {
         Ok(None)
+    }
+}
+
+fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
+    let path = path?;
+
+    let schema_str = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) => {
+            eprintln!(
+                "Failed to read output schema file {}: {err}",
+                path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+
+    match serde_json::from_str::<Value>(&schema_str) {
+        Ok(value) => Some(value),
+        Err(err) => {
+            eprintln!(
+                "Output schema file {} is not valid JSON: {err}",
+                path.display()
+            );
+            std::process::exit(1);
+        }
     }
 }

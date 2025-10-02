@@ -1,0 +1,42 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 80, height: 15 },
+    content: [
+        "                                                                                ",
+        "                                                                                ",
+        "  Allow command?                                                                ",
+        "                                                                                ",
+        "  this is a test reason such as one that would be produced by the model         ",
+        "                                                                                ",
+        "  $ echo hello world                                                            ",
+        "                                                                                ",
+        "› 1. Approve and run now          Run this command one time                     ",
+        "  2. Always approve this session  Automatically approve this command for the    ",
+        "                                  rest of the session                           ",
+        "  3. Cancel                       Do not run the command                        ",
+        "                                                                                ",
+        "  Press Enter to confirm or Esc to cancel                                       ",
+        "                                                                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 16, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: ITALIC,
+        x: 71, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 8, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 34, y: 8, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD | DIM,
+        x: 59, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 34, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 76, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 34, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 53, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 34, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 56, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 41, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

@@ -2,6 +2,7 @@ use serde_json::Value;
 use wiremock::BodyPrintLimit;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -74,6 +75,33 @@ pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
     })
 }
 
+pub fn ev_custom_tool_call(call_id: &str, name: &str, input: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "custom_tool_call",
+            "call_id": call_id,
+            "name": name,
+            "input": input
+        }
+    })
+}
+
+pub fn ev_local_shell_call(call_id: &str, status: &str, command: Vec<&str>) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "local_shell_call",
+            "call_id": call_id,
+            "status": status,
+            "action": {
+                "type": "exec",
+                "command": command,
+            }
+        }
+    })
+}
+
 /// Convenience: SSE event for an `apply_patch` custom tool call with raw patch
 /// text. This mirrors the payload produced by the Responses API when the model
 /// invokes `apply_patch` directly (before we convert it to a function call).
@@ -113,13 +141,31 @@ pub fn sse_response(body: String) -> ResponseTemplate {
         .set_body_raw(body, "text/event-stream")
 }
 
-pub async fn mount_sse_once<M>(server: &MockServer, matcher: M, body: String)
+pub async fn mount_sse_once_match<M>(server: &MockServer, matcher: M, body: String)
 where
     M: wiremock::Match + Send + Sync + 'static,
 {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(matcher)
+        .respond_with(sse_response(body))
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+}
+
+pub async fn mount_sse_once(server: &MockServer, body: String) {
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(sse_response(body))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+pub async fn mount_sse(server: &MockServer, body: String) {
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
         .respond_with(sse_response(body))
         .mount(server)
         .await;
@@ -130,4 +176,42 @@ pub async fn start_mock_server() -> MockServer {
         .body_print_limit(BodyPrintLimit::Limited(80_000))
         .start()
         .await
+}
+
+/// Mounts a sequence of SSE response bodies and serves them in order for each
+/// POST to `/v1/responses`. Panics if more requests are received than bodies
+/// provided. Also asserts the exact number of expected calls.
+pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    struct SeqResponder {
+        num_calls: AtomicUsize,
+        responses: Vec<String>,
+    }
+
+    impl Respond for SeqResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            match self.responses.get(call_num) {
+                Some(body) => ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body.clone()),
+                None => panic!("no response for {call_num}"),
+            }
+        }
+    }
+
+    let num_calls = bodies.len();
+    let responder = SeqResponder {
+        num_calls: AtomicUsize::new(0),
+        responses: bodies,
+    };
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(responder)
+        .expect(num_calls as u64)
+        .mount(server)
+        .await;
 }

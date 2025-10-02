@@ -1,4 +1,3 @@
-<h1 align="center">OpenAI Codex CLI</h1>
 
 <p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
 
@@ -102,4 +101,3 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
-

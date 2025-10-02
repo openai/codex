@@ -1,7 +1,10 @@
+use std::path::PathBuf;
+
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
 
+use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
 
 use codex_core::protocol::AskForApproval;
@@ -65,4 +68,16 @@ pub(crate) enum AppEvent {
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
+
+    /// Open the branch picker option from the review popup.
+    OpenReviewBranchPicker(PathBuf),
+
+    /// Open the commit picker option from the review popup.
+    OpenReviewCommitPicker(PathBuf),
+
+    /// Open the custom prompt option from the review popup.
+    OpenReviewCustomPrompt,
+
+    /// Open the approval popup.
+    FullScreenApprovalRequest(ApprovalRequest),
 }
