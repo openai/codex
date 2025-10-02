@@ -115,7 +115,7 @@ async fn test_list_conversations_latest_first() {
         "2025-01-01T12-00-00",
         u1,
         3,
-        Some(SessionSource::Vscode),
+        Some(SessionSource::VSCode),
     )
     .unwrap();
     write_session_file(
@@ -123,7 +123,7 @@ async fn test_list_conversations_latest_first() {
         "2025-01-02T12-00-00",
         u2,
         3,
-        Some(SessionSource::Vscode),
+        Some(SessionSource::VSCode),
     )
     .unwrap();
     write_session_file(
@@ -131,7 +131,7 @@ async fn test_list_conversations_latest_first() {
         "2025-01-03T12-00-00",
         u3,
         3,
-        Some(SessionSource::Vscode),
+        Some(SessionSource::VSCode),
     )
     .unwrap();
 
@@ -240,7 +240,7 @@ async fn test_pagination_cursor() {
         "2025-03-01T09-00-00",
         u1,
         1,
-        Some(SessionSource::Vscode),
+        Some(SessionSource::VSCode),
     )
     .unwrap();
     write_session_file(
@@ -248,7 +248,7 @@ async fn test_pagination_cursor() {
         "2025-03-02T09-00-00",
         u2,
         1,
-        Some(SessionSource::Vscode),
+        Some(SessionSource::VSCode),
     )
     .unwrap();
     write_session_file(
@@ -256,7 +256,7 @@ async fn test_pagination_cursor() {
         "2025-03-03T09-00-00",
         u3,
         1,
-        Some(SessionSource::Vscode),
+        Some(SessionSource::VSCode),
     )
     .unwrap();
     write_session_file(
@@ -264,7 +264,7 @@ async fn test_pagination_cursor() {
         "2025-03-04T09-00-00",
         u4,
         1,
-        Some(SessionSource::Vscode),
+        Some(SessionSource::VSCode),
     )
     .unwrap();
     write_session_file(
@@ -272,7 +272,7 @@ async fn test_pagination_cursor() {
         "2025-03-05T09-00-00",
         u5,
         1,
-        Some(SessionSource::Vscode),
+        Some(SessionSource::VSCode),
     )
     .unwrap();
 
@@ -444,7 +444,7 @@ async fn test_get_conversation_contents() {
 
     let uuid = Uuid::new_v4();
     let ts = "2025-04-01T10-30-00";
-    write_session_file(home, ts, uuid, 2, Some(SessionSource::Vscode)).unwrap();
+    write_session_file(home, ts, uuid, 2, Some(SessionSource::VSCode)).unwrap();
 
     let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES)
         .await
@@ -532,7 +532,7 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                source: SessionSource::Vscode,
+                source: SessionSource::VSCode,
             },
             git: None,
         }),
@@ -616,7 +616,7 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                source: SessionSource::Vscode,
+                source: SessionSource::VSCode,
             },
             git: None,
         }),
@@ -701,7 +701,7 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                source: SessionSource::Vscode,
+                source: SessionSource::VSCode,
             },
             git: None,
         }),
@@ -785,9 +785,9 @@ async fn test_stable_ordering_same_second_pagination() {
     let u2 = Uuid::from_u128(2);
     let u3 = Uuid::from_u128(3);
 
-    write_session_file(home, ts, u1, 0, Some(SessionSource::Vscode)).unwrap();
-    write_session_file(home, ts, u2, 0, Some(SessionSource::Vscode)).unwrap();
-    write_session_file(home, ts, u3, 0, Some(SessionSource::Vscode)).unwrap();
+    write_session_file(home, ts, u1, 0, Some(SessionSource::VSCode)).unwrap();
+    write_session_file(home, ts, u2, 0, Some(SessionSource::VSCode)).unwrap();
+    write_session_file(home, ts, u3, 0, Some(SessionSource::VSCode)).unwrap();
 
     let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES)
         .await

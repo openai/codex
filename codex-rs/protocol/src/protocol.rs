@@ -921,7 +921,7 @@ impl InitialHistory {
 pub enum SessionSource {
     Cli,
     #[default]
-    Vscode,
+    VSCode,
     Exec,
     Mcp,
     #[serde(other)]
