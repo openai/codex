@@ -470,11 +470,11 @@ fn sanitize_json_schema(value: &mut JsonValue) {
     }
 }
 
-/// Builds the tool specs along with the registry builder containing matching handlers.
+/// Builds the tool registry builder while collecting tool specs for later serialization.
 pub(crate) fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
-) -> (Vec<ToolSpec>, ToolRegistryBuilder) {
+) -> ToolRegistryBuilder {
     use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
     use crate::exec_command::WRITE_STDIN_TOOL_NAME;
     use crate::exec_command::create_exec_command_tool_for_responses_api;
@@ -489,7 +489,6 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ViewImageHandler;
     use std::sync::Arc;
 
-    let mut specs: Vec<ToolSpec> = Vec::new();
     let mut builder = ToolRegistryBuilder::new();
 
     let shell_handler = Arc::new(ShellHandler);
@@ -502,21 +501,21 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
 
     if config.experimental_unified_exec_tool {
-        specs.push(create_unified_exec_tool());
+        builder.push_spec(create_unified_exec_tool());
         builder.register_handler("unified_exec", unified_exec_handler);
     } else {
         match &config.shell_type {
             ConfigShellToolType::Default => {
-                specs.push(create_shell_tool());
+                builder.push_spec(create_shell_tool());
             }
             ConfigShellToolType::Local => {
-                specs.push(ToolSpec::LocalShell {});
+                builder.push_spec(ToolSpec::LocalShell {});
             }
             ConfigShellToolType::Streamable => {
-                specs.push(ToolSpec::Function(
+                builder.push_spec(ToolSpec::Function(
                     create_exec_command_tool_for_responses_api(),
                 ));
-                specs.push(ToolSpec::Function(
+                builder.push_spec(ToolSpec::Function(
                     create_write_stdin_tool_for_responses_api(),
                 ));
                 builder.register_handler(EXEC_COMMAND_TOOL_NAME, exec_stream_handler.clone());
@@ -531,31 +530,31 @@ pub(crate) fn build_specs(
     builder.register_handler("local_shell", shell_handler);
 
     if config.plan_tool {
-        specs.push(PLAN_TOOL.clone());
+        builder.push_spec(PLAN_TOOL.clone());
         builder.register_handler("update_plan", plan_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
-                specs.push(create_apply_patch_freeform_tool());
+                builder.push_spec(create_apply_patch_freeform_tool());
             }
             ApplyPatchToolType::Function => {
-                specs.push(create_apply_patch_json_tool());
+                builder.push_spec(create_apply_patch_json_tool());
             }
         }
         builder.register_handler("apply_patch", apply_patch_handler);
     }
 
-    specs.push(create_read_file_tool());
+    builder.push_spec(create_read_file_tool());
     builder.register_handler("read_file", read_file_handler);
 
     if config.web_search_request {
-        specs.push(ToolSpec::WebSearch {});
+        builder.push_spec(ToolSpec::WebSearch {});
     }
 
     if config.include_view_image_tool {
-        specs.push(create_view_image_tool());
+        builder.push_spec(create_view_image_tool());
         builder.register_handler("view_image", view_image_handler);
     }
 
@@ -566,7 +565,7 @@ pub(crate) fn build_specs(
         for (name, tool) in entries.into_iter() {
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
                 Ok(converted_tool) => {
-                    specs.push(ToolSpec::Function(converted_tool));
+                    builder.push_spec(ToolSpec::Function(converted_tool));
                     builder.register_handler(name, mcp_handler.clone());
                 }
                 Err(e) => {
@@ -576,7 +575,7 @@ pub(crate) fn build_specs(
         }
     }
 
-    (specs, builder)
+    builder
 }
 
 #[cfg(test)]
@@ -625,7 +624,7 @@ mod tests {
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
         });
-        let tools = build_specs(&config, Some(HashMap::new())).0;
+        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
         assert_eq_tool_names(
             &tools,
@@ -651,7 +650,7 @@ mod tests {
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
         });
-        let tools = build_specs(&config, Some(HashMap::new())).0;
+        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
         assert_eq_tool_names(
             &tools,
@@ -677,7 +676,7 @@ mod tests {
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
         });
-        let tools = build_specs(
+        let (tools, _) = build_specs(
             &config,
             Some(HashMap::from([(
                 "test_server/do_something_cool".to_string(),
@@ -714,7 +713,7 @@ mod tests {
                 },
             )])),
         )
-        .0;
+        .build();
 
         assert_eq_tool_names(
             &tools,
@@ -833,7 +832,7 @@ mod tests {
             ),
         ]);
 
-        let tools = build_specs(&config, Some(tools_map)).0;
+        let (tools, _) = build_specs(&config, Some(tools_map)).build();
         // Expect unified_exec first, followed by MCP tools sorted by fully-qualified name.
         assert_eq_tool_names(
             &tools,
@@ -861,7 +860,7 @@ mod tests {
             experimental_unified_exec_tool: true,
         });
 
-        let tools = build_specs(
+        let (tools, _) = build_specs(
             &config,
             Some(HashMap::from([(
                 "dash/search".to_string(),
@@ -883,7 +882,7 @@ mod tests {
                 },
             )])),
         )
-        .0;
+        .build();
 
         assert_eq_tool_names(
             &tools,
@@ -929,7 +928,7 @@ mod tests {
             experimental_unified_exec_tool: true,
         });
 
-        let tools = build_specs(
+        let (tools, _) = build_specs(
             &config,
             Some(HashMap::from([(
                 "dash/paginate".to_string(),
@@ -949,7 +948,7 @@ mod tests {
                 },
             )])),
         )
-        .0;
+        .build();
 
         assert_eq_tool_names(
             &tools,
@@ -992,7 +991,7 @@ mod tests {
             experimental_unified_exec_tool: true,
         });
 
-        let tools = build_specs(
+        let (tools, _) = build_specs(
             &config,
             Some(HashMap::from([(
                 "dash/tags".to_string(),
@@ -1012,7 +1011,7 @@ mod tests {
                 },
             )])),
         )
-        .0;
+        .build();
 
         assert_eq_tool_names(
             &tools,
@@ -1058,7 +1057,7 @@ mod tests {
             experimental_unified_exec_tool: true,
         });
 
-        let tools = build_specs(
+        let (tools, _) = build_specs(
             &config,
             Some(HashMap::from([(
                 "dash/value".to_string(),
@@ -1078,7 +1077,7 @@ mod tests {
                 },
             )])),
         )
-        .0;
+        .build();
 
         assert_eq_tool_names(
             &tools,

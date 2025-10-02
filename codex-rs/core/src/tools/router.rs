@@ -22,18 +22,18 @@ pub struct ToolCall {
     pub payload: ToolPayload,
 }
 
-pub struct Router {
+pub struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ToolSpec>,
 }
 
-impl Router {
+impl ToolRouter {
     pub fn from_config(
         config: &ToolsConfig,
         mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
     ) -> Self {
-        let (specs, builder) = build_specs(config, mcp_tools);
-        let registry = builder.build();
+        let builder = build_specs(config, mcp_tools);
+        let (specs, registry) = builder.build();
         Self { registry, specs }
     }
 

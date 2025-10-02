@@ -98,7 +98,7 @@ use crate::state::SessionServices;
 use crate::tasks::CompactTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
-use crate::tools::Router;
+use crate::tools::ToolRouter;
 use crate::tools::format_exec_output_str;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
@@ -1905,7 +1905,7 @@ async fn run_turn(
     input: Vec<ResponseItem>,
 ) -> CodexResult<TurnRunResult> {
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
-    let router = Router::from_config(&turn_context.tools_config, Some(mcp_tools));
+    let router = ToolRouter::from_config(&turn_context.tools_config, Some(mcp_tools));
 
     let prompt = Prompt {
         input,
@@ -1987,7 +1987,7 @@ struct TurnRunResult {
 }
 
 async fn try_run_turn(
-    router: &crate::tools::Router,
+    router: &crate::tools::ToolRouter,
     sess: &Session,
     turn_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
@@ -2180,7 +2180,7 @@ async fn try_run_turn(
 }
 
 async fn handle_response_item(
-    router: &crate::tools::Router,
+    router: &crate::tools::ToolRouter,
     sess: &Session,
     turn_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
@@ -2189,7 +2189,7 @@ async fn handle_response_item(
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
 
-    match Router::build_tool_call(sess, item.clone()) {
+    match ToolRouter::build_tool_call(sess, item.clone()) {
         Ok(Some(call)) => {
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);

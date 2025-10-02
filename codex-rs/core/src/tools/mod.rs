@@ -27,7 +27,7 @@ use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
-pub use router::Router;
+pub use router::ToolRouter;
 use serde::Serialize;
 use tracing::trace;
 

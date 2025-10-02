@@ -37,11 +37,13 @@ use codex_exec::exec_events::TurnFailedEvent;
 use codex_exec::exec_events::TurnStartedEvent;
 use codex_exec::exec_events::Usage;
 use codex_exec::exec_events::WebSearchItem;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use mcp_types::CallToolResult;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::time::Duration;
-use codex_protocol::plan_tool::{PlanItemArg, StepStatus, UpdatePlanArgs};
 
 fn event(id: &str, msg: EventMsg) -> Event {
     Event {
@@ -116,7 +118,6 @@ fn web_search_end_emits_item_completed() {
 
 #[test]
 fn plan_update_emits_todo_list_started_updated_and_completed() {
-
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
     // First plan update => item.started (todo_list)
@@ -337,7 +338,6 @@ fn mcp_tool_call_failure_sets_failed_status() {
 
 #[test]
 fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
-
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
     // First turn: start + complete

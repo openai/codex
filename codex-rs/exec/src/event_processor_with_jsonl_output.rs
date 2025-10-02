@@ -46,9 +46,10 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use tracing::error;
 use tracing::warn;
-use codex_protocol::plan_tool::{StepStatus, UpdatePlanArgs};
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,

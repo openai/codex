@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use codex_protocol::models::ResponseInputItem;
 use tracing::warn;
 
+use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -138,13 +139,19 @@ impl ToolRegistry {
 
 pub struct ToolRegistryBuilder {
     handlers: HashMap<String, Arc<dyn ToolHandler>>,
+    specs: Vec<ToolSpec>,
 }
 
 impl ToolRegistryBuilder {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
+            specs: Vec::new(),
         }
+    }
+
+    pub fn push_spec(&mut self, spec: ToolSpec) {
+        self.specs.push(spec);
     }
 
     pub fn register_handler(&mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) {
@@ -176,8 +183,9 @@ impl ToolRegistryBuilder {
     //     }
     // }
 
-    pub fn build(self) -> ToolRegistry {
-        ToolRegistry::new(self.handlers)
+    pub fn build(self) -> (Vec<ToolSpec>, ToolRegistry) {
+        let registry = ToolRegistry::new(self.handlers);
+        (self.specs, registry)
     }
 }
 
