@@ -29,6 +29,7 @@ jobs:
           openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           prompt_file: .github/prompts/issue-labeler.txt
           require_repo_write: false
+          codex_version: 0.43.0-alpha.16
 
   apply-labels:
     name: Apply labels from Codex output
