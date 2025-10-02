@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
+use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolRegistry;
-use crate::tools::spec::ToolSpec;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::build_specs;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -91,11 +91,9 @@ impl Router {
                 action,
                 ..
             } => {
-                let call_id = call_id.or(id).ok_or_else(|| {
-                    FunctionCallError::RespondToModel(
-                        "LocalShellCall without call_id or id".to_string(),
-                    )
-                })?;
+                let call_id = call_id
+                    .or(id)
+                    .ok_or(FunctionCallError::MissingLocalShellCallId)?;
 
                 match action {
                     LocalShellAction::Exec(exec) => {

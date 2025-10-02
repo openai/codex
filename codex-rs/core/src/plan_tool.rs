@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use crate::client_common::tools::ResponsesApiTool;
+use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
 use crate::openai_tools::JsonSchema;
-use crate::openai_tools::ResponsesApiTool;
-use crate::openai_tools::ToolSpec;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 

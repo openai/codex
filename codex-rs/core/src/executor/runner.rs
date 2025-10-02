@@ -299,6 +299,7 @@ pub(crate) fn normalize_exec_result(
             let message = match err {
                 ExecError::Function(FunctionCallError::RespondToModel(msg)) => msg.clone(),
                 ExecError::Codex(e) => get_error_message_ui(e),
+                err => err.to_string(),
             };
             let synthetic = ExecToolCallOutput {
                 exit_code: -1,

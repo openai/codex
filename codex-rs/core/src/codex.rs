@@ -2230,15 +2230,23 @@ async fn handle_response_item(
 
             Ok(None)
         }
-        Err(FunctionCallError::RespondToModel(msg)) => {
-            if msg == "LocalShellCall without call_id or id" {
-                turn_context
-                    .client
-                    .get_otel_event_manager()
-                    .log_tool_failed("local_shell", &msg);
-                error!(msg);
-            }
+        Err(FunctionCallError::MissingLocalShellCallId) => {
+            let msg = "LocalShellCall without call_id or id";
+            turn_context
+                .client
+                .get_otel_event_manager()
+                .log_tool_failed("local_shell", msg);
+            error!(msg);
 
+            Ok(Some(ResponseInputItem::FunctionCallOutput {
+                call_id: String::new(),
+                output: FunctionCallOutputPayload {
+                    content: msg.to_string(),
+                    success: None,
+                },
+            }))
+        }
+        Err(FunctionCallError::RespondToModel(msg)) => {
             Ok(Some(ResponseInputItem::FunctionCallOutput {
                 call_id: String::new(),
                 output: FunctionCallOutputPayload {

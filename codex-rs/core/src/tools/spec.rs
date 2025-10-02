@@ -1,3 +1,10 @@
+use crate::client_common::tools::ResponsesApiTool;
+use crate::client_common::tools::ToolSpec;
+use crate::model_family::ModelFamily;
+use crate::plan_tool::PLAN_TOOL;
+use crate::tool_apply_patch::ApplyPatchToolType;
+use crate::tool_apply_patch::create_apply_patch_freeform_tool;
+use crate::tool_apply_patch::create_apply_patch_json_tool;
 use crate::tools::registry::ToolRegistryBuilder;
 use serde::Deserialize;
 use serde::Serialize;
@@ -5,54 +12,6 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-
-use crate::model_family::ModelFamily;
-use crate::plan_tool::PLAN_TOOL;
-use crate::tool_apply_patch::ApplyPatchToolType;
-use crate::tool_apply_patch::create_apply_patch_freeform_tool;
-use crate::tool_apply_patch::create_apply_patch_json_tool;
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct ResponsesApiTool {
-    pub(crate) name: String,
-    pub(crate) description: String,
-    /// TODO: Validation. When strict is set to true, the JSON schema,
-    /// `required` and `additional_properties` must be present. All fields in
-    /// `properties` must be present in `required`.
-    pub(crate) strict: bool,
-    pub(crate) parameters: JsonSchema,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FreeformTool {
-    pub(crate) name: String,
-    pub(crate) description: String,
-    pub(crate) format: FreeformToolFormat,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FreeformToolFormat {
-    pub(crate) r#type: String,
-    pub(crate) syntax: String,
-    pub(crate) definition: String,
-}
-
-/// When serialized as JSON, this produces a valid "Tool" in the OpenAI
-/// Responses API.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(tag = "type")]
-pub(crate) enum ToolSpec {
-    #[serde(rename = "function")]
-    Function(ResponsesApiTool),
-    #[serde(rename = "local_shell")]
-    LocalShell {},
-    // TODO: Understand why we get an error on web_search although the API docs say it's supported.
-    // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
-    #[serde(rename = "web_search")]
-    WebSearch {},
-    #[serde(rename = "custom")]
-    Freeform(FreeformTool),
-}
 
 #[derive(Debug, Clone)]
 pub enum ConfigShellToolType {
@@ -622,6 +581,7 @@ pub(crate) fn build_specs(
 
 #[cfg(test)]
 mod tests {
+    use crate::client_common::tools::FreeformTool;
     use crate::model_family::find_family_for_model;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
