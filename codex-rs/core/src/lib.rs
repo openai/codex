@@ -27,7 +27,6 @@ pub mod error;
 pub mod exec;
 mod exec_command;
 pub mod exec_env;
-pub mod executor;
 mod flags;
 pub mod git_info;
 pub mod landlock;
