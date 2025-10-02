@@ -17,6 +17,7 @@ CFG_PRIMARY = ROOT / "local/automation/agent_bus.toml"
 CFG_FALLBACK = ROOT / "docs/automation/agent_bus.example.toml"
 LOCK = ROOT / ".git/.agent_bus_last"
 HTTP_DEFAULT_PATH = "/ci/notify"
+IDEMP_HEADER = "X-Idempotency-Key"
 
 from scripts.connectors.github_conn import pr_status, pr_comment, rerun_placeholder
 from scripts.connectors.http_conn import http_post
@@ -37,6 +38,16 @@ def http_path_allowed(cfg: dict, path: str) -> bool:
     if not allow:
         return False
     return path in allow
+
+
+def ts_bucket(ts: float, bucket_seconds: int = 300) -> int:
+    return int(ts // bucket_seconds * bucket_seconds)
+
+
+def make_idempotency_key(repo: str, pr: int, route: str, ts_val: int) -> str:
+    import hashlib
+    raw = f"{repo}|{pr}|{route}|{ts_val}"
+    return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def rate_limited(cfg):
@@ -98,18 +109,24 @@ def handle_command(cfg, command: str):
         if not http_path_allowed(cfg, path):
             print(f"[agent-bus] http path not allowed by config: {path}")
             return
+        now = int(time.time())
+        idem_ts = ts_bucket(now)
+        idem_key = make_idempotency_key(repo, pr, command, idem_ts)
         payload = {
             "source": "agent-bus",
             "pr": pr,
             "repo": repo,
-            "ts": int(time.time()),
+            "ts": now,
             "command": command,
+            "idempotency_key": idem_key,
         }
+        headers = (http.get('headers') or {}).copy()
+        headers[IDEMP_HEADER] = idem_key
         http_post(
             http.get('base_url'),
             path,
             payload,
-            headers=(http.get('headers') or {}),
+            headers=headers,
             allowed_paths=http.get('allow_paths') or [],
             hmac_secret_env=http.get('hmac_secret_env'),
             hmac_header=http.get('hmac_header', 'X-Hub-Signature-256'),
@@ -146,11 +163,25 @@ def main():
         if not http_path_allowed(cfg, path):
             print(f"[agent-bus] http path not allowed by config: {path}")
             return 0
+        repo = cfg.get('upstream_repo')
+        pr = int(cfg.get('pr_number'))
+        now = int(time.time())
+        idem_ts = ts_bucket(now)
+        idem_key = make_idempotency_key(repo, pr, command, idem_ts)
+        if isinstance(data, dict):
+            data.setdefault("ts", now)
+            data.setdefault("idempotency_key", idem_key)
+            data.setdefault("source", "agent-bus")
+            data.setdefault("repo", repo)
+            data.setdefault("pr", pr)
+            data.setdefault("command", command)
+        headers = (http.get('headers') or {}).copy()
+        headers[IDEMP_HEADER] = idem_key
         http_post(
             http.get('base_url'),
             path,
             data,
-            headers=(http.get('headers') or {}),
+            headers=headers,
             allowed_paths=http.get('allow_paths') or [],
             hmac_secret_env=http.get('hmac_secret_env'),
             hmac_header=http.get('hmac_header', 'X-Hub-Signature-256'),

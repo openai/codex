@@ -36,6 +36,17 @@ def edit_issue_labels(num, remove=None, add=None):
     run(cmd)
 
 
+def count_error_comments(num) -> int:
+    try:
+        out = run(["gh", "issue", "view", str(num), "--json", "comments"])
+        data = json.loads(out)
+        comments = data.get("comments") or []
+        needle = "[agent-bus queue] error"
+        return sum(1 for c in comments if (c.get("body") or "").startswith(needle))
+    except Exception:
+        return 0
+
+
 def process_task(issue):
     body = (issue.get('body') or '').strip()
     # First line is the command, rest is payload (optional JSON)
@@ -74,7 +85,15 @@ def main():
         try:
             process_task(issue)
         except Exception as e:
-            comment_issue(issue['number'], f"[agent-bus queue] error: {e}")
+            num = issue['number']
+            comment_issue(num, f"[agent-bus queue] error: {e}")
+            # dead-letter after 2 failures
+            failures = count_error_comments(num)
+            if failures >= 2:
+                try:
+                    edit_issue_labels(num, remove=["agent-task"], add=["agent-task-failed"])
+                except Exception:
+                    pass
     return 0
 
 

@@ -2,7 +2,7 @@ upstream_repo = "openai/codex"
 pr_number = 4522
 
 [security]
-allow_commands = ["/status", "/rerun", "/handoff", "/notify", "/apply", "/defer", "/decline"]
+allow_commands = ["/status", "/rerun", "/handoff", "/notify"]
 min_seconds_between_posts = 120
 
 [agents.github_upstream]

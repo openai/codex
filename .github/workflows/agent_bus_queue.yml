@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   queue:
+    if: github.ref_name == 'main' || github.ref_name == 'feat/agent-bus'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

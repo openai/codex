@@ -17,6 +17,9 @@ permissions:
 
 jobs:
   respond:
+    if: |
+      github.event_name != 'workflow_run' && (github.ref_name == 'main' || github.ref_name == 'feat/agent-bus') ||
+      (github.event_name == 'workflow_run' && (github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'feat/agent-bus'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
