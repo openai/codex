@@ -2,7 +2,7 @@ import { CodexOptions } from "./codexOptions";
 import { ThreadEvent } from "./events";
 import { CodexExec } from "./exec";
 import { ThreadItem } from "./items";
-import { TheadOptions } from "./threadOptions";
+import { ThreadOptions } from "./threadOptions";
 
 /** Completed turn. */
 export type Turn = {
@@ -29,7 +29,7 @@ export class Thread {
   private _exec: CodexExec;
   private _options: CodexOptions;
   private _id: string | null;
-  private _threadOptions: TheadOptions;
+  private _threadOptions: ThreadOptions;
 
   /** Returns the ID of the thread. Populated after the first turn starts. */
   public get id(): string | null {
@@ -40,7 +40,7 @@ export class Thread {
   constructor(
     exec: CodexExec,
     options: CodexOptions,
-    threadOptions: TheadOptions,
+    threadOptions: ThreadOptions,
     id: string | null = null,
   ) {
     this._exec = exec;
