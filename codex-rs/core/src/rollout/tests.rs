@@ -12,6 +12,7 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::list::ConversationItem;
 use crate::rollout::list::ConversationsPage;
 use crate::rollout::list::Cursor;
@@ -31,7 +32,6 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
 
-const INTERACTIVE_SOURCES: &[SessionSource] = &[SessionSource::Cli, SessionSource::VSCode];
 const NO_SOURCE_FILTER: &[SessionSource] = &[];
 
 fn write_session_file(
@@ -110,11 +110,32 @@ async fn test_list_conversations_latest_first() {
     let u3 = Uuid::from_u128(3);
 
     // Create three sessions across three days
-    write_session_file(home, "2025-01-01T12-00-00", u1, 3, None).unwrap();
-    write_session_file(home, "2025-01-02T12-00-00", u2, 3, None).unwrap();
-    write_session_file(home, "2025-01-03T12-00-00", u3, 3, None).unwrap();
+    write_session_file(
+        home,
+        "2025-01-01T12-00-00",
+        u1,
+        3,
+        Some(SessionSource::Vscode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-01-02T12-00-00",
+        u2,
+        3,
+        Some(SessionSource::Vscode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-01-03T12-00-00",
+        u3,
+        3,
+        Some(SessionSource::Vscode),
+    )
+    .unwrap();
 
-    let page = get_conversations(home, 10, None, INTERACTIVE_SOURCES)
+    let page = get_conversations(home, 10, None, INTERACTIVE_SESSION_SOURCES)
         .await
         .unwrap();
 
@@ -214,13 +235,48 @@ async fn test_pagination_cursor() {
     let u5 = Uuid::from_u128(55);
 
     // Oldest to newest
-    write_session_file(home, "2025-03-01T09-00-00", u1, 1, None).unwrap();
-    write_session_file(home, "2025-03-02T09-00-00", u2, 1, None).unwrap();
-    write_session_file(home, "2025-03-03T09-00-00", u3, 1, None).unwrap();
-    write_session_file(home, "2025-03-04T09-00-00", u4, 1, None).unwrap();
-    write_session_file(home, "2025-03-05T09-00-00", u5, 1, None).unwrap();
+    write_session_file(
+        home,
+        "2025-03-01T09-00-00",
+        u1,
+        1,
+        Some(SessionSource::Vscode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-03-02T09-00-00",
+        u2,
+        1,
+        Some(SessionSource::Vscode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-03-03T09-00-00",
+        u3,
+        1,
+        Some(SessionSource::Vscode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-03-04T09-00-00",
+        u4,
+        1,
+        Some(SessionSource::Vscode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-03-05T09-00-00",
+        u5,
+        1,
+        Some(SessionSource::Vscode),
+    )
+    .unwrap();
 
-    let page1 = get_conversations(home, 2, None, INTERACTIVE_SOURCES)
+    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES)
         .await
         .unwrap();
     let p5 = home
@@ -278,9 +334,14 @@ async fn test_pagination_cursor() {
     };
     assert_eq!(page1, expected_page1);
 
-    let page2 = get_conversations(home, 2, page1.next_cursor.as_ref(), INTERACTIVE_SOURCES)
-        .await
-        .unwrap();
+    let page2 = get_conversations(
+        home,
+        2,
+        page1.next_cursor.as_ref(),
+        INTERACTIVE_SESSION_SOURCES,
+    )
+    .await
+    .unwrap();
     let p3 = home
         .join("sessions")
         .join("2025")
@@ -336,9 +397,14 @@ async fn test_pagination_cursor() {
     };
     assert_eq!(page2, expected_page2);
 
-    let page3 = get_conversations(home, 2, page2.next_cursor.as_ref(), INTERACTIVE_SOURCES)
-        .await
-        .unwrap();
+    let page3 = get_conversations(
+        home,
+        2,
+        page2.next_cursor.as_ref(),
+        INTERACTIVE_SESSION_SOURCES,
+    )
+    .await
+    .unwrap();
     let p1 = home
         .join("sessions")
         .join("2025")
@@ -378,9 +444,9 @@ async fn test_get_conversation_contents() {
 
     let uuid = Uuid::new_v4();
     let ts = "2025-04-01T10-30-00";
-    write_session_file(home, ts, uuid, 2, Some(SessionSource::VSCode)).unwrap();
+    write_session_file(home, ts, uuid, 2, Some(SessionSource::Vscode)).unwrap();
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SOURCES)
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES)
         .await
         .unwrap();
     let path = &page.items[0].path;
@@ -466,7 +532,7 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                source: SessionSource::VSCode,
+                source: SessionSource::Vscode,
             },
             git: None,
         }),
@@ -499,7 +565,7 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
     }
     drop(file);
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SOURCES).await?;
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
     let item = page.items.first().expect("conversation item");
     let tail_len = item.tail.len();
     assert_eq!(tail_len, 10usize.min(total_messages));
@@ -550,7 +616,7 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                source: SessionSource::VSCode,
+                source: SessionSource::Vscode,
             },
             git: None,
         }),
@@ -582,7 +648,7 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
     }
     drop(file);
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SOURCES).await?;
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
     let tail = &page.items.first().expect("conversation item").tail;
 
     assert_eq!(tail.len(), 3);
@@ -635,7 +701,7 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
-                source: SessionSource::VSCode,
+                source: SessionSource::Vscode,
             },
             git: None,
         }),
@@ -681,7 +747,7 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
     writeln!(file, "{}", serde_json::to_string(&shutdown_event)?)?;
     drop(file);
 
-    let page = get_conversations(home, 1, None, INTERACTIVE_SOURCES).await?;
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
     let tail = &page.items.first().expect("conversation item").tail;
 
     let expected: Vec<serde_json::Value> = (0..4)
@@ -719,11 +785,11 @@ async fn test_stable_ordering_same_second_pagination() {
     let u2 = Uuid::from_u128(2);
     let u3 = Uuid::from_u128(3);
 
-    write_session_file(home, ts, u1, 0, None).unwrap();
-    write_session_file(home, ts, u2, 0, None).unwrap();
-    write_session_file(home, ts, u3, 0, None).unwrap();
+    write_session_file(home, ts, u1, 0, Some(SessionSource::Vscode)).unwrap();
+    write_session_file(home, ts, u2, 0, Some(SessionSource::Vscode)).unwrap();
+    write_session_file(home, ts, u3, 0, Some(SessionSource::Vscode)).unwrap();
 
-    let page1 = get_conversations(home, 2, None, INTERACTIVE_SOURCES)
+    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES)
         .await
         .unwrap();
 
@@ -774,9 +840,14 @@ async fn test_stable_ordering_same_second_pagination() {
     };
     assert_eq!(page1, expected_page1);
 
-    let page2 = get_conversations(home, 2, page1.next_cursor.as_ref(), INTERACTIVE_SOURCES)
-        .await
-        .unwrap();
+    let page2 = get_conversations(
+        home,
+        2,
+        page1.next_cursor.as_ref(),
+        INTERACTIVE_SESSION_SOURCES,
+    )
+    .await
+    .unwrap();
     let p1 = home
         .join("sessions")
         .join("2025")
@@ -824,7 +895,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
     )
     .unwrap();
 
-    let interactive_only = get_conversations(home, 10, None, INTERACTIVE_SOURCES)
+    let interactive_only = get_conversations(home, 10, None, INTERACTIVE_SESSION_SOURCES)
         .await
         .unwrap();
     let paths: Vec<_> = interactive_only

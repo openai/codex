@@ -9,6 +9,7 @@ use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
+use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -18,7 +19,6 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::SessionSource;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -78,8 +78,6 @@ pub mod test_backend;
 
 #[cfg(not(debug_assertions))]
 mod updates;
-
-const INTERACTIVE_SOURCES: &[SessionSource] = &[SessionSource::Cli, SessionSource::Vscode];
 
 use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
@@ -396,8 +394,13 @@ async fn run_ratatui_app(
             }
         }
     } else if cli.resume_last {
-        match RolloutRecorder::list_conversations(&config.codex_home, 1, None, INTERACTIVE_SOURCES)
-            .await
+        match RolloutRecorder::list_conversations(
+            &config.codex_home,
+            1,
+            None,
+            INTERACTIVE_SESSION_SOURCES,
+        )
+        .await
         {
             Ok(page) => page
                 .items
