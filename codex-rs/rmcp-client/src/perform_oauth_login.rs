@@ -32,12 +32,15 @@ pub async fn perform_oauth_login(server_name: &str, server_url: &str) -> Result<
         server: Arc::clone(&server),
     };
 
-    let actual_port = server
-        .server_addr()
-        .to_ip()
-        .ok_or_else(|| anyhow!("unable to determine callback port"))?
-        .port();
-    let redirect_uri = format!("http://localhost:{actual_port}/callback");
+    let redirect_uri = match server.server_addr() {
+        tiny_http::ListenAddr::IP(std::net::SocketAddr::V4(addr)) => {
+            format!("http://{}:{}/callback", addr.ip(), addr.port())
+        }
+        tiny_http::ListenAddr::IP(std::net::SocketAddr::V6(addr)) => {
+            format!("http://[{}]:{}/callback", addr.ip(), addr.port())
+        }
+        _ => return Err(anyhow!("unable to determine callback address")),
+    };
 
     let (tx, rx) = oneshot::channel();
     spawn_callback_server(server, tx);
@@ -82,25 +85,36 @@ pub async fn perform_oauth_login(server_name: &str, server_url: &str) -> Result<
 }
 
 fn spawn_callback_server(server: Arc<Server>, tx: oneshot::Sender<(String, String)>) {
-    std::thread::spawn(move || {
+    tokio::task::spawn_blocking(move || {
         while let Ok(request) = server.recv() {
             let path = request.url().to_string();
-            if let Some((code, state)) = parse_oauth_callback(&path) {
+            if let Some(OauthCallbackResult { code, state }) = parse_oauth_callback(&path) {
                 let response =
                     Response::from_string("Authentication complete. You may close this window.");
-                let _ = request.respond(response);
-                let _ = tx.send((code, state));
+                if let Err(err) = request.respond(response) {
+                    eprintln!("Failed to respond to OAuth callback: {err}");
+                }
+                if let Err(err) = tx.send((code, state)) {
+                    eprintln!("Failed to send OAuth callback: {err:?}");
+                }
                 break;
             } else {
                 let response =
                     Response::from_string("Invalid OAuth callback").with_status_code(400);
-                let _ = request.respond(response);
+                if let Err(err) = request.respond(response) {
+                    eprintln!("Failed to respond to OAuth callback: {err}");
+                }
             }
         }
     });
 }
 
-fn parse_oauth_callback(path: &str) -> Option<(String, String)> {
+struct OauthCallbackResult {
+    code: String,
+    state: String,
+}
+
+fn parse_oauth_callback(path: &str) -> Option<OauthCallbackResult> {
     let (route, query) = path.split_once('?')?;
     if route != "/callback" {
         return None;
@@ -119,5 +133,8 @@ fn parse_oauth_callback(path: &str) -> Option<(String, String)> {
         }
     }
 
-    Some((code?, state?))
+    Some(OauthCallbackResult {
+        code: code?,
+        state: state?,
+    })
 }
