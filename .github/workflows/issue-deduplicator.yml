@@ -64,7 +64,7 @@ jobs:
           script: |
             let numbers;
             try {
-              numbers = JSON.parse(raw);
+              numbers = JSON.parse(process.env.CODEX_OUTPUT);
             } catch (error) {
               core.info(`Codex output was not valid JSON. Raw output: ${raw}`);
               return;
