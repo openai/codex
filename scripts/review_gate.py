@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CFG_PRIMARY = ROOT / "local/automation/agent_bus.toml"
 CFG_FALLBACK = ROOT / "docs/automation/agent_bus.example.toml"
 
-from scripts.connectors.github_conn import pr_status, pr_comment
+from scripts.connectors.github_conn import pr_status, pr_comment, pr_review
 
 
 def load_cfg():
@@ -73,6 +73,13 @@ def main():
     review_cfg = cfg.get('review', {})
     barriers = review_cfg.get('barriers') or []
     actions = review_cfg.get('actions') or {"approve": "/apply", "defer": "/defer", "decline": "/decline"}
+    # Map configured action commands to review intents
+    approve_cmd = actions.get("approve", "/apply")
+    defer_cmd = actions.get("defer", "/defer")
+    decline_cmd = actions.get("decline", "/decline")
+    request_changes_cmds = {defer_cmd, decline_cmd}
+    approve_cmds = {approve_cmd}
+    actionable_cmds = approve_cmds.union(request_changes_cmds)
 
     # Fetch PR status once
     status = pr_status(upstream, pr_num, gh_token)
@@ -88,20 +95,23 @@ def main():
             print(f"[review-gate] actor '{actor}' not allowed; skipping")
             return 0
         body_stripped = body.strip()
-        # Map owner intent to command, only when barriers are satisfied
-        if body_stripped in ("/apply", "/defer", "/decline"):
+        # Map owner intent to formal PR review, only when barriers are satisfied
+        if body_stripped in actionable_cmds:
             if not ok:
                 pr_comment(upstream, pr_num, f"[review-gate] Barriers not satisfied; missing: {', '.join(missing)}", gh_token)
                 return 0
-            # create agent-task issue in fork repo using the default GH_TOKEN
-            title = f"agent-task: {body_stripped} PR {pr_num}"
-            issue_body = f"{body_stripped}\n{{\n  \"pr\": {pr_num},\n  \"repo\": \"{upstream}\"\n}}\n"
-            gh_issue_create(title, issue_body, labels=["agent-task"])
-            pr_comment(upstream, pr_num, f"[review-gate] queued task: {body_stripped}", gh_token)
+            review_msg = None
+            if "\n" in body:
+                review_msg = body.split("\n", 1)[1].strip() or None
+            if body_stripped in approve_cmds:
+                pr_review(upstream, pr_num, "approve", review_msg or "[review-gate] Approved.", gh_token)
+                pr_comment(upstream, pr_num, "[review-gate] Submitted APPROVE review.", gh_token)
+            else:
+                pr_review(upstream, pr_num, "request_changes", review_msg or "[review-gate] Requested changes (deferred/declined).", gh_token)
+                pr_comment(upstream, pr_num, "[review-gate] Submitted REQUEST_CHANGES review.", gh_token)
             return 0
-        else:
-            print("[review-gate] no actionable comment; ignoring")
-            return 0
+        print("[review-gate] no actionable comment; ignoring")
+        return 0
 
     # For workflow_run/check_suite/schedule: just post a status summary and list missing barriers when not ok
     if ok:
@@ -113,4 +123,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-
