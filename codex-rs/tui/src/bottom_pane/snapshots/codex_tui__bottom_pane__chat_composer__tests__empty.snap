@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 1938
 expression: terminal.backend()
 ---
 "                                                                                                    "
@@ -11,4 +12,4 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"  ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit                                                     "
+"  ? for shortcuts                                                                                   "

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use codex_protocol::mcp_protocol::AuthMode;
+use codex_app_server_protocol::AuthMode;
 
 use crate::token_data::PlanType;
 use crate::token_data::TokenData;

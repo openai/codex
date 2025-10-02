@@ -25,7 +25,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
-use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
@@ -79,19 +79,19 @@ async fn summarize_context_three_requests_and_instructions() {
         body.contains("\"text\":\"hello world\"")
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    mount_sse_once(&server, first_matcher, sse1).await;
+    mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("You have exceeded the maximum number of tokens")
     };
-    mount_sse_once(&server, second_matcher, sse2).await;
+    mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{THIRD_USER_MSG}\""))
     };
-    mount_sse_once(&server, third_matcher, sse3).await;
+    mount_sse_once_match(&server, third_matcher, sse3).await;
 
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = ModelProviderInfo {
