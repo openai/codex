@@ -15,5 +15,5 @@ expression: terminal.backend()
 "                                  rest of the session                           "
 "  3. Cancel                       Do not run the command                        "
 "                                                                                "
-"  Press Enter to confirm or Esc to cancel                                       "
+"  Press enter to confirm or esc to cancel                                       "
 "                                                                                "

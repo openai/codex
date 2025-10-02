@@ -14,7 +14,7 @@ use std::cell::RefCell;
 
 use crate::render::renderable::Renderable;
 
-use super::popup_consts::STANDARD_POPUP_HINT_LINE;
+use super::popup_consts::standard_popup_hint_line;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -221,7 +221,7 @@ impl Renderable for CustomPromptView {
 
         let hint_y = hint_blank_y.saturating_add(1);
         if hint_y < area.y.saturating_add(area.height) {
-            Paragraph::new(STANDARD_POPUP_HINT_LINE).render(
+            Paragraph::new(standard_popup_hint_line()).render(
                 Rect {
                     x: area.x,
                     y: hint_y,

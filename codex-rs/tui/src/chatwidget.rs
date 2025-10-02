@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -39,6 +40,7 @@ use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
+use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::ConversationId;
@@ -68,7 +70,7 @@ use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
-use crate::bottom_pane::popup_consts::STANDARD_POPUP_HINT_LINE;
+use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -110,6 +112,7 @@ use codex_git_tooling::GhostCommit;
 use codex_git_tooling::GitToolingError;
 use codex_git_tooling::create_ghost_commit;
 use codex_git_tooling::restore_ghost_commit;
+use strum::IntoEnumIterator;
 
 const MAX_TRACKED_GHOST_COMMITS: usize = 20;
 
@@ -282,6 +285,16 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    fn model_description_for(slug: &str) -> Option<&'static str> {
+        if slug.starts_with("gpt-5-codex") {
+            Some("Optimized for coding tasks with many tools.")
+        } else if slug.starts_with("gpt-5") {
+            Some("Broad world knowledge with strong general reasoning.")
+        } else {
+            None
+        }
+    }
+
     fn flush_answer_stream_with_separator(&mut self) {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
@@ -536,6 +549,15 @@ impl ChatWidget {
             event.changes,
             &self.config.cwd,
         ));
+    }
+
+    fn on_view_image_tool_call(&mut self, event: ViewImageToolCallEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_view_image_tool_call(
+            event.path,
+            &self.config.cwd,
+        ));
+        self.request_redraw();
     }
 
     fn on_patch_apply_end(&mut self, event: codex_core::protocol::PatchApplyEndEvent) {
@@ -1398,6 +1420,7 @@ impl ChatWidget {
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
+            EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
@@ -1568,47 +1591,38 @@ impl ChatWidget {
         ));
     }
 
-    /// Open a popup to choose the model preset (model + reasoning effort).
+    /// Open a popup to choose the model (stage 1). After selecting a model,
+    /// a second popup is shown to choose the reasoning effort.
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
-        let current_effort = self.config.model_reasoning_effort;
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
         let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
+        let mut grouped: BTreeMap<&str, Vec<ModelPreset>> = BTreeMap::new();
+        for preset in presets.into_iter() {
+            grouped.entry(preset.model).or_default().push(preset);
+        }
+
         let mut items: Vec<SelectionItem> = Vec::new();
-        for preset in presets.iter() {
-            let name = preset.label.to_string();
-            let description = Some(preset.description.to_string());
-            let is_current = preset.model == current_model && preset.effort == current_effort;
-            let model_slug = preset.model.to_string();
-            let effort = preset.effort;
-            let current_model = current_model.clone();
+        for (model_slug, entries) in grouped.into_iter() {
+            let name = model_slug.to_string();
+            let description = Self::model_description_for(model_slug)
+                .map(std::string::ToString::to_string)
+                .or_else(|| {
+                    entries
+                        .iter()
+                        .find(|preset| !preset.description.is_empty())
+                        .map(|preset| preset.description.to_string())
+                })
+                .or_else(|| entries.first().map(|preset| preset.description.to_string()));
+            let is_current = model_slug == current_model;
+            let model_slug_string = model_slug.to_string();
+            let presets_for_model = entries.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    model: Some(model_slug.clone()),
-                    effort: Some(effort),
-                    summary: None,
-                }));
-                tx.send(AppEvent::UpdateModel(model_slug.clone()));
-                tx.send(AppEvent::UpdateReasoningEffort(effort));
-                tx.send(AppEvent::PersistModelSelection {
-                    model: model_slug.clone(),
-                    effort,
+                tx.send(AppEvent::OpenReasoningPopup {
+                    model: model_slug_string.clone(),
+                    presets: presets_for_model.clone(),
                 });
-                tracing::info!(
-                    "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
-                    model_slug.clone(),
-                    effort
-                        .map(|effort| effort.to_string())
-                        .unwrap_or_else(|| "none".to_string()),
-                    current_model,
-                    current_effort
-                        .map(|effort| effort.to_string())
-                        .unwrap_or_else(|| "none".to_string())
-                );
             })];
             items.push(SelectionItem {
                 name,
@@ -1621,11 +1635,128 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select model and reasoning level".to_string()),
-            subtitle: Some(
-                "Switch between OpenAI models for this and future Codex CLI session".to_string(),
-            ),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            title: Some("Select Model".to_string()),
+            subtitle: Some("Switch the model for this and future Codex CLI sessions".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    /// Open a popup to choose the reasoning effort (stage 2) for the given model.
+    pub(crate) fn open_reasoning_popup(&mut self, model_slug: String, presets: Vec<ModelPreset>) {
+        let default_effort = ReasoningEffortConfig::default();
+
+        let has_none_choice = presets.iter().any(|preset| preset.effort.is_none());
+        struct EffortChoice {
+            stored: Option<ReasoningEffortConfig>,
+            display: ReasoningEffortConfig,
+        }
+        let mut choices: Vec<EffortChoice> = Vec::new();
+        for effort in ReasoningEffortConfig::iter() {
+            if presets.iter().any(|preset| preset.effort == Some(effort)) {
+                choices.push(EffortChoice {
+                    stored: Some(effort),
+                    display: effort,
+                });
+            }
+            if has_none_choice && default_effort == effort {
+                choices.push(EffortChoice {
+                    stored: None,
+                    display: effort,
+                });
+            }
+        }
+        if choices.is_empty() {
+            choices.push(EffortChoice {
+                stored: Some(default_effort),
+                display: default_effort,
+            });
+        }
+
+        let default_choice: Option<ReasoningEffortConfig> = if has_none_choice {
+            None
+        } else if choices
+            .iter()
+            .any(|choice| choice.stored == Some(default_effort))
+        {
+            Some(default_effort)
+        } else {
+            choices
+                .iter()
+                .find_map(|choice| choice.stored)
+                .or(Some(default_effort))
+        };
+
+        let is_current_model = self.config.model == model_slug;
+        let highlight_choice = if is_current_model {
+            self.config.model_reasoning_effort
+        } else {
+            default_choice
+        };
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for choice in choices.iter() {
+            let effort = choice.display;
+            let mut effort_label = effort.to_string();
+            if let Some(first) = effort_label.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            if choice.stored == default_choice {
+                effort_label.push_str(" (default)");
+            }
+
+            let description = presets
+                .iter()
+                .find(|preset| preset.effort == choice.stored && !preset.description.is_empty())
+                .map(|preset| preset.description.to_string())
+                .or_else(|| {
+                    presets
+                        .iter()
+                        .find(|preset| preset.effort == choice.stored)
+                        .map(|preset| preset.description.to_string())
+                });
+
+            let model_for_action = model_slug.clone();
+            let effort_for_action = choice.stored;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: Some(model_for_action.clone()),
+                    effort: Some(effort_for_action),
+                    summary: None,
+                }));
+                tx.send(AppEvent::UpdateModel(model_for_action.clone()));
+                tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
+                tx.send(AppEvent::PersistModelSelection {
+                    model: model_for_action.clone(),
+                    effort: effort_for_action,
+                });
+                tracing::info!(
+                    "Selected model: {}, Selected effort: {}",
+                    model_for_action,
+                    effort_for_action
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "default".to_string())
+                );
+            })];
+
+            items.push(SelectionItem {
+                name: effort_label,
+                description,
+                is_current: is_current_model && choice.stored == highlight_choice,
+                actions,
+                dismiss_on_select: true,
+                search_value: None,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Reasoning Level".to_string()),
+            subtitle: Some(format!("Reasoning for model {model_slug}")),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -1668,7 +1799,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Approval Mode".to_string()),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -1843,7 +1974,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select a review preset".into()),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
@@ -1879,7 +2010,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select a base branch".to_string()),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search branches".to_string()),
@@ -1920,7 +2051,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select a commit to review".to_string()),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search commits".to_string()),
@@ -2145,7 +2276,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
 
     chat.bottom_pane.show_selection_view(SelectionViewParams {
         title: Some("Select a commit to review".to_string()),
-        footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+        footer_hint: Some(standard_popup_hint_line()),
         items,
         is_searchable: true,
         search_placeholder: Some("Type to search commits".to_string()),
