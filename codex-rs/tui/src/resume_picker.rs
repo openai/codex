@@ -24,6 +24,7 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use unicode_width::UnicodeWidthStr;
 
+use crate::key_hint;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -678,16 +679,18 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
 
         // Hint line
         let hint_line: Line = vec![
-            "Enter".bold(),
-            " to resume ".into(),
-            "• ".dim(),
-            "Esc".bold(),
-            " to start new ".into(),
-            "• ".dim(),
-            "Ctrl+C".into(),
-            " to quit ".into(),
-            "• ".dim(),
-            "↑/↓".into(),
+            key_hint::plain(KeyCode::Enter).into(),
+            " to resume ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " to start new ".dim(),
+            "    ".dim(),
+            key_hint::ctrl(KeyCode::Char('c')).into(),
+            " to quit ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Up).into(),
+            "/".dim(),
+            key_hint::plain(KeyCode::Down).into(),
             " to browse".dim(),
         ]
         .into();

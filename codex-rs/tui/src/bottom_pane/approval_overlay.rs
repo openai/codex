@@ -11,6 +11,7 @@ use crate::bottom_pane::list_selection_view::SelectionViewParams;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
+use crate::key_hint;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -116,7 +117,13 @@ impl ApprovalOverlay {
             .collect();
 
         let params = SelectionViewParams {
-            footer_hint: Some("Press Enter to confirm or Esc to cancel".to_string()),
+            footer_hint: Some(Line::from(vec![
+                "Press ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to confirm or ".into(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to cancel".into(),
+            ])),
             items,
             header,
             ..Default::default()
