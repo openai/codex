@@ -18,7 +18,7 @@ Buffer {
         "                                  rest of the session                           ",
         "  3. Cancel                       Do not run the command                        ",
         "                                                                                ",
-        "  Press Enter to confirm or Esc to cancel                                       ",
+        "  Press enter to confirm or esc to cancel                                       ",
         "                                                                                ",
     ],
     styles: [
@@ -37,6 +37,6 @@ Buffer {
         x: 34, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 56, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 41, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 14, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

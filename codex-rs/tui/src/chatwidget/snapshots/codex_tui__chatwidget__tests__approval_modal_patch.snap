@@ -15,5 +15,5 @@ expression: terminal.backend()
 "› 1. Approve  Apply the proposed changes                                        "
 "  2. Cancel   Do not apply the changes                                          "
 "                                                                                "
-"  Press Enter to confirm or Esc to cancel                                       "
+"  Press enter to confirm or esc to cancel                                       "
 "                                                                                "
