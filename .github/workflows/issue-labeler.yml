@@ -1,0 +1,155 @@
+name: Issue Labeler
+
+on:
+  issues:
+    types:
+      - opened
+      - labeled
+
+jobs:
+  label-with-codex:
+    name: Label issue with Codex
+    if: ${{ github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'codex-label') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Generate labeling prompt
+        id: prompt
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const core = require('@actions/core');
+
+            const issue = context.payload.issue;
+            const promptFile = path.join(process.env.RUNNER_TEMP || require('os').tmpdir(), 'codex_issue_prompt.txt');
+
+            const basePromptPath = path.join(process.env.GITHUB_WORKSPACE, '.github', 'prompts', 'issue-labeler.txt');
+            const basePrompt = fs.readFileSync(basePromptPath, 'utf8').trim();
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 20,
+              sort: 'created',
+              direction: 'desc',
+            });
+
+            const examples = issues
+              .filter((item) => item.number !== issue.number)
+              .map((item) => {
+                const itemLabels = (item.labels || [])
+                  .map((label) => (typeof label === 'string' ? label : label.name))
+                  .filter(Boolean);
+                if (itemLabels.length === 0) {
+                  return null;
+                }
+                const body = (item.body || '').replace(/\r\n/g, '\n').split('\n').slice(0, 6).join('\n');
+                return [
+                  `Title: ${item.title}`,
+                  `Labels: ${itemLabels.join(', ')}`,
+                  `Body:\n${body || '(empty)'}`,
+                ].join('\n');
+              })
+              .filter(Boolean)
+              .slice(0, 5);
+
+            const promptSections = [
+              basePrompt,
+              '',
+              'Labeled issue examples:',
+              examples.length > 0
+                ? examples.map((example, index) => `${index + 1}.\n${example}`).join('\n\n')
+                : 'No labeled examples available.',
+              '',
+              'New issue to label:',
+              `Title: ${issue.title}`,
+              `Body:\n${(issue.body || '').replace(/\r\n/g, '\n') || '(empty)'}`,
+            ];
+
+            const prompt = promptSections.join('\n\n');
+            fs.writeFileSync(promptFile, prompt, 'utf8');
+            core.info(`Prompt written to ${promptFile}`);
+            core.setOutput('path', promptFile);
+
+      - name: Run Codex
+        uses: openai/codex-action@main
+        id: codex
+        with:
+          openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          prompt_file: ${{ steps.prompt.outputs.path }}
+
+      - name: Apply labels from Codex output
+        uses: actions/github-script@v7
+        env:
+          CODEX_OUTPUT: ${{ steps.codex.outputs.final_message }}
+        with:
+          script: |
+            const core = require('@actions/core');
+            const output = (process.env.CODEX_OUTPUT || '').trim();
+
+            if (!output) {
+              core.info('Codex produced no output. Skipping label application.');
+              return;
+            }
+
+            let labels;
+            try {
+              labels = JSON.parse(output);
+            } catch (error) {
+              core.warning(`Failed to parse Codex output as JSON: ${error.message}`);
+              core.info(`Raw output: ${output}`);
+              return;
+            }
+
+            if (!Array.isArray(labels)) {
+              core.warning('Codex output is not a JSON array. Skipping label application.');
+              return;
+            }
+
+            const normalized = labels
+              .map((label) => (label == null ? '' : String(label).trim()))
+              .filter((label) => label.length > 0);
+
+            const unique = [...new Set(normalized)];
+
+            if (unique.length === 0) {
+              core.info('No labels to apply after normalization.');
+              return;
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: unique,
+            });
+
+            core.info(`Applied labels: ${unique.join(', ')}`);
+
+      - name: Remove codex-label trigger
+        if: ${{ always() && github.event.action == 'labeled' && github.event.label.name == 'codex-label' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const core = require('@actions/core');
+            const labelName = 'codex-label';
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: labelName,
+              });
+              core.info(`Removed label: ${labelName}`);
+            } catch (error) {
+              if (error.status === 404) {
+                core.info('Label already removed or missing.');
+              } else {
+                core.warning(`Failed to remove label: ${error.message}`);
+              }
+            }
