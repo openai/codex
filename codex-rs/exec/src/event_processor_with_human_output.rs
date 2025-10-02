@@ -580,6 +580,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::ListCustomPromptsResponse(_) => {
                 // Currently ignored in exec output.
             }
+            EventMsg::ViewImageToolCall(view) => {
+                ts_println!(
+                    self,
+                    "{} {}",
+                    "viewed image".style(self.magenta),
+                    view.path.display()
+                );
+            }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
                 TurnAbortReason::Interrupted => {
                     ts_println!(self, "task interrupted");

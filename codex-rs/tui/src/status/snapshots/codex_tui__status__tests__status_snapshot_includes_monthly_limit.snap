@@ -14,6 +14,6 @@ expression: sanitized
 │  Agents.md:        <none>                                                  │
 │                                                                            │
 │  Token usage:      1.2K total  (800 input + 400 output)                    │
-│  Context window:   100% left (1.2K / 272K)                                 │
+│  Context window:   100% left (1.2K used / 272K)                            │
 │  Monthly limit:    [██░░░░░░░░░░░░░░░░░░] 12% used (resets 07:08 on 7 May) │
 ╰────────────────────────────────────────────────────────────────────────────╯

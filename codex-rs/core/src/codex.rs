@@ -109,6 +109,7 @@ use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::ViewImageToolCallEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
@@ -2469,13 +2470,21 @@ async fn handle_function_call(
                 ))
             })?;
             let abs = turn_context.resolve_path(Some(args.path));
-            sess.inject_input(vec![InputItem::LocalImage { path: abs }])
+            sess.inject_input(vec![InputItem::LocalImage { path: abs.clone() }])
                 .await
                 .map_err(|_| {
                     FunctionCallError::RespondToModel(
                         "unable to attach image (no active task)".to_string(),
                     )
                 })?;
+            sess.send_event(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+                    call_id: call_id.clone(),
+                    path: abs,
+                }),
+            })
+            .await;
 
             Ok("attached local image path".to_string())
         }

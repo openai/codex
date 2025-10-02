@@ -190,7 +190,7 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
         // Require ChatGPT login (SWIC). Exit with a clear message if missing.
         let _token = match codex_core::config::find_codex_home()
             .ok()
-            .map(codex_login::AuthManager::new)
+            .map(|home| codex_login::AuthManager::new(home, false))
             .and_then(|am| am.auth())
         {
             Some(auth) => {
