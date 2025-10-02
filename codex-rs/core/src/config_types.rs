@@ -13,6 +13,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
 
+pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
@@ -219,6 +221,64 @@ pub enum HistoryPersistence {
     None,
 }
 
+// ===== OTEL configuration =====
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OtelHttpProtocol {
+    /// Binary payload
+    Binary,
+    /// JSON payload
+    Json,
+}
+
+/// Which OTEL exporter to use.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OtelExporterKind {
+    None,
+    OtlpHttp {
+        endpoint: String,
+        headers: HashMap<String, String>,
+        protocol: OtelHttpProtocol,
+    },
+    OtlpGrpc {
+        endpoint: String,
+        headers: HashMap<String, String>,
+    },
+}
+
+/// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct OtelConfigToml {
+    /// Log user prompt in traces
+    pub log_user_prompt: Option<bool>,
+
+    /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
+    pub environment: Option<String>,
+
+    /// Exporter to use. Defaults to `otlp-file`.
+    pub exporter: Option<OtelExporterKind>,
+}
+
+/// Effective OTEL settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OtelConfig {
+    pub log_user_prompt: bool,
+    pub environment: String,
+    pub exporter: OtelExporterKind,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        OtelConfig {
+            log_user_prompt: false,
+            environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
+            exporter: OtelExporterKind::None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 pub enum Notifications {
@@ -253,7 +313,7 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_slash_tmp: bool,
 }
 
-impl From<SandboxWorkspaceWrite> for codex_protocol::mcp_protocol::SandboxSettings {
+impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings {
     fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
         Self {
             writable_roots: sandbox_workspace_write.writable_roots,

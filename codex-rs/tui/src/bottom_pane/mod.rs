@@ -25,6 +25,7 @@ pub mod custom_prompt_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
+mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod paste_burst;
 pub mod popup_consts;
@@ -67,6 +68,7 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
+    context_window_percent: Option<u8>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -99,6 +101,7 @@ impl BottomPane {
             status: None,
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
+            context_window_percent: None,
         }
     }
 
@@ -338,6 +341,16 @@ impl BottomPane {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.status = None;
         }
+    }
+
+    pub(crate) fn set_context_window_percent(&mut self, percent: Option<u8>) {
+        if self.context_window_percent == percent {
+            return;
+        }
+
+        self.context_window_percent = percent;
+        self.composer.set_context_window_percent(percent);
+        self.request_redraw();
     }
 
     /// Show a generic list selection view with the provided items.

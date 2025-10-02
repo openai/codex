@@ -97,7 +97,7 @@ jobs:
           sudo apt install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --bin codex
+        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
 
       - name: Stage artifacts
         shell: bash
@@ -107,8 +107,10 @@ jobs:
 
           if [[ "${{ matrix.runner }}" == windows* ]]; then
             cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
+            cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
           else
             cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
+            cp target/${{ matrix.target }}/release/codex-responses-api-proxy "$dest/codex-responses-api-proxy-${{ matrix.target }}"
           fi
 
       - if: ${{ matrix.runner == 'windows-11-arm' }}
@@ -214,18 +216,30 @@ jobs:
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
           fi
 
-      # build_npm_package.py requires DotSlash when staging releases.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js for npm packaging
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # stage_npm_packages.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@v2
-      - name: Stage npm package
+      - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          TMP_DIR="${RUNNER_TEMP}/npm-stage"
-          ./codex-cli/scripts/build_npm_package.py \
+          ./scripts/stage_npm_packages.py \
             --release-version "${{ steps.release_name.outputs.name }}" \
-            --staging-dir "${TMP_DIR}" \
-            --pack-output "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
+            --package codex \
+            --package codex-responses-api-proxy \
+            --package codex-sdk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -269,7 +283,7 @@ jobs:
       - name: Update npm
         run: npm install -g npm@latest
 
-      - name: Download npm tarball from release
+      - name: Download npm tarballs from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -280,6 +294,14 @@ jobs:
           gh release download "$tag" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern "codex-npm-${version}.tgz" \
+            --dir dist/npm
+          gh release download "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "codex-responses-api-proxy-npm-${version}.tgz" \
+            --dir dist/npm
+          gh release download "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "codex-sdk-npm-${version}.tgz" \
             --dir dist/npm
 
       # No NODE_AUTH_TOKEN needed because we use OIDC.
@@ -294,7 +316,15 @@ jobs:
             tag_args+=(--tag "${NPM_TAG}")
           fi
 
-          npm publish "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${VERSION}.tgz" "${tag_args[@]}"
+          tarballs=(
+            "codex-npm-${VERSION}.tgz"
+            "codex-responses-api-proxy-npm-${VERSION}.tgz"
+            "codex-sdk-npm-${VERSION}.tgz"
+          )
+
+          for tarball in "${tarballs[@]}"; do
+            npm publish "${GITHUB_WORKSPACE}/dist/npm/${tarball}" "${tag_args[@]}"
+          done
 
   update-branch:
     name: Update latest-alpha-cli branch

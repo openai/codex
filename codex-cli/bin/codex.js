@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Unified entry point for the Codex CLI.
 
+import { spawn } from "node:child_process";
 import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -68,7 +69,6 @@ const binaryPath = path.join(archRoot, "codex", codexBinaryName);
 // executing. This allows us to forward those signals to the child process
 // and guarantees that when either the child terminates or the parent
 // receives a fatal signal, both processes exit in a predictable manner.
-const { spawn } = await import("child_process");
 
 function getUpdatedPath(newDirs) {
   const pathSep = process.platform === "win32" ? ";" : ":";
