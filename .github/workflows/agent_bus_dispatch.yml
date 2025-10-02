@@ -1,0 +1,33 @@
+name: Agent Bus (repository_dispatch)
+
+on:
+  repository_dispatch:
+    types: [agent-event]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  bus:
+    if: github.ref_name == 'main' || github.ref_name == 'feat/agent-bus'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: cli/gh-action@v2
+      - name: Route repository_dispatch to agent_bus
+        env:
+          UPSTREAM_GH_TOKEN: ${{ secrets.UPSTREAM_GH_TOKEN }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: |
+          # Extract command and payload; default to /notify
+          CMD=$(jq -r '.client_payload.command // "/notify"' "$GITHUB_EVENT_PATH")
+          PAYLOAD=$(jq -c '.client_payload.payload // {}' "$GITHUB_EVENT_PATH")
+          export AGENT_BUS_COMMAND="$CMD"
+          export AGENT_BUS_PAYLOAD="$PAYLOAD"
+          python3 scripts/agent_bus.py
+
