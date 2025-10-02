@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::ConversationId;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
-use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
@@ -1206,7 +1206,7 @@ pub struct SessionConfiguredEvent {
 }
 
 /// User's decision in response to an ExecApprovalRequest.
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Display, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.

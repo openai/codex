@@ -6,7 +6,7 @@ use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -24,7 +24,7 @@ use super::list::Cursor;
 use super::list::get_conversations;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
-use crate::default_client::ORIGINATOR;
+use crate::default_client::originator;
 use crate::git_info::collect_git_info;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
@@ -124,7 +124,7 @@ impl RolloutRecorder {
                         id: session_id,
                         timestamp,
                         cwd: config.cwd.clone(),
-                        originator: ORIGINATOR.value.clone(),
+                        originator: originator().value.clone(),
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
                     }),

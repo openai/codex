@@ -5,6 +5,7 @@
 #![deny(clippy::disallowed_methods)]
 use app::App;
 pub use app::AppExitInfo;
+use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
@@ -19,7 +20,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::mcp_protocol::AuthMode;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
@@ -54,6 +55,7 @@ mod markdown_render;
 mod markdown_stream;
 pub mod onboarding;
 mod pager_overlay;
+pub mod public_widgets;
 mod render;
 mod resume_picker;
 mod session_log;
@@ -81,6 +83,9 @@ use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
 pub use cli::Cli;
+pub use markdown_render::render_markdown_text;
+pub use public_widgets::composer_input::ComposerAction;
+pub use public_widgets::composer_input::ComposerInput;
 
 // (tests access modules directly within the crate)
 
@@ -239,7 +244,29 @@ pub async fn run_main(
             .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
     }
 
-    let _ = tracing_subscriber::registry().with(file_layer).try_init();
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
+
+    #[allow(clippy::print_stderr)]
+    let otel = match otel {
+        Ok(otel) => otel,
+        Err(e) => {
+            eprintln!("Could not create otel exporter: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(provider) = otel.as_ref() {
+        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
+        );
+
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(otel_layer)
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::registry().with(file_layer).try_init();
+    };
 
     run_ratatui_app(cli, config, active_profile, should_show_trust_screen)
         .await

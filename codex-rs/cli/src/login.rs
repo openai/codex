@@ -1,3 +1,4 @@
+use codex_app_server_protocol::AuthMode;
 use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
 use codex_core::auth::CLIENT_ID;
@@ -6,8 +7,8 @@ use codex_core::auth::logout;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_login::ServerOptions;
+use codex_login::run_device_code_login;
 use codex_login::run_login_server;
-use codex_protocol::mcp_protocol::AuthMode;
 use std::path::PathBuf;
 
 pub async fn login_with_chatgpt(codex_home: PathBuf) -> std::io::Result<()> {
@@ -50,6 +51,32 @@ pub async fn run_login_with_api_key(
         }
         Err(e) => {
             eprintln!("Error logging in: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Login using the OAuth device code flow.
+pub async fn run_login_with_device_code(
+    cli_config_overrides: CliConfigOverrides,
+    issuer_base_url: Option<String>,
+    client_id: Option<String>,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides);
+    let mut opts = ServerOptions::new(
+        config.codex_home,
+        client_id.unwrap_or(CLIENT_ID.to_string()),
+    );
+    if let Some(iss) = issuer_base_url {
+        opts.issuer = iss;
+    }
+    match run_device_code_login(opts).await {
+        Ok(()) => {
+            eprintln!("Successfully logged in");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Error logging in with device code: {e}");
             std::process::exit(1);
         }
     }

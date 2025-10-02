@@ -1,0 +1,17 @@
+[package]
+name = "codex-backend-openapi-models"
+version = { workspace = true }
+edition = "2024"
+
+[lib]
+name = "codex_backend_openapi_models"
+path = "src/lib.rs"
+
+# Important: generated code often violates our workspace lints.
+# Allow unwrap/expect in this crate so the workspace builds cleanly
+# after models are regenerated.
+# Lint overrides are applied in src/lib.rs via crate attributes
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

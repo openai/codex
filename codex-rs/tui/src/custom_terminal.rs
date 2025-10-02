@@ -412,11 +412,13 @@ fn diff_buffers<'a>(a: &'a Buffer, b: &'a Buffer) -> Vec<DrawCommand<'a>> {
             .unwrap_or(0);
         last_nonblank_column[y as usize] = x as u16;
         let (x_abs, y_abs) = a.pos_of(row_start + x + 1);
-        updates.push(DrawCommand::ClearToEnd {
-            x: x_abs,
-            y: y_abs,
-            bg,
-        });
+        if x < (a.area.width as usize).saturating_sub(1) {
+            updates.push(DrawCommand::ClearToEnd {
+                x: x_abs,
+                y: y_abs,
+                bg,
+            });
+        }
     }
 
     // Cells invalidated by drawing/replacing preceding multi-width characters:
@@ -568,5 +570,40 @@ impl ModifierDiff {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
+        let area = Rect::new(0, 0, 3, 2);
+        let previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+
+        next.cell_mut((2, 0))
+            .expect("cell should exist")
+            .set_symbol("X");
+
+        let commands = diff_buffers(&previous, &next);
+
+        let clear_count = commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::ClearToEnd { y, .. } if *y == 0))
+            .count();
+        assert_eq!(
+            0, clear_count,
+            "expected diff_buffers not to emit ClearToEnd; commands: {commands:?}",
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Put { x: 2, y: 0, .. })),
+            "expected diff_buffers to update the final cell; commands: {commands:?}",
+        );
     }
 }

@@ -13,5 +13,3 @@ expression: term.backend().vt100().screen().contents()
 
 
 › Summarize recent commits
-
-  ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit

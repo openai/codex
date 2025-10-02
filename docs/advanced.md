@@ -74,13 +74,13 @@ env = { "API_KEY" = "value" }
 
 ## Using Codex as an MCP Server
 
-The Codex CLI can also be run as an MCP _server_ via `codex mcp`. For example, you can use `codex mcp` to make Codex available as a tool inside of a multi-agent framework like the OpenAI [Agents SDK](https://platform.openai.com/docs/guides/agents).
+The Codex CLI can also be run as an MCP _server_ via `codex mcp-server`. For example, you can use `codex mcp-server` to make Codex available as a tool inside of a multi-agent framework like the OpenAI [Agents SDK](https://platform.openai.com/docs/guides/agents). Use `codex mcp` separately to add/list/get/remove MCP server launchers in your configuration.
 
 ### Codex MCP Server Quickstart
 You can launch a Codex MCP server with the [Model Context Protocol Inspector](https://modelcontextprotocol.io/legacy/tools/inspector):
 
 ``` bash
-npx @modelcontextprotocol/inspector codex mcp
+npx @modelcontextprotocol/inspector codex mcp-server
 ```
 Send a `tools/list` request and you will see that there are two tools available:
 
@@ -109,7 +109,7 @@ Property   | Type   | Description
 > [!TIP]
 > Codex often takes a few minutes to run. To accommodate this, adjust the MCP inspector's Request and Total timeouts to 600000ms (10 minutes) under ⛭ Configuration.
 
-Use the MCP inspector and `codex mcp` to build a simple tic-tac-toe game with the following settings:
+Use the MCP inspector and `codex mcp-server` to build a simple tic-tac-toe game with the following settings:
 
 **approval-policy:** never
 
