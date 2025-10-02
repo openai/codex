@@ -1627,7 +1627,7 @@ impl ChatWidget {
                 is_current,
                 actions,
                 dismiss_on_select: true,
-                search_value: None,
+                ..Default::default()
             });
         }
 
@@ -1673,7 +1673,7 @@ impl ChatWidget {
                 is_current,
                 actions,
                 dismiss_on_select: true,
-                search_value: None,
+                ..Default::default()
             });
         }
 
@@ -1797,7 +1797,6 @@ impl ChatWidget {
         items.push(SelectionItem {
             name: "Review against a base branch".to_string(),
             description: Some("(PR Style)".into()),
-            is_current: false,
             actions: vec![Box::new({
                 let cwd = self.config.cwd.clone();
                 move |tx| {
@@ -1805,13 +1804,11 @@ impl ChatWidget {
                 }
             })],
             dismiss_on_select: false,
-            search_value: None,
+            ..Default::default()
         });
 
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
-            description: None,
-            is_current: false,
             actions: vec![Box::new(
                 move |tx: &AppEventSender| {
                     tx.send(AppEvent::CodexOp(Op::Review {
@@ -1823,14 +1820,12 @@ impl ChatWidget {
                 },
             )],
             dismiss_on_select: true,
-            search_value: None,
+            ..Default::default()
         });
 
         // New: Review a specific commit (opens commit picker)
         items.push(SelectionItem {
             name: "Review a commit".to_string(),
-            description: None,
-            is_current: false,
             actions: vec![Box::new({
                 let cwd = self.config.cwd.clone();
                 move |tx| {
@@ -1838,18 +1833,16 @@ impl ChatWidget {
                 }
             })],
             dismiss_on_select: false,
-            search_value: None,
+            ..Default::default()
         });
 
         items.push(SelectionItem {
             name: "Custom review instructions".to_string(),
-            description: None,
-            is_current: false,
             actions: vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenReviewCustomPrompt);
             })],
             dismiss_on_select: false,
-            search_value: None,
+            ..Default::default()
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -1871,8 +1864,6 @@ impl ChatWidget {
             let branch = option.clone();
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
-                description: None,
-                is_current: false,
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
                     tx3.send(AppEvent::CodexOp(Op::Review {
                         review_request: ReviewRequest {
@@ -1885,6 +1876,7 @@ impl ChatWidget {
                 })],
                 dismiss_on_select: true,
                 search_value: Some(option),
+                ..Default::default()
             });
         }
 
@@ -1910,8 +1902,6 @@ impl ChatWidget {
 
             items.push(SelectionItem {
                 name: subject.clone(),
-                description: None,
-                is_current: false,
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
                     let hint = format!("commit {short}");
                     let prompt = format!(
@@ -1926,6 +1916,7 @@ impl ChatWidget {
                 })],
                 dismiss_on_select: true,
                 search_value: Some(search_val),
+                ..Default::default()
             });
         }
 
@@ -2135,8 +2126,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
 
         items.push(SelectionItem {
             name: subject.clone(),
-            description: None,
-            is_current: false,
             actions: vec![Box::new(move |tx3: &AppEventSender| {
                 let hint = format!("commit {short}");
                 let prompt = format!(
@@ -2151,6 +2140,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
             })],
             dismiss_on_select: true,
             search_value: Some(search_val),
+            ..Default::default()
         });
     }
 

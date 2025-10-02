@@ -64,6 +64,7 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             path.push_span(" ");
             path.extend(render_line_count_summary(row.added, row.removed));
             rows.push(Box::new(path));
+            rows.push(Box::new(RtLine::from("")));
             rows.push(Box::new(row.change));
         }
 
