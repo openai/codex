@@ -1,0 +1,38 @@
+name: Agent Bus (tests)
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    if: github.ref_name == 'main' || github.ref_name == 'feat/agent-bus'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+      - name: Run unit tests (deterministic)
+        run: |
+          pytest -q tests
+      - name: Assert no local/ files are tracked
+        run: |
+          if git ls-files | grep '^local/'; then
+            echo 'local/ files must not be tracked' >&2
+            exit 1
+          fi
+      - name: Assert no __pycache__ in repo
+        run: |
+          if git ls-files | grep '__pycache__/'; then
+            echo '__pycache__ should be ignored' >&2
+            exit 1
+          fi
+
