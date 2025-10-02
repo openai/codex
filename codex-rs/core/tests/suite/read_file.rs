@@ -15,6 +15,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use wiremock::matchers::any;
@@ -77,12 +78,7 @@ async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
         })
         .await?;
 
-    loop {
-        let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     let request_bodies = requests

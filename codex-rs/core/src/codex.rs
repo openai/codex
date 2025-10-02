@@ -232,7 +232,7 @@ use crate::state::SessionState;
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
     conversation_id: ConversationId,
-    pub(crate) tx_event: Sender<Event>,
+    tx_event: Sender<Event>,
     state: Mutex<SessionState>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
@@ -496,6 +496,10 @@ impl Session {
         }
 
         Ok((sess, turn_context))
+    }
+
+    pub(crate) fn get_tx_event(&self) -> Sender<Event> {
+        self.tx_event.clone()
     }
 
     fn next_internal_sub_id(&self) -> String {

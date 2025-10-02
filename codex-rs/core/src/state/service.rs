@@ -14,5 +14,5 @@ pub(crate) struct SessionServices {
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: crate::shell::Shell,
     pub(crate) show_raw_agent_reasoning: bool,
-    pub(crate) executor: Executor,
+    pub(crate) executor: Executor
 }
