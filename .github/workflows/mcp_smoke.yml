@@ -1,0 +1,27 @@
+name: MCP Smoke
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.ref_name == 'main' || github.ref_name == 'feat/agent-bus'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run MCP smoke (skips if no client)
+        env:
+          MCP_SERVER: ${{ secrets.MCP_SERVER }}
+          MCP_TOOL: ${{ secrets.MCP_TOOL }}
+          MCP_CLIENT_BIN: ${{ secrets.MCP_CLIENT_BIN }}
+        run: |
+          python3 scripts/mcp_smoke.py
+
