@@ -33,7 +33,7 @@ describe("Codex", () => {
       const expectedItems = [
         {
           id: expect.any(String),
-          item_type: "assistant_message",
+          type: "agent_message",
           text: "Hi!",
         },
       ];

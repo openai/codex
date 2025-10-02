@@ -16,8 +16,8 @@ const thread = codex.startThread();
 const rl = createInterface({ input, output });
 
 const handleItemCompleted = (item: ThreadItem): void => {
-  switch (item.item_type) {
-    case "assistant_message":
+  switch (item.type) {
+    case "agent_message":
       console.log(`Assistant: ${item.text}`);
       break;
     case "reasoning":
@@ -38,7 +38,7 @@ const handleItemCompleted = (item: ThreadItem): void => {
 };
 
 const handleItemUpdated = (item: ThreadItem): void => {
-  switch (item.item_type) {
+  switch (item.type) {
     case "todo_list": {
       console.log(`Todo:`);
       for (const todo of item.items) {
