@@ -35,8 +35,10 @@ jobs:
             | jq '.' \
             > "$EXISTING_ISSUES_FILE"
 
-          printf '%s' '${{ toJson(github.event.issue) }}' \
-            | jq '{number, title, body}' \
+          gh issue view "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --json number,title,body \
+            | jq '.' \
             > "$CURRENT_ISSUE_FILE"
 
       - id: codex
