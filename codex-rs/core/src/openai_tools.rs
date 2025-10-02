@@ -122,6 +122,26 @@ impl ToolsConfig {
     }
 }
 
+/// Whether additional properties are allowed, and if so, any required schema
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub(crate) enum AdditionalProperties {
+    Boolean(bool),
+    Schema(Box<JsonSchema>),
+}
+
+impl From<bool> for AdditionalProperties {
+    fn from(b: bool) -> Self {
+        Self::Boolean(b)
+    }
+}
+
+impl From<JsonSchema> for AdditionalProperties {
+    fn from(s: JsonSchema) -> Self {
+        Self::Schema(Box::new(s))
+    }
+}
+
 /// Generic JSON‑Schema subset needed for our tool definitions
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -154,7 +174,7 @@ pub(crate) enum JsonSchema {
             rename = "additionalProperties",
             skip_serializing_if = "Option::is_none"
         )]
-        additional_properties: Option<bool>,
+        additional_properties: Option<AdditionalProperties>,
     },
 }
 
@@ -200,7 +220,7 @@ fn create_unified_exec_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["input".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(false.into()),
         },
     })
 }
@@ -247,7 +267,7 @@ fn create_shell_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["command".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(false.into()),
         },
     })
 }
@@ -271,7 +291,7 @@ fn create_view_image_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(false.into()),
         },
     })
 }
@@ -708,7 +728,130 @@ mod tests {
                                     "string_property".to_string(),
                                     "number_property".to_string(),
                                 ]),
-                                additional_properties: Some(false),
+                                additional_properties: Some(false.into()),
+                            },
+                        ),
+                    ]),
+                    required: None,
+                    additional_properties: None,
+                },
+                description: "Do something cool".to_string(),
+                strict: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
+        });
+        let tools = get_openai_tools(
+            &config,
+            Some(HashMap::from([(
+                "test_server/do_something_cool".to_string(),
+                mcp_types::Tool {
+                    name: "do_something_cool".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({
+                            "string_argument": {
+                                "type": "string",
+                            },
+                            "number_argument": {
+                                "type": "number",
+                            },
+                            "object_argument": {
+                                "type": "object",
+                                "properties": {
+                                    "string_property": { "type": "string" },
+                                    "number_property": { "type": "number" },
+                                },
+                                "required": [
+                                    "string_property",
+                                    "number_property",
+                                ],
+                                "additionalProperties": {
+                                    "type": "object",
+                                    "properties": {
+                                        "addtl_prop": { "type": "string" },
+                                    },
+                                    "required": [
+                                        "addtl_prop",
+                                    ],
+                                    "additionalProperties": false,
+                                },
+                            },
+                        })),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some("Do something cool".to_string()),
+                },
+            )])),
+        );
+
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "unified_exec",
+                "web_search",
+                "view_image",
+                "test_server/do_something_cool",
+            ],
+        );
+
+        assert_eq!(
+            tools[3],
+            OpenAiTool::Function(ResponsesApiTool {
+                name: "test_server/do_something_cool".to_string(),
+                parameters: JsonSchema::Object {
+                    properties: BTreeMap::from([
+                        (
+                            "string_argument".to_string(),
+                            JsonSchema::String { description: None }
+                        ),
+                        (
+                            "number_argument".to_string(),
+                            JsonSchema::Number { description: None }
+                        ),
+                        (
+                            "object_argument".to_string(),
+                            JsonSchema::Object {
+                                properties: BTreeMap::from([
+                                    (
+                                        "string_property".to_string(),
+                                        JsonSchema::String { description: None }
+                                    ),
+                                    (
+                                        "number_property".to_string(),
+                                        JsonSchema::Number { description: None }
+                                    ),
+                                ]),
+                                required: Some(vec![
+                                    "string_property".to_string(),
+                                    "number_property".to_string(),
+                                ]),
+                                additional_properties: Some(
+                                    JsonSchema::Object {
+                                        properties: BTreeMap::from([(
+                                            "addtl_prop".to_string(),
+                                            JsonSchema::String { description: None }
+                                        ),]),
+                                        required: Some(vec!["addtl_prop".to_string(),]),
+                                        additional_properties: Some(false.into()),
+                                    }
+                                    .into()
+                                ),
                             },
                         ),
                     ]),
