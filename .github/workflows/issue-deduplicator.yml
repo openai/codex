@@ -73,6 +73,11 @@ jobs:
               return;
             }
 
+            if (numbers.length === 0) {
+              core.info('Codex reported no potential duplicates.');
+              return;
+            }
+
             const lines = ['Potential duplicates detected:', ...numbers.map((value) => `- #${value}`)];
 
             await github.rest.issues.createComment({
@@ -86,6 +91,7 @@ jobs:
         if: ${{ always() && github.event.action == 'labeled' && github.event.label.name == 'codex-deduplicate' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh issue edit "${{ github.event.issue.number }}" --remove-label codex-deduplicate || true
           echo "Attempted to remove label: codex-deduplicate"
