@@ -798,7 +798,7 @@ fn custom_prompt_enter_empty_does_not_send() {
 #[test]
 fn view_image_tool_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
-    let image_path = chat.config.cwd.join("screenshots").join("example.png");
+    let image_path = chat.config.cwd.join("example.png");
 
     chat.handle_codex_event(Event {
         id: "sub-image".into(),
