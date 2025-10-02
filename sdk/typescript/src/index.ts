@@ -22,8 +22,11 @@ export type {
   ErrorItem,
 } from "./items";
 
-export type { Thread, RunResult, RunStreamedResult, Input } from "./thread";
+export { Thread } from "./thread";
+export type { RunResult, RunStreamedResult, Input } from "./thread";
 
-export type { Codex } from "./codex";
+export { Codex } from "./codex";
 
 export type { CodexOptions } from "./codexOptions";
+
+export type { ThreadOptions as TheadOptions, ApprovalMode, SandboxMode } from "./threadOptions";

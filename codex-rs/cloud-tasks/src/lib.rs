@@ -839,6 +839,9 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                             && matches!(key.code, KeyCode::Char('n') | KeyCode::Char('N'))
                             || matches!(key.code, KeyCode::Char('\u{000E}'));
                         if is_ctrl_n {
+                            if app.new_task.is_none() {
+                                continue;
+                            }
                             if app.best_of_modal.is_some() {
                                 app.best_of_modal = None;
                                 needs_redraw = true;

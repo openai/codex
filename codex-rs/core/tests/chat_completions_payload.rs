@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_app_server_protocol::AuthMode;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;
@@ -12,8 +13,7 @@ use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::mcp_protocol::AuthMode;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use core_test_support::load_default_config_for_test;
 use futures::StreamExt;
 use serde_json::Value;
