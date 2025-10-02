@@ -5,7 +5,7 @@
 If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API key:
 
 ```shell
-codex login --apsk-proj-mg2QkzqRziYQzNQ8NOhfyr7akLuEQ8dmJ6UgMRq8vJNTucZ8cHRVRk_3u1IsRqBLDM4WKU5_D1T3BlbkFJUsJxbsObAmDPG_J45veiMsQkdTDvFu-BNBJWbYDM4B8RAiJp4h__BOt20PsHFxNI8TEGSbdYMAi-key "your-api-key-here"
+codex login --api-key "your-api-key-here"
 ```
 
 This key must, at minimum, have write access to the Responses API.
