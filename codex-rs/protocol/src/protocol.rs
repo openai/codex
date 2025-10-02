@@ -919,7 +919,20 @@ impl InitialHistory {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Default, Debug, TS)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, TS, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum SessionSource {
+    Cli,
+    #[default]
+    VSCode,
+    Exec,
+    Mcp,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
 pub struct SessionMeta {
     pub id: ConversationId,
     pub timestamp: String,
@@ -927,6 +940,22 @@ pub struct SessionMeta {
     pub originator: String,
     pub cli_version: String,
     pub instructions: Option<String>,
+    #[serde(default)]
+    pub source: SessionSource,
+}
+
+impl Default for SessionMeta {
+    fn default() -> Self {
+        SessionMeta {
+            id: ConversationId::default(),
+            timestamp: String::new(),
+            cwd: PathBuf::new(),
+            originator: String::new(),
+            cli_version: String::new(),
+            instructions: None,
+            source: SessionSource::default(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, TS)]

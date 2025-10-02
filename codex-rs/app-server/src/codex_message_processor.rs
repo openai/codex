@@ -53,6 +53,7 @@ use codex_core::AuthManager;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::Cursor as RolloutCursor;
+use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
@@ -708,6 +709,7 @@ impl CodexMessageProcessor {
             &self.config.codex_home,
             page_size,
             cursor_ref,
+            INTERACTIVE_SESSION_SOURCES,
         )
         .await
         {

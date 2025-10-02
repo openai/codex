@@ -17,6 +17,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
+use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;
 
 pub(crate) struct MessageProcessor {
@@ -35,7 +36,10 @@ impl MessageProcessor {
     ) -> Self {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
-        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
+        let conversation_manager = Arc::new(ConversationManager::new(
+            auth_manager.clone(),
+            SessionSource::VSCode,
+        ));
         let codex_message_processor = CodexMessageProcessor::new(
             auth_manager,
             conversation_manager,
