@@ -148,20 +148,20 @@ fn print_colored_warning_device_code() {
 /// Full device code login flow.
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let client = reqwest::Client::new();
-    let auth_base_url = opts.issuer.trim_end_matches('/').to_owned();
+    let base_url = opts.issuer.trim_end_matches('/');
+    let api_base_url = format!("{}/api/accounts", opts.issuer.trim_end_matches('/'));
     print_colored_warning_device_code();
     println!("⏳ Generating a new 9-digit device code for authentication...\n");
-    let uc = request_user_code(&client, &auth_base_url, &opts.client_id).await?;
+    let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
 
     println!(
         "To authenticate, visit: {}/deviceauth/authorize and enter code: {}",
-        opts.issuer.trim_end_matches('/'),
-        uc.user_code
+        api_base_url, uc.user_code
     );
 
     let code_resp = poll_for_token(
         &client,
-        &auth_base_url,
+        &api_base_url,
         &uc.device_auth_id,
         &uc.user_code,
         uc.interval,
@@ -173,10 +173,10 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
         code_challenge: code_resp.code_challenge,
     };
     println!("authorization code received");
-    let redirect_uri = format!("{}/deviceauth/callback", opts.issuer.trim_end_matches('/'));
+    let redirect_uri = format!("{base_url}/deviceauth/callback");
 
     let tokens = crate::server::exchange_code_for_tokens(
-        &opts.issuer,
+        base_url,
         &opts.client_id,
         &redirect_uri,
         &pkce,

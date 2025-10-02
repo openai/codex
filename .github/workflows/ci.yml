@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # build_npm_package.py requires DotSlash when staging releases.
+      # stage_npm_packages.py requires DotSlash when staging releases.
       - uses: facebook/install-dotslash@v2
 
       - name: Stage npm package
@@ -37,10 +37,12 @@ jobs:
         run: |
           set -euo pipefail
           CODEX_VERSION=0.40.0
-          PACK_OUTPUT="${RUNNER_TEMP}/codex-npm.tgz"
-          python3 ./codex-cli/scripts/build_npm_package.py \
+          OUTPUT_DIR="${RUNNER_TEMP}"
+          python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
-            --pack-output "$PACK_OUTPUT"
+            --package codex \
+            --output-dir "$OUTPUT_DIR"
+          PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload staged npm package artifact
