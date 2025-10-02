@@ -12,6 +12,9 @@ permissions:
 
 jobs:
   poll:
+    concurrency:
+      group: monitors-poll-${{ github.ref_name }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

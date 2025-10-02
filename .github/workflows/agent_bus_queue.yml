@@ -12,6 +12,9 @@ permissions:
 
 jobs:
   queue:
+    concurrency:
+      group: agent-bus-queue-${{ github.ref_name }}
+      cancel-in-progress: true
     if: github.ref_name == 'main' || github.ref_name == 'feat/agent-bus'
     runs-on: ubuntu-latest
     steps:

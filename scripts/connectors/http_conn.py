@@ -14,7 +14,7 @@ def http_post(
     hmac_secret_env: str | None = None,
     hmac_header: str = "X-Hub-Signature-256",
     timeout_sec: int = 5,
-    retries: int = 2,
+    retries: int = 3,
 ) -> None:
     if not base_url:
         raise ValueError("base_url is required")
@@ -44,6 +44,7 @@ def http_post(
         "--fail-with-body",
         "-m",
         str(timeout_sec),
+        "--retry-all-errors",
         "--retry",
         str(retries),
         "--retry-delay",
