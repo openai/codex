@@ -139,8 +139,15 @@ def notify_bus(command: str, payload: dict | None = None):
 
 def main():
     cfg = load_cfg()
-    if not cfg or cfg.get('enabled') is False:
-        print("monitors: disabled by config or missing config")
+    if not cfg:
+        print("monitors: disabled (no config)")
+        return 0
+    # enabled can be a bool, or a table { enabled = bool } in older examples
+    enabled_val = cfg.get('enabled', True)
+    if isinstance(enabled_val, dict):
+        enabled_val = enabled_val.get('enabled', True)
+    if enabled_val is False:
+        print("monitors: disabled by config")
         return 0
     state = load_state()
     monitors = cfg.get('monitor', {})

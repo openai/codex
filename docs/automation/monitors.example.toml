@@ -1,4 +1,3 @@
-[enabled]
 enabled = false
 
 [monitor.datadog_alerts]
