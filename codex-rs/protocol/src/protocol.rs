@@ -477,6 +477,9 @@ pub enum EventMsg {
 
     ExecCommandEnd(ExecCommandEndEvent),
 
+    /// Notification that the agent attached a local image via the view_image tool.
+    ViewImageToolCall(ViewImageToolCallEvent),
+
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
@@ -1072,6 +1075,14 @@ pub struct ExecCommandEndEvent {
     pub duration: Duration,
     /// Formatted output from the command, as seen by the model.
     pub formatted_output: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ViewImageToolCallEvent {
+    /// Identifier for the originating tool call.
+    pub call_id: String,
+    /// Local filesystem path provided to the tool.
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
