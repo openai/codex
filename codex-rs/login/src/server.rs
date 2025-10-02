@@ -19,6 +19,7 @@ use codex_core::auth::get_auth_file;
 use codex_core::default_client::originator;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
+use codex_keepawake::Guard;
 use rand::RngCore;
 use serde_json::Value as JsonValue;
 use tiny_http::Header;
@@ -468,8 +469,11 @@ pub(crate) async fn exchange_code_for_tokens(
     }
 
     let client = reqwest::Client::new();
+    let url = format!("{issuer}/oauth/token");
+    let detail = format!("POST {url}");
+    let _awake = Guard::remote_api(&detail);
     let resp = client
-        .post(format!("{issuer}/oauth/token"))
+        .post(&url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
             "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
@@ -627,8 +631,11 @@ pub(crate) async fn obtain_api_key(
         access_token: String,
     }
     let client = reqwest::Client::new();
+    let url = format!("{issuer}/oauth/token");
+    let detail = format!("POST {url}");
+    let _awake = Guard::remote_api(&detail);
     let resp = client
-        .post(format!("{issuer}/oauth/token"))
+        .post(&url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
             "grant_type={}&client_id={}&requested_token={}&subject_token={}&subject_token_type={}",

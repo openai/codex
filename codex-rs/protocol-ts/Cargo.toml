@@ -19,3 +19,4 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
 ts-rs = { workspace = true }
+codex-keepawake = { workspace = true }

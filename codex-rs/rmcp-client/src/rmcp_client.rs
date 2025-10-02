@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_keepawake::Guard;
 use futures::FutureExt;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -56,6 +57,8 @@ enum ClientState {
 /// https://github.com/modelcontextprotocol/rust-sdk
 pub struct RmcpClient {
     state: Mutex<ClientState>,
+    #[allow(dead_code)]
+    keepawake_guard: Option<Guard>,
 }
 
 impl RmcpClient {
@@ -65,6 +68,16 @@ impl RmcpClient {
         env: Option<HashMap<String, String>>,
     ) -> io::Result<Self> {
         let program_name = program.to_string_lossy().into_owned();
+        let args_str = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        let detail = if args_str.is_empty() {
+            program_name.clone()
+        } else {
+            format!("{program_name} {}", args_str.join(" "))
+        };
+        let guard = Guard::local_tool(&detail);
         let mut command = Command::new(&program);
         command
             .kill_on_drop(true)
@@ -100,6 +113,7 @@ impl RmcpClient {
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(PendingTransport::ChildProcess(transport)),
             }),
+            keepawake_guard: Some(guard),
         })
     }
 
@@ -115,6 +129,7 @@ impl RmcpClient {
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(PendingTransport::StreamableHttp(transport)),
             }),
+            keepawake_guard: None,
         })
     }
 

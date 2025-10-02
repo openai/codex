@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use tracing::info;
 use tracing::warn;
 
+use codex_keepawake::Guard;
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct CodeEnvironment {
     id: String,
@@ -74,6 +76,8 @@ pub async fn autodetect_environment_id(
     crate::append_error_log(format!("env: GET {list_url}"));
     // Fetch and log the full environments JSON for debugging
     let http = reqwest::Client::builder().build()?;
+    let detail = format!("GET {list_url}");
+    let _awake = Guard::remote_api(&detail);
     let res = http.get(&list_url).headers(headers.clone()).send().await?;
     let status = res.status();
     let ct = res
@@ -148,6 +152,8 @@ async fn get_json<T: serde::de::DeserializeOwned>(
     headers: &HeaderMap,
 ) -> anyhow::Result<T> {
     let http = reqwest::Client::builder().build()?;
+    let detail = format!("GET {url}");
+    let _awake = Guard::remote_api(&detail);
     let res = http.get(url).headers(headers.clone()).send().await?;
     let status = res.status();
     let ct = res
@@ -169,9 +175,12 @@ async fn get_json<T: serde::de::DeserializeOwned>(
 
 fn get_git_origins() -> Vec<String> {
     // Prefer: git config --get-regexp remote\..*\.url
-    let out = std::process::Command::new("git")
-        .args(["config", "--get-regexp", "remote\\..*\\.url"])
-        .output();
+    let out = {
+        let _awake = Guard::local_tool("git config --get-regexp remote..*.url");
+        std::process::Command::new("git")
+            .args(["config", "--get-regexp", "remote\\..*\\.url"])
+            .output()
+    };
     if let Ok(ok) = out
         && ok.status.success()
     {
@@ -187,9 +196,12 @@ fn get_git_origins() -> Vec<String> {
         }
     }
     // Fallback: git remote -v
-    let out = std::process::Command::new("git")
-        .args(["remote", "-v"])
-        .output();
+    let out = {
+        let _awake = Guard::local_tool("git remote -v");
+        std::process::Command::new("git")
+            .args(["remote", "-v"])
+            .output()
+    };
     if let Ok(ok) = out
         && ok.status.success()
     {

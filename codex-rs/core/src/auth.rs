@@ -17,6 +17,8 @@ use std::time::Duration;
 
 use codex_app_server_protocol::AuthMode;
 
+use codex_keepawake::Guard;
+
 use crate::token_data::PlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
@@ -316,6 +318,7 @@ async fn try_refresh_token(
     };
 
     // Use shared client factory to include standard headers
+    let _awake = Guard::remote_api("Refresh OAuth token");
     let response = client
         .post("https://auth.openai.com/oauth/token")
         .header("Content-Type", "application/json")

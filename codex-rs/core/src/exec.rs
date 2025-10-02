@@ -10,6 +10,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_channel::Sender;
+use codex_keepawake::Guard;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
@@ -101,6 +102,13 @@ pub async fn process_exec_tool_call(
                 env,
                 ..
             } = params;
+            let detail_raw = command.join(" ");
+            let detail = if detail_raw.is_empty() {
+                command.first().cloned().unwrap_or_default()
+            } else {
+                detail_raw
+            };
+            let _awake = Guard::local_tool(&detail);
             let child = spawn_command_under_seatbelt(
                 command,
                 command_cwd,
@@ -119,6 +127,13 @@ pub async fn process_exec_tool_call(
                 env,
                 ..
             } = params;
+            let detail_raw = command.join(" ");
+            let detail = if detail_raw.is_empty() {
+                command.first().cloned().unwrap_or_default()
+            } else {
+                detail_raw
+            };
+            let _awake = Guard::local_tool(&detail);
 
             let codex_linux_sandbox_exe = codex_linux_sandbox_exe
                 .as_ref()
@@ -269,12 +284,19 @@ async fn exec(
         command, cwd, env, ..
     } = params;
 
+    let detail_raw = command.join(" ");
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             "command args are empty",
         ))
     })?;
+    let detail = if detail_raw.is_empty() {
+        program.to_string()
+    } else {
+        detail_raw
+    };
+    let _awake = Guard::local_tool(&detail);
     let arg0 = None;
     let child = spawn_child_async(
         PathBuf::from(program),

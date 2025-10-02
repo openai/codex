@@ -6,6 +6,8 @@ use serde::de::{self};
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_keepawake::Guard;
+
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
 use std::io::Write;
@@ -59,8 +61,10 @@ async fn request_user_code(
         client_id: client_id.to_string(),
     })
     .map_err(std::io::Error::other)?;
+    let detail = format!("POST {url}");
+    let _awake = Guard::remote_api(&detail);
     let resp = client
-        .post(url)
+        .post(&url)
         .header("Content-Type", "application/json")
         .body(body)
         .send()
@@ -96,6 +100,8 @@ async fn poll_for_token(
             user_code: user_code.to_string(),
         })
         .map_err(std::io::Error::other)?;
+        let detail = format!("POST {url}");
+        let _awake = Guard::remote_api(&detail);
         let resp = client
             .post(&url)
             .header("Content-Type", "application/json")

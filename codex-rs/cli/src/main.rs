@@ -15,6 +15,7 @@ use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_keepawake::set_prevent_sleep_enabled;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
@@ -43,6 +44,10 @@ use crate::mcp_cmd::McpCli;
 struct MultitoolCli {
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
+
+    /// Prevent the system from sleeping while Codex performs operations (API calls or local commands).
+    #[arg(long = "prevent-sleep", default_value_t = false, global = true)]
+    prevent_sleep: bool,
 
     #[clap(flatten)]
     interactive: TuiCli,
@@ -236,9 +241,12 @@ fn main() -> anyhow::Result<()> {
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: root_config_overrides,
+        prevent_sleep,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
+
+    set_prevent_sleep_enabled(prevent_sleep);
 
     match subcommand {
         None => {
@@ -463,6 +471,7 @@ mod tests {
             interactive,
             config_overrides: root_overrides,
             subcommand,
+            prevent_sleep: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {

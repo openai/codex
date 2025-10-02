@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_app_server_protocol::GitSha;
+use codex_keepawake::Guard;
 use codex_protocol::protocol::GitInfo;
 use futures::future::join_all;
 use serde::Deserialize;
@@ -180,6 +181,12 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
+    let detail = if args.is_empty() {
+        "git".to_string()
+    } else {
+        format!("git {}", args.join(" "))
+    };
+    let _awake = Guard::local_tool(detail);
     let result = timeout(
         GIT_COMMAND_TIMEOUT,
         Command::new("git").args(args).current_dir(cwd).output(),
@@ -521,6 +528,7 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
 
     // TODO: we should make this async, but it's primarily used deep in
     // callstacks of sync code, and should almost always be fast
+    let _awake = Guard::local_tool("git rev-parse --git-common-dir");
     let git_dir_out = std::process::Command::new("git")
         .args(["rev-parse", "--git-common-dir"])
         .current_dir(base)
@@ -596,6 +604,7 @@ mod tests {
 
     // Helper function to create a test git repository
     async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {
+        let _awake = Guard::local_tool("git test repository setup");
         let repo_path = temp_dir.path().join("repo");
         fs::create_dir(&repo_path).expect("Failed to create repo dir");
         let envs = vec![
@@ -996,6 +1005,7 @@ mod tests {
 
         // Create a linked worktree
         let wt_root = temp_dir.path().join("wt");
+        let _awake = Guard::local_tool("git worktree add");
         let _ = std::process::Command::new("git")
             .args([
                 "worktree",

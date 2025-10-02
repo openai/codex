@@ -24,6 +24,7 @@ tokio-stream = "0.1.17"
 chrono = { version = "0.4", features = ["serde"] }
 codex-login = { path = "../login" }
 codex-core = { path = "../core" }
+codex-keepawake = { workspace = true }
 throbber-widgets-tui = "0.8.0"
 base64 = "0.22"
 serde_json = "1"

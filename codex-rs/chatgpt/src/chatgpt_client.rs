@@ -1,5 +1,6 @@
 use codex_core::config::Config;
 use codex_core::default_client::create_client;
+use codex_keepawake::Guard;
 
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
@@ -26,6 +27,8 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
         anyhow::anyhow!("ChatGPT account ID not available, please re-run `codex login`")
     });
 
+    let detail = format!("GET {url}");
+    let _awake = Guard::remote_api(&detail);
     let response = client
         .get(&url)
         .bearer_auth(&token.access_token)

@@ -21,3 +21,4 @@ tokio = { workspace = true, features = [
     "sync",
     "time",
 ] }
+codex-keepawake = { workspace = true }

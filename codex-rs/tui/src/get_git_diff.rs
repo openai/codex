@@ -5,6 +5,7 @@
 //! untracked files. When the current directory is not inside a Git
 //! repository, the function returns `Ok((false, String::new()))`.
 
+use codex_keepawake::Guard;
 use std::io;
 use std::path::Path;
 use std::process::Stdio;
@@ -64,6 +65,12 @@ pub(crate) async fn get_git_diff() -> io::Result<(bool, String)> {
 /// Helper that executes `git` with the given `args` and returns `stdout` as a
 /// UTF-8 string. Any non-zero exit status is considered an *error*.
 async fn run_git_capture_stdout(args: &[&str]) -> io::Result<String> {
+    let detail = if args.is_empty() {
+        "git".to_string()
+    } else {
+        format!("git {}", args.join(" "))
+    };
+    let _awake = Guard::local_tool(&detail);
     let output = Command::new("git")
         .args(args)
         .stdout(Stdio::piped())
@@ -84,6 +91,12 @@ async fn run_git_capture_stdout(args: &[&str]) -> io::Result<String> {
 /// Like [`run_git_capture_stdout`] but treats exit status 1 as success and
 /// returns stdout. Git returns 1 for diffs when differences are present.
 async fn run_git_capture_diff(args: &[&str]) -> io::Result<String> {
+    let detail = if args.is_empty() {
+        "git".to_string()
+    } else {
+        format!("git {}", args.join(" "))
+    };
+    let _awake = Guard::local_tool(&detail);
     let output = Command::new("git")
         .args(args)
         .stdout(Stdio::piped())
@@ -103,6 +116,7 @@ async fn run_git_capture_diff(args: &[&str]) -> io::Result<String> {
 
 /// Determine if the current directory is inside a Git repository.
 async fn inside_git_repo() -> io::Result<bool> {
+    let _awake = Guard::local_tool("git rev-parse --is-inside-work-tree");
     let status = Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
         .stdout(Stdio::null())

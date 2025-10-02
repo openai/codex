@@ -1,0 +1,15 @@
+[package]
+name = "codex-keepawake"
+version = { workspace = true }
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+keepawake = { workspace = true }
+tracing = { workspace = true }

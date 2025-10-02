@@ -21,6 +21,7 @@ codex-process-hardening = { workspace = true }
 ctor = { workspace = true }
 libc = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
+codex-keepawake = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tiny_http = { workspace = true }

@@ -5,6 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use codex_keepawake::Guard;
+
 use crate::GitToolingError;
 
 pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
@@ -177,6 +179,7 @@ where
         args_vec.push(OsString::from(arg.as_ref()));
     }
     let command_string = build_command_string(&args_vec);
+    let _awake = Guard::local_tool(&command_string);
     let mut command = Command::new("git");
     command.current_dir(dir);
     if let Some(envs) = env {

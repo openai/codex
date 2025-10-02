@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use codex_core::config::Config;
 use codex_core::default_client::create_client;
+use codex_keepawake::Guard;
 
 use crate::version::CODEX_CLI_VERSION;
 
@@ -65,6 +66,8 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
 }
 
 async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
+    let detail = format!("GET {LATEST_RELEASE_URL}");
+    let _awake = Guard::remote_api(&detail);
     let ReleaseInfo {
         tag_name: latest_tag_name,
     } = create_client()

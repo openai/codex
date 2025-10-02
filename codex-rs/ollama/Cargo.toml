@@ -14,6 +14,7 @@ workspace = true
 async-stream = { workspace = true }
 bytes = { workspace = true }
 codex-core = { workspace = true }
+codex-keepawake = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde_json = { workspace = true }

@@ -186,11 +186,18 @@ fn default_commit_identity() -> Vec<(OsString, OsString)> {
 mod tests {
     use super::*;
     use crate::operations::run_git_for_stdout;
+    use codex_keepawake::Guard;
     use pretty_assertions::assert_eq;
     use std::process::Command;
 
     /// Runs a git command in the test repository and asserts success.
     fn run_git_in(repo_path: &Path, args: &[&str]) {
+        let detail = if args.is_empty() {
+            "git".to_string()
+        } else {
+            format!("git {}", args.join(" "))
+        };
+        let _awake = Guard::local_tool(&detail);
         let status = Command::new("git")
             .current_dir(repo_path)
             .args(args)
@@ -201,6 +208,12 @@ mod tests {
 
     /// Runs a git command and returns its trimmed stdout output.
     fn run_git_stdout(repo_path: &Path, args: &[&str]) -> String {
+        let detail = if args.is_empty() {
+            "git".to_string()
+        } else {
+            format!("git {}", args.join(" "))
+        };
+        let _awake = Guard::local_tool(&detail);
         let output = Command::new("git")
             .current_dir(repo_path)
             .args(args)

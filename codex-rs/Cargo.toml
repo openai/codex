@@ -18,6 +18,7 @@ members = [
     "git-tooling",
     "linux-sandbox",
     "login",
+    "keepawake",
     "mcp-client",
     "mcp-server",
     "mcp-types",
@@ -56,6 +57,7 @@ codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
 codex-file-search = { path = "file-search" }
+codex-keepawake = { path = "keepawake" }
 codex-git-tooling = { path = "git-tooling" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-login = { path = "login" }
@@ -110,6 +112,7 @@ image = { version = "^0.25.8", default-features = false }
 indexmap = "2.6.0"
 insta = "1.43.2"
 itertools = "0.14.0"
+keepawake = "0.5.1"
 landlock = "0.4.1"
 lazy_static = "1"
 libc = "0.2.175"

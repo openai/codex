@@ -14,6 +14,7 @@ use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::config::Config;
+use codex_keepawake::Guard;
 
 const OLLAMA_CONNECTION_ERROR: &str = "No running Ollama server detected. Start it with: `ollama serve` (after installing). Install instructions: https://github.com/ollama/ollama?tab=readme-ov-file#ollama";
 
@@ -82,6 +83,8 @@ impl OllamaClient {
         } else {
             format!("{}/api/tags", self.host_root.trim_end_matches('/'))
         };
+        let detail = format!("GET {url}");
+        let _awake = Guard::remote_api(&detail);
         let resp = self.client.get(url).send().await.map_err(|err| {
             tracing::warn!("Failed to connect to Ollama server: {err:?}");
             io::Error::other(OLLAMA_CONNECTION_ERROR)
@@ -101,6 +104,8 @@ impl OllamaClient {
     /// Return the list of model names known to the local Ollama instance.
     pub async fn fetch_models(&self) -> io::Result<Vec<String>> {
         let tags_url = format!("{}/api/tags", self.host_root.trim_end_matches('/'));
+        let detail = format!("GET {tags_url}");
+        let _awake = Guard::remote_api(&detail);
         let resp = self
             .client
             .get(tags_url)
@@ -131,6 +136,8 @@ impl OllamaClient {
         model: &str,
     ) -> io::Result<BoxStream<'static, PullEvent>> {
         let url = format!("{}/api/pull", self.host_root.trim_end_matches('/'));
+        let detail = format!("POST {url}");
+        let _awake = Guard::remote_api(&detail);
         let resp = self
             .client
             .post(url)

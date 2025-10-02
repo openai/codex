@@ -12,6 +12,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use clap::Parser;
+use codex_keepawake::Guard;
 use reqwest::blocking::Client;
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::HOST;
@@ -157,6 +158,8 @@ fn forward_request(client: &Client, auth_header: &'static str, mut req: Request)
     headers.insert(HOST, HeaderValue::from_static("api.openai.com"));
 
     let upstream = "https://api.openai.com/v1/responses";
+    let detail = format!("POST {upstream}");
+    let _awake = Guard::remote_api(&detail);
     let upstream_resp = client
         .post(upstream)
         .headers(headers)

@@ -38,6 +38,7 @@ tokio = { version = "1", features = [
     "time",
 ] }
 tracing = { version = "0.1.41", features = ["log"] }
+codex-keepawake = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

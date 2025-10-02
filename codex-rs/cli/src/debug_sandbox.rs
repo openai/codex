@@ -7,6 +7,7 @@ use codex_core::exec_env::create_env;
 use codex_core::landlock::spawn_command_under_linux_sandbox;
 use codex_core::seatbelt::spawn_command_under_seatbelt;
 use codex_core::spawn::StdioPolicy;
+use codex_keepawake::Guard;
 use codex_protocol::config_types::SandboxMode;
 
 use crate::LandlockCommand;
@@ -86,9 +87,16 @@ async fn run_command_under_sandbox(
     let stdio_policy = StdioPolicy::Inherit;
     let env = create_env(&config.shell_environment_policy);
 
-    let mut child = match sandbox_type {
-        SandboxType::Seatbelt => {
-            spawn_command_under_seatbelt(
+    let (mut child, _awake) = match (sandbox_type, command, cwd, sandbox_policy_cwd, env) {
+        (SandboxType::Seatbelt, command, cwd, sandbox_policy_cwd, env) => {
+            let detail_raw = command.join(" ");
+            let detail = if detail_raw.is_empty() {
+                command.first().cloned().unwrap_or_default()
+            } else {
+                detail_raw
+            };
+            let guard = Guard::local_tool(&detail);
+            let child = spawn_command_under_seatbelt(
                 command,
                 cwd,
                 &config.sandbox_policy,
@@ -96,14 +104,22 @@ async fn run_command_under_sandbox(
                 stdio_policy,
                 env,
             )
-            .await?
+            .await?;
+            (child, guard)
         }
-        SandboxType::Landlock => {
+        (SandboxType::Landlock, command, cwd, sandbox_policy_cwd, env) => {
             #[expect(clippy::expect_used)]
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
-            spawn_command_under_linux_sandbox(
+            let detail_raw = command.join(" ");
+            let detail = if detail_raw.is_empty() {
+                command.first().cloned().unwrap_or_default()
+            } else {
+                detail_raw
+            };
+            let guard = Guard::local_tool(&detail);
+            let child = spawn_command_under_linux_sandbox(
                 codex_linux_sandbox_exe,
                 command,
                 cwd,
@@ -112,7 +128,8 @@ async fn run_command_under_sandbox(
                 stdio_policy,
                 env,
             )
-            .await?
+            .await?;
+            (child, guard)
         }
     };
     let status = child.wait().await?;

@@ -1,6 +1,7 @@
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
+use codex_keepawake::Guard;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -118,6 +119,9 @@ impl OtelEventManager {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Response, Error>>,
     {
+        let slug = &self.metadata.slug;
+        let detail = format!("{slug} attempt {attempt}");
+        let _awake = Guard::remote_api(detail);
         let start = std::time::Instant::now();
         let response = f().await;
         let duration = start.elapsed();

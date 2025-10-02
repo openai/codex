@@ -21,6 +21,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_keepawake::Guard;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::InitializeRequest;
@@ -199,6 +200,8 @@ impl McpClient {
         R::Params: Serialize,
         R::Result: DeserializeOwned,
     {
+        let _awake = Guard::local_tool(format!("MCP request {}", R::METHOD));
+
         // Create a new unique ID.
         let id = self.id_counter.fetch_add(1, Ordering::SeqCst);
         let request_id = RequestId::Integer(id);

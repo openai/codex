@@ -3,6 +3,9 @@ use serde::Serialize;
 use shlex;
 use std::path::PathBuf;
 
+#[cfg(any(test, target_os = "windows"))]
+use codex_keepawake::Guard;
+
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ZshShell {
     pub(crate) shell_path: String,
@@ -179,23 +182,28 @@ pub async fn default_user_shell() -> Shell {
     use tokio::process::Command;
 
     // Prefer PowerShell 7+ (`pwsh`) if available, otherwise fall back to Windows PowerShell.
-    let has_pwsh = Command::new("pwsh")
-        .arg("-NoLogo")
-        .arg("-NoProfile")
-        .arg("-Command")
-        .arg("$PSVersionTable.PSVersion.Major")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    let bash_exe = if Command::new("bash.exe")
-        .arg("--version")
-        .output()
-        .await
-        .ok()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
+    let has_pwsh = {
+        let _awake = Guard::local_tool("pwsh version probe");
+        Command::new("pwsh")
+            .arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg("$PSVersionTable.PSVersion.Major")
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    };
+    let bash_exe = if {
+        let _awake = Guard::local_tool("bash.exe version probe");
+        Command::new("bash.exe")
+            .arg("--version")
+            .output()
+            .await
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } {
         which::which("bash.exe").ok()
     } else {
         None
@@ -228,6 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_current_shell_detects_zsh() {
+        let _awake = Guard::local_tool("sh -c echo $SHELL");
         let shell = Command::new("sh")
             .arg("-c")
             .arg("echo $SHELL")

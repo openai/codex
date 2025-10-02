@@ -5,6 +5,8 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_keepawake::Guard;
+
 #[derive(Debug, Clone)]
 pub struct ApplyGitRequest {
     pub cwd: PathBuf,
@@ -110,6 +112,8 @@ pub fn apply_git_patch(req: &ApplyGitRequest) -> io::Result<ApplyGitResult> {
 }
 
 fn resolve_git_root(cwd: &Path) -> io::Result<PathBuf> {
+    let detail = format!("git rev-parse --show-toplevel (cwd: {})", cwd.display());
+    let _awake = Guard::local_tool(&detail);
     let out = std::process::Command::new("git")
         .arg("rev-parse")
         .arg("--show-toplevel")
@@ -142,6 +146,15 @@ fn run_git(cwd: &Path, git_cfg: &[String], args: &[String]) -> io::Result<(i32, 
     for a in args {
         cmd.arg(a);
     }
+    let mut all_args = Vec::with_capacity(git_cfg.len() + args.len());
+    all_args.extend(git_cfg.iter().map(String::as_str));
+    all_args.extend(args.iter().map(String::as_str));
+    let detail = if all_args.is_empty() {
+        format!("git (cwd: {})", cwd.display())
+    } else {
+        format!("git {} (cwd: {})", all_args.join(" "), cwd.display())
+    };
+    let _awake = Guard::local_tool(&detail);
     let out = cmd.current_dir(cwd).output()?;
     let code = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -476,6 +489,7 @@ fn regex_ci(pat: &str) -> Regex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_keepawake::Guard;
     use std::path::Path;
     use std::sync::Mutex;
     use std::sync::OnceLock;
@@ -486,6 +500,12 @@ mod tests {
     }
 
     fn run(cwd: &Path, args: &[&str]) -> (i32, String, String) {
+        let detail = if args.is_empty() {
+            format!("(cwd: {})", cwd.display())
+        } else {
+            format!("{} (cwd: {})", args.join(" "), cwd.display())
+        };
+        let _awake = Guard::local_tool(&detail);
         let out = std::process::Command::new(args[0])
             .args(&args[1..])
             .current_dir(cwd)

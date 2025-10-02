@@ -24,6 +24,7 @@ codex-chatgpt = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
+codex-keepawake = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-process-hardening = { workspace = true }

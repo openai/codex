@@ -19,3 +19,4 @@ nucleo-matcher = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+codex-keepawake = { workspace = true }

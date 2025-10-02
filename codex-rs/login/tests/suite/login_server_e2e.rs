@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
+use codex_keepawake::Guard;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
@@ -122,6 +123,8 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()?;
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123");
+    let detail = format!("GET {url}");
+    let _awake = Guard::remote_api(&detail);
     let resp = client.get(&url).send().await?;
     assert!(resp.status().is_success());
 
@@ -172,6 +175,8 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
 
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=state2");
+    let detail = format!("GET {url}");
+    let _awake = Guard::remote_api(&detail);
     let resp = client.get(&url).send().await?;
     assert!(resp.status().is_success());
 
@@ -233,7 +238,9 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
 
     let client = reqwest::Client::new();
     let cancel_url = format!("http://127.0.0.1:{login_port}/cancel");
-    let resp = client.get(cancel_url).send().await?;
+    let detail = format!("GET {cancel_url}");
+    let _awake = Guard::remote_api(&detail);
+    let resp = client.get(&cancel_url).send().await?;
     assert!(resp.status().is_success());
 
     second_server

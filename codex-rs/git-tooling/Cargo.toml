@@ -12,6 +12,7 @@ path = "src/lib.rs"
 tempfile = "3"
 thiserror = "2"
 walkdir = "2"
+codex-keepawake = { workspace = true }
 
 [lints]
 workspace = true

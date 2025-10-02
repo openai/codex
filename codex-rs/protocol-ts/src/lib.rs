@@ -7,6 +7,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::export_client_responses;
 use codex_app_server_protocol::export_server_responses;
+use codex_keepawake::Guard;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
@@ -44,6 +45,12 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     if let Some(prettier_bin) = prettier
         && !ts_files.is_empty()
     {
+        let detail = format!(
+            "{} --write ({} files)",
+            prettier_bin.display(),
+            ts_files.len()
+        );
+        let _awake = Guard::local_tool(&detail);
         let status = Command::new(prettier_bin)
             .arg("--write")
             .args(ts_files.iter().map(|p| p.as_os_str()))

@@ -1,3 +1,4 @@
+use codex_keepawake::Guard;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use nucleo_matcher::Matcher;
@@ -72,18 +73,24 @@ pub async fn run_main<T: Reporter>(
         None => {
             reporter.warn_no_search_pattern(&search_directory);
             #[cfg(unix)]
-            Command::new("ls")
-                .arg("-al")
-                .current_dir(search_directory)
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
-                .status()
-                .await?;
+            {
+                let detail = format!("ls -al {}", search_directory.display());
+                let _awake = Guard::local_tool(&detail);
+                Command::new("ls")
+                    .arg("-al")
+                    .current_dir(&search_directory)
+                    .stdout(std::process::Stdio::inherit())
+                    .stderr(std::process::Stdio::inherit())
+                    .status()
+                    .await?;
+            }
             #[cfg(windows)]
             {
+                let detail = format!("cmd /c {}", search_directory.display());
+                let _awake = Guard::local_tool(&detail);
                 Command::new("cmd")
                     .arg("/c")
-                    .arg(search_directory)
+                    .arg(&search_directory)
                     .stdout(std::process::Stdio::inherit())
                     .stderr(std::process::Stdio::inherit())
                     .status()

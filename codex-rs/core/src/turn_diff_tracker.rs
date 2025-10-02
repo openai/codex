@@ -4,6 +4,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use codex_keepawake::Guard;
+
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -204,6 +206,10 @@ impl TurnDiffTracker {
         let root = self.find_git_root_cached(path)?;
         // Compute a path relative to the repo root for better portability across platforms.
         let rel = path.strip_prefix(&root).unwrap_or(path);
+        let root_str = root.display().to_string();
+        let rel_str = rel.display().to_string();
+        let detail = format!("git -C {root_str} hash-object -- {rel_str}");
+        let _awake = Guard::local_tool(detail);
         let output = Command::new("git")
             .arg("-C")
             .arg(&root)

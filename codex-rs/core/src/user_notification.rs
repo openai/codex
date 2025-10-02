@@ -2,6 +2,8 @@ use serde::Serialize;
 use tracing::error;
 use tracing::warn;
 
+use codex_keepawake::Guard;
+
 #[derive(Debug, Default)]
 pub(crate) struct UserNotifier {
     notify_command: Option<Vec<String>>,
@@ -22,6 +24,12 @@ impl UserNotifier {
             return;
         };
 
+        let detail = if notify_command.len() == 1 {
+            notify_command[0].clone()
+        } else {
+            notify_command.join(" ")
+        };
+        let _awake = Guard::local_tool(&detail);
         let mut command = std::process::Command::new(&notify_command[0]);
         if notify_command.len() > 1 {
             command.args(&notify_command[1..]);

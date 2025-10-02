@@ -2,6 +2,7 @@ use crate::types::CodeTaskDetailsResponse;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
+use codex_keepawake::Guard;
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
@@ -114,6 +115,8 @@ impl Client {
         method: &str,
         url: &str,
     ) -> Result<(String, String)> {
+        let detail = format!("{method} {url}");
+        let _awake = Guard::remote_api(&detail);
         let res = req.send().await?;
         let status = res.status();
         let ct = res
@@ -123,6 +126,7 @@ impl Client {
             .unwrap_or("")
             .to_string();
         let body = res.text().await.unwrap_or_default();
+        drop(_awake);
         if !status.is_success() {
             anyhow::bail!("{method} {url} failed: {status}; content-type={ct}; body={body}");
         }
