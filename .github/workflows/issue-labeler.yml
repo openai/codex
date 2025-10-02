@@ -39,6 +39,7 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       CODEX_OUTPUT: ${{ needs.gather-labels.outputs.codex_output }}
     steps:
