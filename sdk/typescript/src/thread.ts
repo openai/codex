@@ -87,7 +87,7 @@ export class Thread {
     let finalResponse: string = "";
     for await (const event of generator) {
       if (event.type === "item.completed") {
-        if (event.item.item_type === "assistant_message") {
+        if (event.item.type === "agent_message") {
           finalResponse = event.item.text;
         }
         items.push(event.item);
