@@ -209,4 +209,47 @@ mod tests {
         let expected_first = format!("L1: {}{}", '\u{FFFD}', '\u{FFFD}');
         assert_eq!(lines, vec![expected_first, "L2: plain".to_string()]);
     }
+
+    #[tokio::test]
+    async fn trims_crlf_endings() {
+        let mut temp = NamedTempFile::new().expect("create temp file");
+        use std::io::Write as _;
+        write!(temp, "one\r\ntwo\r\n").unwrap();
+
+        let lines = read_file_slice(temp.path(), 1, 2)
+            .await
+            .expect("read slice");
+        assert_eq!(lines, vec!["L1: one".to_string(), "L2: two".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn respects_limit_even_with_more_lines() {
+        let mut temp = NamedTempFile::new().expect("create temp file");
+        use std::io::Write as _;
+        writeln!(temp, "first").unwrap();
+        writeln!(temp, "second").unwrap();
+        writeln!(temp, "third").unwrap();
+
+        let lines = read_file_slice(temp.path(), 1, 2)
+            .await
+            .expect("read slice");
+        assert_eq!(
+            lines,
+            vec!["L1: first".to_string(), "L2: second".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn truncates_lines_longer_than_max_length() {
+        let mut temp = NamedTempFile::new().expect("create temp file");
+        use std::io::Write as _;
+        let long_line = "x".repeat(MAX_LINE_LENGTH + 50);
+        writeln!(temp, "{long_line}").unwrap();
+
+        let lines = read_file_slice(temp.path(), 1, 1)
+            .await
+            .expect("read slice");
+        let expected = "x".repeat(MAX_LINE_LENGTH);
+        assert_eq!(lines, vec![format!("L1: {expected}")]);
+    }
 }
