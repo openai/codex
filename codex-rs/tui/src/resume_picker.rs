@@ -9,6 +9,7 @@ use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
 use codex_core::Cursor;
 use codex_core::RolloutRecorder;
+use codex_core::protocol::SessionSource;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -35,6 +36,7 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+const INTERACTIVE_SOURCES: &[SessionSource] = &[SessionSource::Cli, SessionSource::Vscode];
 
 #[derive(Debug, Clone)]
 pub enum ResumeSelection {
@@ -76,7 +78,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
-                true,
+                INTERACTIVE_SOURCES,
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -324,8 +326,13 @@ impl PickerState {
     }
 
     async fn load_initial_page(&mut self) -> Result<()> {
-        let page =
-            RolloutRecorder::list_conversations(&self.codex_home, PAGE_SIZE, None, true).await?;
+        let page = RolloutRecorder::list_conversations(
+            &self.codex_home,
+            PAGE_SIZE,
+            None,
+            INTERACTIVE_SOURCES,
+        )
+        .await?;
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
