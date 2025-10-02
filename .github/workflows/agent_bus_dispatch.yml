@@ -19,6 +19,37 @@ jobs:
         with:
           python-version: '3.12'
       - uses: cli/gh-action@v2
+      - name: Validate repository_dispatch signature
+        env:
+          REPO_DISPATCH_SECRET: ${{ secrets.REPO_DISPATCH_SECRET }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: |
+          set -euo pipefail
+          TYPE=$(jq -r '.action // .event.action // ""' "$GITHUB_EVENT_PATH" || echo "")
+          # Only proceed for allowed type(s)
+          ALLOWED="agent-event"
+          echo "type=$TYPE"
+          if [ "$ALLOWED" != "${TYPE}" ]; then
+            echo "unsupported repository_dispatch type: $TYPE" >&2
+            exit 1
+          fi
+          # Extract client_payload and provided signature
+          SIG=$(jq -r '.client_payload.signature // empty' "$GITHUB_EVENT_PATH")
+          if [ -z "$SIG" ]; then
+            echo "missing client_payload.signature" >&2
+            exit 1
+          fi
+          # Compute expected signature over compacted client_payload excluding the signature field
+          PAYLOAD_COMPACT=$(jq -c '.client_payload | del(.signature)' "$GITHUB_EVENT_PATH")
+          EXPECTED=$(printf "%s" "$PAYLOAD_COMPACT" | openssl dgst -sha256 -hmac "$REPO_DISPATCH_SECRET" -binary | xxd -p -c 256)
+          # Lowercase compare
+          SIG_L=$(printf "%s" "$SIG" | tr 'A-F' 'a-f')
+          EXP_L=$(printf "%s" "$EXPECTED" | tr 'A-F' 'a-f')
+          if [ "$SIG_L" != "$EXP_L" ]; then
+            echo "invalid signature" >&2
+            exit 1
+          fi
+          echo "signature OK"
       - name: Route repository_dispatch to agent_bus
         env:
           UPSTREAM_GH_TOKEN: ${{ secrets.UPSTREAM_GH_TOKEN }}
@@ -30,4 +61,3 @@ jobs:
           export AGENT_BUS_COMMAND="$CMD"
           export AGENT_BUS_PAYLOAD="$PAYLOAD"
           python3 scripts/agent_bus.py
-

@@ -33,5 +33,8 @@ timeout_ms = 800
 
 [review]
 barriers = ["build-test","Format / etc","ubuntu-24.04 - x86_64-unknown-linux-gnu","macos-14 - aarch64-apple-darwin","macos-14 - x86_64-apple-darwin"]
-owners = ["@your-handle"]
-actions = { approve="/apply", defer="/defer", decline="/decline" }
+# Owners who can issue APPROVE/REQUEST_CHANGES via review_gate (required for actionable commands)
+# owners = ["@your-handle", "@another-owner"]
+
+# Map owner commands to review intents (defaults shown)
+# actions = { approve="/apply", defer="/defer", decline="/decline" }

@@ -87,9 +87,9 @@ def main():
         except Exception as e:
             num = issue['number']
             comment_issue(num, f"[agent-bus queue] error: {e}")
-            # dead-letter after 2 failures
+            # dead-letter after 3 failures
             failures = count_error_comments(num)
-            if failures >= 2:
+            if failures >= 3:
                 try:
                     edit_issue_labels(num, remove=["agent-task"], add=["agent-task-failed"])
                 except Exception:

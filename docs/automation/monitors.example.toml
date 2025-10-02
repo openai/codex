@@ -35,3 +35,27 @@ value = "degraded"
 route_command = "/notify"
 cooldown_sec = 600
 include_sample = false
+
+# Optional templates (disabled by default)
+
+# [monitor.slack_incoming]
+# type = "http"
+# method = "POST"
+# url = "https://hooks.slack.com/services/T000/B000/XXXX"  # consider passing via secret proxy
+# poll_interval_sec = 0  # not a poller; use repository_dispatch or queue instead
+# route_command = "/notify"
+# match_any_contains = []  # not applicable
+# include_sample = false
+
+# [monitor.pagerduty_incidents]
+# type = "http"
+# method = "GET"
+# url = "https://api.pagerduty.com/incidents?statuses=triggered"
+# headers = { "Authorization" = "Token token=${ENV:PD_API_TOKEN}", "Accept" = "application/vnd.pagerduty+json;version=2" }
+# poll_interval_sec = 300
+# json_path = "incidents[0].status"
+# operator = "eq"
+# value = "triggered"
+# route_command = "/notify"
+# cooldown_sec = 900
+# include_sample = false

@@ -23,13 +23,12 @@ def load_cfg():
         return tomllib.load(f)
 
 
-def allowed_actor(cfg: dict, login: str | None) -> bool:
+def actor_in_owners(cfg: dict, login: str | None) -> bool:
     if not login:
         return False
     owners = cfg.get('review', {}).get('owners') or []
     if not owners:
-        return True  # if owners not specified, allow any commenter
-    # owners entries can be '@user' or 'user'
+        return False  # owners required for actionable review commands
     norm = login.lower()
     owners_norm = set(o.lower().lstrip('@') for o in owners)
     return norm in owners_norm
@@ -91,10 +90,12 @@ def main():
         payload = json.loads(Path(event_path).read_text()) if event_path and Path(event_path).exists() else {}
         body = (payload.get('comment') or {}).get('body') or ''
         actor = (payload.get('comment') or {}).get('user', {}).get('login')
-        if not allowed_actor(cfg, actor):
-            print(f"[review-gate] actor '{actor}' not allowed; skipping")
-            return 0
+        # For actionable review commands, require actor to be in owners.
         body_stripped = body.strip()
+        if body_stripped.startswith('/') and body_stripped.split('\n', 1)[0] in ("/apply", "/defer", "/decline"):
+            if not actor_in_owners(cfg, actor):
+                print(f"[review-gate] actor '{actor}' not in owners; skipping actionable review command")
+                return 0
         # Map owner intent to formal PR review, only when barriers are satisfied
         if body_stripped in actionable_cmds:
             if not ok:
