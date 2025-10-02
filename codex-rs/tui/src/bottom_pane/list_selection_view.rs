@@ -1,6 +1,7 @@
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use itertools::Itertools as _;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -13,6 +14,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::app_event_sender::AppEventSender;
+use crate::key_hint::KeyBinding;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
@@ -31,8 +33,10 @@ use super::selection_popup_common::render_rows;
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
+#[derive(Default)]
 pub(crate) struct SelectionItem {
     pub name: String,
+    pub display_shortcut: Option<KeyBinding>,
     pub description: Option<String>,
     pub is_current: bool,
     pub actions: Vec<SelectionAction>,
@@ -135,18 +139,10 @@ impl ListSelectionView {
             self.filtered_indices = self
                 .items
                 .iter()
-                .enumerate()
-                .filter_map(|(idx, item)| {
-                    let matches = if let Some(search_value) = &item.search_value {
-                        search_value.to_lowercase().contains(&query_lower)
-                    } else {
-                        let mut matches = item.name.to_lowercase().contains(&query_lower);
-                        if !matches && let Some(desc) = &item.description {
-                            matches = desc.to_lowercase().contains(&query_lower);
-                        }
-                        matches
-                    };
-                    matches.then_some(idx)
+                .positions(|item| {
+                    item.search_value
+                        .as_ref()
+                        .is_some_and(|v| v.to_lowercase().contains(&query_lower))
                 })
                 .collect();
         } else {
@@ -200,6 +196,7 @@ impl ListSelectionView {
                     };
                     GenericDisplayRow {
                         name: display_name,
+                        display_shortcut: item.display_shortcut,
                         match_indices: None,
                         is_current: item.is_current,
                         description: item.description.clone(),
@@ -329,7 +326,8 @@ impl Renderable for ListSelectionView {
 
         let rows_height = measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width);
 
-        let mut height = self.header.desired_height(width);
+        // Subtract 4 for the padding on the left and right of the header.
+        let mut height = self.header.desired_height(width.saturating_sub(4));
         height = height.saturating_add(rows_height + 3);
         if self.is_searchable {
             height = height.saturating_add(1);
@@ -355,7 +353,10 @@ impl Renderable for ListSelectionView {
             .style(user_message_style(terminal_palette::default_bg()))
             .render(content_area, buf);
 
-        let header_height = self.header.desired_height(content_area.width);
+        let header_height = self
+            .header
+            // Subtract 4 for the padding on the left and right of the header.
+            .desired_height(content_area.width.saturating_sub(4));
         let rows = self.build_rows();
         let rows_height =
             measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, content_area.width);
@@ -438,17 +439,15 @@ mod tests {
                 name: "Read Only".to_string(),
                 description: Some("Codex can read files".to_string()),
                 is_current: true,
-                actions: vec![],
                 dismiss_on_select: true,
-                search_value: None,
+                ..Default::default()
             },
             SelectionItem {
                 name: "Full Access".to_string(),
                 description: Some("Codex can edit files".to_string()),
                 is_current: false,
-                actions: vec![],
                 dismiss_on_select: true,
-                search_value: None,
+                ..Default::default()
             },
         ];
         ListSelectionView::new(
@@ -510,9 +509,8 @@ mod tests {
             name: "Read Only".to_string(),
             description: Some("Codex can read files".to_string()),
             is_current: false,
-            actions: vec![],
             dismiss_on_select: true,
-            search_value: None,
+            ..Default::default()
         }];
         let mut view = ListSelectionView::new(
             SelectionViewParams {
