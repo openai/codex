@@ -11,6 +11,10 @@ use unicode_width::UnicodeWidthStr;
 
 use super::account::StatusAccountDisplay;
 
+fn normalize_agents_display_path(path: &Path) -> String {
+    dunce::simplified(path).display().to_string()
+}
+
 pub(crate) fn compose_model_display(
     config: &Config,
     entries: &[(&str, String)],
@@ -36,9 +40,13 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
         Ok(paths) => {
             let mut rels: Vec<String> = Vec::new();
             for p in paths {
+                let file_name = p
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
                 let display = if let Some(parent) = p.parent() {
                     if parent == config.cwd {
-                        "AGENTS.md".to_string()
+                        file_name.clone()
                     } else {
                         let mut cur = config.cwd.as_path();
                         let mut ups = 0usize;
@@ -53,15 +61,15 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
                         }
                         if reached {
                             let up = format!("..{}", std::path::MAIN_SEPARATOR);
-                            format!("{}AGENTS.md", up.repeat(ups))
+                            format!("{}{}", up.repeat(ups), file_name)
                         } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
-                            stripped.display().to_string()
+                            normalize_agents_display_path(stripped)
                         } else {
-                            p.display().to_string()
+                            normalize_agents_display_path(&p)
                         }
                     }
                 } else {
-                    p.display().to_string()
+                    normalize_agents_display_path(&p)
                 };
                 rels.push(display);
             }

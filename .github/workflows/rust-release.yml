@@ -216,31 +216,30 @@ jobs:
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
           fi
 
-      # build_npm_package.py requires DotSlash when staging releases.
-      - uses: facebook/install-dotslash@v2
-      - name: Stage codex CLI npm package
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TMP_DIR="${RUNNER_TEMP}/npm-stage"
-          ./codex-cli/scripts/build_npm_package.py \
-            --package codex \
-            --release-version "${{ steps.release_name.outputs.name }}" \
-            --staging-dir "${TMP_DIR}" \
-            --pack-output "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
 
-      - name: Stage responses API proxy npm package
+      - name: Setup Node.js for npm packaging
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # stage_npm_packages.py requires DotSlash when staging releases.
+      - uses: facebook/install-dotslash@v2
+      - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          TMP_DIR="${RUNNER_TEMP}/npm-stage-responses"
-          ./codex-cli/scripts/build_npm_package.py \
-            --package codex-responses-api-proxy \
+          ./scripts/stage_npm_packages.py \
             --release-version "${{ steps.release_name.outputs.name }}" \
-            --staging-dir "${TMP_DIR}" \
-            --pack-output "${GITHUB_WORKSPACE}/dist/npm/codex-responses-api-proxy-npm-${{ steps.release_name.outputs.name }}.tgz"
+            --package codex \
+            --package codex-responses-api-proxy \
+            --package codex-sdk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -300,6 +299,10 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --pattern "codex-responses-api-proxy-npm-${version}.tgz" \
             --dir dist/npm
+          gh release download "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "codex-sdk-npm-${version}.tgz" \
+            --dir dist/npm
 
       # No NODE_AUTH_TOKEN needed because we use OIDC.
       - name: Publish to npm
@@ -316,6 +319,7 @@ jobs:
           tarballs=(
             "codex-npm-${VERSION}.tgz"
             "codex-responses-api-proxy-npm-${VERSION}.tgz"
+            "codex-sdk-npm-${VERSION}.tgz"
           )
 
           for tarball in "${tarballs[@]}"; do

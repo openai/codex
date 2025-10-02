@@ -5,6 +5,7 @@
 #![deny(clippy::disallowed_methods)]
 use app::App;
 pub use app::AppExitInfo;
+use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
@@ -19,7 +20,6 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::mcp_protocol::AuthMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -361,7 +361,7 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&config);
 
-    let auth_manager = AuthManager::shared(config.codex_home.clone());
+    let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
     let login_status = get_login_status(&config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &config, should_show_trust_screen);

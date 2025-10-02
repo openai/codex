@@ -39,10 +39,12 @@ codex-git-tooling = { workspace = true }
 codex-login = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 diffy = { workspace = true }
 dirs = { workspace = true }
+dunce = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }

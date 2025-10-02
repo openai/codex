@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::ConversationId;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
-use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
@@ -476,6 +476,9 @@ pub enum EventMsg {
     ExecCommandOutputDelta(ExecCommandOutputDeltaEvent),
 
     ExecCommandEnd(ExecCommandEndEvent),
+
+    /// Notification that the agent attached a local image via the view_image tool.
+    ViewImageToolCall(ViewImageToolCallEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
@@ -1072,6 +1075,14 @@ pub struct ExecCommandEndEvent {
     pub duration: Duration,
     /// Formatted output from the command, as seen by the model.
     pub formatted_output: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ViewImageToolCallEvent {
+    /// Identifier for the originating tool call.
+    pub call_id: String,
+    /// Local filesystem path provided to the tool.
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]

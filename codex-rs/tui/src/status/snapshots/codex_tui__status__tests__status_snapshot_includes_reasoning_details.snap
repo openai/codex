@@ -4,16 +4,17 @@ expression: sanitized
 ---
 /status
 
-╭───────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                                         │
-│                                                                   │
-│  Model:          gpt-5-codex (reasoning high, summaries detailed) │
-│  Directory: [[workspace]]                                         │
-│  Approval:       on-request                                       │
-│  Sandbox:        workspace-write                                  │
-│  Agents.md:      <none>                                           │
-│                                                                   │
-│  Token usage:    1.9K total  (1K input + 900 output)              │
-│  5h limit:       [███████████████░░░░░] 72% used (resets 03:14)   │
-│  Weekly limit:   [█████████░░░░░░░░░░░] 45% used (resets 03:24)   │
-╰───────────────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.0.0)                                           │
+│                                                                     │
+│  Model:            gpt-5-codex (reasoning high, summaries detailed) │
+│  Directory: [[workspace]]                                           │
+│  Approval:         on-request                                       │
+│  Sandbox:          workspace-write                                  │
+│  Agents.md:        <none>                                           │
+│                                                                     │
+│  Token usage:      1.9K total  (1K input + 900 output)              │
+│  Context window:   100% left (2.1K used / 272K)                     │
+│  5h limit:         [███████████████░░░░░] 72% used (resets 03:14)   │
+│  Weekly limit:     [█████████░░░░░░░░░░░] 45% used (resets 03:24)   │
+╰─────────────────────────────────────────────────────────────────────╯
