@@ -6,4 +6,6 @@ pub enum FunctionCallError {
     RespondToModel(String),
     #[error("LocalShellCall without call_id or id")]
     MissingLocalShellCallId,
+    #[error("Fatal error: {0}")]
+    Fatal(String),
 }

@@ -94,7 +94,7 @@ impl ToolRegistry {
                 false,
                 &message,
             );
-            return Err(FunctionCallError::RespondToModel(message));
+            return Err(FunctionCallError::Fatal(message));
         }
 
         let output_cell = tokio::sync::Mutex::new(None);
@@ -128,7 +128,7 @@ impl ToolRegistry {
             Ok(_) => {
                 let mut guard = output_cell.lock().await;
                 let output = guard.take().ok_or_else(|| {
-                    FunctionCallError::RespondToModel("tool produced no output".to_string())
+                    FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
                 Ok(output.into_response(&call_id_owned, &payload_for_response))
             }

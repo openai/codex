@@ -1929,6 +1929,7 @@ async fn run_turn(
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
+            Err(e @ CodexErr::Fatal(_)) => return Err(e),
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
@@ -2193,10 +2194,14 @@ async fn handle_response_item(
         Ok(Some(call)) => {
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
-            let response = router
+            match router
                 .dispatch_tool_call(sess, turn_context, turn_diff_tracker, sub_id, call)
-                .await;
-            Ok(Some(response))
+                .await
+            {
+                Ok(response) => Ok(Some(response)),
+                Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
+                Err(other) => unreachable!("non-fatal tool error returned: {other:?}"),
+            }
         }
         Ok(None) => {
             match &item {
@@ -2255,6 +2260,7 @@ async fn handle_response_item(
                 },
             }))
         }
+        Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
     }
 }
 
@@ -2390,7 +2396,9 @@ mod tests {
     use crate::tools::MODEL_FORMAT_MAX_BYTES;
     use crate::tools::MODEL_FORMAT_MAX_LINES;
     use crate::tools::MODEL_FORMAT_TAIL_LINES;
+    use crate::tools::ToolRouter;
     use crate::tools::handle_container_exec_with_params;
+    use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -2880,6 +2888,43 @@ mod tests {
             found,
             "synthetic review interruption not recorded in history"
         );
+    }
+
+    #[tokio::test]
+    async fn fatal_tool_error_stops_turn_and_reports_error() {
+        let (session, turn_context, _rx) = make_session_and_context_with_rx();
+        let session_ref = session.as_ref();
+        let turn_context_ref = turn_context.as_ref();
+        let router = ToolRouter::from_config(
+            &turn_context_ref.tools_config,
+            Some(session_ref.services.mcp_connection_manager.list_all_tools()),
+        );
+        let mut tracker = TurnDiffTracker::new();
+        let item = ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-1".to_string(),
+            name: "shell".to_string(),
+            input: "{}".to_string(),
+        };
+
+        let err = handle_response_item(
+            &router,
+            session_ref,
+            turn_context_ref,
+            &mut tracker,
+            "sub-id",
+            item,
+        )
+        .await
+        .expect_err("expected fatal error");
+
+        match err {
+            CodexErr::Fatal(message) => {
+                assert_eq!(message, "tool shell invoked with incompatible payload");
+            }
+            other => panic!("expected CodexErr::Fatal, got {other:?}"),
+        }
     }
 
     fn sample_rollout(

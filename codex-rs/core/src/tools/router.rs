@@ -123,27 +123,33 @@ impl ToolRouter {
         tracker: &mut TurnDiffTracker,
         sub_id: &str,
         call: ToolCall,
-    ) -> ResponseInputItem {
-        let payload_outputs_custom = matches!(call.payload, ToolPayload::Custom { .. });
+    ) -> Result<ResponseInputItem, FunctionCallError> {
         let ToolCall {
             tool_name,
             call_id,
             payload,
         } = call;
+        let payload_outputs_custom = matches!(payload, ToolPayload::Custom { .. });
+        let failure_call_id = call_id.clone();
 
         let invocation = ToolInvocation {
             session,
             turn,
             tracker,
             sub_id,
-            call_id: call_id.clone(),
-            tool_name: tool_name.clone(),
+            call_id,
+            tool_name,
             payload,
         };
 
         match self.registry.dispatch(invocation).await {
-            Ok(response) => response,
-            Err(err) => Self::failure_response(call_id, payload_outputs_custom, err),
+            Ok(response) => Ok(response),
+            Err(FunctionCallError::Fatal(message)) => Err(FunctionCallError::Fatal(message)),
+            Err(err) => Ok(Self::failure_response(
+                failure_call_id,
+                payload_outputs_custom,
+                err,
+            )),
         }
     }
 
