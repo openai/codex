@@ -42,6 +42,9 @@ use toml_edit::DocumentMut;
 use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
 
+#[cfg(target_os = "windows")]
+const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
+#[cfg(not(target_os = "windows"))]
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5-codex";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5-codex";
 pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
