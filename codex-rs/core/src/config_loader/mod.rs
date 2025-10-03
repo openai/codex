@@ -2,7 +2,6 @@ mod macos;
 
 use crate::config::CONFIG_TOML_FILE;
 use macos::load_managed_admin_config_layer;
-use std::env;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
