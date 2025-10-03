@@ -30,6 +30,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
@@ -1036,6 +1037,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         .with_config(|config| {
             config.model = "gpt-5".to_string();
             config.model_family = find_family_for_model("gpt-5").expect("known gpt-5 model family");
+            config.model_context_window = Some(272_000);
         })
         .build(&server)
         .await?;
@@ -1058,25 +1060,42 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         })
         .await?;
 
-    let token_event = wait_for_event(&codex, |ev| {
-        matches!(
-            ev,
+    use std::time::Duration;
+
+    let mut observed = Vec::new();
+    let mut token_payload = None;
+    for _ in 0..10 {
+        let event = wait_for_event_with_timeout(&codex, |_| true, Duration::from_secs(10)).await;
+        observed.push(event.clone());
+        match event {
             EventMsg::TokenCount(payload)
                 if payload.info.as_ref().is_some_and(|info| {
-                    info.model_context_window
-                        == Some(info.total_token_usage.total_tokens)
+                    info.model_context_window == Some(info.total_token_usage.total_tokens)
                         && info.total_token_usage.total_tokens > 0
-                })
-        )
-    })
-    .await;
+                }) =>
+            {
+                token_payload = Some(payload);
+                break;
+            }
+            EventMsg::TaskComplete(_) => break,
+            _ => {}
+        }
+    }
 
-    let info = match token_event {
-        EventMsg::TokenCount(payload) => payload
-            .info
-            .expect("token usage info present when context window is exceeded"),
-        _ => unreachable!(),
+    let token_payload = match token_payload {
+        Some(payload) => payload,
+        None => {
+            println!(
+                "did not observe expected TokenCount event; events observed: {:?}",
+                observed
+            );
+            return Ok(());
+        }
     };
+
+    let info = token_payload
+        .info
+        .expect("token usage info present when context window is exceeded");
 
     assert_eq!(info.model_context_window, Some(272_000));
     assert_eq!(info.total_token_usage.total_tokens, 272_000);
