@@ -28,6 +28,7 @@ use serde_json::Value;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -113,8 +114,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cli::Color::Always => (true, true),
         cli::Color::Never => (false, false),
         cli::Color::Auto => (
-            std::io::stdout().is_terminal(),
-            std::io::stderr().is_terminal(),
+            supports_color::on_cached(Stream::Stdout).is_some(),
+            supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
 
