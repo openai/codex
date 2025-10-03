@@ -80,7 +80,7 @@ jobs:
             }
 
             const lines = [
-              'Potential duplicates detected:'
+              'Potential duplicates detected:',
               ...numbers.map((value) => `- #${value}`),
               '',
               '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];
