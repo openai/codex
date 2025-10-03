@@ -3,7 +3,7 @@ name: Issue Deduplicator
 on:
   issues:
     types:
-#      - opened - disabled while testing
+      - opened
       - labeled
 
 jobs:
@@ -79,7 +79,11 @@ jobs:
               return;
             }
 
-            const lines = ['Potential duplicates detected:', ...numbers.map((value) => `- #${value}`)];
+            const lines = [
+              'Potential duplicates detected:'
+              ...numbers.map((value) => `- #${value}`),
+              '',
+              '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
