@@ -864,6 +864,7 @@ dependencies = [
  "codex-utils-string",
  "core_test_support",
  "dirs",
+ "dunce",
  "env-flags",
  "escargot",
  "eventsource-stream",
@@ -913,7 +914,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
- "chrono",
  "clap",
  "codex-arg0",
  "codex-common",
@@ -930,6 +930,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "supports-color",
  "tempfile",
  "tokio",
  "tracing",
@@ -1201,6 +1202,7 @@ dependencies = [
  "crossterm",
  "diffy",
  "dirs",
+ "dunce",
  "image",
  "insta",
  "itertools 0.14.0",
@@ -1802,6 +1804,12 @@ name = "dtor-proc-macro"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f678cf4a922c215c63e0de95eb1ff08a958a81d47e485cf9da1e27bf6305cfa5"
+
+[[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dupe"
@@ -4069,7 +4077,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

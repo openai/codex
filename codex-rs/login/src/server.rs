@@ -25,6 +25,7 @@ use tiny_http::Header;
 use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
+use tiny_http::StatusCode;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
@@ -148,8 +149,15 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
                                 let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
                                 None
                             }
-                            HandledRequest::ResponseAndExit { response, result } => {
-                                let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
+                            HandledRequest::ResponseAndExit {
+                                headers,
+                                body,
+                                result,
+                            } => {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    send_response_with_disconnect(req, headers, body)
+                                })
+                                .await;
                                 Some(result)
                             }
                             HandledRequest::RedirectWithHeader(header) => {
@@ -185,7 +193,8 @@ enum HandledRequest {
     Response(Response<Cursor<Vec<u8>>>),
     RedirectWithHeader(Header),
     ResponseAndExit {
-        response: Response<Cursor<Vec<u8>>>,
+        headers: Vec<Header>,
+        body: Vec<u8>,
         result: io::Result<()>,
     },
 }
@@ -275,20 +284,21 @@ async fn process_request(
         }
         "/success" => {
             let body = include_str!("assets/success.html");
-            let mut resp = Response::from_data(body.as_bytes());
-            if let Ok(h) = tiny_http::Header::from_bytes(
-                &b"Content-Type"[..],
-                &b"text/html; charset=utf-8"[..],
-            ) {
-                resp.add_header(h);
-            }
             HandledRequest::ResponseAndExit {
-                response: resp,
+                headers: match Header::from_bytes(
+                    &b"Content-Type"[..],
+                    &b"text/html; charset=utf-8"[..],
+                ) {
+                    Ok(header) => vec![header],
+                    Err(_) => Vec::new(),
+                },
+                body: body.as_bytes().to_vec(),
                 result: Ok(()),
             }
         }
         "/cancel" => HandledRequest::ResponseAndExit {
-            response: Response::from_string("Login cancelled"),
+            headers: Vec::new(),
+            body: b"Login cancelled".to_vec(),
             result: Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 "Login cancelled",
@@ -296,6 +306,50 @@ async fn process_request(
         },
         _ => HandledRequest::Response(Response::from_string("Not Found").with_status_code(404)),
     }
+}
+
+/// tiny_http filters `Connection` headers out of `Response` objects, so using
+/// `req.respond` never informs the client (or the library) that a keep-alive
+/// socket should be closed. That leaves the per-connection worker parked in a
+/// loop waiting for more requests, which in turn causes the next login attempt
+/// to hang on the old connection. This helper bypasses tiny_http’s response
+/// machinery: it extracts the raw writer, prints the HTTP response manually,
+/// and always appends `Connection: close`, ensuring the socket is closed from
+/// the server side. Ideally, tiny_http would provide an API to control
+/// server-side connection persistence, but it does not.
+fn send_response_with_disconnect(
+    req: Request,
+    mut headers: Vec<Header>,
+    body: Vec<u8>,
+) -> io::Result<()> {
+    let status = StatusCode(200);
+    let mut writer = req.into_writer();
+    let reason = status.default_reason_phrase();
+    write!(writer, "HTTP/1.1 {} {}\r\n", status.0, reason)?;
+    headers.retain(|h| !h.field.equiv("Connection"));
+    if let Ok(close_header) = Header::from_bytes(&b"Connection"[..], &b"close"[..]) {
+        headers.push(close_header);
+    }
+
+    let content_length_value = format!("{}", body.len());
+    if let Ok(content_length_header) =
+        Header::from_bytes(&b"Content-Length"[..], content_length_value.as_bytes())
+    {
+        headers.push(content_length_header);
+    }
+
+    for header in headers {
+        write!(
+            writer,
+            "{}: {}\r\n",
+            header.field.as_str(),
+            header.value.as_str()
+        )?;
+    }
+
+    writer.write_all(b"\r\n")?;
+    writer.write_all(&body)?;
+    writer.flush()
 }
 
 fn build_authorize_url(

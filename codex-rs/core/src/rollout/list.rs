@@ -17,6 +17,7 @@ use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionSource;
 
 /// Returned page of conversation summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -40,10 +41,25 @@ pub struct ConversationItem {
     pub head: Vec<serde_json::Value>,
     /// Last up to `TAIL_RECORD_LIMIT` JSONL response records parsed as JSON.
     pub tail: Vec<serde_json::Value>,
+    /// RFC3339 timestamp string for when the session was created, if available.
+    pub created_at: Option<String>,
+    /// RFC3339 timestamp string for the most recent response in the tail, if available.
+    pub updated_at: Option<String>,
+}
+
+#[derive(Default)]
+struct HeadTailSummary {
+    head: Vec<serde_json::Value>,
+    tail: Vec<serde_json::Value>,
+    saw_session_meta: bool,
+    saw_user_event: bool,
+    source: Option<SessionSource>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
 }
 
 /// Hard cap to bound worst‑case work per request.
-const MAX_SCAN_FILES: usize = 100;
+const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
 const TAIL_RECORD_LIMIT: usize = 10;
 
@@ -92,6 +108,7 @@ pub(crate) async fn get_conversations(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
+    allowed_sources: &[SessionSource],
 ) -> io::Result<ConversationsPage> {
     let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
@@ -107,7 +124,8 @@ pub(crate) async fn get_conversations(
 
     let anchor = cursor.cloned();
 
-    let result = traverse_directories_for_paths(root.clone(), page_size, anchor).await?;
+    let result =
+        traverse_directories_for_paths(root.clone(), page_size, anchor, allowed_sources).await?;
     Ok(result)
 }
 
@@ -126,6 +144,7 @@ async fn traverse_directories_for_paths(
     root: PathBuf,
     page_size: usize,
     anchor: Option<Cursor>,
+    allowed_sources: &[SessionSource],
 ) -> io::Result<ConversationsPage> {
     let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -179,13 +198,33 @@ async fn traverse_directories_for_paths(
                     }
                     // Read head and simultaneously detect message events within the same
                     // first N JSONL records to avoid a second file read.
-                    let (head, tail, saw_session_meta, saw_user_event) =
-                        read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
-                            .await
-                            .unwrap_or((Vec::new(), Vec::new(), false, false));
+                    let summary = read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
+                        .await
+                        .unwrap_or_default();
+                    if !allowed_sources.is_empty()
+                        && !summary
+                            .source
+                            .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
+                    {
+                        continue;
+                    }
                     // Apply filters: must have session meta and at least one user message event
-                    if saw_session_meta && saw_user_event {
-                        items.push(ConversationItem { path, head, tail });
+                    if summary.saw_session_meta && summary.saw_user_event {
+                        let HeadTailSummary {
+                            head,
+                            tail,
+                            created_at,
+                            mut updated_at,
+                            ..
+                        } = summary;
+                        updated_at = updated_at.or_else(|| created_at.clone());
+                        items.push(ConversationItem {
+                            path,
+                            head,
+                            tail,
+                            created_at,
+                            updated_at,
+                        });
                     }
                 }
             }
@@ -293,17 +332,15 @@ async fn read_head_and_tail(
     path: &Path,
     head_limit: usize,
     tail_limit: usize,
-) -> io::Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, bool, bool)> {
+) -> io::Result<HeadTailSummary> {
     use tokio::io::AsyncBufReadExt;
 
     let file = tokio::fs::File::open(path).await?;
     let reader = tokio::io::BufReader::new(file);
     let mut lines = reader.lines();
-    let mut head: Vec<serde_json::Value> = Vec::new();
-    let mut saw_session_meta = false;
-    let mut saw_user_event = false;
+    let mut summary = HeadTailSummary::default();
 
-    while head.len() < head_limit {
+    while summary.head.len() < head_limit {
         let line_opt = lines.next_line().await?;
         let Some(line) = line_opt else { break };
         let trimmed = line.trim();
@@ -316,14 +353,23 @@ async fn read_head_and_tail(
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
+                summary.source = Some(session_meta_line.meta.source);
+                summary.created_at = summary
+                    .created_at
+                    .clone()
+                    .or_else(|| Some(rollout_line.timestamp.clone()));
                 if let Ok(val) = serde_json::to_value(session_meta_line) {
-                    head.push(val);
-                    saw_session_meta = true;
+                    summary.head.push(val);
+                    summary.saw_session_meta = true;
                 }
             }
             RolloutItem::ResponseItem(item) => {
+                summary.created_at = summary
+                    .created_at
+                    .clone()
+                    .or_else(|| Some(rollout_line.timestamp.clone()));
                 if let Ok(val) = serde_json::to_value(item) {
-                    head.push(val);
+                    summary.head.push(val);
                 }
             }
             RolloutItem::TurnContext(_) => {
@@ -334,28 +380,30 @@ async fn read_head_and_tail(
             }
             RolloutItem::EventMsg(ev) => {
                 if matches!(ev, EventMsg::UserMessage(_)) {
-                    saw_user_event = true;
+                    summary.saw_user_event = true;
                 }
             }
         }
     }
 
-    let tail = if tail_limit == 0 {
-        Vec::new()
-    } else {
-        read_tail_records(path, tail_limit).await?
-    };
-
-    Ok((head, tail, saw_session_meta, saw_user_event))
+    if tail_limit != 0 {
+        let (tail, updated_at) = read_tail_records(path, tail_limit).await?;
+        summary.tail = tail;
+        summary.updated_at = updated_at;
+    }
+    Ok(summary)
 }
 
-async fn read_tail_records(path: &Path, max_records: usize) -> io::Result<Vec<serde_json::Value>> {
+async fn read_tail_records(
+    path: &Path,
+    max_records: usize,
+) -> io::Result<(Vec<serde_json::Value>, Option<String>)> {
     use std::io::SeekFrom;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncSeekExt;
 
     if max_records == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
 
     const CHUNK_SIZE: usize = 8192;
@@ -363,24 +411,28 @@ async fn read_tail_records(path: &Path, max_records: usize) -> io::Result<Vec<se
     let mut file = tokio::fs::File::open(path).await?;
     let mut pos = file.seek(SeekFrom::End(0)).await?;
     if pos == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
 
     let mut buffer: Vec<u8> = Vec::new();
+    let mut latest_timestamp: Option<String> = None;
 
     loop {
         let slice_start = match (pos > 0, buffer.iter().position(|&b| b == b'\n')) {
             (true, Some(idx)) => idx + 1,
             _ => 0,
         };
-        let tail = collect_last_response_values(&buffer[slice_start..], max_records);
+        let (tail, newest_ts) = collect_last_response_values(&buffer[slice_start..], max_records);
+        if latest_timestamp.is_none() {
+            latest_timestamp = newest_ts.clone();
+        }
         if tail.len() >= max_records || pos == 0 {
-            return Ok(tail);
+            return Ok((tail, latest_timestamp.or(newest_ts)));
         }
 
         let read_size = CHUNK_SIZE.min(pos as usize);
         if read_size == 0 {
-            return Ok(tail);
+            return Ok((tail, latest_timestamp.or(newest_ts)));
         }
         pos -= read_size as u64;
         file.seek(SeekFrom::Start(pos)).await?;
@@ -391,15 +443,19 @@ async fn read_tail_records(path: &Path, max_records: usize) -> io::Result<Vec<se
     }
 }
 
-fn collect_last_response_values(buffer: &[u8], max_records: usize) -> Vec<serde_json::Value> {
+fn collect_last_response_values(
+    buffer: &[u8],
+    max_records: usize,
+) -> (Vec<serde_json::Value>, Option<String>) {
     use std::borrow::Cow;
 
     if buffer.is_empty() || max_records == 0 {
-        return Vec::new();
+        return (Vec::new(), None);
     }
 
     let text: Cow<'_, str> = String::from_utf8_lossy(buffer);
     let mut collected_rev: Vec<serde_json::Value> = Vec::new();
+    let mut latest_timestamp: Option<String> = None;
     for line in text.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -407,9 +463,13 @@ fn collect_last_response_values(buffer: &[u8], max_records: usize) -> Vec<serde_
         }
         let parsed: serde_json::Result<RolloutLine> = serde_json::from_str(trimmed);
         let Ok(rollout_line) = parsed else { continue };
-        if let RolloutItem::ResponseItem(item) = rollout_line.item
-            && let Ok(val) = serde_json::to_value(item)
+        let RolloutLine { timestamp, item } = rollout_line;
+        if let RolloutItem::ResponseItem(item) = item
+            && let Ok(val) = serde_json::to_value(&item)
         {
+            if latest_timestamp.is_none() {
+                latest_timestamp = Some(timestamp.clone());
+            }
             collected_rev.push(val);
             if collected_rev.len() == max_records {
                 break;
@@ -417,7 +477,7 @@ fn collect_last_response_values(buffer: &[u8], max_records: usize) -> Vec<serde_
         }
     }
     collected_rev.reverse();
-    collected_rev
+    (collected_rev, latest_timestamp)
 }
 
 /// Locate a recorded conversation rollout file by its UUID string using the existing

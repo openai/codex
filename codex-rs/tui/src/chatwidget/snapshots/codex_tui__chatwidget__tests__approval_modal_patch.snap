@@ -1,16 +1,17 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: terminal.backend()
+expression: terminal.backend().vt100().screen().contents()
 ---
-"                                                                                "
-"▌ The model wants to apply changes                                              "
-"▌                                                                               "
-"▌ Grant write access to /tmp for the remainder of this session.                 "
-"▌                                                                               "
-"▌ Apply changes?                                                                "
-"▌                                                                               "
-"▌ > 1. Approve  (Y) Apply the proposed changes                                  "
-"▌   2. Cancel   (N) Do not apply the changes                                    "
-"                                                                                "
-"Press Enter to confirm or Esc to cancel                                         "
-"                                                                                "
+  Would you like to make the following edits?
+
+  README.md (+2 -0)
+
+      1     +hello
+      2     +world
+
+  The model wants to apply changes
+
+› 1. Yes, proceed
+  2. No, and tell Codex what to do differently esc
+
+  Press enter to confirm or esc to cancel

@@ -1,51 +1,5 @@
 ## Advanced
 
-## Non-interactive / CI mode
-
-Run Codex head-less in pipelines. Example GitHub Action step:
-
-```yaml
-- name: Update changelog via Codex
-  run: |
-    npm install -g @openai/codex
-    codex login --api-key "${{ secrets.OPENAI_KEY }}"
-    codex exec --full-auto "update CHANGELOG for next release"
-```
-
-### Resuming non-interactive sessions
-
-You can resume a previous headless run to continue the same conversation context and append to the same rollout file.
-
-Interactive TUI equivalent:
-
-```shell
-codex resume             # picker
-codex resume --last      # most recent
-codex resume <SESSION_ID>
-```
-
-Compatibility:
-
-- Latest source builds include `codex exec resume` (examples below).
-- Current released CLI may not include this yet. If `codex exec --help` shows no `resume`, use the workaround in the next subsection.
-
-```shell
-# Resume the most recent recorded session and run with a new prompt (source builds)
-codex exec "ship a release draft changelog" resume --last
-
-# Alternatively, pass the prompt via stdin (source builds)
-# Note: omit the trailing '-' to avoid it being parsed as a SESSION_ID
-echo "ship a release draft changelog" | codex exec resume --last
-
-# Or resume a specific session by id (UUID) (source builds)
-codex exec resume 7f9f9a2e-1b3c-4c7a-9b0e-123456789abc "continue the task"
-```
-
-Notes:
-
-- When using `--last`, Codex picks the newest recorded session; if none exist, it behaves like starting fresh.
-- Resuming appends new events to the existing session file and maintains the same conversation id.
-
 ## Tracing / verbose logging
 
 Because Codex is written in Rust, it honors the `RUST_LOG` environment variable to configure its logging behavior.

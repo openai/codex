@@ -366,26 +366,35 @@ impl ExecCell {
                     include_prefix: false,
                 },
             );
-            let trimmed_output =
-                Self::truncate_lines_middle(&raw_output_lines, layout.output_max_lines);
 
-            let mut wrapped_output: Vec<Line<'static>> = Vec::new();
-            let output_wrap_width = layout.output_block.wrap_width(width);
-            let output_opts =
-                RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
-            for line in trimmed_output {
-                push_owned_lines(
-                    &word_wrap_line(&line, output_opts.clone()),
-                    &mut wrapped_output,
-                );
-            }
-
-            if !wrapped_output.is_empty() {
+            if raw_output_lines.is_empty() {
                 lines.extend(prefix_lines(
-                    wrapped_output,
+                    vec![Line::from("(no output)".dim())],
                     Span::from(layout.output_block.initial_prefix).dim(),
                     Span::from(layout.output_block.subsequent_prefix),
                 ));
+            } else {
+                let trimmed_output =
+                    Self::truncate_lines_middle(&raw_output_lines, layout.output_max_lines);
+
+                let mut wrapped_output: Vec<Line<'static>> = Vec::new();
+                let output_wrap_width = layout.output_block.wrap_width(width);
+                let output_opts =
+                    RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
+                for line in trimmed_output {
+                    push_owned_lines(
+                        &word_wrap_line(&line, output_opts.clone()),
+                        &mut wrapped_output,
+                    );
+                }
+
+                if !wrapped_output.is_empty() {
+                    lines.extend(prefix_lines(
+                        wrapped_output,
+                        Span::from(layout.output_block.initial_prefix).dim(),
+                        Span::from(layout.output_block.subsequent_prefix),
+                    ));
+                }
             }
         }
 

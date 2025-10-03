@@ -19,6 +19,7 @@ use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
@@ -89,6 +90,7 @@ use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::ViewImageToolCallEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
@@ -144,6 +146,7 @@ impl Codex {
         config: Config,
         auth_manager: Arc<AuthManager>,
         conversation_history: InitialHistory,
+        session_source: SessionSource,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -172,6 +175,7 @@ impl Codex {
             auth_manager.clone(),
             tx_event.clone(),
             conversation_history,
+            session_source,
         )
         .await
         .map_err(|e| {
@@ -306,6 +310,7 @@ impl Session {
         auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
+        session_source: SessionSource,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
         let ConfigureSession {
             provider,
@@ -329,7 +334,11 @@ impl Session {
                 let conversation_id = ConversationId::default();
                 (
                     conversation_id,
-                    RolloutRecorderParams::new(conversation_id, user_instructions.clone()),
+                    RolloutRecorderParams::new(
+                        conversation_id,
+                        user_instructions.clone(),
+                        session_source,
+                    ),
                 )
             }
             InitialHistory::Resumed(resumed_history) => (
