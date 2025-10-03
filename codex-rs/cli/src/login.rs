@@ -26,7 +26,7 @@ pub async fn login_with_chatgpt(codex_home: PathBuf) -> std::io::Result<()> {
 }
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match login_with_chatgpt(config.codex_home).await {
         Ok(_) => {
@@ -44,7 +44,7 @@ pub async fn run_login_with_api_key(
     cli_config_overrides: CliConfigOverrides,
     api_key: String,
 ) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match login_with_api_key(&config.codex_home, &api_key) {
         Ok(_) => {
@@ -91,7 +91,7 @@ pub async fn run_login_with_device_code(
     issuer_base_url: Option<String>,
     client_id: Option<String>,
 ) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
     let mut opts = ServerOptions::new(
         config.codex_home,
         client_id.unwrap_or(CLIENT_ID.to_string()),
@@ -112,7 +112,7 @@ pub async fn run_login_with_device_code(
 }
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match CodexAuth::from_codex_home(&config.codex_home) {
         Ok(Some(auth)) => match auth.mode {
@@ -143,7 +143,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 }
 
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match logout(&config.codex_home) {
         Ok(true) => {
@@ -161,7 +161,7 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     }
 }
 
-fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
+async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
     let cli_overrides = match cli_config_overrides.parse_overrides() {
         Ok(v) => v,
         Err(e) => {
@@ -171,7 +171,7 @@ fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
     };
 
     let config_overrides = ConfigOverrides::default();
-    match Config::load_with_cli_overrides(cli_overrides, config_overrides) {
+    match Config::load_with_cli_overrides(cli_overrides, config_overrides).await {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Error loading configuration: {e}");
