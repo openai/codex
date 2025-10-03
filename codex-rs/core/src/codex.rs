@@ -791,11 +791,18 @@ impl Session {
                 if let Some(mut token_info) = state.get_token_info() {
                     let previous_total = token_info.total_token_usage.total_tokens;
                     token_info.total_token_usage.total_tokens = context_window;
-                    let delta = context_window.saturating_sub(previous_total);
+                    let delta = if previous_total >= context_window {
+                        context_window
+                    } else {
+                        context_window - previous_total
+                    };
                     token_info.last_token_usage = TokenUsage {
                         total_tokens: delta,
                         ..TokenUsage::default()
                     };
+                    if token_info.model_context_window.is_none() {
+                        token_info.model_context_window = Some(context_window);
+                    }
                     state.set_token_info(token_info);
                 } else {
                     let token_info = TokenUsageInfo {
