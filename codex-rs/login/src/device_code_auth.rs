@@ -144,7 +144,6 @@ fn print_colored_warning_device_code() {
         stdout,
         "{ANSI_YELLOW}{ANSI_BOLD}Only use device code authentication when browser login is not available.{ANSI_RESET}{ANSI_YELLOW}\n\
 {ANSI_BOLD}Keep the code secret; do not share it.{ANSI_RESET}{ANSI_RESET}\n\n"
-Only use it when a browser login is not available.\n{ANSI_BOLD}Keep the code secret; do not share it.{ANSI_RESET}{ANSI_RESET}\n\n"
     );
     let _ = stdout.flush();
 }
