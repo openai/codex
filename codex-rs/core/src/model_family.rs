@@ -41,6 +41,9 @@ pub struct ModelFamily {
 
     // Instructions to use for querying the model
     pub base_instructions: String,
+
+    /// Names of beta tools that should be exposed to this model family.
+    pub experimental_supported_tools: Vec<String>,
 }
 
 macro_rules! model_family {
@@ -57,6 +60,7 @@ macro_rules! model_family {
             uses_local_shell_tool: false,
             apply_patch_tool_type: None,
             base_instructions: BASE_INSTRUCTIONS.to_string(),
+            experimental_supported_tools: Vec::new(),
         };
         // apply overrides
         $(
@@ -105,6 +109,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             supports_reasoning_summaries: true,
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
+            experimental_supported_tools: vec!["read_file".to_string()],
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
@@ -127,5 +132,6 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         uses_local_shell_tool: false,
         apply_patch_tool_type: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
+        experimental_supported_tools: Vec::new(),
     }
 }

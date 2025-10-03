@@ -28,6 +28,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
+    pub experimental_supported_tools: Vec<String>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -78,6 +79,7 @@ impl ToolsConfig {
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
+            experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
 }
@@ -515,7 +517,6 @@ pub(crate) fn build_specs(
     let exec_stream_handler = Arc::new(ExecStreamHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
-    let read_file_handler = Arc::new(ReadFileHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
@@ -566,8 +567,15 @@ pub(crate) fn build_specs(
         builder.register_handler("apply_patch", apply_patch_handler);
     }
 
-    builder.push_spec(create_read_file_tool());
-    builder.register_handler("read_file", read_file_handler);
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "read_file")
+    {
+        let read_file_handler = Arc::new(ReadFileHandler);
+        builder.push_spec(create_read_file_tool());
+        builder.register_handler("read_file", read_file_handler);
+    }
 
     if config.web_search_request {
         builder.push_spec(ToolSpec::WebSearch {});
@@ -648,13 +656,7 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &[
-                "unified_exec",
-                "update_plan",
-                "read_file",
-                "web_search",
-                "view_image",
-            ],
+            &["unified_exec", "update_plan", "web_search", "view_image"],
         );
     }
 
@@ -674,14 +676,26 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &[
-                "unified_exec",
-                "update_plan",
-                "read_file",
-                "web_search",
-                "view_image",
-            ],
+            &["unified_exec", "update_plan", "web_search", "view_image"],
         );
+    }
+
+    #[test]
+    fn test_build_specs_includes_beta_read_file_tool() {
+        let model_family = find_family_for_model("gpt-5-codex")
+            .expect("gpt-5-codex should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            experimental_unified_exec_tool: true,
+        });
+        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
+
+        assert_eq_tool_names(&tools, &["unified_exec", "read_file"]);
     }
 
     #[test]
@@ -739,7 +753,6 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
                 "web_search",
                 "view_image",
                 "test_server/do_something_cool",
@@ -747,7 +760,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[4],
+            tools[3],
             ToolSpec::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
@@ -858,7 +871,6 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
                 "view_image",
                 "test_server/cool",
                 "test_server/do",
@@ -869,7 +881,8 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_property_missing_type_defaults_to_string() {
-        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let model_family = find_family_for_model("gpt-5-codex")
+            .expect("gpt-5-codex should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
@@ -937,7 +950,8 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_integer_normalized_to_number() {
-        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let model_family = find_family_for_model("gpt-5-codex")
+            .expect("gpt-5-codex should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
@@ -1000,7 +1014,8 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_array_without_items_gets_default_string_items() {
-        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let model_family = find_family_for_model("gpt-5-codex")
+            .expect("gpt-5-codex should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
@@ -1066,7 +1081,8 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_anyof_defaults_to_string() {
-        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let model_family = find_family_for_model("gpt-5-codex")
+            .expect("gpt-5-codex should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
@@ -1144,7 +1160,8 @@ mod tests {
 
     #[test]
     fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
-        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let model_family = find_family_for_model("gpt-5-codex")
+            .expect("gpt-5-codex should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
