@@ -1390,7 +1390,7 @@ exclude_slash_tmp = true
         let codex_home = TempDir::new()?;
         let managed_path = codex_home.path().join("managed_config.toml");
 
-        with_managed_config_env_override(&managed_path, || {
+        crate::config_loader::with_managed_config_path_override(Some(&managed_path), || {
             std::fs::write(
                 codex_home.path().join(CONFIG_TOML_FILE),
                 "model = \"base\"\n",
@@ -1481,21 +1481,6 @@ ZIG_VAR = "3"
         }
 
         Ok(())
-    }
-
-    fn with_managed_config_env_override<R>(path: &std::path::Path, f: impl FnOnce() -> R) -> R {
-        use scopeguard::guard;
-
-        let previous = std::env::var(MANAGED_CONFIG_PATH_ENV_VAR).ok();
-        // Ensure the managed-config override never leaks past this test.
-        let _restore = guard(previous, |prev| match prev {
-            Some(value) => unsafe { std::env::set_var(MANAGED_CONFIG_PATH_ENV_VAR, value) },
-            None => unsafe { std::env::remove_var(MANAGED_CONFIG_PATH_ENV_VAR) },
-        });
-
-        unsafe { std::env::set_var(MANAGED_CONFIG_PATH_ENV_VAR, path) };
-
-        f()
     }
 
     #[test]

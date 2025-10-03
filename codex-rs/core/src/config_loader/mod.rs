@@ -5,6 +5,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
+#[cfg(target_os = "macos")]
 use tokio::task;
 use toml::Value as TomlValue;
 
