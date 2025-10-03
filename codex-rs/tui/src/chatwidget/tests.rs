@@ -8,6 +8,7 @@ use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -1101,6 +1102,12 @@ fn disabled_slash_command_while_task_running_snapshot() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn binary_size_transcript_snapshot() {
+    if OPENAI_DEFAULT_MODEL != "gpt-5-codex" {
+        eprintln!(
+            "skipping binary_size_transcript_snapshot: unsupported default model {OPENAI_DEFAULT_MODEL}"
+        );
+        return;
+    }
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Set up a VT100 test terminal to capture ANSI visual output
