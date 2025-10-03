@@ -1,0 +1,20 @@
+---
+source: tui/src/status/tests.rs
+expression: sanitized
+---
+/status
+
+╭────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.0.0)                  │
+│                                            │
+│  Model:            gpt-5-codex (reasoning  │
+│  Directory: [[workspace]]                  │
+│  Approval:         on-request              │
+│  Sandbox:          read-only               │
+│  Agents.md:        <none>                  │
+│                                            │
+│  Token usage:      1.9K total  (1K input + │
+│  Context window:   100% left (2.1K used /  │
+│  5h limit:         [███████████████░░░░░]  │
+│                    (resets 03:14)          │
+╰────────────────────────────────────────────╯

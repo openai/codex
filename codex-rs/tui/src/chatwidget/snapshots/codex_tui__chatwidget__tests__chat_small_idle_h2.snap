@@ -2,5 +2,5 @@
 source: tui/src/chatwidget/tests.rs
 expression: terminal.backend()
 ---
-"▌ Ask Codex to do anything              "
-" ⏎ send   ⌃J newline   ⌃T transcript   ⌃"
+"                                        "
+"› Ask Codex to do anything              "

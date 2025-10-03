@@ -1,0 +1,102 @@
+name: Issue Deduplicator
+
+on:
+  issues:
+    types:
+      - opened
+      - labeled
+
+jobs:
+  gather-duplicates:
+    name: Identify potential duplicates
+    if: ${{ github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'codex-deduplicate') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      codex_output: ${{ steps.codex.outputs.final_message }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Codex inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eo pipefail
+
+          CURRENT_ISSUE_FILE=codex-current-issue.json
+          EXISTING_ISSUES_FILE=codex-existing-issues.json
+
+          gh issue list --repo "${{ github.repository }}" \
+            --json number,title,body,createdAt \
+            --limit 1000 \
+            --state all \
+            --search "sort:created-desc" \
+            | jq '.' \
+            > "$EXISTING_ISSUES_FILE"
+
+          gh issue view "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --json number,title,body \
+            | jq '.' \
+            > "$CURRENT_ISSUE_FILE"
+
+      - id: codex
+        uses: openai/codex-action@main
+        with:
+          openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          prompt_file: .github/prompts/issue-deduplicator.txt
+          require_repo_write: false
+          codex_version: 0.43.0-alpha.16
+          codex_args: -m gpt-5
+
+  comment-on-issue:
+    name: Comment with potential duplicates
+    needs: gather-duplicates
+    if: ${{ needs.gather-duplicates.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Comment on issue
+        uses: actions/github-script@v7
+        env:
+          CODEX_OUTPUT: ${{ needs.gather-duplicates.outputs.codex_output }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            let numbers;
+            try {
+              numbers = JSON.parse(process.env.CODEX_OUTPUT);
+            } catch (error) {
+              core.info(`Codex output was not valid JSON. Raw output: ${raw}`);
+              return;
+            }
+
+            if (numbers.length === 0) {
+              core.info('Codex reported no potential duplicates.');
+              return;
+            }
+
+            const lines = [
+              'Potential duplicates detected:',
+              ...numbers.map((value) => `- #${value}`),
+              '',
+              '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: lines.join("\n"),
+            });
+
+      - name: Remove codex-deduplicate label
+        if: ${{ always() && github.event.action == 'labeled' && github.event.label.name == 'codex-deduplicate' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh issue edit "${{ github.event.issue.number }}" --remove-label codex-deduplicate || true
+          echo "Attempted to remove label: codex-deduplicate"

@@ -3,7 +3,6 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 use codex_core::protocol::Event;
-use codex_protocol::mcp_protocol::ServerNotification;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCError;
 use mcp_types::JSONRPCErrorError;
@@ -125,12 +124,6 @@ impl OutgoingMessageSender {
         .await;
     }
 
-    pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
-        let _ = self
-            .sender
-            .send(OutgoingMessage::AppServerNotification(notification));
-    }
-
     pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
         let outgoing_message = OutgoingMessage::Notification(notification);
         let _ = self.sender.send(outgoing_message);
@@ -146,9 +139,6 @@ impl OutgoingMessageSender {
 pub(crate) enum OutgoingMessage {
     Request(OutgoingRequest),
     Notification(OutgoingNotification),
-    /// AppServerNotification is specific to the case where this is run as an
-    /// "app server" as opposed to an MCP server.
-    AppServerNotification(ServerNotification),
     Response(OutgoingResponse),
     Error(OutgoingError),
 }
@@ -166,21 +156,6 @@ impl From<OutgoingMessage> for JSONRPCMessage {
                 })
             }
             Notification(OutgoingNotification { method, params }) => {
-                JSONRPCMessage::Notification(JSONRPCNotification {
-                    jsonrpc: JSONRPC_VERSION.into(),
-                    method,
-                    params,
-                })
-            }
-            AppServerNotification(notification) => {
-                let method = notification.to_string();
-                let params = match notification.to_params() {
-                    Ok(params) => Some(params),
-                    Err(err) => {
-                        warn!("failed to serialize notification params: {err}");
-                        None
-                    }
-                };
                 JSONRPCMessage::Notification(JSONRPCNotification {
                     jsonrpc: JSONRPC_VERSION.into(),
                     method,
@@ -256,30 +231,34 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SessionConfiguredEvent;
-    use codex_protocol::mcp_protocol::ConversationId;
-    use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
+    use codex_protocol::ConversationId;
+    use codex_protocol::config_types::ReasoningEffort;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use uuid::Uuid;
+    use tempfile::NamedTempFile;
 
     use super::*;
 
     #[tokio::test]
-    async fn test_send_event_as_notification() {
+    async fn test_send_event_as_notification() -> Result<()> {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
         let conversation_id = ConversationId::new();
+        let rollout_file = NamedTempFile::new()?;
         let event = Event {
             id: "1".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "gpt-4o".to_string(),
+                reasoning_effort: Some(ReasoningEffort::default()),
                 history_log_id: 1,
                 history_entry_count: 1000,
                 initial_messages: None,
+                rollout_path: rollout_file.path().to_path_buf(),
             }),
         };
 
@@ -296,21 +275,25 @@ mod tests {
         let Ok(expected_params) = serde_json::to_value(&event) else {
             panic!("Event must serialize");
         };
-        assert_eq!(params, Some(expected_params.clone()));
+        assert_eq!(params, Some(expected_params));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_send_event_as_notification_with_meta() {
+    async fn test_send_event_as_notification_with_meta() -> Result<()> {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
         let conversation_id = ConversationId::new();
+        let rollout_file = NamedTempFile::new()?;
         let session_configured_event = SessionConfiguredEvent {
             session_id: conversation_id,
             model: "gpt-4o".to_string(),
+            reasoning_effort: Some(ReasoningEffort::default()),
             history_log_id: 1,
             history_entry_count: 1000,
             initial_messages: None,
+            rollout_path: rollout_file.path().to_path_buf(),
         };
         let event = Event {
             id: "1".to_string(),
@@ -337,36 +320,14 @@ mod tests {
             "msg": {
                 "session_id": session_configured_event.session_id,
                 "model": session_configured_event.model,
+                "reasoning_effort": session_configured_event.reasoning_effort,
                 "history_log_id": session_configured_event.history_log_id,
                 "history_entry_count": session_configured_event.history_entry_count,
                 "type": "session_configured",
+                "rollout_path": rollout_file.path().to_path_buf(),
             }
         });
         assert_eq!(params.unwrap(), expected_params);
-    }
-
-    #[test]
-    fn verify_server_notification_serialization() {
-        let notification =
-            ServerNotification::LoginChatGptComplete(LoginChatGptCompleteNotification {
-                login_id: Uuid::nil(),
-                success: true,
-                error: None,
-            });
-
-        let jsonrpc_notification: JSONRPCMessage =
-            OutgoingMessage::AppServerNotification(notification).into();
-        assert_eq!(
-            JSONRPCMessage::Notification(JSONRPCNotification {
-                jsonrpc: "2.0".into(),
-                method: "loginChatGptComplete".into(),
-                params: Some(json!({
-                    "loginId": Uuid::nil(),
-                    "success": true,
-                })),
-            }),
-            jsonrpc_notification,
-            "ensure the strum macros serialize the method field correctly"
-        );
+        Ok(())
     }
 }
