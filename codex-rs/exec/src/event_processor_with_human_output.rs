@@ -1,8 +1,6 @@
 use codex_common::elapsed::format_duration;
 use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
-use codex_core::protocol::AgentMessageDeltaEvent;
-use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::BackgroundEventEvent;
