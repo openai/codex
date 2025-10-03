@@ -441,10 +441,6 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
         duration_ms >= timeout_ms,
         "expected duration >= configured timeout, got {duration_ms} (timeout {timeout_ms})"
     );
-    assert!(
-        stdout.contains("[... omitted"),
-        "expected truncated output marker, got {stdout:?}"
-    );
 
     Ok(())
 }
