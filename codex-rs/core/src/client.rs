@@ -63,7 +63,6 @@ struct ErrorResponse {
 #[derive(Debug, Deserialize)]
 struct Error {
     r#type: Option<String>,
-    #[allow(dead_code)]
     code: Option<String>,
     message: Option<String>,
 
@@ -793,10 +792,21 @@ async fn process_sse<S>(
 
                     if let Some(error) = error {
                         match serde_json::from_value::<Error>(error.clone()) {
-                            Ok(error) => {
-                                let delay = try_parse_retry_after(&error);
-                                let message = error.message.unwrap_or_default();
-                                response_error = Some(CodexErr::Stream(message, delay));
+                            Ok(mut error) => {
+                                if is_context_window_error(&error) {
+                                    let message = error
+                                        .message
+                                        .take()
+                                        .unwrap_or_else(|| {
+                                            "Your input exceeds the context window of this model.".
+                                                to_string()
+                                        });
+                                    response_error = Some(CodexErr::ContextWindowExceeded(message));
+                                } else {
+                                    let delay = try_parse_retry_after(&error);
+                                    let message = error.message.take().unwrap_or_default();
+                                    response_error = Some(CodexErr::Stream(message, delay));
+                                }
                             }
                             Err(e) => {
                                 let error = format!("failed to parse ErrorResponse: {e}");
@@ -920,6 +930,18 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
         }
     }
     None
+}
+
+fn is_context_window_error(error: &Error) -> bool {
+    if error.code.as_deref() == Some("context_length_exceeded") {
+        return true;
+    }
+
+    error
+        .message
+        .as_ref()
+        .map(|msg| msg.to_ascii_lowercase())
+        .is_some_and(|msg| msg.contains("context window"))
 }
 
 #[cfg(test)]
@@ -1176,6 +1198,80 @@ mod tests {
                 assert_eq!(*delay, Some(Duration::from_secs_f64(11.054)));
             }
             other => panic!("unexpected second event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn context_window_error_is_fatal() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_5c66275b97b9baef1ed95550adb3b7ec13b17aafd1d2f11b","object":"response","created_at":1759510079,"status":"failed","background":false,"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try again."},"usage":null,"user":null,"metadata":{}}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let otel_event_manager = otel_event_manager();
+
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(CodexErr::ContextWindowExceeded(message)) => {
+                assert_eq!(
+                    message,
+                    "Your input exceeds the context window of this model. Please adjust your input and try again."
+                );
+            }
+            other => panic!("unexpected context window event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn context_window_error_with_newline_is_fatal() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":4,"response":{"id":"resp_fatal_newline","object":"response","created_at":1759510080,"status":"failed","background":false,"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try\nagain."},"usage":null,"user":null,"metadata":{}}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let otel_event_manager = otel_event_manager();
+
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(CodexErr::ContextWindowExceeded(message)) => {
+                assert_eq!(
+                    message,
+                    "Your input exceeds the context window of this model. Please adjust your input and try\nagain."
+                );
+            }
+            other => panic!("unexpected context window event: {other:?}"),
         }
     }
 

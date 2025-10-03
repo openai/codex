@@ -55,6 +55,9 @@ pub enum CodexErr {
     #[error("stream disconnected before completion: {0}")]
     Stream(String, Option<Duration>),
 
+    #[error("{0}")]
+    ContextWindowExceeded(String),
+
     #[error("no conversation with id: {0}")]
     ConversationNotFound(ConversationId),
 
