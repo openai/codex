@@ -1,0 +1,27 @@
+[package]
+edition = "2024"
+name = "codex-responses-api-proxy"
+version = { workspace = true }
+
+[lib]
+name = "codex_responses_api_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codex-responses-api-proxy"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-process-hardening = { workspace = true }
+ctor = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tiny_http = { workspace = true }
+zeroize = { workspace = true }

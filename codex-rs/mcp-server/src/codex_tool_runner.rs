@@ -22,7 +22,7 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::RequestId;
@@ -222,7 +222,7 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
                         let text = match last_agent_message {
-                            Some(msg) => msg.clone(),
+                            Some(msg) => msg,
                             None => "".to_string(),
                         };
                         let result = CallToolResult {
@@ -277,9 +277,12 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
                     | EventMsg::TurnAborted(_)
-                    | EventMsg::ConversationHistory(_)
+                    | EventMsg::ConversationPath(_)
                     | EventMsg::UserMessage(_)
-                    | EventMsg::ShutdownComplete => {
+                    | EventMsg::ShutdownComplete
+                    | EventMsg::ViewImageToolCall(_)
+                    | EventMsg::EnteredReviewMode(_)
+                    | EventMsg::ExitedReviewMode(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has
