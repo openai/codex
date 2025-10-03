@@ -1219,8 +1219,6 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
-    const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_MANAGED_CONFIG_PATH";
-
     fn block_on<F, T>(future: F) -> T
     where
         F: Future<Output = T>,
