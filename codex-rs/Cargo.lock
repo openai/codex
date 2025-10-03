@@ -861,6 +861,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-utils-string",
  "core_test_support",
  "dirs",
  "dunce",
@@ -1253,6 +1254,10 @@ dependencies = [
  "time",
  "tokio",
 ]
+
+[[package]]
+name = "codex-utils-string"
+version = "0.0.0"
 
 [[package]]
 name = "color-eyre"

@@ -1,7 +1,6 @@
 use codex_common::elapsed::format_duration;
 use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
-use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::BackgroundEventEvent;
@@ -35,6 +34,8 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
 use codex_common::create_config_summary_entries;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -456,7 +457,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
                 // Pretty-print the plan items with simple status markers.
                 for item in plan {
-                    use codex_core::plan_tool::StepStatus;
                     match item.status {
                         StepStatus::Completed => {
                             ts_println!(self, "  {} {}", "✓".style(self.green), item.step);

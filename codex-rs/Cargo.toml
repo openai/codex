@@ -32,6 +32,7 @@ members = [
     "git-apply",
     "utils/json-to-toml",
     "utils/readiness",
+    "utils/string",
 ]
 resolver = "2"
 
@@ -71,6 +72,7 @@ codex-rmcp-client = { path = "rmcp-client" }
 codex-tui = { path = "tui" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-readiness = { path = "utils/readiness" }
+codex-utils-string = { path = "utils/string" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }

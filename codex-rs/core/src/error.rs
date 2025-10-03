@@ -108,6 +108,9 @@ pub enum CodexErr {
     #[error("unsupported operation: {0}")]
     UnsupportedOperation(String),
 
+    #[error("Fatal error: {0}")]
+    Fatal(String),
+
     // -----------------------------------------------------------------
     // Automatic conversions for common external error types
     // -----------------------------------------------------------------
