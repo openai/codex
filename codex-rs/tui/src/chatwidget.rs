@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -1598,9 +1597,14 @@ impl ChatWidget {
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
         let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
-        let mut grouped: BTreeMap<&str, Vec<ModelPreset>> = BTreeMap::new();
+        let mut grouped: Vec<(&str, Vec<ModelPreset>)> = Vec::new();
         for preset in presets.into_iter() {
-            grouped.entry(preset.model).or_default().push(preset);
+            if let Some((_, entries)) = grouped.iter_mut().find(|(model, _)| *model == preset.model)
+            {
+                entries.push(preset);
+            } else {
+                grouped.push((preset.model, vec![preset]));
+            }
         }
 
         let mut items: Vec<SelectionItem> = Vec::new();
