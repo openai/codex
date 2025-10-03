@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/footer.rs
-assertion_line: 389
 expression: terminal.backend()
 ---
 "  / for commands                            shift + enter for newline           "

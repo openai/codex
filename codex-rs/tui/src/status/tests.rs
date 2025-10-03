@@ -314,7 +314,7 @@ fn status_context_window_uses_last_usage() {
         .expect("context line");
 
     assert!(
-        context_line.contains("13.7K / 272K"),
+        context_line.contains("13.7K used / 272K"),
         "expected context line to reflect last usage tokens, got: {context_line}"
     );
     assert!(

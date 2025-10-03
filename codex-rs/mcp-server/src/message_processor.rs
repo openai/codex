@@ -8,6 +8,7 @@ use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::SessionSource;
 
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
@@ -52,8 +53,9 @@ impl MessageProcessor {
         config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(config.codex_home.clone());
-        let conversation_manager = Arc::new(ConversationManager::new(auth_manager));
+        let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
+        let conversation_manager =
+            Arc::new(ConversationManager::new(auth_manager, SessionSource::Mcp));
         Self {
             outgoing,
             initialized: false,

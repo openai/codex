@@ -1,14 +1,98 @@
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+
+use crate::client_common::tools::FreeformTool;
+use crate::client_common::tools::FreeformToolFormat;
+use crate::client_common::tools::ResponsesApiTool;
+use crate::client_common::tools::ToolSpec;
+use crate::exec::ExecParams;
+use crate::function_tool::FunctionCallError;
+use crate::openai_tools::JsonSchema;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolPayload;
+use crate::tools::handle_container_exec_with_params;
+use crate::tools::registry::ToolHandler;
+use crate::tools::registry::ToolKind;
+use crate::tools::spec::ApplyPatchToolArgs;
+use async_trait::async_trait;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::BTreeMap;
 
-use crate::openai_tools::FreeformTool;
-use crate::openai_tools::FreeformToolFormat;
-use crate::openai_tools::JsonSchema;
-use crate::openai_tools::OpenAiTool;
-use crate::openai_tools::ResponsesApiTool;
+pub struct ApplyPatchHandler;
 
 const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("tool_apply_patch.lark");
+
+#[async_trait]
+impl ToolHandler for ApplyPatchHandler {
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(
+            payload,
+            ToolPayload::Function { .. } | ToolPayload::Custom { .. }
+        )
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation<'_>,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        let ToolInvocation {
+            session,
+            turn,
+            tracker,
+            sub_id,
+            call_id,
+            tool_name,
+            payload,
+        } = invocation;
+
+        let patch_input = match payload {
+            ToolPayload::Function { arguments } => {
+                let args: ApplyPatchToolArgs = serde_json::from_str(&arguments).map_err(|e| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to parse function arguments: {e:?}"
+                    ))
+                })?;
+                args.input
+            }
+            ToolPayload::Custom { input } => input,
+            _ => {
+                return Err(FunctionCallError::RespondToModel(
+                    "apply_patch handler received unsupported payload".to_string(),
+                ));
+            }
+        };
+
+        let exec_params = ExecParams {
+            command: vec!["apply_patch".to_string(), patch_input.clone()],
+            cwd: turn.cwd.clone(),
+            timeout_ms: None,
+            env: HashMap::new(),
+            with_escalated_permissions: None,
+            justification: None,
+        };
+
+        let content = handle_container_exec_with_params(
+            tool_name.as_str(),
+            exec_params,
+            session,
+            turn,
+            tracker,
+            sub_id.to_string(),
+            call_id.clone(),
+        )
+        .await?;
+
+        Ok(ToolOutput::Function {
+            content,
+            success: Some(true),
+        })
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -19,8 +103,8 @@ pub enum ApplyPatchToolType {
 
 /// Returns a custom tool that can be used to edit files. Well-suited for GPT-5 models
 /// https://platform.openai.com/docs/guides/function-calling#custom-tools
-pub(crate) fn create_apply_patch_freeform_tool() -> OpenAiTool {
-    OpenAiTool::Freeform(FreeformTool {
+pub(crate) fn create_apply_patch_freeform_tool() -> ToolSpec {
+    ToolSpec::Freeform(FreeformTool {
         name: "apply_patch".to_string(),
         description: "Use the `apply_patch` tool to edit files".to_string(),
         format: FreeformToolFormat {
@@ -32,7 +116,7 @@ pub(crate) fn create_apply_patch_freeform_tool() -> OpenAiTool {
 }
 
 /// Returns a json tool that can be used to edit files. Should only be used with gpt-oss models
-pub(crate) fn create_apply_patch_json_tool() -> OpenAiTool {
+pub(crate) fn create_apply_patch_json_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "input".to_string(),
@@ -41,7 +125,7 @@ pub(crate) fn create_apply_patch_json_tool() -> OpenAiTool {
         },
     );
 
-    OpenAiTool::Function(ResponsesApiTool {
+    ToolSpec::Function(ResponsesApiTool {
         name: "apply_patch".to_string(),
         description: r#"Use the `apply_patch` tool to edit files.
 Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
@@ -111,12 +195,12 @@ It is important to remember:
 - You must prefix new lines with `+` even when creating a new file
 - File references can only be relative, NEVER ABSOLUTE.
 "#
-        .to_string(),
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["input".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(false.into()),
         },
     })
 }

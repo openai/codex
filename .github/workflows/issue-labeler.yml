@@ -1,0 +1,78 @@
+name: Issue Labeler
+
+on:
+  issues:
+    types:
+      - opened
+      - labeled
+
+jobs:
+  gather-labels:
+    name: Generate label suggestions
+    if: ${{ github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'codex-label') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      REPO_FULL_NAME: ${{ github.repository }}
+    outputs:
+      codex_output: ${{ steps.codex.outputs.final_message }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: codex
+        uses: openai/codex-action@main
+        with:
+          openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          prompt_file: .github/prompts/issue-labeler.txt
+          require_repo_write: false
+          codex_version: 0.43.0-alpha.16
+
+  apply-labels:
+    name: Apply labels from Codex output
+    needs: gather-labels
+    if: ${{ needs.gather-labels.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      CODEX_OUTPUT: ${{ needs.gather-labels.outputs.codex_output }}
+    steps:
+      - name: Apply labels
+        run: |
+          json=${CODEX_OUTPUT//$'\r'/}
+          if [ -z "$json" ]; then
+            echo "Codex produced no output. Skipping label application."
+            exit 0
+          fi
+
+          if ! printf '%s' "$json" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "Codex output was not a JSON array. Raw output: $json"
+            exit 0
+          fi
+
+          labels=$(printf '%s' "$json" | jq -r '.[] | tostring')
+          if [ -z "$labels" ]; then
+            echo "Codex returned an empty array. Nothing to do."
+            exit 0
+          fi
+
+          cmd=(gh issue edit "$ISSUE_NUMBER")
+          while IFS= read -r label; do
+            cmd+=(--add-label "$label")
+          done <<< "$labels"
+
+          "${cmd[@]}" || true
+
+      - name: Remove codex-label trigger
+        if: ${{ always() && github.event.action == 'labeled' && github.event.label.name == 'codex-label' }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label codex-label || true
+          echo "Attempted to remove label: codex-label"

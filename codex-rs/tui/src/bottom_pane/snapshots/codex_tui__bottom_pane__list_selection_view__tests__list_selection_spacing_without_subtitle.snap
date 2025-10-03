@@ -2,9 +2,10 @@
 source: tui/src/bottom_pane/list_selection_view.rs
 expression: render_lines(&view)
 ---
-▌ Select Approval Mode                          
-▌                                               
-▌ > 1. Read Only (current)  Codex can read files
-▌   2. Full Access          Codex can edit files
                                                 
-Press Enter to confirm or Esc to go back
+  Select Approval Mode                          
+                                                
+› 1. Read Only (current)  Codex can read files  
+  2. Full Access          Codex can edit files  
+                                                
+  Press enter to confirm or esc to go back
