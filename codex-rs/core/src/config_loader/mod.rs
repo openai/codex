@@ -2,14 +2,16 @@ mod macos;
 
 use crate::config::CONFIG_TOML_FILE;
 use macos::load_managed_admin_config_layer;
+use std::env;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
 use toml::Value as TomlValue;
 
+const CODEX_MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_MANAGED_CONFIG_PATH";
 #[cfg(unix)]
-const MANAGED_CONFIG_SYSTEM_PATH: &str = "/etc/codex/managed_config.toml";
+const CODEX_MANAGED_CONFIG_SYSTEM_PATH: &str = "/etc/codex/managed_config.toml";
 
 #[derive(Debug)]
 pub(crate) struct LoadedConfigLayers {
@@ -146,10 +148,16 @@ pub(crate) fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
 }
 
 fn managed_config_default_path(codex_home: &Path) -> PathBuf {
+    if let Some(path) = env::var_os(CODEX_MANAGED_CONFIG_PATH_ENV_VAR) {
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+
     #[cfg(unix)]
     {
         let _ = codex_home;
-        PathBuf::from(MANAGED_CONFIG_SYSTEM_PATH)
+        PathBuf::from(CODEX_MANAGED_CONFIG_SYSTEM_PATH)
     }
 
     #[cfg(not(unix))]
