@@ -90,12 +90,12 @@ jobs:
             exit 0
           fi
 
-          if ! printf '%s' "$json" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            echo "Codex output was not a JSON array. Raw output: $json"
+          if ! printf '%s' "$json" | jq -e 'type == "object" and (.labels | type == "array")' >/dev/null 2>&1; then
+            echo "Codex output did not include a labels array. Raw output: $json"
             exit 0
           fi
 
-          labels=$(printf '%s' "$json" | jq -r '.[] | tostring')
+          labels=$(printf '%s' "$json" | jq -r '.labels[] | tostring')
           if [ -z "$labels" ]; then
             echo "Codex returned an empty array. Nothing to do."
             exit 0

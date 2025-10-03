@@ -92,22 +92,25 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            let numbers;
+            const raw = process.env.CODEX_OUTPUT ?? '';
+            let parsed;
             try {
-              numbers = JSON.parse(process.env.CODEX_OUTPUT);
+              parsed = JSON.parse(raw);
             } catch (error) {
               core.info(`Codex output was not valid JSON. Raw output: ${raw}`);
+              core.info(`Parse error: ${error.message}`);
               return;
             }
 
-            if (numbers.length === 0) {
+            const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
+            if (issues.length === 0) {
               core.info('Codex reported no potential duplicates.');
               return;
             }
 
             const lines = [
               'Potential duplicates detected:',
-              ...numbers.map((value) => `- #${value}`),
+              ...issues.map((value) => `- #${String(value)}`),
               '',
               '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];
 
