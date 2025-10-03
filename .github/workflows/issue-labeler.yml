@@ -14,15 +14,15 @@ jobs:
     permissions:
       contents: read
     outputs:
-      codex_output: ${{ steps.codex.outputs.final_message }}
+      codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
       - uses: actions/checkout@v4
 
       - id: codex
         uses: openai/codex-action@main
         with:
-          openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
-          require_repo_write: false
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          require-repo-write: false
           prompt: |
             You are an assistant that reviews GitHub issues for the repository.
 
@@ -53,7 +53,7 @@ jobs:
             Repository full name:
             ${{ github.repository }}
 
-          output_schema: |
+          output-schema: |
             {
               "type": "object",
               "properties": {

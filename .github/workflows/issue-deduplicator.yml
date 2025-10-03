@@ -14,7 +14,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      codex_output: ${{ steps.codex.outputs.final_message }}
+      codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,8 +44,8 @@ jobs:
       - id: codex
         uses: openai/codex-action@main
         with:
-          openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
-          require_repo_write: false
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          require-repo-write: false
           model: gpt-5
           prompt: |
             You are an assistant that triages new GitHub issues by identifying potential duplicates.
@@ -60,7 +60,7 @@ jobs:
             - When unsure, prefer returning fewer matches.
             - Include at most five numbers.
 
-          output_schema: |
+          output-schema: |
             {
               "type": "object",
               "properties": {
