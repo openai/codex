@@ -1,4 +1,7 @@
+use crate::config_loader::LoadedConfigLayers;
 pub use crate::config_loader::load_config_as_toml;
+use crate::config_loader::load_config_layers;
+use crate::config_loader::merge_toml_values;
 use crate::config_profile::ConfigProfile;
 use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config_types::History;
@@ -250,15 +253,15 @@ async fn load_layered_config_with_cli_overrides(
     codex_home: PathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<TomlValue> {
-    let layers = crate::config_loader::load_config_layers(codex_home).await?;
+    let layers = load_config_layers(codex_home).await?;
     Ok(finalize_layers_with_overrides(layers, cli_overrides))
 }
 
 fn finalize_layers_with_overrides(
-    layers: crate::config_loader::LoadedConfigLayers,
+    layers: LoadedConfigLayers,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> TomlValue {
-    let crate::config_loader::LoadedConfigLayers {
+    let LoadedConfigLayers {
         mut base,
         managed_config,
         managed_preferences,
@@ -273,7 +276,7 @@ fn finalize_layers_with_overrides(
     // Managed configuration comes after CLI overrides, with managed
     // preferences (MDM) as the highest-precedence layer.
     for overlay in [managed_config, managed_preferences].into_iter().flatten() {
-        crate::config_loader::merge_toml_values(&mut base, &overlay);
+        merge_toml_values(&mut base, &overlay);
     }
 
     base
@@ -281,7 +284,7 @@ fn finalize_layers_with_overrides(
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value = crate::config_loader::load_config_as_toml(codex_home.to_path_buf()).await?;
+    let root_value = load_config_as_toml(codex_home.to_path_buf()).await?;
     let Some(servers_value) = root_value.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
@@ -1215,20 +1218,8 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    use std::future::Future;
     use std::time::Duration;
     use tempfile::TempDir;
-
-    fn block_on<F, T>(future: F) -> T
-    where
-        F: Future<Output = T>,
-    {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime")
-            .block_on(future)
-    }
 
     #[test]
     fn test_toml_parsing() {
@@ -1331,18 +1322,18 @@ exclude_slash_tmp = true
         );
     }
 
-    #[test]
-    fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
-        let servers = block_on(load_global_mcp_servers(codex_home.path()))?;
+        let servers = load_global_mcp_servers(codex_home.path()).await?;
         assert!(servers.is_empty());
 
         Ok(())
     }
 
-    #[test]
-    fn write_global_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
+    #[tokio::test(flavor = "current_thread")]
+    async fn write_global_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
         let mut servers = BTreeMap::new();
@@ -1361,7 +1352,7 @@ exclude_slash_tmp = true
 
         write_global_mcp_servers(codex_home.path(), &servers)?;
 
-        let loaded = block_on(load_global_mcp_servers(codex_home.path()))?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
@@ -1377,36 +1368,37 @@ exclude_slash_tmp = true
 
         let empty = BTreeMap::new();
         write_global_mcp_servers(codex_home.path(), &empty)?;
-        let loaded = block_on(load_global_mcp_servers(codex_home.path()))?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         assert!(loaded.is_empty());
 
         Ok(())
     }
 
-    #[test]
-    fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
+    #[tokio::test(flavor = "current_thread")]
+    async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let managed_path = codex_home.path().join("managed_config.toml");
 
-        crate::config_loader::with_managed_config_path_override(Some(&managed_path), || {
-            std::fs::write(
-                codex_home.path().join(CONFIG_TOML_FILE),
-                "model = \"base\"\n",
-            )?;
-            std::fs::write(&managed_path, "model = \"managed_config\"\n")?;
+        let _guard = crate::config_loader::with_managed_config_path_override(Some(&managed_path));
 
-            let cfg = block_on(load_config_as_toml_with_cli_overrides(
-                codex_home.path(),
-                vec![("model".to_string(), TomlValue::String("cli".to_string()))],
-            ))?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            "model = \"base\"\n",
+        )?;
+        std::fs::write(&managed_path, "model = \"managed_config\"\n")?;
 
-            assert_eq!(cfg.model.as_deref(), Some("managed_config"));
-            anyhow::Ok(())
-        })
+        let cfg = load_config_as_toml_with_cli_overrides(
+            codex_home.path(),
+            vec![("model".to_string(), TomlValue::String("cli".to_string()))],
+        )
+        .await?;
+
+        assert_eq!(cfg.model.as_deref(), Some("managed_config"));
+        Ok(())
     }
 
-    #[test]
-    fn load_global_mcp_servers_accepts_legacy_ms_field() -> anyhow::Result<()> {
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_global_mcp_servers_accepts_legacy_ms_field() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
 
@@ -1420,15 +1412,15 @@ startup_timeout_ms = 2500
 "#,
         )?;
 
-        let servers = block_on(load_global_mcp_servers(codex_home.path()))?;
+        let servers = load_global_mcp_servers(codex_home.path()).await?;
         let docs = servers.get("docs").expect("docs entry");
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_millis(2500)));
 
         Ok(())
     }
 
-    #[test]
-    fn write_global_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
+    #[tokio::test(flavor = "current_thread")]
+    async fn write_global_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
@@ -1463,7 +1455,7 @@ ZIG_VAR = "3"
 "#
         );
 
-        let loaded = block_on(load_global_mcp_servers(codex_home.path()))?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio { command, args, env } => {
@@ -1481,8 +1473,8 @@ ZIG_VAR = "3"
         Ok(())
     }
 
-    #[test]
-    fn write_global_mcp_servers_serializes_streamable_http() -> anyhow::Result<()> {
+    #[tokio::test(flavor = "current_thread")]
+    async fn write_global_mcp_servers_serializes_streamable_http() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
         let mut servers = BTreeMap::from([(
@@ -1510,7 +1502,7 @@ startup_timeout_sec = 2.0
 "#
         );
 
-        let loaded = block_on(load_global_mcp_servers(codex_home.path()))?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
@@ -1542,7 +1534,7 @@ url = "https://example.com/mcp"
 "#
         );
 
-        let loaded = block_on(load_global_mcp_servers(codex_home.path()))?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp { url, bearer_token } => {

@@ -90,28 +90,15 @@ mod tests {
     use super::*;
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
-    use std::future::Future;
 
-    fn test_config() -> Config {
+    async fn test_config() -> Config {
         let overrides = ConfigOverrides {
             cwd: std::env::current_dir().ok(),
             ..Default::default()
         };
-        match block_on(Config::load_with_cli_overrides(vec![], overrides)) {
-            Ok(c) => c,
-            Err(e) => panic!("load test config: {e}"),
-        }
-    }
-
-    fn block_on<F, T>(future: F) -> T
-    where
-        F: Future<Output = T>,
-    {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime")
-            .block_on(future)
+        Config::load_with_cli_overrides(vec![], overrides)
+            .await
+            .expect("load test config")
     }
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
@@ -127,9 +114,9 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
-        let cfg = test_config();
+    #[tokio::test(flavor = "current_thread")]
+    async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
+        let cfg = test_config().await;
         let mut ctrl = StreamController::new(cfg.clone(), None);
         let mut lines = Vec::new();
 
