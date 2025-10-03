@@ -108,9 +108,6 @@ impl McpClientAdapter {
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
     ) -> Result<Self> {
-        info!(
-            "new_stdio_client use_rmcp_client: {use_rmcp_client} program: {program:?} args: {args:?} env: {env:?} params: {params:?} startup_timeout: {startup_timeout:?}"
-        );
         if use_rmcp_client {
             let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
             client.initialize(params, Some(startup_timeout)).await?;
@@ -202,17 +199,6 @@ impl McpConnectionManager {
                     "invalid server name '{server_name}': must match pattern ^[a-zA-Z0-9_-]+$"
                 );
                 errors.insert(server_name, error);
-                continue;
-            }
-
-            if matches!(
-                cfg.transport,
-                McpServerTransportConfig::StreamableHttp { .. }
-            ) && !use_rmcp_client
-            {
-                info!(
-                    "skipping MCP server `{server_name}` because the legacy MCP client only supports stdio servers",
-                );
                 continue;
             }
 
