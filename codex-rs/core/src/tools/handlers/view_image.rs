@@ -3,7 +3,10 @@ use serde::Deserialize;
 use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
+use crate::protocol::Event;
+use crate::protocol::EventMsg;
 use crate::protocol::InputItem;
+use crate::protocol::ViewImageToolCallEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -31,6 +34,8 @@ impl ToolHandler for ViewImageHandler {
             session,
             turn,
             payload,
+            sub_id,
+            call_id,
             ..
         } = invocation;
 
@@ -62,6 +67,8 @@ impl ToolHandler for ViewImageHandler {
                 abs_path.display()
             )));
         }
+        let event_path = abs_path.clone();
+
         session
             .inject_input(vec![InputItem::LocalImage { path: abs_path }])
             .await
@@ -70,6 +77,16 @@ impl ToolHandler for ViewImageHandler {
                     "unable to attach image (no active task)".to_string(),
                 )
             })?;
+
+        session
+            .send_event(Event {
+                id: sub_id.to_string(),
+                msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+                    call_id,
+                    path: event_path,
+                }),
+            })
+            .await;
 
         Ok(ToolOutput::Function {
             content: "attached local image path".to_string(),

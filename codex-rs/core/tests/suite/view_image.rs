@@ -120,12 +120,19 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         })
         .await?;
 
+    let mut tool_event = None;
     loop {
         let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
+        match event.msg {
+            EventMsg::ViewImageToolCall(ev) => tool_event = Some(ev),
+            EventMsg::TaskComplete(_) => break,
+            _ => {}
         }
     }
+
+    let tool_event = tool_event.expect("view image tool event emitted");
+    assert_eq!(tool_event.call_id, call_id);
+    assert_eq!(tool_event.path, abs_path);
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(
