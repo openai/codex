@@ -123,16 +123,28 @@ mod tests {
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use ratatui::style::Color;
+    use std::future::Future;
 
     fn test_config() -> Config {
         let overrides = ConfigOverrides {
             cwd: std::env::current_dir().ok(),
             ..Default::default()
         };
-        match Config::load_with_cli_overrides(vec![], overrides) {
+        match block_on(Config::load_with_cli_overrides(vec![], overrides)) {
             Ok(c) => c,
             Err(e) => panic!("load test config: {e}"),
         }
+    }
+
+    fn block_on<F, T>(future: F) -> T
+    where
+        F: Future<Output = T>,
+    {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+            .block_on(future)
     }
 
     #[test]

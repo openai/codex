@@ -1,7 +1,6 @@
 mod macos;
 
 use std::env;
-use std::future::Future;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -122,10 +121,6 @@ pub async fn load_config_as_toml(codex_home: PathBuf) -> io::Result<TomlValue> {
     Ok(base)
 }
 
-pub fn load_config_as_toml_blocking(codex_home: &Path) -> io::Result<TomlValue> {
-    block_on_config_future(load_config_as_toml(codex_home.to_path_buf()))
-}
-
 pub(crate) async fn load_config_layers(codex_home: PathBuf) -> io::Result<LoadedConfigLayers> {
     let user_config = read_config_from_path(codex_home.join(CONFIG_TOML_FILE), true).await?;
     let managed_config = read_config_from_path(managed_config_path(&codex_home), false).await?;
@@ -136,10 +131,6 @@ pub(crate) async fn load_config_layers(codex_home: PathBuf) -> io::Result<Loaded
         managed_config,
         managed_preferences,
     })
-}
-
-pub(crate) fn load_config_layers_blocking(codex_home: &Path) -> io::Result<LoadedConfigLayers> {
-    block_on_config_future(load_config_layers(codex_home.to_path_buf()))
 }
 
 fn default_empty_table() -> TomlValue {
@@ -193,31 +184,6 @@ async fn load_managed_admin_config_layer_async() -> io::Result<Option<TomlValue>
 #[cfg(not(target_os = "macos"))]
 async fn load_managed_admin_config_layer_async() -> io::Result<Option<TomlValue>> {
     Ok(None)
-}
-
-/// Execute the given config-loading future, regardless of whether a Tokio
-/// runtime is already running on the current thread.
-///
-/// Synchronous call sites can reuse the async implementation without
-/// duplicating file I/O by delegating through this helper.
-fn block_on_config_future<F, T>(future: F) -> io::Result<T>
-where
-    F: Future<Output = io::Result<T>> + Send + 'static,
-    T: Send + 'static,
-{
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        task::block_in_place(|| handle.block_on(future))
-    } else {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| {
-                io::Error::other(format!(
-                    "failed to create runtime for managed preferences loading: {err}"
-                ))
-            })?;
-        runtime.block_on(future)
-    }
 }
 
 /// Merge config `overlay` into `base`, giving `overlay` precedence.
@@ -275,6 +241,17 @@ fn managed_config_path(codex_home: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn block_on<F, T>(future: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+            .block_on(future)
+    }
 
     #[test]
     fn merges_managed_config_layer_on_top() {
@@ -336,7 +313,8 @@ extra = true
             )
             .expect("write managed config");
 
-            let loaded = load_config_as_toml_blocking(tmp.path()).expect("load config");
+            let loaded =
+                block_on(load_config_as_toml(tmp.path().to_path_buf())).expect("load config");
             let table = loaded.as_table().expect("top-level table expected");
 
             assert_eq!(table.get("foo"), Some(&TomlValue::Integer(2)));
@@ -357,7 +335,8 @@ extra = true
         let managed_path = tmp.path().join("managed_config.toml");
 
         super::with_managed_config_path_override(Some(&managed_path), || {
-            let layers = load_config_layers_blocking(tmp.path()).expect("load layers");
+            let layers =
+                block_on(load_config_layers(tmp.path().to_path_buf())).expect("load layers");
             let base_table = layers.base.as_table().expect("base table expected");
             assert!(
                 base_table.is_empty(),
@@ -370,7 +349,8 @@ extra = true
 
             #[cfg(not(target_os = "macos"))]
             {
-                let loaded = load_config_as_toml_blocking(tmp.path()).expect("load config");
+                let loaded =
+                    block_on(load_config_as_toml(tmp.path().to_path_buf())).expect("load config");
                 let table = loaded.as_table().expect("top-level table expected");
                 assert!(
                     table.is_empty(),
@@ -402,7 +382,8 @@ flag = true
             )
             .expect("write managed config");
 
-            let loaded = load_config_as_toml_blocking(tmp.path()).expect("load config");
+            let loaded =
+                block_on(load_config_as_toml(tmp.path().to_path_buf())).expect("load config");
             let nested = loaded
                 .get("nested")
                 .and_then(|v| v.as_table())

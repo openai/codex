@@ -183,7 +183,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let config = Config::load_with_cli_overrides_async(cli_kv_overrides, overrides).await?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 

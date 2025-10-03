@@ -14,7 +14,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_overrides_async;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -161,7 +161,7 @@ pub async fn run_main(
         // Load configuration and support CLI overrides.
 
         #[allow(clippy::print_stderr)]
-        match Config::load_with_cli_overrides_async(cli_kv_overrides.clone(), overrides).await {
+        match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides).await {
             Ok(config) => config,
             Err(err) => {
                 eprintln!("Error loading configuration: {err}");
@@ -181,7 +181,7 @@ pub async fn run_main(
             }
         };
 
-        match load_config_as_toml_with_cli_overrides_async(&codex_home, cli_kv_overrides).await {
+        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides).await {
             Ok(config_toml) => config_toml,
             Err(err) => {
                 eprintln!("Error loading config.toml: {err}");

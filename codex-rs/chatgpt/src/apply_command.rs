@@ -23,7 +23,7 @@ pub async fn run_apply_command(
     apply_cli: ApplyCommand,
     cwd: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    let config = Config::load_with_cli_overrides_async(
+    let config = Config::load_with_cli_overrides(
         apply_cli
             .config_overrides
             .parse_overrides()
