@@ -128,7 +128,7 @@ impl McpCli {
                 run_login(&config_overrides, args).await?;
             }
             McpSubcommand::Logout(args) => {
-                run_logout(&config_overrides, args)?;
+                run_logout(&config_overrides, args).await?;
             }
         }
 
