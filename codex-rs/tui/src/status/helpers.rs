@@ -11,6 +11,10 @@ use unicode_width::UnicodeWidthStr;
 
 use super::account::StatusAccountDisplay;
 
+fn normalize_agents_display_path(path: &Path) -> String {
+    dunce::simplified(path).display().to_string()
+}
+
 pub(crate) fn compose_model_display(
     config: &Config,
     entries: &[(&str, String)],
@@ -59,13 +63,13 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
                             let up = format!("..{}", std::path::MAIN_SEPARATOR);
                             format!("{}{}", up.repeat(ups), file_name)
                         } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
-                            stripped.display().to_string()
+                            normalize_agents_display_path(stripped)
                         } else {
-                            p.display().to_string()
+                            normalize_agents_display_path(&p)
                         }
                     }
                 } else {
-                    p.display().to_string()
+                    normalize_agents_display_path(&p)
                 };
                 rels.push(display);
             }

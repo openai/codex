@@ -6,6 +6,8 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+use crate::render::Insets;
+use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
@@ -171,6 +173,7 @@ impl CommandPopup {
                     name,
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     is_current: false,
+                    display_shortcut: None,
                     description: Some(description),
                 }
             })
@@ -205,13 +208,12 @@ impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
         render_rows(
-            area,
+            area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
             "no matches",
-            false,
         );
     }
 }

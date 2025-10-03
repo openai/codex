@@ -83,6 +83,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 - [**Authentication**](./docs/authentication.md)
   - [Auth methods](./docs/authentication.md#forcing-a-specific-auth-method-advanced)
   - [Login on a "Headless" machine](./docs/authentication.md#connecting-on-a-headless-machine)
+- [**Non-interactive mode**](./docs/exec.md)
 - [**Advanced**](./docs/advanced.md)
   - [Non-interactive / CI mode](./docs/advanced.md#non-interactive--ci-mode)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
