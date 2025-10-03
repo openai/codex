@@ -62,10 +62,6 @@ impl SessionState {
         self.latest_rate_limits = Some(snapshot);
     }
 
-    pub(crate) fn set_token_info(&mut self, info: TokenUsageInfo) {
-        self.token_info = Some(info);
-    }
-
     pub(crate) fn token_info_and_rate_limits(
         &self,
     ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {

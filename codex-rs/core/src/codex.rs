@@ -793,16 +793,6 @@ impl Session {
                     .unwrap_or(0)
             };
 
-            {
-                let mut state = self.state.lock().await;
-                if let Some(mut token_info) = state.get_token_info() {
-                    if token_info.model_context_window.is_none() {
-                        token_info.model_context_window = Some(context_window);
-                        state.set_token_info(token_info);
-                    }
-                }
-            }
-
             let delta = context_window.saturating_sub(current_total);
             let mut last_usage = TokenUsage::default();
             last_usage.total_tokens = delta;
