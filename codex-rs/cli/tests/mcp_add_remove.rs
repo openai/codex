@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use tokio::runtime::Builder;
 
 use anyhow::Result;
 use codex_core::config::load_global_mcp_servers;
@@ -16,16 +15,12 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     Ok(cmd)
 }
 
-fn read_servers(path: &Path) -> Result<BTreeMap<String, McpServerConfig>> {
-    Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(load_global_mcp_servers(path))
-        .map_err(Into::into)
+async fn read_servers(path: &Path) -> Result<BTreeMap<String, McpServerConfig>> {
+    Ok(load_global_mcp_servers(path).await?)
 }
 
-#[test]
-fn add_and_remove_server_updates_global_config() -> Result<()> {
+#[tokio::test]
+async fn add_and_remove_server_updates_global_config() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     let mut add_cmd = codex_command(codex_home.path())?;
@@ -35,7 +30,7 @@ fn add_and_remove_server_updates_global_config() -> Result<()> {
         .success()
         .stdout(contains("Added global MCP server 'docs'."));
 
-    let servers = read_servers(codex_home.path())?;
+    let servers = read_servers(codex_home.path()).await?;
     assert_eq!(servers.len(), 1);
     let docs = servers.get("docs").expect("server should exist");
     match &docs.transport {
@@ -54,7 +49,7 @@ fn add_and_remove_server_updates_global_config() -> Result<()> {
         .success()
         .stdout(contains("Removed global MCP server 'docs'."));
 
-    let servers = read_servers(codex_home.path())?;
+    let servers = read_servers(codex_home.path()).await?;
     assert!(servers.is_empty());
 
     let mut remove_again_cmd = codex_command(codex_home.path())?;
@@ -64,14 +59,14 @@ fn add_and_remove_server_updates_global_config() -> Result<()> {
         .success()
         .stdout(contains("No MCP server named 'docs' found."));
 
-    let servers = read_servers(codex_home.path())?;
+    let servers = read_servers(codex_home.path()).await?;
     assert!(servers.is_empty());
 
     Ok(())
 }
 
-#[test]
-fn add_with_env_preserves_key_order_and_values() -> Result<()> {
+#[tokio::test]
+async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     let mut add_cmd = codex_command(codex_home.path())?;
@@ -91,7 +86,7 @@ fn add_with_env_preserves_key_order_and_values() -> Result<()> {
         .assert()
         .success();
 
-    let servers = read_servers(codex_home.path())?;
+    let servers = read_servers(codex_home.path()).await?;
     let envy = servers.get("envy").expect("server should exist");
     let env = match &envy.transport {
         McpServerTransportConfig::Stdio { env: Some(env), .. } => env,

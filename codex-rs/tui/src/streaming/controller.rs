@@ -114,7 +114,7 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
         let cfg = test_config().await;
         let mut ctrl = StreamController::new(cfg.clone(), None);

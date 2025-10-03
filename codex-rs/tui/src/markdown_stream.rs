@@ -134,7 +134,7 @@ mod tests {
             .expect("load test config")
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn no_commit_until_newline() {
         let cfg = test_config().await;
         let mut c = super::MarkdownStreamCollector::new(None);
@@ -146,7 +146,7 @@ mod tests {
         assert_eq!(out2.len(), 1, "one completed line after newline");
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn finalize_commits_partial_line() {
         let cfg = test_config().await;
         let mut c = super::MarkdownStreamCollector::new(None);
@@ -155,7 +155,7 @@ mod tests {
         assert_eq!(out.len(), 1);
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn e2e_stream_blockquote_simple_is_green() {
         let cfg = test_config().await;
         let out = super::simulate_stream_markdown_for_tests(&["> Hello\n"], true, &cfg);
@@ -169,7 +169,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn e2e_stream_blockquote_nested_is_green() {
         let cfg = test_config().await;
         let out =
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(non_blank[1].style.fg, Some(Color::Green));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn e2e_stream_blockquote_with_list_items_is_green() {
         let cfg = test_config().await;
         let out =
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(out[1].style.fg, Some(Color::Green));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn e2e_stream_nested_mixed_lists_ordered_marker_is_light_blue() {
         let cfg = test_config().await;
         let md = [
@@ -236,7 +236,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn e2e_stream_blockquote_wrap_preserves_green_style() {
         let cfg = test_config().await;
         let long = "> This is a very long quoted line that should wrap across multiple columns to verify style preservation.";
@@ -272,7 +272,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn heading_starts_on_new_line_when_following_paragraph() {
         let cfg = test_config().await;
 
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(line_to_string(&out2[1]), "## Heading");
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn heading_not_inlined_when_split_across_chunks() {
         let cfg = test_config().await;
 
@@ -412,7 +412,7 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn lists_and_fences_commit_without_duplication() {
         // List case
         assert_streamed_equals_full(&["- a\n- ", "b\n- c\n"]).await;
@@ -421,7 +421,7 @@ mod tests {
         assert_streamed_equals_full(&["```", "\nco", "de 1\ncode 2\n", "```\n"]).await;
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn utf8_boundary_safety_and_wide_chars() {
         let cfg = test_config().await;
 
@@ -452,7 +452,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn e2e_stream_deep_nested_third_level_marker_is_light_blue() {
         let cfg = test_config().await;
         let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
@@ -502,7 +502,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn empty_fenced_block_is_dropped_and_separator_preserved_before_heading() {
         let cfg = test_config().await;
         // An empty fenced code block followed by a heading should not render the fence,
@@ -521,7 +521,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn paragraph_then_empty_fence_then_heading_keeps_heading_on_new_line() {
         let cfg = test_config().await;
         let deltas = vec!["Para.\n", "```\n```\n", "## Title\n"]; // empty fence block in one commit
@@ -541,7 +541,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn loose_list_with_split_dashes_matches_full_render() {
         let cfg = test_config().await;
         // Minimized failing sequence discovered by the helper: two chunks
@@ -562,7 +562,7 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn loose_vs_tight_list_items_streaming_matches_full() {
         let cfg = test_config().await;
         // Deltas extracted from the session log around 2025-08-27T00:33:18.216Z
@@ -675,7 +675,7 @@ mod tests {
         assert_eq!(streamed_strs, rendered_strs, "full:\n---\n{full}\n---");
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn fuzz_class_bullet_duplication_variant_1() {
         assert_streamed_equals_full(&[
             "aph.\n- let one\n- bull",
@@ -684,7 +684,7 @@ mod tests {
         .await;
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn fuzz_class_bullet_duplication_variant_2() {
         assert_streamed_equals_full(&[
             "- e\n  c",
@@ -693,7 +693,7 @@ mod tests {
         .await;
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn streaming_html_block_then_text_matches_full() {
         assert_streamed_equals_full(&[
             "HTML block:\n",

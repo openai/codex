@@ -286,6 +286,7 @@ fn apply_overlays(
 
     base
 }
+
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
@@ -1327,7 +1328,7 @@ exclude_slash_tmp = true
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
@@ -1337,7 +1338,7 @@ exclude_slash_tmp = true
         Ok(())
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn write_global_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
@@ -1379,7 +1380,7 @@ exclude_slash_tmp = true
         Ok(())
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let managed_path = codex_home.path().join("managed_config.toml");
@@ -1412,7 +1413,7 @@ exclude_slash_tmp = true
         Ok(())
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn load_global_mcp_servers_accepts_legacy_ms_field() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
@@ -1434,7 +1435,7 @@ startup_timeout_ms = 2500
         Ok(())
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn write_global_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
@@ -1488,7 +1489,7 @@ ZIG_VAR = "3"
         Ok(())
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn write_global_mcp_servers_serializes_streamable_http() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 

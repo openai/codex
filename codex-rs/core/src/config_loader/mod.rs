@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use tokio::fs;
 use toml::Value as TomlValue;
 
-const CODEX_MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_MANAGED_CONFIG_PATH";
 #[cfg(unix)]
 const CODEX_MANAGED_CONFIG_SYSTEM_PATH: &str = "/etc/codex/managed_config.toml";
 
@@ -148,12 +147,6 @@ pub(crate) fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
 }
 
 fn managed_config_default_path(codex_home: &Path) -> PathBuf {
-    if let Some(path) = env::var_os(CODEX_MANAGED_CONFIG_PATH_ENV_VAR)
-        && !path.is_empty()
-    {
-        return PathBuf::from(path);
-    }
-
     #[cfg(unix)]
     {
         let _ = codex_home;
@@ -185,7 +178,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn merges_managed_config_layer_on_top() {
         let tmp = tempdir().expect("tempdir");
         let managed_path = tmp.path().join("managed_config.toml");
@@ -233,7 +226,7 @@ extra = true
         assert_eq!(nested.get("extra"), Some(&TomlValue::Boolean(true)));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn returns_empty_when_all_layers_missing() {
         let tmp = tempdir().expect("tempdir");
         let managed_path = tmp.path().join("managed_config.toml");
@@ -270,7 +263,7 @@ extra = true
     }
 
     #[cfg(target_os = "macos")]
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn managed_preferences_take_highest_precedence() {
         use base64::Engine;
 
