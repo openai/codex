@@ -14,6 +14,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -26,6 +27,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
@@ -37,6 +39,7 @@ use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
 use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -992,6 +995,112 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         "unexpected error message for submission {submission_id}: {}",
         error_event.message
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let first_turn = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_completed("resp_seed"), "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains("seed turn"))
+        .respond_with(first_turn)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_context_window","object":"response","created_at":1759510079,"status":"failed","background":false,"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try again."},"usage":null,"user":null,"metadata":{}}}"#;
+
+    let error_stream = format!("event: response.failed\ndata: {raw_error}\n\n");
+
+    let second_turn = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(error_stream, "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains("trigger context window"))
+        .respond_with(second_turn)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model = "gpt-5".to_string();
+            config.model_family = find_family_for_model("gpt-5").expect("known gpt-5 model family");
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "seed turn".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "trigger context window".into(),
+            }],
+        })
+        .await?;
+
+    let token_event = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::TokenCount(payload)
+                if payload.info.as_ref().is_some_and(|info| {
+                    info.model_context_window
+                        == Some(info.total_token_usage.total_tokens)
+                        && info.total_token_usage.total_tokens > 0
+                })
+        )
+    })
+    .await;
+
+    let info = match token_event {
+        EventMsg::TokenCount(payload) => payload
+            .info
+            .expect("token usage info present when context window is exceeded"),
+        _ => unreachable!(),
+    };
+
+    assert_eq!(info.model_context_window, Some(272_000));
+    assert_eq!(info.total_token_usage.total_tokens, 272_000);
+
+    let error_event = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::Error(err) if err
+                .message
+                .contains("context window")
+        )
+    })
+    .await;
+
+    if let EventMsg::Error(err) = error_event {
+        assert_eq!(
+            err.message,
+            "Your input exceeds the context window of this model. Please adjust your input and try again."
+        );
+    } else {
+        unreachable!("expected error event after context window failure");
+    }
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     Ok(())
 }

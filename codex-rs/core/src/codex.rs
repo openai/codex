@@ -784,15 +784,25 @@ impl Session {
 
     async fn set_total_tokens_full(&self, sub_id: &str, turn_context: &TurnContext) {
         let context_window = turn_context.client.get_model_context_window();
-        let token_info = {
-            let state = self.state.lock().await;
-            state.get_token_info()
-        };
-        if let (Some(token_info), Some(context_window)) = (token_info, context_window) {
-            let mut token_info = token_info;
-            token_info.total_token_usage.total_tokens = context_window;
-            self.update_token_usage_info(sub_id, turn_context, Some(&token_info.last_token_usage))
-                .await;
+        if let Some(context_window) = context_window {
+            let mut updated = false;
+            {
+                let mut state = self.state.lock().await;
+                if let Some(mut token_info) = state.get_token_info() {
+                    let previous_total = token_info.total_token_usage.total_tokens;
+                    token_info.total_token_usage.total_tokens = context_window;
+                    let delta = context_window.saturating_sub(previous_total);
+                    token_info.last_token_usage = TokenUsage {
+                        total_tokens: delta,
+                        ..TokenUsage::default()
+                    };
+                    state.set_token_info(token_info);
+                    updated = true;
+                }
+            }
+            if updated {
+                self.send_token_count_event(sub_id).await;
+            }
         }
     }
 
