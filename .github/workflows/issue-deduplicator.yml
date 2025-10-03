@@ -102,14 +102,17 @@ jobs:
             }
 
             const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
-            if (issues.length === 0) {
+            const currentIssueNumber = String(context.payload.issue.number);
+            const filteredIssues = issues.filter((value) => String(value) !== currentIssueNumber);
+
+            if (filteredIssues.length === 0) {
               core.info('Codex reported no potential duplicates.');
               return;
             }
 
             const lines = [
               'Potential duplicates detected:',
-              ...issues.map((value) => `- #${String(value)}`),
+              ...filteredIssues.map((value) => `- #${String(value)}`),
               '',
               '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];
 
