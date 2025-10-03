@@ -1,3 +1,7 @@
+use crate::config_loader::LoadedConfigLayers;
+pub use crate::config_loader::load_config_as_toml;
+use crate::config_loader::load_config_layers_with_overrides;
+use crate::config_loader::merge_toml_values;
 use crate::config_profile::ConfigProfile;
 use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config_types::History;
@@ -212,50 +216,38 @@ pub struct Config {
 }
 
 impl Config {
-    /// Load configuration with *generic* CLI overrides (`-c key=value`) applied
-    /// **in between** the values parsed from `config.toml` and the
-    /// strongly-typed overrides specified via [`ConfigOverrides`].
-    ///
-    /// The precedence order is therefore: `config.toml` < `-c` overrides <
-    /// `ConfigOverrides`.
-    pub fn load_with_cli_overrides(
+    pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
         overrides: ConfigOverrides,
     ) -> std::io::Result<Self> {
-        // Resolve the directory that stores Codex state (e.g. ~/.codex or the
-        // value of $CODEX_HOME) so we can embed it into the resulting
-        // `Config` instance.
         let codex_home = find_codex_home()?;
 
-        // Step 1: parse `config.toml` into a generic JSON value.
-        let mut root_value = load_config_as_toml(&codex_home)?;
+        let root_value = load_resolved_config(
+            &codex_home,
+            cli_overrides,
+            crate::config_loader::LoaderOverrides::default(),
+        )
+        .await?;
 
-        // Step 2: apply the `-c` overrides.
-        for (path, value) in cli_overrides.into_iter() {
-            apply_toml_override(&mut root_value, &path, value);
-        }
-
-        // Step 3: deserialize into `ConfigToml` so that Serde can enforce the
-        // correct types.
         let cfg: ConfigToml = root_value.try_into().map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
             std::io::Error::new(std::io::ErrorKind::InvalidData, e)
         })?;
 
-        // Step 4: merge with the strongly-typed overrides.
         Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
     }
 }
 
-pub fn load_config_as_toml_with_cli_overrides(
+pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    let mut root_value = load_config_as_toml(codex_home)?;
-
-    for (path, value) in cli_overrides.into_iter() {
-        apply_toml_override(&mut root_value, &path, value);
-    }
+    let root_value = load_resolved_config(
+        codex_home,
+        cli_overrides,
+        crate::config_loader::LoaderOverrides::default(),
+    )
+    .await?;
 
     let cfg: ConfigToml = root_value.try_into().map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
@@ -265,33 +257,40 @@ pub fn load_config_as_toml_with_cli_overrides(
     Ok(cfg)
 }
 
-/// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
-/// an empty TOML table when the file does not exist.
-pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-    match std::fs::read_to_string(&config_path) {
-        Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
-            Ok(val) => Ok(val),
-            Err(e) => {
-                tracing::error!("Failed to parse config.toml: {e}");
-                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::info!("config.toml not found, using defaults");
-            Ok(TomlValue::Table(Default::default()))
-        }
-        Err(e) => {
-            tracing::error!("Failed to read config.toml: {e}");
-            Err(e)
-        }
-    }
+async fn load_resolved_config(
+    codex_home: &Path,
+    cli_overrides: Vec<(String, TomlValue)>,
+    overrides: crate::config_loader::LoaderOverrides,
+) -> std::io::Result<TomlValue> {
+    let layers = load_config_layers_with_overrides(codex_home, overrides).await?;
+    Ok(apply_overlays(layers, cli_overrides))
 }
 
-pub fn load_global_mcp_servers(
+fn apply_overlays(
+    layers: LoadedConfigLayers,
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> TomlValue {
+    let LoadedConfigLayers {
+        mut base,
+        managed_config,
+        managed_preferences,
+    } = layers;
+
+    for (path, value) in cli_overrides.into_iter() {
+        apply_toml_override(&mut base, &path, value);
+    }
+
+    for overlay in [managed_config, managed_preferences].into_iter().flatten() {
+        merge_toml_values(&mut base, &overlay);
+    }
+
+    base
+}
+
+pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value = load_config_as_toml(codex_home)?;
+    let root_value = load_config_as_toml(codex_home).await?;
     let Some(servers_value) = root_value.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
@@ -1329,18 +1328,18 @@ exclude_slash_tmp = true
         );
     }
 
-    #[test]
-    fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
-        let servers = load_global_mcp_servers(codex_home.path())?;
+        let servers = load_global_mcp_servers(codex_home.path()).await?;
         assert!(servers.is_empty());
 
         Ok(())
     }
 
-    #[test]
-    fn write_global_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn write_global_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
         let mut servers = BTreeMap::new();
@@ -1359,7 +1358,7 @@ exclude_slash_tmp = true
 
         write_global_mcp_servers(codex_home.path(), &servers)?;
 
-        let loaded = load_global_mcp_servers(codex_home.path())?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
@@ -1375,14 +1374,47 @@ exclude_slash_tmp = true
 
         let empty = BTreeMap::new();
         write_global_mcp_servers(codex_home.path(), &empty)?;
-        let loaded = load_global_mcp_servers(codex_home.path())?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         assert!(loaded.is_empty());
 
         Ok(())
     }
 
-    #[test]
-    fn load_global_mcp_servers_accepts_legacy_ms_field() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let managed_path = codex_home.path().join("managed_config.toml");
+
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            "model = \"base\"\n",
+        )?;
+        std::fs::write(&managed_path, "model = \"managed_config\"\n")?;
+
+        let overrides = crate::config_loader::LoaderOverrides {
+            managed_config_path: Some(managed_path),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: None,
+        };
+
+        let root_value = load_resolved_config(
+            codex_home.path(),
+            vec![("model".to_string(), TomlValue::String("cli".to_string()))],
+            overrides,
+        )
+        .await?;
+
+        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+            tracing::error!("Failed to deserialize overridden config: {e}");
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        })?;
+
+        assert_eq!(cfg.model.as_deref(), Some("managed_config"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_global_mcp_servers_accepts_legacy_ms_field() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
 
@@ -1396,15 +1428,15 @@ startup_timeout_ms = 2500
 "#,
         )?;
 
-        let servers = load_global_mcp_servers(codex_home.path())?;
+        let servers = load_global_mcp_servers(codex_home.path()).await?;
         let docs = servers.get("docs").expect("docs entry");
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_millis(2500)));
 
         Ok(())
     }
 
-    #[test]
-    fn write_global_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn write_global_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
         let servers = BTreeMap::from([(
@@ -1439,7 +1471,7 @@ ZIG_VAR = "3"
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path())?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio { command, args, env } => {
@@ -1457,8 +1489,8 @@ ZIG_VAR = "3"
         Ok(())
     }
 
-    #[test]
-    fn write_global_mcp_servers_serializes_streamable_http() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn write_global_mcp_servers_serializes_streamable_http() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
         let mut servers = BTreeMap::from([(
@@ -1486,7 +1518,7 @@ startup_timeout_sec = 2.0
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path())?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
@@ -1518,7 +1550,7 @@ url = "https://example.com/mcp"
 "#
         );
 
-        let loaded = load_global_mcp_servers(codex_home.path())?;
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
