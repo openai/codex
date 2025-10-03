@@ -1633,7 +1633,7 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
-                dismiss_on_select: true,
+                dismiss_on_select: false,
                 ..Default::default()
             });
         }
