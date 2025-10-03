@@ -1,0 +1,18 @@
+[package]
+name = "codex-backend-client"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+codex-backend-openapi-models = { path = "../codex-backend-openapi-models" }
+
+[dev-dependencies]
+pretty_assertions = "1"

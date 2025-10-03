@@ -1,19 +1,20 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
-use codex_protocol::mcp_protocol::ClientRequest;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
+use codex_protocol::protocol::SessionSource;
 
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::default_client::USER_AGENT_SUFFIX;
+use codex_core::default_client::get_codex_user_agent;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -34,10 +35,8 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task;
-use uuid::Uuid;
 
 pub(crate) struct MessageProcessor {
-    codex_message_processor: CodexMessageProcessor,
     outgoing: Arc<OutgoingMessageSender>,
     initialized: bool,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -54,21 +53,10 @@ impl MessageProcessor {
         config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager = AuthManager::shared(
-            config.codex_home.clone(),
-            config.preferred_auth_method,
-            config.responses_originator_header.clone(),
-        );
-        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
-        let codex_message_processor = CodexMessageProcessor::new(
-            auth_manager,
-            conversation_manager.clone(),
-            outgoing.clone(),
-            codex_linux_sandbox_exe.clone(),
-            config,
-        );
+        let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
+        let conversation_manager =
+            Arc::new(ConversationManager::new(auth_manager, SessionSource::Mcp));
         Self {
-            codex_message_processor,
             outgoing,
             initialized: false,
             codex_linux_sandbox_exe,
@@ -78,17 +66,6 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
-        if let Ok(request_json) = serde_json::to_value(request.clone())
-            && let Ok(codex_request) = serde_json::from_value::<ClientRequest>(request_json)
-        {
-            // If the request is a Codex request, handle it with the Codex
-            // message processor.
-            self.codex_message_processor
-                .process_request(codex_request)
-                .await;
-            return;
-        }
-
         // Hold on to the ID so we can respond.
         let request_id = request.id.clone();
 
@@ -211,6 +188,14 @@ impl MessageProcessor {
             return;
         }
 
+        let client_info = params.client_info;
+        let name = client_info.name;
+        let version = client_info.version;
+        let user_agent_suffix = format!("{name}; {version}");
+        if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
+            *suffix = Some(user_agent_suffix);
+        }
+
         self.initialized = true;
 
         // Build a minimal InitializeResult. Fill with placeholders.
@@ -231,6 +216,7 @@ impl MessageProcessor {
                 name: "codex-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
+                user_agent: Some(get_codex_user_agent()),
             },
         };
 
@@ -477,8 +463,8 @@ impl MessageProcessor {
                 return;
             }
         };
-        let conversation_id = match Uuid::parse_str(&conversation_id) {
-            Ok(id) => ConversationId::from(id),
+        let conversation_id = match ConversationId::from_string(&conversation_id) {
+            Ok(id) => id,
             Err(e) => {
                 tracing::error!("Failed to parse conversation_id: {e}");
                 let result = CallToolResult {
@@ -524,7 +510,6 @@ impl MessageProcessor {
 
         // Spawn the long-running reply handler.
         tokio::spawn({
-            let codex = codex.clone();
             let outgoing = outgoing.clone();
             let prompt = prompt.clone();
             let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();

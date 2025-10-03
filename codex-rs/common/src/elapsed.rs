@@ -2,7 +2,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 /// Returns a string representing the elapsed time since `start_time` like
-/// "1m15s" or "1.50s".
+/// "1m 15s" or "1.50s".
 pub fn format_elapsed(start_time: Instant) -> String {
     format_duration(start_time.elapsed())
 }
@@ -12,7 +12,7 @@ pub fn format_elapsed(start_time: Instant) -> String {
 /// Formatting rules:
 /// * < 1 s  ->  "{milli}ms"
 /// * < 60 s ->  "{sec:.2}s" (two decimal places)
-/// * >= 60 s ->  "{min}m{sec:02}s"
+/// * >= 60 s ->  "{min}m {sec:02}s"
 pub fn format_duration(duration: Duration) -> String {
     let millis = duration.as_millis() as i64;
     format_elapsed_millis(millis)
@@ -26,7 +26,7 @@ fn format_elapsed_millis(millis: i64) -> String {
     } else {
         let minutes = millis / 60_000;
         let seconds = (millis % 60_000) / 1000;
-        format!("{minutes}m{seconds:02}s")
+        format!("{minutes}m {seconds:02}s")
     }
 }
 
@@ -61,12 +61,18 @@ mod tests {
     fn test_format_duration_minutes() {
         // Durations ≥ 1 minute should be printed mmss.
         let dur = Duration::from_millis(75_000); // 1m15s
-        assert_eq!(format_duration(dur), "1m15s");
+        assert_eq!(format_duration(dur), "1m 15s");
 
         let dur_exact = Duration::from_millis(60_000); // 1m0s
-        assert_eq!(format_duration(dur_exact), "1m00s");
+        assert_eq!(format_duration(dur_exact), "1m 00s");
 
         let dur_long = Duration::from_millis(3_601_000);
-        assert_eq!(format_duration(dur_long), "60m01s");
+        assert_eq!(format_duration(dur_long), "60m 01s");
+    }
+
+    #[test]
+    fn test_format_duration_one_hour_has_space() {
+        let dur_hour = Duration::from_millis(3_600_000);
+        assert_eq!(format_duration(dur_hour), "60m 00s");
     }
 }
