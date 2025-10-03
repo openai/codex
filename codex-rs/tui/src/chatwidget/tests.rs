@@ -1027,6 +1027,29 @@ fn model_reasoning_selection_popup_snapshot() {
 }
 
 #[test]
+fn reasoning_popup_escape_returns_to_model_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "gpt-5".to_string();
+    chat.open_model_popup();
+
+    let presets = builtin_model_presets(None)
+        .into_iter()
+        .filter(|preset| preset.model == "gpt-5-codex")
+        .collect::<Vec<_>>();
+    chat.open_reasoning_popup("gpt-5-codex".to_string(), presets);
+
+    let before_escape = render_bottom_popup(&chat, 80);
+    assert!(before_escape.contains("Select Reasoning Level"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    let after_escape = render_bottom_popup(&chat, 80);
+    assert!(after_escape.contains("Select Model"));
+    assert!(!after_escape.contains("Select Reasoning Level"));
+}
+
+#[test]
 fn exec_history_extends_previous_when_consecutive() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
