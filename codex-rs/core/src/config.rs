@@ -1396,7 +1396,7 @@ exclude_slash_tmp = true
             managed_preferences_base64: None,
         };
 
-        let root_value = load_effective_config(
+        let root_value = load_resolved_config(
             codex_home.path().to_path_buf(),
             vec![("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
