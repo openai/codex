@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,8 +14,6 @@ use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::MaybeApplyPatchVerified;
-use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
@@ -28,8 +25,6 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use futures::prelude::*;
 use mcp_types::CallToolResult;
-use serde::Deserialize;
-use serde::Serialize;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -41,9 +36,6 @@ use tracing::trace;
 use tracing::warn;
 
 use crate::ModelProviderInfo;
-use crate::apply_patch;
-use crate::apply_patch::ApplyPatchExec;
-use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
@@ -54,32 +46,21 @@ use crate::conversation_history::ConversationHistory;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::error::SandboxErr;
-use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::StdoutStream;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
 use crate::exec_command::ExecSessionManager;
-use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
-use crate::exec_env::create_env;
-use crate::executor::ExecutionMode;
 use crate::executor::Executor;
 use crate::executor::ExecutorConfig;
 use crate::executor::normalize_exec_result;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
-use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
-use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
-use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
@@ -94,7 +75,6 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
-use crate::protocol::FileChange;
 use crate::protocol::InputItem;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
@@ -110,7 +90,6 @@ use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
-use crate::protocol::ViewImageToolCallEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
@@ -120,6 +99,8 @@ use crate::state::SessionServices;
 use crate::tasks::CompactTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::tools::ToolRouter;
+use crate::tools::format_exec_output_str;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
@@ -131,10 +112,8 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::InitialHistory;
 
 pub mod compact;
@@ -159,13 +138,6 @@ pub struct CodexSpawnOk {
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
-
-// Model-formatting limits: clients get full streams; oonly content sent to the model is truncated.
-pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
-pub(crate) const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
-pub(crate) const MODEL_FORMAT_HEAD_LINES: usize = MODEL_FORMAT_MAX_LINES / 2;
-pub(crate) const MODEL_FORMAT_TAIL_LINES: usize = MODEL_FORMAT_MAX_LINES - MODEL_FORMAT_HEAD_LINES; // 128
-pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -266,7 +238,7 @@ pub(crate) struct Session {
     tx_event: Sender<Event>,
     state: Mutex<SessionState>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
-    services: SessionServices,
+    pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -289,7 +261,7 @@ pub(crate) struct TurnContext {
 }
 
 impl TurnContext {
-    fn resolve_path(&self, path: Option<String>) -> PathBuf {
+    pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
@@ -532,6 +504,10 @@ impl Session {
         }
 
         Ok((sess, turn_context))
+    }
+
+    pub(crate) fn get_tx_event(&self) -> Sender<Event> {
+        self.tx_event.clone()
     }
 
     fn next_internal_sub_id(&self) -> String {
@@ -937,7 +913,7 @@ impl Session {
     /// command even on error.
     ///
     /// Returns the output of the exec tool call.
-    async fn run_exec_with_events(
+    pub(crate) async fn run_exec_with_events(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
         prepared: PreparedExec,
@@ -1043,6 +1019,49 @@ impl Session {
             .await
     }
 
+    pub(crate) fn parse_mcp_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
+        self.services
+            .mcp_connection_manager
+            .parse_tool_name(tool_name)
+    }
+
+    pub(crate) async fn handle_exec_command_tool(
+        &self,
+        params: ExecCommandParams,
+    ) -> Result<String, FunctionCallError> {
+        let result = self
+            .services
+            .session_manager
+            .handle_exec_command_request(params)
+            .await;
+        match result {
+            Ok(output) => Ok(output.to_text_output()),
+            Err(err) => Err(FunctionCallError::RespondToModel(err)),
+        }
+    }
+
+    pub(crate) async fn handle_write_stdin_tool(
+        &self,
+        params: WriteStdinParams,
+    ) -> Result<String, FunctionCallError> {
+        self.services
+            .session_manager
+            .handle_write_stdin_request(params)
+            .await
+            .map(|output| output.to_text_output())
+            .map_err(FunctionCallError::RespondToModel)
+    }
+
+    pub(crate) async fn run_unified_exec_request(
+        &self,
+        request: crate::unified_exec::UnifiedExecRequest<'_>,
+    ) -> Result<crate::unified_exec::UnifiedExecResult, crate::unified_exec::UnifiedExecError> {
+        self.services
+            .unified_exec_manager
+            .handle_request(request)
+            .await
+    }
+
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
@@ -1078,23 +1097,6 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.interrupt_task_sync();
     }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ExecCommandContext {
-    pub(crate) sub_id: String,
-    pub(crate) call_id: String,
-    pub(crate) command_for_display: Vec<String>,
-    pub(crate) cwd: PathBuf,
-    pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
-    pub(crate) tool_name: String,
-    pub(crate) otel_event_manager: OtelEventManager,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ApplyPatchCommandContext {
-    pub(crate) user_explicitly_approved_this_action: bool,
-    pub(crate) changes: HashMap<PathBuf, FileChange>,
 }
 
 async fn submission_loop(
@@ -1910,24 +1912,32 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<TurnRunResult> {
-    let tools = get_openai_tools(
-        &turn_context.tools_config,
-        Some(sess.services.mcp_connection_manager.list_all_tools()),
-    );
+    let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
+    let router = ToolRouter::from_config(&turn_context.tools_config, Some(mcp_tools));
 
     let prompt = Prompt {
         input,
-        tools,
+        tools: router.specs().to_vec(),
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
     let mut retries = 0;
     loop {
-        match try_run_turn(sess, turn_context, turn_diff_tracker, &sub_id, &prompt).await {
+        match try_run_turn(
+            &router,
+            sess,
+            turn_context,
+            turn_diff_tracker,
+            &sub_id,
+            &prompt,
+        )
+        .await
+        {
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
+            Err(e @ CodexErr::Fatal(_)) => return Err(e),
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
@@ -1986,6 +1996,7 @@ struct TurnRunResult {
 }
 
 async fn try_run_turn(
+    router: &crate::tools::ToolRouter,
     sess: &Session,
     turn_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
@@ -2087,6 +2098,7 @@ async fn try_run_turn(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
                 let response = handle_response_item(
+                    router,
                     sess,
                     turn_context,
                     turn_diff_tracker,
@@ -2177,6 +2189,7 @@ async fn try_run_turn(
 }
 
 async fn handle_response_item(
+    router: &crate::tools::ToolRouter,
     sess: &Session,
     turn_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
@@ -2184,715 +2197,79 @@ async fn handle_response_item(
     item: ResponseItem,
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
-    let output = match item {
-        ResponseItem::FunctionCall {
-            name,
-            arguments,
-            call_id,
-            ..
-        } => {
-            info!("FunctionCall: {name}({arguments})");
-            if let Some((server, tool_name)) =
-                sess.services.mcp_connection_manager.parse_tool_name(&name)
-            {
-                let resp = handle_mcp_tool_call(
-                    sess,
-                    sub_id,
-                    call_id.clone(),
-                    server,
-                    tool_name,
-                    arguments,
-                )
-                .await;
-                Some(resp)
-            } else {
-                let result = turn_context
-                    .client
-                    .get_otel_event_manager()
-                    .log_tool_result(name.as_str(), call_id.as_str(), arguments.as_str(), || {
-                        handle_function_call(
-                            sess,
-                            turn_context,
-                            turn_diff_tracker,
-                            sub_id.to_string(),
-                            name.to_owned(),
-                            arguments.to_owned(),
-                            call_id.clone(),
-                        )
-                    })
-                    .await;
 
-                let output = match result {
-                    Ok(content) => FunctionCallOutputPayload {
-                        content,
-                        success: Some(true),
-                    },
-                    Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
-                        content: msg,
-                        success: Some(false),
-                    },
-                };
-                Some(ResponseInputItem::FunctionCallOutput { call_id, output })
+    match ToolRouter::build_tool_call(sess, item.clone()) {
+        Ok(Some(call)) => {
+            let payload_preview = call.payload.log_payload().into_owned();
+            tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
+            match router
+                .dispatch_tool_call(sess, turn_context, turn_diff_tracker, sub_id, call)
+                .await
+            {
+                Ok(response) => Ok(Some(response)),
+                Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
+                Err(other) => unreachable!("non-fatal tool error returned: {other:?}"),
             }
         }
-        ResponseItem::LocalShellCall {
-            id,
-            call_id,
-            status: _,
-            action,
-        } => {
-            let name = "local_shell";
-            let LocalShellAction::Exec(action) = action;
-            tracing::info!("LocalShellCall: {action:?}");
-            let params = ShellToolCallParams {
-                command: action.command,
-                workdir: action.working_directory,
-                timeout_ms: action.timeout_ms,
-                with_escalated_permissions: None,
-                justification: None,
-            };
-            let effective_call_id = match (call_id, id) {
-                (Some(call_id), _) => call_id,
-                (None, Some(id)) => id,
-                (None, None) => {
-                    let error_message = "LocalShellCall without call_id or id";
-
-                    turn_context
-                        .client
-                        .get_otel_event_manager()
-                        .log_tool_failed(name, error_message);
-
-                    error!(error_message);
-                    return Ok(Some(ResponseInputItem::FunctionCallOutput {
-                        call_id: "".to_string(),
-                        output: FunctionCallOutputPayload {
-                            content: error_message.to_string(),
-                            success: None,
-                        },
-                    }));
+        Ok(None) => {
+            match &item {
+                ResponseItem::Message { .. }
+                | ResponseItem::Reasoning { .. }
+                | ResponseItem::WebSearchCall { .. } => {
+                    let msgs = match &item {
+                        ResponseItem::Message { .. } if turn_context.is_review_mode => {
+                            trace!("suppressing assistant Message in review mode");
+                            Vec::new()
+                        }
+                        _ => map_response_item_to_event_messages(
+                            &item,
+                            sess.show_raw_agent_reasoning(),
+                        ),
+                    };
+                    for msg in msgs {
+                        let event = Event {
+                            id: sub_id.to_string(),
+                            msg,
+                        };
+                        sess.send_event(event).await;
+                    }
                 }
-            };
-
-            let exec_params = to_exec_params(params, turn_context);
-            {
-                let result = turn_context
-                    .client
-                    .get_otel_event_manager()
-                    .log_tool_result(
-                        name,
-                        effective_call_id.as_str(),
-                        exec_params.command.join(" ").as_str(),
-                        || {
-                            handle_container_exec_with_params(
-                                name,
-                                exec_params,
-                                sess,
-                                turn_context,
-                                turn_diff_tracker,
-                                sub_id.to_string(),
-                                effective_call_id.clone(),
-                            )
-                        },
-                    )
-                    .await;
-
-                let output = match result {
-                    Ok(content) => FunctionCallOutputPayload {
-                        content,
-                        success: Some(true),
-                    },
-                    Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
-                        content: msg,
-                        success: Some(false),
-                    },
-                };
-                Some(ResponseInputItem::FunctionCallOutput {
-                    call_id: effective_call_id,
-                    output,
-                })
+                ResponseItem::FunctionCallOutput { .. }
+                | ResponseItem::CustomToolCallOutput { .. } => {
+                    debug!("unexpected tool output from stream");
+                }
+                _ => {}
             }
+
+            Ok(None)
         }
-        ResponseItem::CustomToolCall {
-            id: _,
-            call_id,
-            name,
-            input,
-            status: _,
-        } => {
-            let result = turn_context
+        Err(FunctionCallError::MissingLocalShellCallId) => {
+            let msg = "LocalShellCall without call_id or id";
+            turn_context
                 .client
                 .get_otel_event_manager()
-                .log_tool_result(name.as_str(), call_id.as_str(), input.as_str(), || {
-                    handle_custom_tool_call(
-                        sess,
-                        turn_context,
-                        turn_diff_tracker,
-                        sub_id.to_string(),
-                        name.to_owned(),
-                        input.to_owned(),
-                        call_id.clone(),
-                    )
-                })
-                .await;
+                .log_tool_failed("local_shell", msg);
+            error!(msg);
 
-            let output = match result {
-                Ok(content) => content,
-                Err(FunctionCallError::RespondToModel(msg)) => msg,
-            };
-            Some(ResponseInputItem::CustomToolCallOutput { call_id, output })
+            Ok(Some(ResponseInputItem::FunctionCallOutput {
+                call_id: String::new(),
+                output: FunctionCallOutputPayload {
+                    content: msg.to_string(),
+                    success: None,
+                },
+            }))
         }
-        ResponseItem::FunctionCallOutput { .. } => {
-            debug!("unexpected FunctionCallOutput from stream");
-            None
+        Err(FunctionCallError::RespondToModel(msg)) => {
+            Ok(Some(ResponseInputItem::FunctionCallOutput {
+                call_id: String::new(),
+                output: FunctionCallOutputPayload {
+                    content: msg,
+                    success: None,
+                },
+            }))
         }
-        ResponseItem::CustomToolCallOutput { .. } => {
-            debug!("unexpected CustomToolCallOutput from stream");
-            None
-        }
-        ResponseItem::Message { .. }
-        | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. } => {
-            // In review child threads, suppress assistant message events but
-            // keep reasoning/web search.
-            let msgs = match &item {
-                ResponseItem::Message { .. } if turn_context.is_review_mode => {
-                    trace!("suppressing assistant Message in review mode");
-                    Vec::new()
-                }
-                _ => map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning()),
-            };
-            for msg in msgs {
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg,
-                };
-                sess.send_event(event).await;
-            }
-            None
-        }
-        ResponseItem::Other => None,
-    };
-    Ok(output)
-}
-
-async fn handle_unified_exec_tool_call(
-    sess: &Session,
-    session_id: Option<String>,
-    arguments: Vec<String>,
-    timeout_ms: Option<u64>,
-) -> Result<String, FunctionCallError> {
-    let parsed_session_id = if let Some(session_id) = session_id {
-        match session_id.parse::<i32>() {
-            Ok(parsed) => Some(parsed),
-            Err(output) => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "invalid session_id: {session_id} due to error {output:?}"
-                )));
-            }
-        }
-    } else {
-        None
-    };
-
-    let request = crate::unified_exec::UnifiedExecRequest {
-        session_id: parsed_session_id,
-        input_chunks: &arguments,
-        timeout_ms,
-    };
-
-    let value = sess
-        .services
-        .unified_exec_manager
-        .handle_request(request)
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("unified exec failed: {err:?}"))
-        })?;
-
-    #[derive(Serialize)]
-    struct SerializedUnifiedExecResult {
-        session_id: Option<String>,
-        output: String,
+        Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
     }
-
-    serde_json::to_string(&SerializedUnifiedExecResult {
-        session_id: value.session_id.map(|id| id.to_string()),
-        output: value.output,
-    })
-    .map_err(|err| {
-        FunctionCallError::RespondToModel(format!(
-            "failed to serialize unified exec output: {err:?}"
-        ))
-    })
-}
-
-async fn handle_function_call(
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
-    sub_id: String,
-    name: String,
-    arguments: String,
-    call_id: String,
-) -> Result<String, FunctionCallError> {
-    match name.as_str() {
-        "container.exec" | "shell" => {
-            let params = parse_container_exec_arguments(arguments, turn_context, &call_id)?;
-            handle_container_exec_with_params(
-                name.as_str(),
-                params,
-                sess,
-                turn_context,
-                turn_diff_tracker,
-                sub_id,
-                call_id,
-            )
-            .await
-        }
-        "unified_exec" => {
-            #[derive(Deserialize)]
-            struct UnifiedExecArgs {
-                input: Vec<String>,
-                #[serde(default)]
-                session_id: Option<String>,
-                #[serde(default)]
-                timeout_ms: Option<u64>,
-            }
-
-            let args: UnifiedExecArgs = serde_json::from_str(&arguments).map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {err:?}"
-                ))
-            })?;
-
-            handle_unified_exec_tool_call(sess, args.session_id, args.input, args.timeout_ms).await
-        }
-        "view_image" => {
-            #[derive(serde::Deserialize)]
-            struct SeeImageArgs {
-                path: String,
-            }
-            let args: SeeImageArgs = serde_json::from_str(&arguments).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {e:?}"
-                ))
-            })?;
-            let abs = turn_context.resolve_path(Some(args.path));
-            sess.inject_input(vec![InputItem::LocalImage { path: abs.clone() }])
-                .await
-                .map_err(|_| {
-                    FunctionCallError::RespondToModel(
-                        "unable to attach image (no active task)".to_string(),
-                    )
-                })?;
-            sess.send_event(Event {
-                id: sub_id.clone(),
-                msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
-                    call_id: call_id.clone(),
-                    path: abs,
-                }),
-            })
-            .await;
-
-            Ok("attached local image path".to_string())
-        }
-        "apply_patch" => {
-            let args: ApplyPatchToolArgs = serde_json::from_str(&arguments).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {e:?}"
-                ))
-            })?;
-            let exec_params = ExecParams {
-                command: vec!["apply_patch".to_string(), args.input.clone()],
-                cwd: turn_context.cwd.clone(),
-                timeout_ms: None,
-                env: HashMap::new(),
-                with_escalated_permissions: None,
-                justification: None,
-            };
-            handle_container_exec_with_params(
-                name.as_str(),
-                exec_params,
-                sess,
-                turn_context,
-                turn_diff_tracker,
-                sub_id,
-                call_id,
-            )
-            .await
-        }
-        "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
-        EXEC_COMMAND_TOOL_NAME => {
-            // TODO(mbolin): Sandbox check.
-            let exec_params: ExecCommandParams = serde_json::from_str(&arguments).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {e:?}"
-                ))
-            })?;
-            let result = sess
-                .services
-                .session_manager
-                .handle_exec_command_request(exec_params)
-                .await;
-            match result {
-                Ok(output) => Ok(output.to_text_output()),
-                Err(err) => Err(FunctionCallError::RespondToModel(err)),
-            }
-        }
-        WRITE_STDIN_TOOL_NAME => {
-            let write_stdin_params =
-                serde_json::from_str::<WriteStdinParams>(&arguments).map_err(|e| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to parse function arguments: {e:?}"
-                    ))
-                })?;
-
-            let result = sess
-                .services
-                .session_manager
-                .handle_write_stdin_request(write_stdin_params)
-                .await
-                .map_err(FunctionCallError::RespondToModel)?;
-
-            Ok(result.to_text_output())
-        }
-        _ => Err(FunctionCallError::RespondToModel(format!(
-            "unsupported call: {name}"
-        ))),
-    }
-}
-
-async fn handle_custom_tool_call(
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
-    sub_id: String,
-    name: String,
-    input: String,
-    call_id: String,
-) -> Result<String, FunctionCallError> {
-    info!("CustomToolCall: {name} {input}");
-    match name.as_str() {
-        "apply_patch" => {
-            let exec_params = ExecParams {
-                command: vec!["apply_patch".to_string(), input.clone()],
-                cwd: turn_context.cwd.clone(),
-                timeout_ms: None,
-                env: HashMap::new(),
-                with_escalated_permissions: None,
-                justification: None,
-            };
-
-            handle_container_exec_with_params(
-                name.as_str(),
-                exec_params,
-                sess,
-                turn_context,
-                turn_diff_tracker,
-                sub_id,
-                call_id,
-            )
-            .await
-        }
-        _ => {
-            debug!("unexpected CustomToolCall from stream");
-            Err(FunctionCallError::RespondToModel(format!(
-                "unsupported custom tool call: {name}"
-            )))
-        }
-    }
-}
-
-fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
-    ExecParams {
-        command: params.command,
-        cwd: turn_context.resolve_path(params.workdir.clone()),
-        timeout_ms: params.timeout_ms,
-        env: create_env(&turn_context.shell_environment_policy),
-        with_escalated_permissions: params.with_escalated_permissions,
-        justification: params.justification,
-    }
-}
-
-fn parse_container_exec_arguments(
-    arguments: String,
-    turn_context: &TurnContext,
-    _call_id: &str,
-) -> Result<ExecParams, FunctionCallError> {
-    serde_json::from_str::<ShellToolCallParams>(&arguments)
-        .map(|p| to_exec_params(p, turn_context))
-        .map_err(|e| {
-            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
-        })
-}
-
-async fn handle_container_exec_with_params(
-    tool_name: &str,
-    params: ExecParams,
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
-    sub_id: String,
-    call_id: String,
-) -> Result<String, FunctionCallError> {
-    let otel_event_manager = turn_context.client.get_otel_event_manager();
-
-    if params.with_escalated_permissions.unwrap_or(false)
-        && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
-    {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-            policy = turn_context.approval_policy
-        )));
-    }
-
-    // check if this was a patch, and apply it if so
-    let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
-        MaybeApplyPatchVerified::Body(changes) => {
-            match apply_patch::apply_patch(sess, turn_context, &sub_id, &call_id, changes).await {
-                InternalApplyPatchInvocation::Output(item) => return item,
-                InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
-                    Some(apply_patch_exec)
-                }
-            }
-        }
-        MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-            // It looks like an invocation of `apply_patch`, but we
-            // could not resolve it into a patch that would apply
-            // cleanly. Return to model for resample.
-            return Err(FunctionCallError::RespondToModel(format!(
-                "error: {parse_error:#?}"
-            )));
-        }
-        MaybeApplyPatchVerified::ShellParseError(error) => {
-            trace!("Failed to parse shell command, {error:?}");
-            None
-        }
-        MaybeApplyPatchVerified::NotApplyPatch => None,
-    };
-
-    let command_for_display = if let Some(exec) = apply_patch_exec.as_ref() {
-        vec!["apply_patch".to_string(), exec.action.patch.clone()]
-    } else {
-        params.command.clone()
-    };
-
-    let exec_command_context = ExecCommandContext {
-        sub_id: sub_id.clone(),
-        call_id: call_id.clone(),
-        command_for_display: command_for_display.clone(),
-        cwd: params.cwd.clone(),
-        apply_patch: apply_patch_exec.as_ref().map(
-            |ApplyPatchExec {
-                 action,
-                 user_explicitly_approved_this_action,
-             }| ApplyPatchCommandContext {
-                user_explicitly_approved_this_action: *user_explicitly_approved_this_action,
-                changes: convert_apply_patch_to_protocol(action),
-            },
-        ),
-        tool_name: tool_name.to_string(),
-        otel_event_manager,
-    };
-
-    let mode = match apply_patch_exec {
-        Some(exec) => ExecutionMode::ApplyPatch(exec),
-        None => ExecutionMode::Shell,
-    };
-
-    sess.services.executor.update_environment(
-        turn_context.sandbox_policy.clone(),
-        turn_context.cwd.clone(),
-    );
-
-    let prepared_exec = PreparedExec::new(
-        exec_command_context,
-        params,
-        command_for_display,
-        mode,
-        Some(StdoutStream {
-            sub_id: sub_id.clone(),
-            call_id: call_id.clone(),
-            tx_event: sess.tx_event.clone(),
-        }),
-        turn_context.shell_environment_policy.use_profile,
-    );
-
-    let output_result = sess
-        .run_exec_with_events(
-            turn_diff_tracker,
-            prepared_exec,
-            turn_context.approval_policy,
-        )
-        .await;
-
-    match output_result {
-        Ok(output) => {
-            let ExecToolCallOutput { exit_code, .. } = &output;
-            let content = format_exec_output(&output);
-            if *exit_code == 0 {
-                Ok(content)
-            } else {
-                Err(FunctionCallError::RespondToModel(content))
-            }
-        }
-        Err(ExecError::Function(err)) => Err(err),
-        Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
-            FunctionCallError::RespondToModel(format_exec_output(&output)),
-        ),
-        Err(ExecError::Codex(err)) => Err(FunctionCallError::RespondToModel(format!(
-            "execution error: {err:?}"
-        ))),
-    }
-}
-
-fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
-    let ExecToolCallOutput {
-        aggregated_output, ..
-    } = exec_output;
-
-    // Head+tail truncation for the model: show the beginning and end with an elision.
-    // Clients still receive full streams; only this formatted summary is capped.
-
-    let mut s = &aggregated_output.text;
-    let prefixed_str: String;
-
-    if exec_output.timed_out {
-        prefixed_str = format!(
-            "command timed out after {} milliseconds\n",
-            exec_output.duration.as_millis()
-        ) + s;
-        s = &prefixed_str;
-    }
-
-    let total_lines = s.lines().count();
-    if s.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
-        return s.to_string();
-    }
-
-    let lines: Vec<&str> = s.lines().collect();
-    let head_take = MODEL_FORMAT_HEAD_LINES.min(lines.len());
-    let tail_take = MODEL_FORMAT_TAIL_LINES.min(lines.len().saturating_sub(head_take));
-    let omitted = lines.len().saturating_sub(head_take + tail_take);
-
-    // Join head and tail blocks (lines() strips newlines; reinsert them)
-    let head_block = lines
-        .iter()
-        .take(head_take)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
-    let tail_block = if tail_take > 0 {
-        lines[lines.len() - tail_take..].join("\n")
-    } else {
-        String::new()
-    };
-    let marker = format!("\n[... omitted {omitted} of {total_lines} lines ...]\n\n");
-
-    // Byte budgets for head/tail around the marker
-    let mut head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
-    let tail_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(head_budget + marker.len());
-    if tail_budget == 0 && marker.len() >= MODEL_FORMAT_MAX_BYTES {
-        // Degenerate case: marker alone exceeds budget; return a clipped marker
-        return take_bytes_at_char_boundary(&marker, MODEL_FORMAT_MAX_BYTES).to_string();
-    }
-    if tail_budget == 0 {
-        // Make room for the marker by shrinking head
-        head_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(marker.len());
-    }
-
-    // Enforce line-count cap by trimming head/tail lines
-    let head_lines_text = head_block;
-    let tail_lines_text = tail_block;
-    // Build final string respecting byte budgets
-    let head_part = take_bytes_at_char_boundary(&head_lines_text, head_budget);
-    let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(s.len()));
-
-    result.push_str(head_part);
-    result.push_str(&marker);
-
-    let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
-    let tail_budget_final = remaining;
-    let tail_part = take_last_bytes_at_char_boundary(&tail_lines_text, tail_budget_final);
-    result.push_str(tail_part);
-
-    result
-}
-
-// Truncate a &str to a byte budget at a char boundary (prefix)
-#[inline]
-fn take_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
-    if s.len() <= maxb {
-        return s;
-    }
-    let mut last_ok = 0;
-    for (i, ch) in s.char_indices() {
-        let nb = i + ch.len_utf8();
-        if nb > maxb {
-            break;
-        }
-        last_ok = nb;
-    }
-    &s[..last_ok]
-}
-
-// Take a suffix of a &str within a byte budget at a char boundary
-#[inline]
-fn take_last_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
-    if s.len() <= maxb {
-        return s;
-    }
-    let mut start = s.len();
-    let mut used = 0usize;
-    for (i, ch) in s.char_indices().rev() {
-        let nb = ch.len_utf8();
-        if used + nb > maxb {
-            break;
-        }
-        start = i;
-        used += nb;
-        if start == 0 {
-            break;
-        }
-    }
-    &s[start..]
-}
-
-/// Exec output is a pre-serialized JSON payload
-fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
-    let ExecToolCallOutput {
-        exit_code,
-        duration,
-        ..
-    } = exec_output;
-
-    #[derive(Serialize)]
-    struct ExecMetadata {
-        exit_code: i32,
-        duration_seconds: f32,
-    }
-
-    #[derive(Serialize)]
-    struct ExecOutput<'a> {
-        output: &'a str,
-        metadata: ExecMetadata,
-    }
-
-    // round to 1 decimal place
-    let duration_seconds = ((duration.as_secs_f32()) * 10.0).round() / 10.0;
-
-    let formatted_output = format_exec_output_str(exec_output);
-
-    let payload = ExecOutput {
-        output: &formatted_output,
-        metadata: ExecMetadata {
-            exit_code: *exit_code,
-            duration_seconds,
-        },
-    };
-
-    #[expect(clippy::expect_used)]
-    serde_json::to_string(&payload).expect("serialize ExecOutput")
 }
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
@@ -3006,6 +2383,8 @@ pub(crate) async fn exit_review_mode(
 
 use crate::executor::errors::ExecError;
 use crate::executor::linkers::PreparedExec;
+use crate::tools::context::ApplyPatchCommandContext;
+use crate::tools::context::ExecCommandContext;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -3021,6 +2400,13 @@ mod tests {
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
+    use crate::tools::MODEL_FORMAT_HEAD_LINES;
+    use crate::tools::MODEL_FORMAT_MAX_BYTES;
+    use crate::tools::MODEL_FORMAT_MAX_LINES;
+    use crate::tools::MODEL_FORMAT_TAIL_LINES;
+    use crate::tools::ToolRouter;
+    use crate::tools::handle_container_exec_with_params;
+    use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -3510,6 +2896,43 @@ mod tests {
             found,
             "synthetic review interruption not recorded in history"
         );
+    }
+
+    #[tokio::test]
+    async fn fatal_tool_error_stops_turn_and_reports_error() {
+        let (session, turn_context, _rx) = make_session_and_context_with_rx();
+        let session_ref = session.as_ref();
+        let turn_context_ref = turn_context.as_ref();
+        let router = ToolRouter::from_config(
+            &turn_context_ref.tools_config,
+            Some(session_ref.services.mcp_connection_manager.list_all_tools()),
+        );
+        let mut tracker = TurnDiffTracker::new();
+        let item = ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-1".to_string(),
+            name: "shell".to_string(),
+            input: "{}".to_string(),
+        };
+
+        let err = handle_response_item(
+            &router,
+            session_ref,
+            turn_context_ref,
+            &mut tracker,
+            "sub-id",
+            item,
+        )
+        .await
+        .expect_err("expected fatal error");
+
+        match err {
+            CodexErr::Fatal(message) => {
+                assert_eq!(message, "tool shell invoked with incompatible payload");
+            }
+            other => panic!("expected CodexErr::Fatal, got {other:?}"),
+        }
     }
 
     fn sample_rollout(
