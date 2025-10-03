@@ -881,7 +881,6 @@ dependencies = [
  "rand 0.9.2",
  "regex-lite",
  "reqwest",
- "scopeguard",
  "seccompiler",
  "serde",
  "serde_json",
