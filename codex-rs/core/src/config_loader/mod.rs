@@ -148,10 +148,10 @@ pub(crate) fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
 }
 
 fn managed_config_default_path(codex_home: &Path) -> PathBuf {
-    if let Some(path) = env::var_os(CODEX_MANAGED_CONFIG_PATH_ENV_VAR) {
-        if !path.is_empty() {
-            return PathBuf::from(path);
-        }
+    if let Some(path) = env::var_os(CODEX_MANAGED_CONFIG_PATH_ENV_VAR)
+        && !path.is_empty()
+    {
+        return PathBuf::from(path);
     }
 
     #[cfg(unix)]
