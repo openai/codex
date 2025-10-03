@@ -1083,10 +1083,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     }
 
     let token_payload = token_payload.unwrap_or_else(|| {
-        panic!(
-            "did not observe expected TokenCount event; events observed: {:?}",
-            observed
-        )
+        panic!("did not observe expected TokenCount event; events observed: {observed:?}")
     });
 
     let info = token_payload
