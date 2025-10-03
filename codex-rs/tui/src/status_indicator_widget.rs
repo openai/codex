@@ -160,7 +160,7 @@ impl WidgetRef for StatusIndicatorWidget {
         let pretty_elapsed = fmt_elapsed_compact(elapsed);
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let mut spans = vec!["  ".into()];
+        let mut spans = vec!["• ".dim()];
         spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),
