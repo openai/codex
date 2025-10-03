@@ -369,6 +369,8 @@ url = "http://127.0.0.1:3845/mcp"
 bearer_token = "<token>"
 ```
 
+Refer to the MCP CLI commands for oauth login
+
 ### Other configuration options
 
 ```toml
@@ -404,6 +406,12 @@ codex mcp get docs --json
 
 # Remove a server
 codex mcp remove docs
+
+# Log in to a streamable HTTP server that supports oauth
+codex mcp login SERVER_NAME
+
+# Log out from a streamable HTTP server that supports oauth
+codex mcp logout SERVER_NAME
 ```
 
 ## shell_environment_policy
