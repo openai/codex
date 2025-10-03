@@ -1,21 +1,21 @@
-#![cfg(target_os = "macos")]
-
-use base64::Engine;
-use base64::prelude::BASE64_STANDARD;
-use core_foundation::base::TCFType;
-use core_foundation::string::CFString;
-use core_foundation::string::CFStringRef;
-use std::ffi::c_void;
 use std::io;
 use toml::Value as TomlValue;
 
-#[cfg(test)]
-use test_support::current_test_managed_preferences_override;
+#[cfg(target_os = "macos")]
+mod native {
+    use super::*;
+    use base64::Engine;
+    use base64::prelude::BASE64_STANDARD;
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    use core_foundation::string::CFStringRef;
+    use std::ffi::c_void;
+    use tokio::task;
 
-pub(super) fn load_managed_admin_config() -> io::Result<Option<TomlValue>> {
-    #[cfg(test)]
-    {
-        if let Some(encoded) = current_test_managed_preferences_override() {
+    pub(crate) async fn load_managed_admin_config_layer(
+        override_base64: Option<&str>,
+    ) -> io::Result<Option<TomlValue>> {
+        if let Some(encoded) = override_base64 {
             let trimmed = encoded.trim();
             return if trimmed.is_empty() {
                 Ok(None)
@@ -23,138 +23,96 @@ pub(super) fn load_managed_admin_config() -> io::Result<Option<TomlValue>> {
                 parse_managed_preferences_base64(trimmed).map(Some)
             };
         }
-    }
 
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFPreferencesCopyAppValue(key: CFStringRef, application_id: CFStringRef) -> *mut c_void;
-    }
+        const LOAD_ERROR: &str = "Failed to load managed preferences configuration";
 
-    const MANAGED_PREFERENCES_APPLICATION_ID: &str = "com.openai.codex";
-    const MANAGED_PREFERENCES_CONFIG_KEY: &str = "config_toml_base64";
-
-    let application_id = CFString::new(MANAGED_PREFERENCES_APPLICATION_ID);
-    let key = CFString::new(MANAGED_PREFERENCES_CONFIG_KEY);
-
-    let value_ref = unsafe {
-        CFPreferencesCopyAppValue(
-            key.as_concrete_TypeRef(),
-            application_id.as_concrete_TypeRef(),
-        )
-    };
-
-    if value_ref.is_null() {
-        tracing::debug!(
-            "Managed preferences for {} key {} not found",
-            MANAGED_PREFERENCES_APPLICATION_ID,
-            MANAGED_PREFERENCES_CONFIG_KEY
-        );
-        return Ok(None);
-    }
-
-    let value = unsafe { CFString::wrap_under_create_rule(value_ref as _) };
-    let contents = value.to_string();
-    let trimmed = contents.trim();
-
-    parse_managed_preferences_base64(trimmed).map(Some)
-}
-
-pub(super) fn parse_managed_preferences_base64(encoded: &str) -> io::Result<TomlValue> {
-    let decoded = BASE64_STANDARD.decode(encoded.as_bytes()).map_err(|err| {
-        tracing::error!("Failed to decode managed preferences as base64: {err}");
-        io::Error::new(io::ErrorKind::InvalidData, err)
-    })?;
-
-    let decoded_str = String::from_utf8(decoded).map_err(|err| {
-        tracing::error!("Managed preferences base64 contents were not valid UTF-8: {err}");
-        io::Error::new(io::ErrorKind::InvalidData, err)
-    })?;
-
-    match toml::from_str::<TomlValue>(&decoded_str) {
-        Ok(TomlValue::Table(parsed)) => Ok(TomlValue::Table(parsed)),
-        Ok(other) => {
-            tracing::error!(
-                "Managed preferences TOML must have a table at the root, found {other:?}",
-            );
-            Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "managed preferences root must be a table",
-            ))
-        }
-        Err(err) => {
-            tracing::error!("Failed to parse managed preferences TOML: {err}");
-            Err(io::Error::new(io::ErrorKind::InvalidData, err))
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod test_support {
-    /// Test-only helpers that provide deterministic managed preferences.
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
-
-    static TEST_MANAGED_PREFERENCES_OVERRIDE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    static TEST_MANAGED_PREFERENCES_SERIALIZER: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn test_managed_preferences_override_storage() -> &'static Mutex<Option<String>> {
-        TEST_MANAGED_PREFERENCES_OVERRIDE.get_or_init(|| Mutex::new(None))
-    }
-
-    fn test_managed_preferences_serializer() -> &'static Mutex<()> {
-        TEST_MANAGED_PREFERENCES_SERIALIZER.get_or_init(|| Mutex::new(()))
-    }
-
-    pub(super) fn current_test_managed_preferences_override() -> Option<String> {
-        let guard = test_managed_preferences_override_storage()
-            .lock()
-            .unwrap_or_else(|_| panic!("managed preferences override mutex poisoned"));
-        guard.clone()
-    }
-
-    pub(crate) struct ManagedPreferencesOverrideGuard {
-        previous: Option<String>,
-        serializer_guard: Option<std::sync::MutexGuard<'static, ()>>,
-    }
-
-    impl Drop for ManagedPreferencesOverrideGuard {
-        fn drop(&mut self) {
-            let mut guard = test_managed_preferences_override_storage()
-                .lock()
-                .unwrap_or_else(|_| panic!("managed preferences override mutex poisoned"));
-            *guard = self.previous.take();
-            drop(guard);
-            if let Some(serializer_guard) = self.serializer_guard.take() {
-                drop(serializer_guard);
+        match task::spawn_blocking(load_managed_admin_config).await {
+            Ok(result) => result,
+            Err(join_err) => {
+                if join_err.is_cancelled() {
+                    tracing::error!("Managed preferences load task was cancelled");
+                } else {
+                    tracing::error!("Managed preferences load task failed: {join_err}");
+                }
+                Err(io::Error::other(LOAD_ERROR))
             }
         }
     }
 
-    fn install_override(value: Option<&str>) -> ManagedPreferencesOverrideGuard {
-        let serializer_guard = test_managed_preferences_serializer()
-            .lock()
-            .unwrap_or_else(|_| panic!("managed preferences serializer mutex poisoned"));
+    pub(super) fn load_managed_admin_config() -> io::Result<Option<TomlValue>> {
+        #[link(name = "CoreFoundation", kind = "framework")]
+        unsafe extern "C" {
+            fn CFPreferencesCopyAppValue(
+                key: CFStringRef,
+                application_id: CFStringRef,
+            ) -> *mut c_void;
+        }
 
-        let mut guard = test_managed_preferences_override_storage()
-            .lock()
-            .unwrap_or_else(|_| panic!("managed preferences override mutex poisoned"));
-        let previous = guard.clone();
-        *guard = value.map(std::string::ToString::to_string);
-        drop(guard);
+        const MANAGED_PREFERENCES_APPLICATION_ID: &str = "com.openai.codex";
+        const MANAGED_PREFERENCES_CONFIG_KEY: &str = "config_toml_base64";
 
-        ManagedPreferencesOverrideGuard {
-            previous,
-            serializer_guard: Some(serializer_guard),
+        let application_id = CFString::new(MANAGED_PREFERENCES_APPLICATION_ID);
+        let key = CFString::new(MANAGED_PREFERENCES_CONFIG_KEY);
+
+        let value_ref = unsafe {
+            CFPreferencesCopyAppValue(
+                key.as_concrete_TypeRef(),
+                application_id.as_concrete_TypeRef(),
+            )
+        };
+
+        if value_ref.is_null() {
+            tracing::debug!(
+                "Managed preferences for {} key {} not found",
+                MANAGED_PREFERENCES_APPLICATION_ID,
+                MANAGED_PREFERENCES_CONFIG_KEY
+            );
+            return Ok(None);
+        }
+
+        let value = unsafe { CFString::wrap_under_create_rule(value_ref as _) };
+        let contents = value.to_string();
+        let trimmed = contents.trim();
+
+        parse_managed_preferences_base64(trimmed).map(Some)
+    }
+
+    pub(super) fn parse_managed_preferences_base64(encoded: &str) -> io::Result<TomlValue> {
+        let decoded = BASE64_STANDARD.decode(encoded.as_bytes()).map_err(|err| {
+            tracing::error!("Failed to decode managed preferences as base64: {err}");
+            io::Error::new(io::ErrorKind::InvalidData, err)
+        })?;
+
+        let decoded_str = String::from_utf8(decoded).map_err(|err| {
+            tracing::error!("Managed preferences base64 contents were not valid UTF-8: {err}");
+            io::Error::new(io::ErrorKind::InvalidData, err)
+        })?;
+
+        match toml::from_str::<TomlValue>(&decoded_str) {
+            Ok(TomlValue::Table(parsed)) => Ok(TomlValue::Table(parsed)),
+            Ok(other) => {
+                tracing::error!(
+                    "Managed preferences TOML must have a table at the root, found {other:?}",
+                );
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "managed preferences root must be a table",
+                ))
+            }
+            Err(err) => {
+                tracing::error!("Failed to parse managed preferences TOML: {err}");
+                Err(io::Error::new(io::ErrorKind::InvalidData, err))
+            }
         }
     }
+}
 
-    pub(crate) fn with_cleared_test_managed_preferences() -> ManagedPreferencesOverrideGuard {
-        install_override(None)
-    }
+#[cfg(target_os = "macos")]
+pub(crate) use native::load_managed_admin_config_layer;
 
-    pub(crate) fn with_encoded_test_managed_preferences(
-        encoded: &str,
-    ) -> ManagedPreferencesOverrideGuard {
-        install_override(Some(encoded))
-    }
+#[cfg(not(target_os = "macos"))]
+pub(crate) async fn load_managed_admin_config_layer(
+    _override_base64: Option<&str>,
+) -> io::Result<Option<TomlValue>> {
+    Ok(None)
 }

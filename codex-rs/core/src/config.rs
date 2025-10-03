@@ -1,6 +1,6 @@
 use crate::config_loader::LoadedConfigLayers;
 pub use crate::config_loader::load_config_as_toml;
-use crate::config_loader::load_config_layers;
+use crate::config_loader::load_config_layers_with_overrides;
 use crate::config_loader::merge_toml_values;
 use crate::config_profile::ConfigProfile;
 use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
@@ -222,8 +222,12 @@ impl Config {
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
 
-        let root_value =
-            load_layered_config_with_cli_overrides(codex_home.clone(), cli_overrides).await?;
+        let root_value = load_layered_config_with_cli_overrides(
+            codex_home.clone(),
+            cli_overrides,
+            crate::config_loader::LoaderOverrides::default(),
+        )
+        .await?;
 
         let cfg: ConfigToml = root_value.try_into().map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
@@ -238,8 +242,12 @@ pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    let root_value =
-        load_layered_config_with_cli_overrides(codex_home.to_path_buf(), cli_overrides).await?;
+    let root_value = load_layered_config_with_cli_overrides(
+        codex_home.to_path_buf(),
+        cli_overrides,
+        crate::config_loader::LoaderOverrides::default(),
+    )
+    .await?;
 
     let cfg: ConfigToml = root_value.try_into().map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
@@ -252,9 +260,19 @@ pub async fn load_config_as_toml_with_cli_overrides(
 async fn load_layered_config_with_cli_overrides(
     codex_home: PathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
+    overrides: crate::config_loader::LoaderOverrides,
 ) -> std::io::Result<TomlValue> {
-    let layers = load_config_layers(codex_home).await?;
+    let layers = load_config_layers_with_overrides(codex_home, overrides).await?;
     Ok(finalize_layers_with_overrides(layers, cli_overrides))
+}
+
+#[cfg(test)]
+async fn load_layered_config_with_cli_overrides_for_tests(
+    codex_home: PathBuf,
+    cli_overrides: Vec<(String, TomlValue)>,
+    overrides: crate::config_loader::LoaderOverrides,
+) -> std::io::Result<TomlValue> {
+    load_layered_config_with_cli_overrides(codex_home, cli_overrides, overrides).await
 }
 
 fn finalize_layers_with_overrides(
@@ -1379,19 +1397,29 @@ exclude_slash_tmp = true
         let codex_home = TempDir::new()?;
         let managed_path = codex_home.path().join("managed_config.toml");
 
-        let _guard = crate::config_loader::with_managed_config_path_override(Some(&managed_path));
-
         std::fs::write(
             codex_home.path().join(CONFIG_TOML_FILE),
             "model = \"base\"\n",
         )?;
         std::fs::write(&managed_path, "model = \"managed_config\"\n")?;
 
-        let cfg = load_config_as_toml_with_cli_overrides(
-            codex_home.path(),
+        let overrides = crate::config_loader::LoaderOverrides {
+            managed_config_path: Some(managed_path),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: None,
+        };
+
+        let root_value = load_layered_config_with_cli_overrides_for_tests(
+            codex_home.path().to_path_buf(),
             vec![("model".to_string(), TomlValue::String("cli".to_string()))],
+            overrides,
         )
         .await?;
+
+        let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+            tracing::error!("Failed to deserialize overridden config: {e}");
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        })?;
 
         assert_eq!(cfg.model.as_deref(), Some("managed_config"));
         Ok(())
