@@ -10,7 +10,6 @@ pub(crate) use runner::ExecutorConfig;
 pub(crate) use runner::normalize_exec_result;
 
 pub(crate) mod linkers {
-    use crate::codex::ExecCommandContext;
     use crate::exec::ExecParams;
     use crate::exec::StdoutStream;
     use crate::executor::backends::ExecutionMode;
