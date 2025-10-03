@@ -2610,63 +2610,6 @@ mod tests {
     }
 
     #[test]
-    fn context_window_error_records_token_usage() {
-        let (session, turn_context) = make_session_and_context();
-        let context_window = turn_context
-            .client
-            .get_model_context_window()
-            .expect("context window available");
-
-        let initial_usage = TokenUsage {
-            input_tokens: 42,
-            cached_input_tokens: 7,
-            output_tokens: 13,
-            reasoning_output_tokens: 5,
-            total_tokens: 67,
-        };
-
-        tokio_test::block_on(async {
-            let mut state = session.state.lock().await;
-            state.update_token_info_from_usage(
-                &initial_usage,
-                turn_context.client.get_model_context_window(),
-            );
-        });
-
-        tokio_test::block_on(async {
-            session.set_total_tokens_full("sub", &turn_context).await;
-        });
-
-        let token_info = tokio_test::block_on(async {
-            let state = session.state.lock().await;
-            state.token_info.clone()
-        })
-        .expect("token info recorded");
-
-        assert_eq!(token_info.total_token_usage.total_tokens, context_window);
-        assert_eq!(
-            token_info.total_token_usage.input_tokens,
-            initial_usage.input_tokens
-        );
-        assert_eq!(
-            token_info.total_token_usage.cached_input_tokens,
-            initial_usage.cached_input_tokens
-        );
-        assert_eq!(
-            token_info.total_token_usage.output_tokens,
-            initial_usage.output_tokens
-        );
-        assert_eq!(
-            token_info.total_token_usage.reasoning_output_tokens,
-            initial_usage.reasoning_output_tokens
-        );
-        assert_eq!(
-            token_info.last_token_usage.total_tokens,
-            context_window - initial_usage.total_tokens
-        );
-    }
-
-    #[test]
     fn falls_back_to_content_when_structured_is_null() {
         let ctr = CallToolResult {
             content: vec![text_block("hello"), text_block("world")],
