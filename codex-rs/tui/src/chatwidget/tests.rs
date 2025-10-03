@@ -1102,10 +1102,9 @@ fn disabled_slash_command_while_task_running_snapshot() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn binary_size_transcript_snapshot() {
+    // the snapshot in this test depends on gpt-5-codex. Skip for now. We will consider
+    // creating snapshots for other models in the future.
     if OPENAI_DEFAULT_MODEL != "gpt-5-codex" {
-        eprintln!(
-            "skipping binary_size_transcript_snapshot: unsupported default model {OPENAI_DEFAULT_MODEL}"
-        );
         return;
     }
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
