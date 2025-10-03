@@ -125,7 +125,7 @@ pub async fn load_config_as_toml(codex_home: PathBuf) -> io::Result<TomlValue> {
 pub(crate) async fn load_config_layers(codex_home: PathBuf) -> io::Result<LoadedConfigLayers> {
     let user_config = read_config_from_path(codex_home.join(CONFIG_TOML_FILE), true).await?;
     let managed_config = read_config_from_path(managed_config_path(&codex_home), false).await?;
-    let managed_preferences = load_managed_admin_config_layer_async().await?;
+    let managed_preferences = load_managed_admin_config_layer().await?;
 
     Ok(LoadedConfigLayers {
         base: user_config.unwrap_or_else(default_empty_table),
@@ -166,7 +166,7 @@ async fn read_config_from_path(
 }
 
 #[cfg(target_os = "macos")]
-async fn load_managed_admin_config_layer_async() -> io::Result<Option<TomlValue>> {
+async fn load_managed_admin_config_layer() -> io::Result<Option<TomlValue>> {
     const LOAD_ERROR: &str = "Failed to load managed preferences configuration";
 
     match task::spawn_blocking(load_managed_admin_config).await {
@@ -183,7 +183,7 @@ async fn load_managed_admin_config_layer_async() -> io::Result<Option<TomlValue>
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn load_managed_admin_config_layer_async() -> io::Result<Option<TomlValue>> {
+async fn load_managed_admin_config_layer() -> io::Result<Option<TomlValue>> {
     Ok(None)
 }
 
