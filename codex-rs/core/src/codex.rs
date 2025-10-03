@@ -784,15 +784,11 @@ impl Session {
 
     async fn record_context_window_token_usage(&self, sub_id: &str, turn_context: &TurnContext) {
         if let Some(context_window) = turn_context.client.get_model_context_window() {
-            let usage = TokenUsage {
-                input_tokens: context_window,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                total_tokens: context_window,
-            };
-            self.update_token_usage_info(sub_id, turn_context, Some(&usage))
-                .await;
+            {
+                let mut state = self.state.lock().await;
+                state.set_total_tokens(context_window, Some(context_window));
+            }
+            self.send_token_count_event(sub_id).await;
         }
     }
 
@@ -2612,6 +2608,22 @@ mod tests {
             .get_model_context_window()
             .expect("context window available");
 
+        let initial_usage = TokenUsage {
+            input_tokens: 42,
+            cached_input_tokens: 7,
+            output_tokens: 13,
+            reasoning_output_tokens: 5,
+            total_tokens: 67,
+        };
+
+        tokio_test::block_on(async {
+            let mut state = session.state.lock().await;
+            state.update_token_info_from_usage(
+                &initial_usage,
+                turn_context.client.get_model_context_window(),
+            );
+        });
+
         tokio_test::block_on(async {
             session
                 .record_context_window_token_usage("sub", &turn_context)
@@ -2625,8 +2637,26 @@ mod tests {
         .expect("token info recorded");
 
         assert_eq!(token_info.total_token_usage.total_tokens, context_window);
-        assert_eq!(token_info.total_token_usage.input_tokens, context_window);
-        assert_eq!(token_info.last_token_usage.total_tokens, context_window);
+        assert_eq!(
+            token_info.total_token_usage.input_tokens,
+            initial_usage.input_tokens
+        );
+        assert_eq!(
+            token_info.total_token_usage.cached_input_tokens,
+            initial_usage.cached_input_tokens
+        );
+        assert_eq!(
+            token_info.total_token_usage.output_tokens,
+            initial_usage.output_tokens
+        );
+        assert_eq!(
+            token_info.total_token_usage.reasoning_output_tokens,
+            initial_usage.reasoning_output_tokens
+        );
+        assert_eq!(
+            token_info.last_token_usage.total_tokens,
+            initial_usage.total_tokens
+        );
     }
 
     #[test]
