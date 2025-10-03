@@ -339,7 +339,14 @@ impl BottomPane {
             self.request_redraw();
         } else {
             // Hide the status indicator when a task completes, but keep other modal views.
-            self.status = None;
+            self.hide_status_indicator();
+        }
+    }
+
+    /// Hide the status indicator while leaving task-running state untouched.
+    pub(crate) fn hide_status_indicator(&mut self) {
+        if self.status.take().is_some() {
+            self.request_redraw();
         }
     }
 
@@ -709,8 +716,8 @@ mod tests {
             top.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            top.trim_start().starts_with("Working"),
-            "expected top row to start with 'Working': {top:?}"
+            top.trim_start().starts_with("• Working"),
+            "expected top row to start with '• Working': {top:?}"
         );
         assert!(
             top.contains("Working"),

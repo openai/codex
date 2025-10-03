@@ -64,6 +64,7 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             path.push_span(" ");
             path.extend(render_line_count_summary(row.added, row.removed));
             rows.push(Box::new(path));
+            rows.push(Box::new(RtLine::from("")));
             rows.push(Box::new(row.change));
         }
 
@@ -145,7 +146,7 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
     let total_removed: usize = rows.iter().map(|r| r.removed).sum();
     let file_count = rows.len();
     let noun = if file_count == 1 { "file" } else { "files" };
-    let mut header_spans: Vec<RtSpan<'static>> = vec!["• ".into()];
+    let mut header_spans: Vec<RtSpan<'static>> = vec!["• ".dim()];
     if let [row] = &rows[..] {
         let verb = match &row.change {
             FileChange::Add { .. } => "Added",
@@ -268,7 +269,9 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
     let chosen = if path_in_same_repo {
         pathdiff::diff_paths(path, cwd).unwrap_or_else(|| path.to_path_buf())
     } else {
-        relativize_to_home(path).unwrap_or_else(|| path.to_path_buf())
+        relativize_to_home(path)
+            .map(|p| PathBuf::from_iter([Path::new("~"), p.as_path()]))
+            .unwrap_or_else(|| path.to_path_buf())
     };
     chosen.display().to_string()
 }
