@@ -104,6 +104,8 @@ async fn run_compact_task_inner(
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded(_)) => {
+                sess.record_context_window_token_usage(&sub_id, turn_context.as_ref())
+                    .await;
                 let event = Event {
                     id: sub_id.clone(),
                     msg: EventMsg::Error(ErrorEvent {

@@ -782,6 +782,20 @@ impl Session {
         self.send_event(event).await;
     }
 
+    async fn record_context_window_token_usage(&self, sub_id: &str, turn_context: &TurnContext) {
+        if let Some(context_window) = turn_context.client.get_model_context_window() {
+            let usage = TokenUsage {
+                input_tokens: context_window,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                total_tokens: context_window,
+            };
+            self.update_token_usage_info(sub_id, turn_context, Some(&usage))
+                .await;
+        }
+    }
+
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
     async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
@@ -1938,7 +1952,11 @@ async fn run_turn(
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
-            Err(e @ CodexErr::ContextWindowExceeded(_)) => return Err(e),
+            Err(e @ CodexErr::ContextWindowExceeded(_)) => {
+                sess.record_context_window_token_usage(&sub_id, turn_context)
+                    .await;
+                return Err(e);
+            }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
@@ -2584,6 +2602,31 @@ mod tests {
             out,
             "command timed out after 1000 milliseconds\nCommand output"
         );
+    }
+
+    #[test]
+    fn context_window_error_records_token_usage() {
+        let (session, turn_context) = make_session_and_context();
+        let context_window = turn_context
+            .client
+            .get_model_context_window()
+            .expect("context window available");
+
+        tokio_test::block_on(async {
+            session
+                .record_context_window_token_usage("sub", &turn_context)
+                .await;
+        });
+
+        let token_info = tokio_test::block_on(async {
+            let state = session.state.lock().await;
+            state.token_info.clone()
+        })
+        .expect("token info recorded");
+
+        assert_eq!(token_info.total_token_usage.total_tokens, context_window);
+        assert_eq!(token_info.total_token_usage.input_tokens, context_window);
+        assert_eq!(token_info.last_token_usage.total_tokens, context_window);
     }
 
     #[test]
