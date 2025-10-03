@@ -29,9 +29,12 @@ mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod paste_burst;
 pub mod popup_consts;
+mod rename_session_view;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
+
+pub(crate) use rename_session_view::RenameSessionView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -69,6 +72,8 @@ pub(crate) struct BottomPane {
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
     context_window_percent: Option<u8>,
+    // Optional user-visible session name for footer display.
+    session_name: Option<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -102,6 +107,7 @@ impl BottomPane {
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
+            session_name: None,
         }
     }
 
@@ -358,6 +364,15 @@ impl BottomPane {
         self.context_window_percent = percent;
         self.composer.set_context_window_percent(percent);
         self.request_redraw();
+    }
+
+    /// Update the session name; forwarded to the composer for footer rendering.
+    pub(crate) fn set_session_name(&mut self, name: Option<String>) {
+        if self.session_name != name {
+            self.session_name = name.clone();
+            self.composer.set_session_name(name);
+            self.request_redraw();
+        }
     }
 
     /// Show a generic list selection view with the provided items.

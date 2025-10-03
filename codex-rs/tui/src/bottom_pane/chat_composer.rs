@@ -110,6 +110,8 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<u8>,
+    // Optional user-provided session name shown on the footer line.
+    session_name: Option<String>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -153,6 +155,7 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutPrompt,
             footer_hint_override: None,
             context_window_percent: None,
+            session_name: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -1358,6 +1361,11 @@ impl ChatComposer {
             .map(|items| if items.is_empty() { 0 } else { 1 })
     }
 
+    /// Provide/clear the session name to be shown on the right side of the footer hint line.
+    pub(crate) fn set_session_name(&mut self, name: Option<String>) {
+        self.session_name = name.filter(|s| !s.trim().is_empty());
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
@@ -1526,10 +1534,49 @@ impl WidgetRef for ChatComposer {
                             custom_rect.x += 2;
                             custom_rect.width = custom_rect.width.saturating_sub(2);
                         }
-                        Line::from(spans).render_ref(custom_rect, buf);
+                        Line::from(spans.clone()).render_ref(custom_rect, buf);
+                        // Render right-aligned session name when appropriate
+                        if let Some(name) = self.session_name.as_ref()
+                            && !matches!(
+                                self.footer_mode(),
+                                super::footer::FooterMode::ShortcutOverlay
+                            )
+                            && custom_rect.width > 0
+                        {
+                            let right = name;
+                            let right_width = right.chars().count() as u16;
+                            let right_x = custom_rect
+                                .x
+                                .saturating_add(custom_rect.width.saturating_sub(right_width));
+                            let y = custom_rect.y;
+                            WidgetRef::render_ref(
+                                &Span::from(right.as_str()).dim(),
+                                Rect::new(right_x, y, right_width, 1),
+                                buf,
+                            );
+                        }
                     }
                 } else {
                     render_footer(hint_rect, buf, footer_props);
+                    if let Some(name) = self.session_name.as_ref()
+                        && !matches!(
+                            self.footer_mode(),
+                            super::footer::FooterMode::ShortcutOverlay
+                        )
+                        && hint_rect.width > 0
+                    {
+                        let right = name;
+                        let right_width = right.chars().count() as u16;
+                        let right_x = hint_rect
+                            .x
+                            .saturating_add(hint_rect.width.saturating_sub(right_width));
+                        let y = hint_rect.y;
+                        WidgetRef::render_ref(
+                            &Span::from(right.as_str()).dim(),
+                            Rect::new(right_x, y, right_width, 1),
+                            buf,
+                        );
+                    }
                 }
             }
         }

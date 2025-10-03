@@ -87,4 +87,7 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
+
+    /// Update the current session's display name in the UI.
+    UpdateSessionName(String),
 }

@@ -6,3 +6,4 @@ expression: terminal.backend()
 "  @ for file paths                          ctrl + v to paste images            "
 "  esc again to edit previous message        ctrl + c to exit                    "
 "                                            ctrl + t to view transcript         "
+"  ctrl + r to rename session                                                    "

@@ -260,6 +260,8 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+    // Optional user-set session name for footer display.
+    session_name: Option<String>,
 }
 
 struct UserMessage {
@@ -938,6 +940,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            session_name: None,
         }
     }
 
@@ -1001,6 +1004,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            session_name: None,
         }
     }
 
@@ -1010,6 +1014,21 @@ impl ChatWidget {
                 .active_cell
                 .as_ref()
                 .map_or(0, |c| c.desired_height(width) + 1)
+    }
+
+    /// Open a bottom-pane popup to rename the current session.
+    pub(crate) fn open_rename_popup(&mut self) {
+        use crate::bottom_pane::RenameSessionView;
+        let current = self.session_name.clone().unwrap_or_default();
+        let view = RenameSessionView::new(self.app_event_tx.clone(), &current);
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    /// Update the current session name and propagate it to the bottom pane for footer display.
+    pub(crate) fn set_session_name(&mut self, name: Option<String>) {
+        self.session_name = name.clone();
+        self.bottom_pane.set_session_name(name);
+        self.request_redraw();
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {

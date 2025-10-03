@@ -232,6 +232,17 @@ impl App {
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
             }
+            // OpenRenameSessionPopup removed; Ctrl+R handler opens popup directly.
+            AppEvent::UpdateSessionName(name) => {
+                let trimmed = name.trim().to_string();
+                let name_opt = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                };
+                self.chat_widget.set_session_name(name_opt);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -424,6 +435,15 @@ impl App {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+                tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Char('r'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.chat_widget.open_rename_popup();
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
