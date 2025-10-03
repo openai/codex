@@ -13,11 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      ISSUE_NUMBER: ${{ github.event.issue.number }}
-      ISSUE_TITLE: ${{ github.event.issue.title }}
-      ISSUE_BODY: ${{ github.event.issue.body }}
-      REPO_FULL_NAME: ${{ github.repository }}
     outputs:
       codex_output: ${{ steps.codex.outputs.final_message }}
     steps:
@@ -27,9 +22,51 @@ jobs:
         uses: openai/codex-action@main
         with:
           openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
-          prompt_file: .github/prompts/issue-labeler.txt
           require_repo_write: false
-          codex_version: 0.43.0-alpha.16
+          prompt: |
+            You are an assistant that reviews GitHub issues for the repository.
+
+            Your job is to choose the most appropriate existing labels for the issue described later in this prompt.
+            Follow these rules:
+            - Only pick labels out of the list below.
+            - Prefer a small set of precise labels over many broad ones.
+
+            Labels to apply:
+            1. bug — Reproducible defects in Codex products (CLI, VS Code extension, web, auth).
+            2. enhancement — Feature requests or usability improvements that ask for new capabilities, better ergonomics, or quality-of-life tweaks.
+            3. extension — VS Code (or other IDE) extension-specific issues.
+            4. windows-os — Bugs or friction specific to Windows environments (always when PowerShell is mentioned, path handling, copy/paste, OS-specific auth or tooling failures).
+            5. mcp — Topics involving Model Context Protocol servers/clients.
+            6. codex-web — Issues targeting the Codex web UI/Cloud experience.
+            8. azure — Problems or requests tied to Azure OpenAI deployments.
+            9. documentation — Updates or corrections needed in docs/README/config references (broken links, missing examples, outdated keys, clarification requests).
+            10. model-behavior — Undesirable LLM behavior: forgetting goals, refusing work, hallucinating environment details, quota misreports, or other reasoning/performance anomalies.
+
+            Issue number: ${{ github.event.issue.number }}
+            
+            Issue title:
+            ${{ github.event.issue.title }}
+            
+            Issue body:
+            ${{ github.event.issue.body }}
+            
+            Repository full name:
+            ${{ github.repository }}
+
+          output_schema: | 
+            {
+              "type": "object",
+              "properties": {
+                "labels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": ["labels"],
+              "additionalProperties": false
+            }
 
   apply-labels:
     name: Apply labels from Codex output
@@ -53,12 +90,12 @@ jobs:
             exit 0
           fi
 
-          if ! printf '%s' "$json" | jq -e 'type == "array"' >/dev/null 2>&1; then
-            echo "Codex output was not a JSON array. Raw output: $json"
+          if ! printf '%s' "$json" | jq -e 'type == "object" and (.labels | type == "array")' >/dev/null 2>&1; then
+            echo "Codex output did not include a labels array. Raw output: $json"
             exit 0
           fi
 
-          labels=$(printf '%s' "$json" | jq -r '.[] | tostring')
+          labels=$(printf '%s' "$json" | jq -r '.labels[] | tostring')
           if [ -z "$labels" ]; then
             echo "Codex returned an empty array. Nothing to do."
             exit 0
