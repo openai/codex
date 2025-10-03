@@ -567,10 +567,27 @@ async fn process_chat_sse<S>(
                 }
             }
 
+            if let Some(function_call) = choice
+                .get("delta")
+                .and_then(|d| d.get("function_call"))
+                .and_then(|fc| fc.as_object())
+            {
+                fn_call_state.active = true;
+
+                if let Some(name) = function_call.get("name").and_then(|n| n.as_str()) {
+                    fn_call_state.name.get_or_insert_with(|| name.to_string());
+                }
+
+                if let Some(args_fragment) = function_call.get("arguments").and_then(|a| a.as_str())
+                {
+                    fn_call_state.arguments.push_str(args_fragment);
+                }
+            }
+
             // Emit end-of-turn when finish_reason signals completion.
             if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
                 match finish_reason {
-                    "tool_calls" if fn_call_state.active => {
+                    "tool_calls" | "function_call" if fn_call_state.active => {
                         // First, flush the terminal raw reasoning so UIs can finalize
                         // the reasoning stream before any exec/tool events begin.
                         if !reasoning_text.is_empty() {

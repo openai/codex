@@ -340,6 +340,41 @@ async fn streams_reasoning_before_tool_call() {
     assert!(matches!(events[3], ResponseEvent::Completed { .. }));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streams_legacy_function_call_delta() {
+    if network_disabled() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"function_call\":{\"name\":\"run\"}}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"function_call\":{\"arguments\":\"{\\\"foo\\\":1\"}}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"function_call\":{\"arguments\":\"}\"}},\"finish_reason\":\"function_call\"}]}\n\n",
+    );
+
+    let events = run_stream(sse).await;
+    assert_eq!(events.len(), 2, "unexpected events: {events:?}");
+
+    match &events[0] {
+        ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+            name,
+            arguments,
+            call_id,
+            ..
+        }) => {
+            assert_eq!(name, "run");
+            assert_eq!(arguments, "{\"foo\":1}");
+            assert!(call_id.is_empty());
+        }
+        other => panic!("expected function call, got {other:?}"),
+    }
+
+    assert!(matches!(events[1], ResponseEvent::Completed { .. }));
+}
+
 #[tokio::test]
 #[traced_test]
 async fn chat_sse_emits_failed_on_parse_error() {
