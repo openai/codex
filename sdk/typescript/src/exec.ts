@@ -58,7 +58,7 @@ export class CodexExec {
       env.OPENAI_BASE_URL = args.baseUrl;
     }
     if (args.apiKey) {
-      env.OPENAI_API_KEY = args.apiKey;
+      env.CODEX_API_KEY = args.apiKey;
     }
 
     const child = spawn(this.executablePath, commandArgs, {

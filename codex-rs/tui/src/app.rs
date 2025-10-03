@@ -18,6 +18,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::ConversationId;
@@ -86,7 +87,10 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
+        let conversation_manager = Arc::new(ConversationManager::new(
+            auth_manager.clone(),
+            SessionSource::Cli,
+        ));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
 
@@ -320,24 +324,28 @@ impl App {
                     self.config.model_family = family;
                 }
             }
+            AppEvent::OpenReasoningPopup { model, presets } => {
+                self.chat_widget.open_reasoning_popup(model, presets);
+            }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
                 match persist_model_selection(&self.config.codex_home, profile, &model, effort)
                     .await
                 {
                     Ok(()) => {
+                        let effort_label = effort
+                            .map(|eff| format!(" with {eff} reasoning"))
+                            .unwrap_or_else(|| " with default reasoning".to_string());
                         if let Some(profile) = profile {
                             self.chat_widget.add_info_message(
-                                format!("Model changed to {model}{reasoning_effort} for {profile} profile", reasoning_effort = effort.map(|e| format!(" {e}")).unwrap_or_default()),
+                                format!(
+                                    "Model changed to {model}{effort_label} for {profile} profile"
+                                ),
                                 None,
                             );
                         } else {
                             self.chat_widget.add_info_message(
-                                format!(
-                                    "Model changed to {model}{reasoning_effort}",
-                                    reasoning_effort =
-                                        effort.map(|e| format!(" {e}")).unwrap_or_default()
-                                ),
+                                format!("Model changed to {model}{effort_label}"),
                                 None,
                             );
                         }

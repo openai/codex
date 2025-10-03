@@ -861,6 +861,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-utils-string",
  "core_test_support",
  "dirs",
  "dunce",
@@ -913,7 +914,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
- "chrono",
  "clap",
  "codex-arg0",
  "codex-common",
@@ -930,6 +930,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "supports-color",
  "tempfile",
  "tokio",
  "tracing",
@@ -1253,6 +1254,10 @@ dependencies = [
  "time",
  "tokio",
 ]
+
+[[package]]
+name = "codex-utils-string"
+version = "0.0.0"
 
 [[package]]
 name = "color-eyre"

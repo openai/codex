@@ -12,7 +12,7 @@ export type {
 } from "./events";
 export type {
   ThreadItem,
-  AssistantMessageItem,
+  AgentMessageItem,
   ReasoningItem,
   CommandExecutionItem,
   FileChangeItem,
