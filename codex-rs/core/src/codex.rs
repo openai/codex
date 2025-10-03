@@ -796,9 +796,6 @@ impl Session {
                     } else {
                         context_window - previous_total
                     };
-                    println!(
-                        "set_total_tokens_full existing info: prev={previous_total}, delta={delta}, context={context_window}"
-                    );
                     token_info.last_token_usage = TokenUsage {
                         total_tokens: delta,
                         ..TokenUsage::default()
@@ -819,7 +816,6 @@ impl Session {
                         },
                         model_context_window: Some(context_window),
                     };
-                    println!("set_total_tokens_full new info: context={context_window}");
                     state.set_token_info(token_info);
                 }
             }

@@ -1005,18 +1005,6 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let first_turn = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp_seed"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(body_string_contains("seed turn"))
-        .respond_with(first_turn)
-        .expect(1)
-        .mount(&server)
-        .await;
-
     let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_context_window","object":"response","created_at":1759510079,"status":"failed","background":false,"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try again."},"usage":null,"user":null,"metadata":{}}}"#;
 
     let error_stream = format!("event: response.failed\ndata: {raw_error}\n\n");
@@ -1029,6 +1017,18 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         .and(path("/v1/responses"))
         .and(body_string_contains("trigger context window"))
         .respond_with(second_turn)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let first_turn = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_completed("resp_seed"), "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains("seed turn"))
+        .respond_with(first_turn)
         .expect(1)
         .mount(&server)
         .await;
@@ -1082,16 +1082,12 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         }
     }
 
-    let token_payload = match token_payload {
-        Some(payload) => payload,
-        None => {
-            println!(
-                "did not observe expected TokenCount event; events observed: {:?}",
-                observed
-            );
-            return Ok(());
-        }
-    };
+    let token_payload = token_payload.unwrap_or_else(|| {
+        panic!(
+            "did not observe expected TokenCount event; events observed: {:?}",
+            observed
+        )
+    });
 
     let info = token_payload
         .info
