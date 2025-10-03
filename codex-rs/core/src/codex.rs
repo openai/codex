@@ -794,8 +794,10 @@ impl Session {
             };
 
             let delta = context_window.saturating_sub(current_total);
-            let mut last_usage = TokenUsage::default();
-            last_usage.total_tokens = delta;
+            let last_usage = TokenUsage {
+                total_tokens: delta,
+                ..TokenUsage::default()
+            };
 
             self.update_token_usage_info(sub_id, turn_context, Some(&last_usage))
                 .await;
