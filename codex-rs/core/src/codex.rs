@@ -89,6 +89,7 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
+use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
@@ -795,6 +796,20 @@ impl Session {
                     token_info.last_token_usage = TokenUsage {
                         total_tokens: delta,
                         ..TokenUsage::default()
+                    };
+                    state.set_token_info(token_info);
+                    updated = true;
+                } else {
+                    let token_info = TokenUsageInfo {
+                        total_token_usage: TokenUsage {
+                            total_tokens: context_window,
+                            ..TokenUsage::default()
+                        },
+                        last_token_usage: TokenUsage {
+                            total_tokens: context_window,
+                            ..TokenUsage::default()
+                        },
+                        model_context_window: Some(context_window),
                     };
                     state.set_token_info(token_info);
                     updated = true;
