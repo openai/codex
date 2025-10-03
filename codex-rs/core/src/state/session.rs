@@ -54,23 +54,6 @@ impl SessionState {
         );
     }
 
-    pub(crate) fn set_total_tokens_full(
-        &mut self,
-        total_tokens: u64,
-        model_context_window: Option<u64>,
-    ) {
-        let mut token_info = self.token_info.clone().unwrap_or(TokenUsageInfo {
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage::default(),
-            model_context_window,
-        });
-        token_info.total_token_usage.total_tokens = total_tokens;
-        if token_info.model_context_window.is_none() {
-            token_info.model_context_window = model_context_window;
-        }
-        self.token_info = Some(token_info);
-    }
-
     pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
         self.latest_rate_limits = Some(snapshot);
     }

@@ -784,11 +784,30 @@ impl Session {
 
     async fn set_total_tokens_full(&self, sub_id: &str, turn_context: &TurnContext) {
         if let Some(context_window) = turn_context.client.get_model_context_window() {
-            {
-                let mut state = self.state.lock().await;
-                state.set_total_tokens_full(context_window, Some(context_window));
+            let delta_usage = {
+                let state = self.state.lock().await;
+                let current_total = state
+                    .token_info
+                    .as_ref()
+                    .map(|info| info.total_token_usage.total_tokens)
+                    .unwrap_or(0);
+                if current_total >= context_window {
+                    None
+                } else {
+                    Some(TokenUsage {
+                        input_tokens: 0,
+                        cached_input_tokens: 0,
+                        output_tokens: 0,
+                        reasoning_output_tokens: 0,
+                        total_tokens: context_window - current_total,
+                    })
+                }
+            };
+
+            if let Some(usage_delta) = delta_usage {
+                self.update_token_usage_info(sub_id, turn_context, Some(&usage_delta))
+                    .await;
             }
-            self.send_token_count_event(sub_id).await;
         }
     }
 
@@ -2652,7 +2671,7 @@ mod tests {
         );
         assert_eq!(
             token_info.last_token_usage.total_tokens,
-            initial_usage.total_tokens
+            context_window - initial_usage.total_tokens
         );
     }
 
