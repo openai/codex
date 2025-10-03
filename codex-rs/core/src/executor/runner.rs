@@ -6,6 +6,7 @@ use std::time::Duration;
 use super::backends::ExecutionMode;
 use super::backends::backend_for_mode;
 use super::cache::ApprovalCache;
+use crate::codex::ExecCommandContext;
 use crate::codex::Session;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;

@@ -36,6 +36,9 @@ use tracing::trace;
 use tracing::warn;
 
 use crate::ModelProviderInfo;
+use crate::apply_patch;
+use crate::apply_patch::ApplyPatchExec;
+use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
@@ -46,12 +49,22 @@ use crate::conversation_history::ConversationHistory;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::error::SandboxErr;
+use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 #[cfg(test)]
+use crate::exec::StdoutStream;
+#[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
 use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WriteStdinParams;
+use crate::executor::Executor;
+use crate::executor::ExecutorConfig;
+use crate::executor::normalize_exec_result;
+use crate::exec_env::create_env;
+use crate::executor::ExecutionMode;
 use crate::executor::Executor;
 use crate::executor::ExecutorConfig;
 use crate::executor::normalize_exec_result;
