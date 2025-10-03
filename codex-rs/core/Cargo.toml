@@ -91,11 +91,12 @@ escargot = { workspace = true }
 maplit = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 tokio-test = { workspace = true }
+tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
-tracing-test = {  workspace = true, features = ["no-env-filter"] }
 
 [package.metadata.cargo-shear]
 ignored = ["openssl-sys"]
