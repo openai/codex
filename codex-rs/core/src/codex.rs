@@ -782,11 +782,11 @@ impl Session {
         self.send_event(event).await;
     }
 
-    async fn record_context_window_token_usage(&self, sub_id: &str, turn_context: &TurnContext) {
+    async fn set_total_tokens_full(&self, sub_id: &str, turn_context: &TurnContext) {
         if let Some(context_window) = turn_context.client.get_model_context_window() {
             {
                 let mut state = self.state.lock().await;
-                state.set_total_tokens(context_window, Some(context_window));
+                state.set_total_tokens_full(context_window, Some(context_window));
             }
             self.send_token_count_event(sub_id).await;
         }
@@ -1949,8 +1949,7 @@ async fn run_turn(
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
             Err(e @ CodexErr::ContextWindowExceeded(_)) => {
-                sess.record_context_window_token_usage(&sub_id, turn_context)
-                    .await;
+                sess.set_total_tokens_full(&sub_id, turn_context).await;
                 return Err(e);
             }
             Err(CodexErr::UsageLimitReached(e)) => {
@@ -2625,9 +2624,7 @@ mod tests {
         });
 
         tokio_test::block_on(async {
-            session
-                .record_context_window_token_usage("sub", &turn_context)
-                .await;
+            session.set_total_tokens_full("sub", &turn_context).await;
         });
 
         let token_info = tokio_test::block_on(async {
