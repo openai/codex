@@ -42,6 +42,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use dirs::home_dir;
 use serde::Deserialize;
+use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -233,6 +234,10 @@ pub struct Config {
 
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
+
+    /// The currently active project config, resolved by checking if cwd:
+    /// is (1) part of a git repo, (2) a git worktree, or (3) just using the cwd
+    pub active_project: ProjectConfig,
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: bool,
@@ -863,6 +868,15 @@ pub struct ProjectConfig {
     pub trust_level: Option<String>,
 }
 
+impl ProjectConfig {
+    pub fn is_trusted(&self) -> bool {
+        match &self.trust_level {
+            Some(trust_level) => trust_level == "trusted",
+            None => false,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ToolsToml {
     #[serde(default, alias = "web_search_request")]
@@ -893,8 +907,13 @@ impl ConfigToml {
             .or(self.sandbox_mode)
             .or_else(|| {
                 // if no sandbox_mode is set, but user has marked directory as trusted, use WorkspaceWrite
-                self.is_cwd_trusted(resolved_cwd)
-                    .then_some(SandboxMode::WorkspaceWrite)
+                self.get_active_project(resolved_cwd).and_then(|p| {
+                    if p.is_trusted() {
+                        Some(SandboxMode::WorkspaceWrite)
+                    } else {
+                        None
+                    }
+                })
             })
             .unwrap_or_default();
         match resolved_sandbox_mode {
@@ -917,30 +936,26 @@ impl ConfigToml {
         }
     }
 
-    pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
+    /// Resolves the cwd to an existing project, or returns None if ConfigToml
+    /// does not contain a project corresponding to cwd or a git repo for cwd
+    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
         let projects = self.projects.clone().unwrap_or_default();
 
-        let is_path_trusted = |path: &Path| {
-            let path_str = path.to_string_lossy().to_string();
-            projects
-                .get(&path_str)
-                .map(|p| p.trust_level.as_deref() == Some("trusted"))
-                .unwrap_or(false)
-        };
-
-        // Fast path: exact cwd match
-        if is_path_trusted(resolved_cwd) {
-            return true;
+        if let Some(project_config) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
+            return Some(project_config.clone());
         }
 
-        // If cwd lives inside a git worktree, check whether the root git project
+        // If cwd lives inside a git repo/worktree, check whether the root git project
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
-        if let Some(root_project) = resolve_root_git_project_for_trust(resolved_cwd) {
-            return is_path_trusted(&root_project);
+        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd)
+            && let Some(project_config_for_root) =
+                projects.get(&repo_root.to_string_lossy().to_string_lossy().to_string())
+        {
+            return Some(project_config_for_root.clone());
         }
 
-        false
+        None
     }
 
     pub fn get_config_profile(
@@ -1057,17 +1072,22 @@ impl Config {
                 }
             }
         };
+        let active_project = cfg
+            .get_active_project(&resolved_cwd)
+            .unwrap_or(ProjectConfig { trust_level: None });
 
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
         let approval_policy = approval_policy_override
             .or(config_profile.approval_policy)
             .or(cfg.approval_policy)
-            .or_else(|| {
-                // If no explicit approval policy is set, but we trust cwd, default to OnRequest
-                cfg.is_cwd_trusted(&resolved_cwd)
-                    .then_some(AskForApproval::OnRequest)
-            })
-            .unwrap_or_else(AskForApproval::default);
+            .unwrap_or_else(|| {
+                if active_project.is_trusted() {
+                    // If no explicit approval policy is set, but we trust cwd, default to OnRequest
+                    AskForApproval::OnRequest
+                } else {
+                    AskForApproval::default()
+                }
+            });
         let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
             .is_some()
             || config_profile.approval_policy.is_some()
@@ -1230,6 +1250,7 @@ impl Config {
             include_view_image_tool: include_view_image_tool_flag,
             features,
             active_profile: active_profile_name,
+            active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
@@ -2312,6 +2333,7 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
+                active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
@@ -2377,6 +2399,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
+            active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -2457,6 +2480,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
+            active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -2523,6 +2547,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
+            active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
