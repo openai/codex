@@ -390,6 +390,7 @@ async fn run_ratatui_app(
         if onboarding_result.windows_install_selected {
             restore();
             session_log::log_session_end();
+            let _ = tui.terminal.clear();
             if let Err(err) = writeln!(std::io::stdout(), "{WSL_INSTRUCTIONS}") {
                 tracing::error!("Failed to write WSL instructions: {err}");
             }
