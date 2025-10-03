@@ -45,10 +45,35 @@ jobs:
         uses: openai/codex-action@main
         with:
           openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
-          prompt_file: .github/prompts/issue-deduplicator.txt
           require_repo_write: false
-          codex_version: 0.43.0-alpha.16
-          codex_args: -m gpt-5
+          model: gpt-5
+          prompt: |
+            You are an assistant that triages new GitHub issues by identifying potential duplicates.
+
+            You will receive the following JSON files located in the current working directory:
+            - `codex-current-issue.json`: JSON object describing the newly created issue (fields: number, title, body).
+            - `codex-existing-issues.json`: JSON array of recent issues (each element includes number, title, body, createdAt).
+
+            Instructions:
+            - Load both files as JSON and review their contents carefully. The codex-existing-issues.json file is large, ensure you explore all of it.
+            - Compare the current issue against the existing issues to find up to five that appear to describe the same underlying problem or request.
+            - When unsure, prefer returning fewer matches.
+            - Include at most five numbers.
+
+          output_schema: | 
+            {
+              "type": "object",
+              "properties": {
+                "issues": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": ["issues"],
+              "additionalProperties": false
+            }
 
   comment-on-issue:
     name: Comment with potential duplicates
@@ -66,22 +91,25 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            let numbers;
+            const raw = process.env.CODEX_OUTPUT ?? '';
+            let parsed;
             try {
-              numbers = JSON.parse(process.env.CODEX_OUTPUT);
+              parsed = JSON.parse(raw);
             } catch (error) {
               core.info(`Codex output was not valid JSON. Raw output: ${raw}`);
+              core.info(`Parse error: ${error.message}`);
               return;
             }
 
-            if (numbers.length === 0) {
+            const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
+            if (issues.length === 0) {
               core.info('Codex reported no potential duplicates.');
               return;
             }
 
             const lines = [
               'Potential duplicates detected:',
-              ...numbers.map((value) => `- #${value}`),
+              ...issues.map((value) => `- #${String(value)}`),
               '',
               '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];
 
