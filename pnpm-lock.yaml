@@ -34,6 +34,9 @@ importers:
       eslint-plugin-jest:
         specifier: ^29.0.1
         version: 29.0.1(@typescript-eslint/eslint-plugin@8.45.0(@typescript-eslint/parser@8.45.0(eslint@9.36.0)(typescript@5.9.2))(eslint@9.36.0)(typescript@5.9.2))(eslint@9.36.0)(jest@29.7.0(@types/node@20.19.18)(ts-node@10.9.2(@types/node@20.19.18)(typescript@5.9.2)))(typescript@5.9.2)
+      eslint-plugin-node-import:
+        specifier: ^1.0.5
+        version: 1.0.5(eslint@9.36.0)
       jest:
         specifier: ^29.7.0
         version: 29.7.0(@types/node@20.19.18)(ts-node@10.9.2(@types/node@20.19.18)(typescript@5.9.2))
@@ -1083,6 +1086,12 @@ packages:
         optional: true
       jest:
         optional: true
+
+  eslint-plugin-node-import@1.0.5:
+    resolution: {integrity: sha512-razzgbr3EcB5+bm8/gqTqzTJ7Bpiu8PIChiAMRfZCNigr9GZBtnVSI+wPw+RGbWYCCIzWAsK/A7ihoAeSz5j7A==}
+    engines: {node: ^14.18.0 || ^16.0.0 || >= 18.0.0}
+    peerDependencies:
+      eslint: '>=7'
 
   eslint-scope@8.4.0:
     resolution: {integrity: sha512-sNXOfKCn74rt8RICKMvJS7XKV/Xk9kA7DyJr8mJik3S7Cwgy3qlkkmyS2uQB3jiJg6VNdZd/pDBJu0nvG2NlTg==}
@@ -3243,6 +3252,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
       - typescript
+
+  eslint-plugin-node-import@1.0.5(eslint@9.36.0):
+    dependencies:
+      eslint: 9.36.0
 
   eslint-scope@8.4.0:
     dependencies:

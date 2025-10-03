@@ -116,7 +116,7 @@ It is important to remember:
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["input".to_string()]),
-            additional_properties: Some(false),
+            additional_properties: Some(false.into()),
         },
     })
 }
