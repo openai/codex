@@ -13,8 +13,8 @@ fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     Ok(cmd)
 }
 
-#[test]
-fn add_and_remove_server_updates_global_config() -> Result<()> {
+#[tokio::test]
+async fn add_and_remove_server_updates_global_config() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     let mut add_cmd = codex_command(codex_home.path())?;
@@ -24,7 +24,7 @@ fn add_and_remove_server_updates_global_config() -> Result<()> {
         .success()
         .stdout(contains("Added global MCP server 'docs'."));
 
-    let servers = load_global_mcp_servers(codex_home.path())?;
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
     assert_eq!(servers.len(), 1);
     let docs = servers.get("docs").expect("server should exist");
     match &docs.transport {
@@ -43,7 +43,7 @@ fn add_and_remove_server_updates_global_config() -> Result<()> {
         .success()
         .stdout(contains("Removed global MCP server 'docs'."));
 
-    let servers = load_global_mcp_servers(codex_home.path())?;
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
     assert!(servers.is_empty());
 
     let mut remove_again_cmd = codex_command(codex_home.path())?;
@@ -53,14 +53,14 @@ fn add_and_remove_server_updates_global_config() -> Result<()> {
         .success()
         .stdout(contains("No MCP server named 'docs' found."));
 
-    let servers = load_global_mcp_servers(codex_home.path())?;
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
     assert!(servers.is_empty());
 
     Ok(())
 }
 
-#[test]
-fn add_with_env_preserves_key_order_and_values() -> Result<()> {
+#[tokio::test]
+async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     let mut add_cmd = codex_command(codex_home.path())?;
@@ -80,7 +80,7 @@ fn add_with_env_preserves_key_order_and_values() -> Result<()> {
         .assert()
         .success();
 
-    let servers = load_global_mcp_servers(codex_home.path())?;
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
     let envy = servers.get("envy").expect("server should exist");
     let env = match &envy.transport {
         McpServerTransportConfig::Stdio { env: Some(env), .. } => env,
