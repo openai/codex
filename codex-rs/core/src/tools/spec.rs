@@ -28,7 +28,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
-    pub beta_supported_tools: Vec<String>,
+    pub experimental_supported_tools: Vec<String>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -79,7 +79,7 @@ impl ToolsConfig {
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
-            beta_supported_tools: model_family.beta_supported_tools.clone(),
+            experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
 }
@@ -568,7 +568,7 @@ pub(crate) fn build_specs(
     }
 
     if config
-        .beta_supported_tools
+        .experimental_supported_tools
         .iter()
         .any(|tool| tool == "read_file")
     {
