@@ -223,7 +223,7 @@ impl Config {
         let codex_home = find_codex_home()?;
 
         let root_value = load_resolved_config(
-            codex_home.clone(),
+            &codex_home,
             cli_overrides,
             crate::config_loader::LoaderOverrides::default(),
         )
@@ -243,7 +243,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
     let root_value = load_resolved_config(
-        codex_home.to_path_buf(),
+        codex_home,
         cli_overrides,
         crate::config_loader::LoaderOverrides::default(),
     )
@@ -258,7 +258,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
 }
 
 async fn load_resolved_config(
-    codex_home: PathBuf,
+    codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
     overrides: crate::config_loader::LoaderOverrides,
 ) -> std::io::Result<TomlValue> {
@@ -290,7 +290,7 @@ fn apply_overlays(
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value = load_config_as_toml(codex_home.to_path_buf()).await?;
+    let root_value = load_config_as_toml(codex_home).await?;
     let Some(servers_value) = root_value.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
@@ -1398,7 +1398,7 @@ exclude_slash_tmp = true
         };
 
         let root_value = load_resolved_config(
-            codex_home.path().to_path_buf(),
+            codex_home.path(),
             vec![("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
         )

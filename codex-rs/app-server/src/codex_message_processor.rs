@@ -500,7 +500,7 @@ impl CodexMessageProcessor {
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {
-        let toml_value = match load_config_as_toml(self.config.codex_home.clone()).await {
+        let toml_value = match load_config_as_toml(&self.config.codex_home).await {
             Ok(val) => val,
             Err(err) => {
                 let error = JSONRPCErrorError {

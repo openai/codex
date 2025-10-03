@@ -43,7 +43,7 @@ pub(crate) struct LoaderOverrides {
 //
 // (*) Only available on macOS via managed device profiles.
 
-pub async fn load_config_as_toml(codex_home: PathBuf) -> io::Result<TomlValue> {
+pub async fn load_config_as_toml(codex_home: &Path) -> io::Result<TomlValue> {
     load_config_as_toml_with_overrides(codex_home, LoaderOverrides::default()).await
 }
 
@@ -52,14 +52,14 @@ fn default_empty_table() -> TomlValue {
 }
 
 pub(crate) async fn load_config_layers_with_overrides(
-    codex_home: PathBuf,
+    codex_home: &Path,
     overrides: LoaderOverrides,
 ) -> io::Result<LoadedConfigLayers> {
     load_config_layers_internal(codex_home, overrides).await
 }
 
 async fn load_config_as_toml_with_overrides(
-    codex_home: PathBuf,
+    codex_home: &Path,
     overrides: LoaderOverrides,
 ) -> io::Result<TomlValue> {
     let layers = load_config_layers_internal(codex_home, overrides).await?;
@@ -67,7 +67,7 @@ async fn load_config_as_toml_with_overrides(
 }
 
 async fn load_config_layers_internal(
-    codex_home: PathBuf,
+    codex_home: &Path,
     overrides: LoaderOverrides,
 ) -> io::Result<LoadedConfigLayers> {
     #[cfg(target_os = "macos")]
@@ -82,10 +82,11 @@ async fn load_config_layers_internal(
     } = overrides;
 
     let managed_config_path =
-        managed_config_path.unwrap_or_else(|| managed_config_default_path(&codex_home));
+        managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home));
 
-    let user_config = read_config_from_path(codex_home.join(CONFIG_TOML_FILE), true).await?;
-    let managed_config = read_config_from_path(managed_config_path, false).await?;
+    let user_config_path = codex_home.join(CONFIG_TOML_FILE);
+    let user_config = read_config_from_path(&user_config_path, true).await?;
+    let managed_config = read_config_from_path(&managed_config_path, false).await?;
 
     #[cfg(target_os = "macos")]
     let managed_preferences =
@@ -102,10 +103,10 @@ async fn load_config_layers_internal(
 }
 
 async fn read_config_from_path(
-    path: PathBuf,
+    path: &Path,
     log_missing_as_info: bool,
 ) -> io::Result<Option<TomlValue>> {
-    match fs::read_to_string(&path).await {
+    match fs::read_to_string(path).await {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(value) => Ok(Some(value)),
             Err(err) => {
@@ -208,7 +209,7 @@ extra = true
             managed_preferences_base64: None,
         };
 
-        let loaded = load_config_as_toml_with_overrides(tmp.path().to_path_buf(), overrides)
+        let loaded = load_config_as_toml_with_overrides(tmp.path(), overrides)
             .await
             .expect("load config");
         let table = loaded.as_table().expect("top-level table expected");
@@ -235,7 +236,7 @@ extra = true
             managed_preferences_base64: None,
         };
 
-        let layers = load_config_layers_with_overrides(tmp.path().to_path_buf(), overrides)
+        let layers = load_config_layers_with_overrides(tmp.path(), overrides)
             .await
             .expect("load layers");
         let base_table = layers.base.as_table().expect("base table expected");
@@ -250,9 +251,7 @@ extra = true
 
         #[cfg(not(target_os = "macos"))]
         {
-            let loaded = load_config_as_toml(tmp.path().to_path_buf())
-                .await
-                .expect("load config");
+            let loaded = load_config_as_toml(tmp.path()).await.expect("load config");
             let table = loaded.as_table().expect("top-level table expected");
             assert!(
                 table.is_empty(),
@@ -296,7 +295,7 @@ flag = true
             managed_preferences_base64: Some(encoded),
         };
 
-        let loaded = load_config_as_toml_with_overrides(tmp.path().to_path_buf(), overrides)
+        let loaded = load_config_as_toml_with_overrides(tmp.path(), overrides)
             .await
             .expect("load config");
         let nested = loaded
