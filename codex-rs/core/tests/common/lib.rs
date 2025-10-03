@@ -7,6 +7,9 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 
+#[cfg(target_os = "linux")]
+use assert_cmd::cargo::cargo_bin;
+
 pub mod responses;
 pub mod test_codex;
 pub mod test_codex_exec;
@@ -17,10 +20,23 @@ pub mod test_codex_exec;
 pub fn load_default_config_for_test(codex_home: &TempDir) -> Config {
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
-        ConfigOverrides::default(),
+        default_test_overrides(),
         codex_home.path().to_path_buf(),
     )
     .expect("defaults for test should always succeed")
+}
+
+#[cfg(target_os = "linux")]
+fn default_test_overrides() -> ConfigOverrides {
+    ConfigOverrides {
+        codex_linux_sandbox_exe: Some(cargo_bin("codex-linux-sandbox")),
+        ..ConfigOverrides::default()
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn default_test_overrides() -> ConfigOverrides {
+    ConfigOverrides::default()
 }
 
 /// Builds an SSE stream body from a JSON fixture.

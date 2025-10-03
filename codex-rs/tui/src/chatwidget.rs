@@ -111,6 +111,7 @@ use codex_git_tooling::GhostCommit;
 use codex_git_tooling::GitToolingError;
 use codex_git_tooling::create_ghost_commit;
 use codex_git_tooling::restore_ghost_commit;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
 const MAX_TRACKED_GHOST_COMMITS: usize = 20;
@@ -508,7 +509,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
+    fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.add_to_history(history_cell::new_plan_update(update));
     }
 

@@ -6,7 +6,6 @@ use std::time::Duration;
 use super::backends::ExecutionMode;
 use super::backends::backend_for_mode;
 use super::cache::ApprovalCache;
-use crate::codex::ExecCommandContext;
 use crate::codex::Session;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
@@ -24,6 +23,7 @@ use crate::protocol::AskForApproval;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::shell;
+use crate::tools::context::ExecCommandContext;
 use codex_otel::otel_event_manager::ToolDecisionSource;
 
 #[derive(Clone, Debug)]
@@ -303,6 +303,7 @@ pub(crate) fn normalize_exec_result(
             let message = match err {
                 ExecError::Function(FunctionCallError::RespondToModel(msg)) => msg.clone(),
                 ExecError::Codex(e) => get_error_message_ui(e),
+                err => err.to_string(),
             };
             let synthetic = ExecToolCallOutput {
                 exit_code: -1,
