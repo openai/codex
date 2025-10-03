@@ -35,6 +35,7 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::ViewImageToolCallEvent;
 use codex_protocol::ConversationId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -46,6 +47,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn test_config() -> Config {
@@ -612,6 +614,36 @@ fn alt_up_edits_most_recent_queued_message() {
 }
 
 #[test]
+fn streaming_final_answer_keeps_task_running_state() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_commit_tick();
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_widget().is_none());
+
+    chat.bottom_pane
+        .set_composer_text("queued submission".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued submission"
+    );
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    match op_rx.try_recv() {
+        Ok(Op::Interrupt) => {}
+        other => panic!("expected Op::Interrupt, got {other:?}"),
+    }
+    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+}
+
+#[test]
 fn exec_history_cell_shows_working_then_completed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
@@ -794,6 +826,25 @@ fn custom_prompt_enter_empty_does_not_send() {
     assert!(rx.try_recv().is_err(), "no app event should be sent");
 }
 
+#[test]
+fn view_image_tool_call_adds_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let image_path = chat.config.cwd.join("example.png");
+
+    chat.handle_codex_event(Event {
+        id: "sub-image".into(),
+        msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
+            call_id: "call-image".into(),
+            path: image_path,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single history cell");
+    let combined = lines_to_single_string(&cells[0]);
+    assert_snapshot!("local_image_attachment_history_snapshot", combined);
+}
+
 // Snapshot test: interrupting a running exec finalizes the active cell with a red ✗
 // marker (replacing the spinner) and flushes it into history.
 #[test]
@@ -914,6 +965,88 @@ fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
         }
     }
     String::new()
+}
+
+fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
+    let height = chat.desired_height(width);
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    (chat).render_ref(area, &mut buf);
+
+    let mut lines: Vec<String> = (0..area.height)
+        .map(|row| {
+            let mut line = String::new();
+            for col in 0..area.width {
+                let symbol = buf[(area.x + col, area.y + row)].symbol();
+                if symbol.is_empty() {
+                    line.push(' ');
+                } else {
+                    line.push_str(symbol);
+                }
+            }
+            line.trim_end().to_string()
+        })
+        .collect();
+
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+
+    lines.join("\n")
+}
+
+#[test]
+fn model_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "gpt-5-codex".to_string();
+    chat.open_model_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_selection_popup", popup);
+}
+
+#[test]
+fn model_reasoning_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "gpt-5-codex".to_string();
+    chat.config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
+
+    let presets = builtin_model_presets(None)
+        .into_iter()
+        .filter(|preset| preset.model == "gpt-5-codex")
+        .collect::<Vec<_>>();
+    chat.open_reasoning_popup("gpt-5-codex".to_string(), presets);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[test]
+fn reasoning_popup_escape_returns_to_model_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.model = "gpt-5".to_string();
+    chat.open_model_popup();
+
+    let presets = builtin_model_presets(None)
+        .into_iter()
+        .filter(|preset| preset.model == "gpt-5-codex")
+        .collect::<Vec<_>>();
+    chat.open_reasoning_popup("gpt-5-codex".to_string(), presets);
+
+    let before_escape = render_bottom_popup(&chat, 80);
+    assert!(before_escape.contains("Select Reasoning Level"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    let after_escape = render_bottom_popup(&chat, 80);
+    assert!(after_escape.contains("Select Model"));
+    assert!(!after_escape.contains("Select Reasoning Level"));
 }
 
 #[test]
@@ -1157,6 +1290,14 @@ fn approval_modal_exec_snapshot() {
     terminal
         .draw(|f| f.render_widget_ref(&chat, f.area()))
         .expect("draw approval modal");
+    assert!(
+        terminal
+            .backend()
+            .vt100()
+            .screen()
+            .contents()
+            .contains("echo hello world")
+    );
     assert_snapshot!(
         "approval_modal_exec",
         terminal.backend().vt100().screen().contents()
@@ -1182,12 +1323,16 @@ fn approval_modal_exec_without_reason_snapshot() {
     });
 
     let height = chat.desired_height(80);
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
-        .expect("create terminal");
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 80, height));
     terminal
         .draw(|f| f.render_widget_ref(&chat, f.area()))
         .expect("draw approval modal (no reason)");
-    assert_snapshot!("approval_modal_exec_no_reason", terminal.backend());
+    assert_snapshot!(
+        "approval_modal_exec_no_reason",
+        terminal.backend().vt100().screen().contents()
+    );
 }
 
 // Snapshot test: patch approval modal
@@ -1217,12 +1362,16 @@ fn approval_modal_patch_snapshot() {
 
     // Render at the widget's desired height and snapshot.
     let height = chat.desired_height(80);
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
-        .expect("create terminal");
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 80, height));
     terminal
         .draw(|f| f.render_widget_ref(&chat, f.area()))
         .expect("draw patch approval modal");
-    assert_snapshot!("approval_modal_patch", terminal.backend());
+    assert_snapshot!(
+        "approval_modal_patch",
+        terminal.backend().vt100().screen().contents()
+    );
 }
 
 #[test]
@@ -1752,14 +1901,14 @@ fn apply_patch_untrusted_shows_approval_modal() {
         for x in 0..area.width {
             row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
         }
-        if row.contains("Apply changes?") {
+        if row.contains("Would you like to make the following edits?") {
             contains_title = true;
             break;
         }
     }
     assert!(
         contains_title,
-        "expected approval modal to be visible with title 'Apply changes?'"
+        "expected approval modal to be visible with title 'Would you like to make the following edits?'"
     );
 }
 

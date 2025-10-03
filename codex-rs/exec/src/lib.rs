@@ -17,6 +17,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::SessionSource;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
@@ -27,6 +28,7 @@ use serde_json::Value;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -112,8 +114,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cli::Color::Always => (true, true),
         cli::Color::Never => (false, false),
         cli::Color::Auto => (
-            std::io::stdout().is_terminal(),
-            std::io::stderr().is_terminal(),
+            supports_color::on_cached(Stream::Stdout).is_some(),
+            supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
 
@@ -237,7 +239,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     let auth_manager = AuthManager::shared(config.codex_home.clone(), true);
-    let conversation_manager = ConversationManager::new(auth_manager.clone());
+    let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewConversation {
@@ -363,6 +365,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             }
         }
     }
+    event_processor.print_final_output();
     if error_seen {
         std::process::exit(1);
     }
@@ -375,7 +378,9 @@ async fn resolve_resume_path(
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
-        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
+        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None, &[])
+            .await
+        {
             Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
             Err(e) => {
                 error!("Error listing conversations: {e}");

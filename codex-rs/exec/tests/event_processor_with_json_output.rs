@@ -14,7 +14,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
-use codex_exec::exec_events::AssistantMessageItem;
+use codex_exec::exec_events::AgentMessageItem;
 use codex_exec::exec_events::CommandExecutionItem;
 use codex_exec::exec_events::CommandExecutionStatus;
 use codex_exec::exec_events::ItemCompletedEvent;
@@ -410,7 +410,7 @@ fn agent_reasoning_produces_item_completed_reasoning() {
 }
 
 #[test]
-fn agent_message_produces_item_completed_assistant_message() {
+fn agent_message_produces_item_completed_agent_message() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let ev = event(
         "e1",
@@ -424,7 +424,7 @@ fn agent_message_produces_item_completed_assistant_message() {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
             item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ThreadItemDetails::AssistantMessage(AssistantMessageItem {
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem {
                     text: "hello".to_string(),
                 }),
             },

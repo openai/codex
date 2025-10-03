@@ -45,7 +45,7 @@ describe("Codex", () => {
           type: "item.completed",
           item: {
             id: "item_0",
-            item_type: "assistant_message",
+            type: "agent_message",
             text: "Hi!",
           },
         },

@@ -7,6 +7,7 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::login::read_api_key_from_stdin;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
@@ -139,7 +140,18 @@ struct LoginCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
 
-    #[arg(long = "api-key", value_name = "API_KEY")]
+    #[arg(
+        long = "with-api-key",
+        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
+    )]
+    with_api_key: bool,
+
+    #[arg(
+        long = "api-key",
+        value_name = "API_KEY",
+        help = "(deprecated) Previously accepted the API key directly; now exits with guidance to use --with-api-key",
+        hide = true
+    )]
     api_key: Option<String>,
 
     /// EXPERIMENTAL: Use device code flow (not yet supported)
@@ -298,7 +310,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                             login_cli.client_id,
                         )
                         .await;
-                    } else if let Some(api_key) = login_cli.api_key {
+                    } else if login_cli.api_key.is_some() {
+                        eprintln!(
+                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                        );
+                        std::process::exit(1);
+                    } else if login_cli.with_api_key {
+                        let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;

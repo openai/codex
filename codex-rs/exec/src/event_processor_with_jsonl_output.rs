@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU64;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
-use crate::exec_events::AssistantMessageItem;
+use crate::exec_events::AgentMessageItem;
 use crate::exec_events::CommandExecutionItem;
 use crate::exec_events::CommandExecutionStatus;
 use crate::exec_events::FileChangeItem;
@@ -162,7 +162,7 @@ impl EventProcessorWithJsonOutput {
         let item = ThreadItem {
             id: self.get_next_item_id(),
 
-            details: ThreadItemDetails::AssistantMessage(AssistantMessageItem {
+            details: ThreadItemDetails::AgentMessage(AgentMessageItem {
                 text: payload.message.clone(),
             }),
         };

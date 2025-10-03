@@ -152,7 +152,7 @@ impl StatusHistoryCell {
             Span::from(format!("{percent}% left")),
             Span::from(" (").dim(),
             Span::from(used_fmt).dim(),
-            Span::from(" / ").dim(),
+            Span::from(" used / ").dim(),
             Span::from(window_fmt).dim(),
             Span::from(")").dim(),
         ])
@@ -302,7 +302,10 @@ impl HistoryCell for StatusHistoryCell {
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));
-        lines.push(formatter.line("Token usage", self.token_usage_spans()));
+        // Hide token usage only for ChatGPT subscribers
+        if !matches!(self.account, Some(StatusAccountDisplay::ChatGpt { .. })) {
+            lines.push(formatter.line("Token usage", self.token_usage_spans()));
+        }
 
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
