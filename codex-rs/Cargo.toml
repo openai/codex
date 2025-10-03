@@ -142,6 +142,7 @@ rand = "0.9"
 ratatui = "0.29.0"
 regex-lite = "0.1.7"
 reqwest = "0.12"
+# When this gets bumped, remove the patch below.
 rmcp = { version = "0.7.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
@@ -243,5 +244,11 @@ strip = "symbols"
 codegen-units = 1
 
 [patch.crates-io]
+# Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
+
+# Uncomment to debug local changes.
+# rmcp = { path = "../../rust-sdk/crates/rmcp" }
+# 0.7.0 + https://github.com/modelcontextprotocol/rust-sdk/pull/459 which includes dynamic .well-known discovery which is required for Figma.
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "c0b777c7f784ba2d456b03c2ec3b98c9b28b5e10", default-features = false }
