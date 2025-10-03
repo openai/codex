@@ -48,6 +48,7 @@ jobs:
           prompt_file: .github/prompts/issue-deduplicator.txt
           require_repo_write: false
           codex_version: 0.43.0-alpha.16
+          codex_args: -m gpt-5
 
   comment-on-issue:
     name: Comment with potential duplicates
