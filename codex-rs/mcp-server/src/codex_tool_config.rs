@@ -132,7 +132,7 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
 impl CodexToolCallParam {
     /// Returns the initial user prompt to start the Codex conversation and the
     /// effective Config object generated from the supplied parameters.
-    pub fn into_config(
+    pub async fn into_config(
         self,
         codex_linux_sandbox_exe: Option<PathBuf>,
     ) -> std::io::Result<(String, codex_core::config::Config)> {
@@ -172,7 +172,8 @@ impl CodexToolCallParam {
             .map(|(k, v)| (k, json_to_toml(v)))
             .collect();
 
-        let cfg = codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
+        let cfg =
+            codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides).await?;
 
         Ok((prompt, cfg))
     }
