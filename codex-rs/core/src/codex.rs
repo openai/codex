@@ -791,9 +791,6 @@ impl Session {
         if let (Some(token_info), Some(context_window)) = (token_info, context_window) {
             let mut token_info = token_info;
             token_info.total_token_usage.total_tokens = context_window;
-            if token_info.model_context_window.is_none() {
-                token_info.model_context_window = Some(context_window);
-            }
             self.update_token_usage_info(sub_id, turn_context, Some(&token_info.last_token_usage))
                 .await;
         }
