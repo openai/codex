@@ -222,7 +222,7 @@ impl Config {
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
 
-        let root_value = load_layered_config_with_cli_overrides(
+        let root_value = load_resolved_config(
             codex_home.clone(),
             cli_overrides,
             crate::config_loader::LoaderOverrides::default(),
@@ -242,7 +242,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    let root_value = load_layered_config_with_cli_overrides(
+    let root_value = load_resolved_config(
         codex_home.to_path_buf(),
         cli_overrides,
         crate::config_loader::LoaderOverrides::default(),
@@ -257,25 +257,16 @@ pub async fn load_config_as_toml_with_cli_overrides(
     Ok(cfg)
 }
 
-async fn load_layered_config_with_cli_overrides(
+async fn load_resolved_config(
     codex_home: PathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
     overrides: crate::config_loader::LoaderOverrides,
 ) -> std::io::Result<TomlValue> {
     let layers = load_config_layers_with_overrides(codex_home, overrides).await?;
-    Ok(finalize_layers_with_overrides(layers, cli_overrides))
+    Ok(apply_overlays(layers, cli_overrides))
 }
 
-#[cfg(test)]
-async fn load_layered_config_with_cli_overrides_for_tests(
-    codex_home: PathBuf,
-    cli_overrides: Vec<(String, TomlValue)>,
-    overrides: crate::config_loader::LoaderOverrides,
-) -> std::io::Result<TomlValue> {
-    load_layered_config_with_cli_overrides(codex_home, cli_overrides, overrides).await
-}
-
-fn finalize_layers_with_overrides(
+fn apply_overlays(
     layers: LoadedConfigLayers,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> TomlValue {
@@ -285,14 +276,10 @@ fn finalize_layers_with_overrides(
         managed_preferences,
     } = layers;
 
-    // CLI overrides sit directly on top of the base user config before we apply
-    // any machine-managed layers.
     for (path, value) in cli_overrides.into_iter() {
         apply_toml_override(&mut base, &path, value);
     }
 
-    // Managed configuration comes after CLI overrides, with managed
-    // preferences (MDM) as the highest-precedence layer.
     for overlay in [managed_config, managed_preferences].into_iter().flatten() {
         merge_toml_values(&mut base, &overlay);
     }
@@ -1409,7 +1396,7 @@ exclude_slash_tmp = true
             managed_preferences_base64: None,
         };
 
-        let root_value = load_layered_config_with_cli_overrides_for_tests(
+        let root_value = load_effective_config(
             codex_home.path().to_path_buf(),
             vec![("model".to_string(), TomlValue::String("cli".to_string()))],
             overrides,
