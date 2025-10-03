@@ -60,7 +60,7 @@ jobs:
             - When unsure, prefer returning fewer matches.
             - Include at most five numbers.
 
-          output_schema: | 
+          output_schema: |
             {
               "type": "object",
               "properties": {

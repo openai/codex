@@ -1,4 +1,3 @@
-
 <p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
@@ -63,7 +62,6 @@ You can also use Codex with an API key, but this requires [additional setup](./d
 ### Model Context Protocol (MCP)
 
 Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
-
 
 ### Configuration
 
