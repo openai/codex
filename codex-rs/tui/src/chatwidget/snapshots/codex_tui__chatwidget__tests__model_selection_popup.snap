@@ -5,8 +5,8 @@ expression: popup
   Select Model
   Switch the model for this and future Codex CLI sessions
 
-  1. gpt-5                  Broad world knowledge with strong general
+› 1. gpt-5-codex (current)  Optimized for coding tasks with many tools.
+  2. gpt-5                  Broad world knowledge with strong general
                             reasoning.
-› 2. gpt-5-codex (current)  Optimized for coding tasks with many tools.
 
   Press enter to confirm or esc to go back
