@@ -1,3 +1,5 @@
+pub use crate::config_loader::load_config_as_toml;
+pub use crate::config_loader::load_config_as_toml_blocking;
 use crate::config_profile::ConfigProfile;
 use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config_types::History;
@@ -295,7 +297,7 @@ fn load_layered_config_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<TomlValue> {
-    let layers = crate::config_loader::load_config_layers(codex_home)?;
+    let layers = crate::config_loader::load_config_layers_blocking(codex_home)?;
     Ok(finalize_layers_with_overrides(layers, cli_overrides))
 }
 
@@ -303,7 +305,7 @@ async fn load_layered_config_with_cli_overrides_async(
     codex_home: PathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<TomlValue> {
-    let layers = crate::config_loader::load_config_layers_async(codex_home).await?;
+    let layers = crate::config_loader::load_config_layers(codex_home).await?;
     Ok(finalize_layers_with_overrides(layers, cli_overrides))
 }
 
@@ -331,14 +333,10 @@ fn finalize_layers_with_overrides(
 
     base
 }
-
-pub use crate::config_loader::load_config_as_toml;
-pub use crate::config_loader::load_config_as_toml_async;
-
 pub fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value = crate::config_loader::load_config_as_toml(codex_home)?;
+    let root_value = crate::config_loader::load_config_as_toml_blocking(codex_home)?;
     let Some(servers_value) = root_value.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
@@ -352,8 +350,7 @@ pub fn load_global_mcp_servers(
 pub async fn load_global_mcp_servers_async(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value =
-        crate::config_loader::load_config_as_toml_async(codex_home.to_path_buf()).await?;
+    let root_value = crate::config_loader::load_config_as_toml(codex_home.to_path_buf()).await?;
     let Some(servers_value) = root_value.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };

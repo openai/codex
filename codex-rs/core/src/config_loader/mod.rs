@@ -13,7 +13,6 @@ use toml::Value as TomlValue;
 mod test_support {
     /// Test-only override plumbing so integration tests can bypass the
     /// environment variable and supply a managed config path directly.
-    use super::*;
     use std::panic::AssertUnwindSafe;
     use std::panic::catch_unwind;
     use std::panic::resume_unwind;
@@ -70,8 +69,14 @@ mod test_support {
 
 #[cfg(test)]
 use test_support::current_managed_config_path_override;
+
 #[cfg(test)]
-pub(super) use test_support::with_managed_config_path_override;
+pub(super) fn with_managed_config_path_override<R>(
+    path: Option<&Path>,
+    f: impl FnOnce() -> R + std::panic::UnwindSafe,
+) -> R {
+    test_support::with_managed_config_path_override(path, f)
+}
 
 const CONFIG_TOML_FILE: &str = "config.toml";
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_MANAGED_CONFIG_PATH";
@@ -103,12 +108,12 @@ pub(crate) struct LoadedConfigLayers {
 //
 // (*) Only available on macOS via managed device profiles.
 
-pub async fn load_config_as_toml_async(codex_home: PathBuf) -> io::Result<TomlValue> {
+pub async fn load_config_as_toml(codex_home: PathBuf) -> io::Result<TomlValue> {
     let LoadedConfigLayers {
         mut base,
         managed_config,
         managed_preferences,
-    } = load_config_layers_async(codex_home).await?;
+    } = load_config_layers(codex_home).await?;
 
     for overlay in [managed_config, managed_preferences].into_iter().flatten() {
         merge_toml_values(&mut base, &overlay);
@@ -117,13 +122,11 @@ pub async fn load_config_as_toml_async(codex_home: PathBuf) -> io::Result<TomlVa
     Ok(base)
 }
 
-pub fn load_config_as_toml(codex_home: &Path) -> io::Result<TomlValue> {
-    block_on_config_future(load_config_as_toml_async(codex_home.to_path_buf()))
+pub fn load_config_as_toml_blocking(codex_home: &Path) -> io::Result<TomlValue> {
+    block_on_config_future(load_config_as_toml(codex_home.to_path_buf()))
 }
 
-pub(crate) async fn load_config_layers_async(
-    codex_home: PathBuf,
-) -> io::Result<LoadedConfigLayers> {
+pub(crate) async fn load_config_layers(codex_home: PathBuf) -> io::Result<LoadedConfigLayers> {
     let user_config = read_config_from_path(codex_home.join(CONFIG_TOML_FILE), true).await?;
     let managed_config = read_config_from_path(managed_config_path(&codex_home), false).await?;
     let managed_preferences = load_managed_admin_config_layer_async().await?;
@@ -135,8 +138,8 @@ pub(crate) async fn load_config_layers_async(
     })
 }
 
-pub(crate) fn load_config_layers(codex_home: &Path) -> io::Result<LoadedConfigLayers> {
-    block_on_config_future(load_config_layers_async(codex_home.to_path_buf()))
+pub(crate) fn load_config_layers_blocking(codex_home: &Path) -> io::Result<LoadedConfigLayers> {
+    block_on_config_future(load_config_layers(codex_home.to_path_buf()))
 }
 
 fn default_empty_table() -> TomlValue {
@@ -333,7 +336,7 @@ extra = true
             )
             .expect("write managed config");
 
-            let loaded = load_config_as_toml(tmp.path()).expect("load config");
+            let loaded = load_config_as_toml_blocking(tmp.path()).expect("load config");
             let table = loaded.as_table().expect("top-level table expected");
 
             assert_eq!(table.get("foo"), Some(&TomlValue::Integer(2)));
@@ -354,7 +357,7 @@ extra = true
         let managed_path = tmp.path().join("managed_config.toml");
 
         super::with_managed_config_path_override(Some(&managed_path), || {
-            let layers = load_config_layers(tmp.path()).expect("load layers");
+            let layers = load_config_layers_blocking(tmp.path()).expect("load layers");
             let base_table = layers.base.as_table().expect("base table expected");
             assert!(
                 base_table.is_empty(),
@@ -367,7 +370,7 @@ extra = true
 
             #[cfg(not(target_os = "macos"))]
             {
-                let loaded = load_config_as_toml(tmp.path()).expect("load config");
+                let loaded = load_config_as_toml_blocking(tmp.path()).expect("load config");
                 let table = loaded.as_table().expect("top-level table expected");
                 assert!(
                     table.is_empty(),
@@ -399,7 +402,7 @@ flag = true
             )
             .expect("write managed config");
 
-            let loaded = load_config_as_toml(tmp.path()).expect("load config");
+            let loaded = load_config_as_toml_blocking(tmp.path()).expect("load config");
             let nested = loaded
                 .get("nested")
                 .and_then(|v| v.as_table())

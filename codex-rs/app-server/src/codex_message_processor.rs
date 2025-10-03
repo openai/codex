@@ -63,7 +63,7 @@ use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
-use codex_core::config::load_config_as_toml_async;
+use codex_core::config::load_config_as_toml;
 use codex_core::config_edit::CONFIG_KEY_EFFORT;
 use codex_core::config_edit::CONFIG_KEY_MODEL;
 use codex_core::config_edit::persist_overrides_and_clear_if_none;
@@ -499,7 +499,7 @@ impl CodexMessageProcessor {
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {
-        let toml_value = match load_config_as_toml_async(self.config.codex_home.clone()).await {
+        let toml_value = match load_config_as_toml(self.config.codex_home.clone()).await {
             Ok(val) => val,
             Err(err) => {
                 let error = JSONRPCErrorError {
