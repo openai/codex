@@ -51,6 +51,8 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::config::AdminAuditContext;
+use crate::config::AdminConfig;
 use crate::config::Config;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
@@ -291,6 +293,8 @@ pub(crate) struct TurnContext {
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) admin: AdminConfig,
+    pub(crate) danger_full_access_justification: Option<String>,
 }
 
 impl TurnContext {
@@ -488,6 +492,8 @@ impl Session {
             cwd,
             is_review_mode: false,
             final_output_json_schema: None,
+            admin: config.admin.clone(),
+            danger_full_access_justification: config.danger_full_access_justification.clone(),
         };
         let services = SessionServices {
             mcp_connection_manager,
@@ -957,6 +963,7 @@ impl Session {
             exec_args.sandbox_cwd,
             exec_args.codex_linux_sandbox_exe,
             exec_args.stdout_stream,
+            exec_args.admin_audit.as_ref(),
         )
         .await;
 
@@ -1201,6 +1208,8 @@ async fn submission_loop(
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
                     final_output_json_schema: None,
+                    admin: prev.admin.clone(),
+                    danger_full_access_justification: prev.danger_full_access_justification.clone(),
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1301,6 +1310,10 @@ async fn submission_loop(
                         cwd,
                         is_review_mode: false,
                         final_output_json_schema,
+                        admin: turn_context.admin.clone(),
+                        danger_full_access_justification: turn_context
+                            .danger_full_access_justification
+                            .clone(),
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1560,6 +1573,10 @@ async fn spawn_review_thread(
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
         final_output_json_schema: None,
+        admin: parent_turn_context.admin.clone(),
+        danger_full_access_justification: parent_turn_context
+            .danger_full_access_justification
+            .clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2634,6 +2651,7 @@ pub struct ExecInvokeArgs<'a> {
     pub sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
     pub stdout_stream: Option<StdoutStream>,
+    pub admin_audit: Option<AdminAuditContext>,
 }
 
 fn maybe_translate_shell_command(
@@ -2883,6 +2901,10 @@ async fn handle_container_exec_with_params(
                         tx_event: sess.tx_event.clone(),
                     })
                 },
+                admin_audit: turn_context.admin.audit_context(
+                    format!("codex:{tool_name}"),
+                    turn_context.danger_full_access_justification.clone(),
+                ),
             },
         )
         .await;
@@ -3010,6 +3032,10 @@ async fn handle_sandbox_error(
                                 tx_event: sess.tx_event.clone(),
                             })
                         },
+                        admin_audit: turn_context.admin.audit_context(
+                            format!("codex:{tool_name}"),
+                            turn_context.danger_full_access_justification.clone(),
+                        ),
                     },
                 )
                 .await;
@@ -3609,6 +3635,8 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            admin: config.admin.clone(),
+            danger_full_access_justification: config.danger_full_access_justification.clone(),
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -3678,6 +3706,8 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            admin: config.admin.clone(),
+            danger_full_access_justification: config.danger_full_access_justification.clone(),
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),

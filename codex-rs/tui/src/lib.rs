@@ -11,6 +11,7 @@ use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::config::AdminAuditEvent;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -22,7 +23,11 @@ use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use serde_json::json;
 use std::fs::OpenOptions;
+use std::io::IsTerminal;
+use std::io::Write;
+use std::io::{self};
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
@@ -111,6 +116,8 @@ pub async fn run_main(
         )
     };
 
+    let mut danger_justification = normalize_justification(cli.danger_justification.clone());
+
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
     // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
     // `oss` model provider.
@@ -170,6 +177,41 @@ pub async fn run_main(
             }
         }
     };
+
+    if matches!(config.sandbox_policy, SandboxPolicy::DangerFullAccess) {
+        if config.admin.forbids_danger() {
+            eprintln!("danger-full-access is disabled by the administrator on this host.");
+            std::process::exit(1);
+        }
+
+        if config.admin.requires_justification() && danger_justification.is_none() {
+            danger_justification = prompt_for_danger_justification();
+            if danger_justification.is_none() {
+                eprintln!(
+                    "danger-full-access requires --danger-justification <TEXT> as mandated by your administrator."
+                );
+                std::process::exit(1);
+            }
+        }
+
+        config.danger_full_access_justification = danger_justification.clone();
+
+        if let Some(context) = config
+            .admin
+            .audit_context("tui", danger_justification.clone())
+        {
+            context
+                .log_json_event(
+                    AdminAuditEvent::Danger,
+                    json!({
+                        "approval_policy": config.approval_policy.to_string(),
+                        "sandbox_policy": "danger-full-access",
+                        "justification": danger_justification.clone(),
+                    }),
+                )
+                .await;
+        }
+    }
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
@@ -454,6 +496,43 @@ fn restore() {
         eprintln!(
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
+    }
+}
+
+fn normalize_justification(value: Option<String>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn prompt_for_danger_justification() -> Option<String> {
+    let stdin = io::stdin();
+    if !stdin.is_terminal() {
+        return None;
+    }
+
+    println!("Administrator requires a justification to run with danger-full-access.");
+    print!("Reason: ");
+    if let Err(err) = io::stdout().flush() {
+        warn!(
+            ?err,
+            "failed to flush stdout while prompting for danger justification"
+        );
+        return None;
+    }
+
+    let mut input = String::new();
+    match stdin.read_line(&mut input) {
+        Ok(_) => normalize_justification(Some(input)),
+        Err(err) => {
+            warn!(?err, "failed to read danger justification from stdin");
+            None
+        }
     }
 }
 

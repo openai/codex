@@ -326,6 +326,43 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
+## admin
+
+Administrators can enforce host-wide policies by adding an `[admin]` table. The following snippet disables `danger-full-access` by default, allows users to proceed when they provide an explicit reason, and records audit data for each escalation/command:
+
+```toml
+# Example administrator configuration applied to every Codex user on this host.
+
+[admin]
+# Disallow --sandbox danger-full-access
+disallow_danger_full_access = true
+
+# Permit end users to proceed after providing a justification, which will be
+# logged via the admin audit hook below.
+allow_danger_with_reason = true
+
+[admin.audit]
+# (optional) file path to append audit entries as JSONL.
+log_file = "~/Library/Logs/com.openai.codex/codex_audit.jsonl"
+# (optional) HTTP webhook to receive audit events whenever Codex logs an event.
+log_endpoint = "http://localhost:5000/collect"
+# (optional) Determine which events to log.
+log_events = ["danger", "command"]
+```
+
+- `disallow_danger_full_access`: blocks `--sandbox danger-full-access` (and the `--dangerously-bypass-approvals-and-sandbox` shortcut). When paired with `allow_danger_with_reason = true`, Codex prompts for a justification before proceeding. In non-interactive contexts (for example, `codex exec`), pass `--danger-justification "why you need it"`.
+- `allow_danger_with_reason`: when `true`, users can supply a justification to temporarily enable `danger-full-access`. The justification is recorded in audit logs.
+
+### admin.audit
+
+Configure optional audit sinks:
+
+- `log_file`: append JSON Lines entries to the given path. `~` is expanded to the current user's home directory.
+- `log_endpoint`: POST each audit event as JSON to the provided HTTP endpoint.
+- `log_events`: filter which events are emitted. Supported values are `"danger"` (when `danger-full-access` is enabled) and `"command"` (each command execution). Omit or leave empty to record all supported events.
+
+Danger escalations include the user's justification along with the resolved sandbox and approval policy. Command events capture the command, working directory, sandbox policy, and the exit status (or error) of the invocation.
+
 ## Approval presets
 
 Codex provides three main Approval Presets:

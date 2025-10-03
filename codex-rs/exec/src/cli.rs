@@ -34,6 +34,10 @@ pub struct Cli {
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
+    /// Optional justification required when administrators allow danger-full-access only with a reason.
+    #[arg(long = "danger-justification", value_name = "TEXT")]
+    pub danger_justification: Option<String>,
+
     /// Skip all confirmation prompts and execute commands without sandboxing.
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(

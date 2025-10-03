@@ -15,6 +15,8 @@ use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 
+use crate::config::AdminAuditContext;
+use crate::config::AdminAuditEvent;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
@@ -27,6 +29,9 @@ use crate::protocol::SandboxPolicy;
 use crate::seatbelt::spawn_command_under_seatbelt;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+
+use serde_json::Value as JsonValue;
+use serde_json::json;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -86,10 +91,15 @@ pub async fn process_exec_tool_call(
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
+    admin_audit: Option<&AdminAuditContext>,
 ) -> Result<ExecToolCallOutput> {
     let start = Instant::now();
 
     let timeout_duration = params.timeout_duration();
+    let audit_command = params.command.clone();
+    let audit_cwd = params.cwd.clone();
+    let audit_justification = params.justification.clone();
+    let audit_escalated = params.with_escalated_permissions.unwrap_or(false);
 
     let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
     {
@@ -138,7 +148,8 @@ pub async fn process_exec_tool_call(
         }
     };
     let duration = start.elapsed();
-    match raw_output_result {
+
+    let result: Result<ExecToolCallOutput> = match raw_output_result {
         Ok(raw_output) => {
             #[allow(unused_mut)]
             let mut timed_out = raw_output.timed_out;
@@ -172,24 +183,41 @@ pub async fn process_exec_tool_call(
             };
 
             if timed_out {
-                return Err(CodexErr::Sandbox(SandboxErr::Timeout {
+                Err(CodexErr::Sandbox(SandboxErr::Timeout {
                     output: Box::new(exec_output),
-                }));
-            }
-
-            if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
-                return Err(CodexErr::Sandbox(SandboxErr::Denied {
+                }))
+            } else if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
+                Err(CodexErr::Sandbox(SandboxErr::Denied {
                     output: Box::new(exec_output),
-                }));
+                }))
+            } else {
+                Ok(exec_output)
             }
-
-            Ok(exec_output)
         }
         Err(err) => {
             tracing::error!("exec error: {err}");
             Err(err)
         }
+    };
+
+    if let Some(context) = admin_audit {
+        let payload = build_command_audit_payload(
+            &audit_command,
+            &audit_cwd,
+            audit_escalated,
+            audit_justification.as_deref(),
+            sandbox_type,
+            sandbox_policy,
+            sandbox_cwd,
+            &result,
+            duration,
+        );
+        context
+            .log_json_event(AdminAuditEvent::Command, payload)
+            .await;
     }
+
+    result
 }
 
 /// We don't have a fully deterministic way to tell if our command failed
@@ -210,6 +238,64 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exit_code: i32) -> bool {
 
     // For all other cases, we assume the sandbox is the cause
     true
+}
+
+fn describe_sandbox_type(sandbox_type: SandboxType) -> &'static str {
+    match sandbox_type {
+        SandboxType::None => "none",
+        SandboxType::MacosSeatbelt => "macos-seatbelt",
+        SandboxType::LinuxSeccomp => "linux-seccomp",
+    }
+}
+
+fn describe_sandbox_policy(sandbox_policy: &SandboxPolicy) -> &'static str {
+    match sandbox_policy {
+        SandboxPolicy::DangerFullAccess => "danger-full-access",
+        SandboxPolicy::ReadOnly => "read-only",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+    }
+}
+
+fn build_command_audit_payload(
+    command: &[String],
+    cwd: &Path,
+    with_escalated_permissions: bool,
+    justification: Option<&str>,
+    sandbox_type: SandboxType,
+    sandbox_policy: &SandboxPolicy,
+    sandbox_cwd: &Path,
+    result: &Result<ExecToolCallOutput>,
+    duration: Duration,
+) -> JsonValue {
+    let (status, details) = match result {
+        Ok(output) => (
+            "ok",
+            json!({
+                "exit_code": output.exit_code,
+                "timed_out": output.timed_out,
+                "duration_ms": output.duration.as_millis(),
+            }),
+        ),
+        Err(err) => (
+            "error",
+            json!({
+                "error": err.to_string(),
+                "duration_ms": duration.as_millis(),
+            }),
+        ),
+    };
+
+    json!({
+        "command": command,
+        "cwd": cwd.to_string_lossy(),
+        "with_escalated_permissions": with_escalated_permissions,
+        "justification": justification,
+        "sandbox_type": describe_sandbox_type(sandbox_type),
+        "sandbox_policy": describe_sandbox_policy(sandbox_policy),
+        "sandbox_cwd": sandbox_cwd.to_string_lossy(),
+        "status": status,
+        "result": details,
+    })
 }
 
 #[derive(Debug)]

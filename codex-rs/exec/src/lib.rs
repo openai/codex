@@ -9,6 +9,7 @@ use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::config::AdminAuditEvent;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::git_info::get_git_repo_root;
@@ -17,6 +18,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -25,6 +27,7 @@ use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use serde_json::Value;
+use serde_json::json;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
@@ -53,6 +56,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         oss,
         config_profile,
         full_auto,
+        danger_justification,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
         skip_git_repo_check,
@@ -65,6 +69,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_plan_tool,
         config_overrides,
     } = cli;
+
+    let mut danger_justification = normalize_justification(danger_justification);
 
     // Determine the prompt source (parent or subcommand) and read from stdin if needed.
     let prompt_arg = match &command {
@@ -185,7 +191,37 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    let mut config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+
+    if matches!(config.sandbox_policy, SandboxPolicy::DangerFullAccess) {
+        if config.admin.forbids_danger() {
+            anyhow::bail!("danger-full-access is disabled by the administrator on this host");
+        }
+
+        if config.admin.requires_justification() && danger_justification.is_none() {
+            anyhow::bail!(
+                "danger-full-access requires --danger-justification <TEXT> as mandated by your administrator"
+            );
+        }
+
+        config.danger_full_access_justification = danger_justification.clone();
+
+        if let Some(context) = config
+            .admin
+            .audit_context("exec", danger_justification.clone())
+        {
+            context
+                .log_json_event(
+                    AdminAuditEvent::Danger,
+                    json!({
+                        "approval_policy": config.approval_policy.to_string(),
+                        "sandbox_policy": "danger-full-access",
+                        "justification": danger_justification.clone(),
+                    }),
+                )
+                .await;
+        }
+    }
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 
@@ -393,6 +429,17 @@ async fn resolve_resume_path(
     } else {
         Ok(None)
     }
+}
+
+fn normalize_justification(value: Option<String>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {

@@ -438,6 +438,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     if let Some(prompt) = resume_cli.prompt {
         interactive.prompt = Some(prompt);
     }
+    if let Some(justification) = resume_cli.danger_justification {
+        interactive.danger_justification = Some(justification);
+    }
 
     interactive
         .config_overrides

@@ -31,11 +31,20 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use dirs::home_dir;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
+use tokio::task;
+use tracing::warn;
+
+use chrono::Utc;
+use serde_json::Value as JsonValue;
+use serde_json::json;
 use toml::Value as TomlValue;
 use toml_edit::Array as TomlArray;
 use toml_edit::DocumentMut;
@@ -83,6 +92,12 @@ pub struct Config {
     pub approval_policy: AskForApproval,
 
     pub sandbox_policy: SandboxPolicy,
+
+    /// Administrator-managed restrictions and audit hooks.
+    pub admin: AdminConfig,
+
+    /// Optional justification recorded when `danger-full-access` is enabled.
+    pub danger_full_access_justification: Option<String>,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
 
@@ -209,6 +224,171 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config_types::OtelConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AdminConfig {
+    pub disallow_danger_full_access: bool,
+    pub allow_danger_with_reason: bool,
+    pub audit: Option<AdminAudit>,
+}
+
+impl AdminConfig {
+    pub fn forbids_danger(&self) -> bool {
+        self.disallow_danger_full_access && !self.allow_danger_with_reason
+    }
+
+    pub fn requires_justification(&self) -> bool {
+        self.disallow_danger_full_access && self.allow_danger_with_reason
+    }
+
+    pub fn audit_context<S: Into<String>>(
+        &self,
+        source: S,
+        danger_full_access_justification: Option<String>,
+    ) -> Option<AdminAuditContext> {
+        let audit = self.audit.clone()?;
+        Some(AdminAuditContext {
+            audit,
+            source: source.into(),
+            danger_full_access_justification,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AdminAudit {
+    pub log_file: Option<PathBuf>,
+    pub log_endpoint: Option<String>,
+    pub log_events: BTreeSet<AdminAuditEvent>,
+}
+
+impl AdminAudit {
+    pub fn should_log(&self, event: AdminAuditEvent) -> bool {
+        if self.log_file.is_none() && self.log_endpoint.is_none() {
+            return false;
+        }
+
+        if self.log_events.is_empty() {
+            return true;
+        }
+
+        self.log_events.contains(&event)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AdminAuditEvent {
+    Danger,
+    Command,
+}
+
+impl AdminAuditEvent {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AdminAuditEvent::Danger => "danger",
+            AdminAuditEvent::Command => "command",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AdminAuditContext {
+    pub audit: AdminAudit,
+    pub source: String,
+    pub danger_full_access_justification: Option<String>,
+}
+
+impl AdminAuditContext {
+    pub async fn log_json_event(&self, event: AdminAuditEvent, payload: JsonValue) {
+        if !self.audit.should_log(event) {
+            return;
+        }
+
+        let timestamp = Utc::now();
+        let username = std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .ok();
+        let record = json!({
+            "ts": timestamp.to_rfc3339(),
+            "event": event.as_str(),
+            "source": self.source,
+            "user": username,
+            "pid": std::process::id(),
+            "danger_justification": self.danger_full_access_justification,
+            "payload": payload,
+        });
+
+        if let Some(log_file) = &self.audit.log_file {
+            let path = log_file.clone();
+            let serialized = match serde_json::to_string(&record) {
+                Ok(val) => val,
+                Err(err) => {
+                    warn!(?err, "failed to serialize admin audit record");
+                    return;
+                }
+            };
+            match task::spawn_blocking(move || {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)?;
+                file.write_all(serialized.as_bytes())?;
+                file.write_all(b"\n")?;
+                Ok::<(), std::io::Error>(())
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => warn!(?err, "failed to write admin audit log"),
+                Err(err) => warn!(?err, "failed to write admin audit log"),
+            }
+        }
+
+        if let Some(endpoint) = &self.audit.log_endpoint {
+            let record = record.clone();
+            let endpoint = endpoint.clone();
+            task::spawn(async move {
+                let client = reqwest::Client::new();
+                if let Err(err) = client.post(endpoint).json(&record).send().await {
+                    warn!(?err, "failed to send admin audit webhook");
+                }
+            });
+        }
+    }
+}
+
+impl From<AdminConfigToml> for AdminConfig {
+    fn from(value: AdminConfigToml) -> Self {
+        let audit = value.audit.and_then(|audit| {
+            let log_file = audit.log_file.map(|path| expand_home_path(&path));
+            let log_endpoint = audit.log_endpoint;
+            let log_events = audit
+                .log_events
+                .into_iter()
+                .collect::<BTreeSet<AdminAuditEvent>>();
+
+            if log_file.is_none() && log_endpoint.is_none() {
+                None
+            } else {
+                Some(AdminAudit {
+                    log_file,
+                    log_endpoint,
+                    log_events,
+                })
+            }
+        });
+
+        Self {
+            disallow_danger_full_access: value.disallow_danger_full_access,
+            allow_danger_with_reason: value.allow_danger_with_reason,
+            audit,
+        }
+    }
 }
 
 impl Config {
@@ -623,6 +803,24 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct AdminConfigToml {
+    #[serde(default)]
+    pub disallow_danger_full_access: bool,
+    #[serde(default)]
+    pub allow_danger_with_reason: bool,
+    #[serde(default)]
+    pub audit: Option<AdminAuditToml>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct AdminAuditToml {
+    pub log_file: Option<String>,
+    pub log_endpoint: Option<String>,
+    #[serde(default)]
+    pub log_events: Vec<AdminAuditEvent>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigToml {
@@ -654,6 +852,9 @@ pub struct ConfigToml {
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+
+    #[serde(default)]
+    pub admin: Option<AdminConfigToml>,
 
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
@@ -923,6 +1124,8 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
+        let admin = cfg.admin.clone().unwrap_or_default().into();
+
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
         let mut model_providers = built_in_model_providers();
@@ -1037,6 +1240,8 @@ impl Config {
                 .or(cfg.approval_policy)
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
+            admin,
+            danger_full_access_justification: None,
             shell_environment_policy,
             notify: cfg.notify,
             user_instructions,
@@ -1180,6 +1385,20 @@ fn default_model() -> String {
 
 fn default_review_model() -> String {
     OPENAI_DEFAULT_REVIEW_MODEL.to_string()
+}
+
+fn expand_home_path(path: &str) -> PathBuf {
+    if path == "~" {
+        if let Some(home) = home_dir() {
+            return home;
+        }
+    } else if let Some(stripped) = path.strip_prefix("~/") {
+        if let Some(home) = home_dir() {
+            return home.join(stripped);
+        }
+    }
+
+    PathBuf::from(path)
 }
 
 /// Returns the path to the Codex configuration directory, which can be
@@ -1823,6 +2042,8 @@ model_verbosity = "high"
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                admin: AdminConfig::default(),
+                danger_full_access_justification: None,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
@@ -1884,6 +2105,8 @@ model_verbosity = "high"
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            admin: AdminConfig::default(),
+            danger_full_access_justification: None,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -1960,6 +2183,8 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            admin: AdminConfig::default(),
+            danger_full_access_justification: None,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
@@ -2022,6 +2247,8 @@ model_verbosity = "high"
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            admin: AdminConfig::default(),
+            danger_full_access_justification: None,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
