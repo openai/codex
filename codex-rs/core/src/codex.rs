@@ -89,7 +89,6 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
-use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
@@ -786,40 +785,30 @@ impl Session {
     async fn set_total_tokens_full(&self, sub_id: &str, turn_context: &TurnContext) {
         let context_window = turn_context.client.get_model_context_window();
         if let Some(context_window) = context_window {
+            let current_total = {
+                let state = self.state.lock().await;
+                state
+                    .get_token_info()
+                    .map(|info| info.total_token_usage.total_tokens)
+                    .unwrap_or(0)
+            };
+
             {
                 let mut state = self.state.lock().await;
                 if let Some(mut token_info) = state.get_token_info() {
-                    let previous_total = token_info.total_token_usage.total_tokens;
-                    token_info.total_token_usage.total_tokens = context_window;
-                    let delta = if previous_total >= context_window {
-                        context_window
-                    } else {
-                        context_window - previous_total
-                    };
-                    token_info.last_token_usage = TokenUsage {
-                        total_tokens: delta,
-                        ..TokenUsage::default()
-                    };
                     if token_info.model_context_window.is_none() {
                         token_info.model_context_window = Some(context_window);
+                        state.set_token_info(token_info);
                     }
-                    state.set_token_info(token_info);
-                } else {
-                    let token_info = TokenUsageInfo {
-                        total_token_usage: TokenUsage {
-                            total_tokens: context_window,
-                            ..TokenUsage::default()
-                        },
-                        last_token_usage: TokenUsage {
-                            total_tokens: context_window,
-                            ..TokenUsage::default()
-                        },
-                        model_context_window: Some(context_window),
-                    };
-                    state.set_token_info(token_info);
                 }
             }
-            self.send_token_count_event(sub_id).await;
+
+            let delta = context_window.saturating_sub(current_total);
+            let mut last_usage = TokenUsage::default();
+            last_usage.total_tokens = delta;
+
+            self.update_token_usage_info(sub_id, turn_context, Some(&last_usage))
+                .await;
         }
     }
 
