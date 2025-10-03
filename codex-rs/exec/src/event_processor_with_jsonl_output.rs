@@ -428,6 +428,7 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         });
     }
 
+    #[allow(clippy::print_stdout)]
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let aggregated = self.collect_thread_events(&event);
         for conv_event in aggregated {
