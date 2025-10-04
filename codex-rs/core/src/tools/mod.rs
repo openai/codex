@@ -145,6 +145,7 @@ pub(crate) async fn handle_container_exec_with_params(
         )
         .await;
 
+    // always make sure to truncate the output if its length isn't controlled.
     match output_result {
         Ok(output) => {
             let ExecToolCallOutput { exit_code, .. } = &output;
