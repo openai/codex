@@ -470,7 +470,10 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
     let call_id = "shell-denied";
     let long_line = "this is a long stderr line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz";
     let script = format!(
+<<<<<<< HEAD
         "for i in $(seq 1 500); do >&2 echo '{long_line}'; done; cat <<'EOF' > denied.txt\ncontent\nEOF",
+=======
+        "for i in $(seq 1 500); do echo '{long_line}' >&2; done; cat <<'EOF' > denied.txt\ncontent\nEOF",
     );
     let args = json!({
         "command": ["/bin/sh", "-c", script],
@@ -512,8 +515,18 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
         .expect("denied output string");
 
     assert!(
+<<<<<<< HEAD
         output.starts_with("failed in sandbox: "),
         "expected sandbox error prefix, got {output:?}"
+=======
+        output.starts_with("failed in sandbox:"),
+        "expected sandbox failure prefix, got {output:?}"
+    );
+    assert!(
+        output.len() <= 10 * 1024,
+        "expected truncated output to stay within byte budget, len={}",
+        output.len()
+>>>>>>> 0fbe4bfa (exec-bug)
     );
     assert!(
         output.contains("[... omitted"),

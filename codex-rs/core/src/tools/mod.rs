@@ -156,7 +156,23 @@ pub(crate) async fn handle_container_exec_with_params(
                 Err(FunctionCallError::RespondToModel(content))
             }
         }
+<<<<<<< HEAD
         Err(ExecError::Function(err)) => Err(truncate_function_error(err)),
+=======
+        Err(ExecError::Function(err)) => match err {
+            FunctionCallError::RespondToModel(msg) => {
+                let message = truncate_formatted_exec_output(&msg);
+                Err(FunctionCallError::RespondToModel(message))
+            }
+            FunctionCallError::MissingLocalShellCallId => {
+                Err(FunctionCallError::MissingLocalShellCallId)
+            }
+            FunctionCallError::Fatal(msg) => {
+                let message = truncate_formatted_exec_output(&msg);
+                Err(FunctionCallError::Fatal(message))
+            }
+        },
+>>>>>>> 0fbe4bfa (exec-bug)
         Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
             FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
         ),
