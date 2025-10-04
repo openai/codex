@@ -31,6 +31,10 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Token usage threshold that triggers auto-compaction.
+    #[arg(long = "auto-compact-limit", value_name = "TOKENS")]
+    pub auto_compact_limit: Option<i64>,
+
     /// Convenience flag to select the local open source model provider.
     /// Equivalent to -c model_provider=oss; verifies a local Ollama server is
     /// running.

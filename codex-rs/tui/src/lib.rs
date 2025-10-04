@@ -149,7 +149,7 @@ pub async fn run_main(
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
         auto_compact_mode: None,
-        auto_compact_threshold_tokens: None,
+        auto_compact_threshold_tokens: cli.auto_compact_limit,
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };

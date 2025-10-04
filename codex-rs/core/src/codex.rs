@@ -63,6 +63,7 @@ use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
 use crate::parse_command::parse_command;
+use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
@@ -144,6 +145,10 @@ pub struct CodexSpawnOk {
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
 
+fn is_context_window_error(message: &str) -> bool {
+    let lowercase = message.to_ascii_lowercase();
+    lowercase.contains("context window") || lowercase.contains("maximum context length")
+}
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub async fn spawn(
@@ -1145,6 +1150,7 @@ async fn submission_loop(
                 effort,
                 summary,
                 auto_compact,
+                auto_compact_limit,
             } => {
                 // Recalculate the persistent turn context with provided overrides.
                 let prev = Arc::clone(&turn_context);
@@ -1169,7 +1175,18 @@ async fn submission_loop(
                 let mut updated_config = (*config).clone();
                 if let Some(auto_compact_mode) = auto_compact {
                     updated_config.auto_compact_mode = auto_compact_mode;
-                    Arc::make_mut(&mut config).auto_compact_mode = auto_compact_mode;
+                }
+                if let Some(limit) = auto_compact_limit {
+                    updated_config.model_auto_compact_token_limit = limit;
+                }
+                if auto_compact.is_some() || auto_compact_limit.is_some() {
+                    let mutable_config = Arc::make_mut(&mut config);
+                    if let Some(auto_compact_mode) = auto_compact {
+                        mutable_config.auto_compact_mode = auto_compact_mode;
+                    }
+                    if let Some(limit) = auto_compact_limit {
+                        mutable_config.model_auto_compact_token_limit = limit;
+                    }
                 }
                 updated_config.model = effective_model.clone();
                 updated_config.model_family = effective_family.clone();
@@ -1908,10 +1925,52 @@ pub(crate) async fn run_task(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
+                let mut error_message = e.to_string();
+                let mut handled = false;
+                if let CodexErr::Stream(message, _) = &e {
+                    if is_context_window_error(message) {
+                        match turn_context.client.get_auto_compact_mode() {
+                            AutoCompactMode::Auto | AutoCompactMode::SmartAuto => {
+                                if auto_retry_in_progress {
+                                    auto_retry_in_progress = false;
+                                    error_message = format!(
+                                        "{} Automatic summarization couldn't shrink the conversation below the limit. Try lowering the auto-compact limit, trimming your prompt, or starting a new session.",
+                                        message
+                                    );
+                                } else {
+                                    auto_retry_in_progress = true;
+                                    compact::run_inline_auto_compact_task(
+                                        sess.clone(),
+                                        turn_context.clone(),
+                                    )
+                                    .await;
+                                    handled = true;
+                                }
+                            }
+                            AutoCompactMode::Manual => {
+                                error_message = format!(
+                                    "{} Auto-compaction is set to manual; run /compact (or set a custom limit under /auto-compact) before retrying.",
+                                    message
+                                );
+                            }
+                            AutoCompactMode::Off => {
+                                error_message = format!(
+                                    "{} Auto-compaction is disabled; enable it via /auto-compact or run /compact to summarize before retrying.",
+                                    message
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if handled {
+                    continue;
+                }
+
                 let event = Event {
                     id: sub_id.clone(),
                     msg: EventMsg::Error(ErrorEvent {
-                        message: e.to_string(),
+                        message: error_message,
                     }),
                 };
                 sess.send_event(event).await;

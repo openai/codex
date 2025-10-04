@@ -44,6 +44,7 @@ use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::ConversationId;
 use codex_protocol::config_types::AutoCompactMode;
+use codex_protocol::num_format::format_with_separators;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -1128,6 +1129,9 @@ impl ChatWidget {
             SlashCommand::AutoCompact => {
                 self.open_auto_compact_popup();
             }
+            SlashCommand::AutoCompactLimit => {
+                self.show_auto_compact_limit_editor();
+            }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
@@ -1737,6 +1741,7 @@ impl ChatWidget {
                     effort: Some(effort_for_action),
                     summary: None,
                     auto_compact: None,
+                    auto_compact_limit: None,
                 }));
                 tx.send(AppEvent::UpdateModel(model_for_action.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -1794,6 +1799,7 @@ impl ChatWidget {
                     effort: None,
                     summary: None,
                     auto_compact: None,
+                    auto_compact_limit: None,
                 }));
                 tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
                 tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
@@ -1818,7 +1824,61 @@ impl ChatWidget {
 
     pub(crate) fn open_auto_compact_popup(&mut self) {
         let current_mode = self.config.auto_compact_mode;
+        let custom_limit = self.config.model_auto_compact_token_limit;
+        let has_custom_limit = custom_limit.is_some();
+        let limit_caption = match custom_limit {
+            Some(limit) => format!(
+                "Auto-compaction is using a custom limit of {} tokens.",
+                format_with_separators(limit.max(0) as u64)
+            ),
+            None => "Auto-compaction currently uses the model's default token limit.".to_string(),
+        };
+        let custom_description = match custom_limit {
+            Some(limit) => format!(
+                "Currently {} tokens. Select to change the threshold.",
+                format_with_separators(limit.max(0) as u64)
+            ),
+            None => "Enter a token threshold to override the model's default limit.".to_string(),
+        };
+
         let mut items: Vec<SelectionItem> = Vec::new();
+
+        // Allow editing the custom limit
+        items.push(SelectionItem {
+            name: "Use custom token limit…".to_string(),
+            description: Some(custom_description),
+            is_current: has_custom_limit,
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenAutoCompactLimitEditor);
+            })],
+            dismiss_on_select: false,
+            search_value: Some("custom limit threshold override set".to_string()),
+        });
+
+        // Allow clearing the custom limit
+        items.push(SelectionItem {
+            name: "Use model default limit".to_string(),
+            description: Some(
+                "Clear the custom threshold and rely on the model's default.".to_string(),
+            ),
+            is_current: !has_custom_limit,
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    auto_compact: None,
+                    auto_compact_limit: Some(None),
+                }));
+                tx.send(AppEvent::UpdateAutoCompactLimit(None));
+            })],
+            dismiss_on_select: true,
+            search_value: Some("default reset clear model".to_string()),
+        });
+
         let options: &[(AutoCompactMode, &str, &str)] = &[
             (
                 AutoCompactMode::Auto,
@@ -1853,6 +1913,7 @@ impl ChatWidget {
                     effort: None,
                     summary: None,
                     auto_compact: Some(*mode),
+                    auto_compact_limit: None,
                 }));
                 tx.send(AppEvent::UpdateAutoCompactMode(*mode));
             })];
@@ -1868,7 +1929,10 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: "Auto-compact".to_string(),
-            subtitle: Some("Control automatic summarization of the conversation".to_string()),
+            subtitle: Some(format!(
+                "{} Select a mode or adjust the limit to fit your workflow.",
+                limit_caption
+            )),
             footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
             items,
             ..Default::default()
@@ -1898,6 +1962,10 @@ impl ChatWidget {
 
     pub(crate) fn set_auto_compact_mode(&mut self, mode: AutoCompactMode) {
         self.config.auto_compact_mode = mode;
+    }
+
+    pub(crate) fn set_auto_compact_limit(&mut self, limit: Option<i64>) {
+        self.config.model_auto_compact_token_limit = limit;
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
@@ -2141,6 +2209,74 @@ impl ChatWidget {
                         user_facing_hint: trimmed,
                     },
                 }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn show_auto_compact_limit_editor(&mut self) {
+        let custom_limit = self.config.model_auto_compact_token_limit;
+        let context_label = match custom_limit {
+            Some(limit) => format!(
+                "Current limit: {} tokens. Type a new value or `default` to reset.",
+                format_with_separators(limit.max(0) as u64)
+            ),
+            None => "Type a token limit (e.g., 200000). Enter `default` to use the model limit."
+                .to_string(),
+        };
+
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Set auto-compact token limit".to_string(),
+            "Type a positive integer and press Enter".to_string(),
+            Some(context_label),
+            Box::new(move |input: String| {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    return;
+                }
+                if trimmed.eq_ignore_ascii_case("default") {
+                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        model: None,
+                        effort: None,
+                        summary: None,
+                        auto_compact: None,
+                        auto_compact_limit: Some(None),
+                    }));
+                    tx.send(AppEvent::UpdateAutoCompactLimit(None));
+                    return;
+                }
+
+                let sanitized: String = trimmed
+                    .chars()
+                    .filter(|c| !matches!(c, ',' | '_'))
+                    .collect();
+                match sanitized.parse::<i64>() {
+                    Ok(value) if value > 0 => {
+                        tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                            cwd: None,
+                            approval_policy: None,
+                            sandbox_policy: None,
+                            model: None,
+                            effort: None,
+                            summary: None,
+                            auto_compact: None,
+                            auto_compact_limit: Some(Some(value)),
+                        }));
+                        tx.send(AppEvent::UpdateAutoCompactLimit(Some(value)));
+                    }
+                    _ => {
+                        let message = format!(
+                            "Failed to parse auto-compact limit `{trimmed}`. Enter a positive integer or `default`."
+                        );
+                        tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(message),
+                        )));
+                    }
+                }
             }),
         );
         self.bottom_pane.show_view(Box::new(view));

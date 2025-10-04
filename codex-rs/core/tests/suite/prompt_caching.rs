@@ -443,6 +443,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
             auto_compact: None,
+            auto_compact_limit: None,
         })
         .await
         .unwrap();

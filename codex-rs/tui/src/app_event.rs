@@ -77,6 +77,12 @@ pub(crate) enum AppEvent {
     /// Update the auto-compaction mode for the session.
     UpdateAutoCompactMode(AutoCompactMode),
 
+    /// Update (or clear) the token limit that triggers auto-compaction.
+    UpdateAutoCompactLimit(Option<i64>),
+
+    /// Open the editor that lets the user set a custom auto-compaction limit.
+    OpenAutoCompactLimitEditor,
+
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
 

@@ -130,6 +130,11 @@ pub enum Op {
         /// Updated auto-compaction mode.
         #[serde(skip_serializing_if = "Option::is_none")]
         auto_compact: Option<AutoCompactMode>,
+
+        /// Updated limit (in tokens) used to trigger auto-compaction. Use `None`
+        /// to revert to the model's default limit.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auto_compact_limit: Option<Option<i64>>,
     },
 
     /// Approve a command execution
