@@ -318,7 +318,7 @@ mod tests {
         let line = "respond-to-model error that should be truncated\n";
         let huge = line.repeat(3_000);
 
-        let err = truncate_function_error(FunctionCallError::RespondToModel(huge.clone()));
+        let err = truncate_function_error(FunctionCallError::RespondToModel(huge));
         match err {
             FunctionCallError::RespondToModel(message) => {
                 assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
@@ -334,7 +334,7 @@ mod tests {
         let line = "fatal error output that should be truncated\n";
         let huge = line.repeat(3_000);
 
-        let err = truncate_function_error(FunctionCallError::Fatal(huge.clone()));
+        let err = truncate_function_error(FunctionCallError::Fatal(huge));
         match err {
             FunctionCallError::Fatal(message) => {
                 assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
