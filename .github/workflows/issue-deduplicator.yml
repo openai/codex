@@ -55,8 +55,9 @@ jobs:
             - `codex-existing-issues.json`: JSON array of recent issues (each element includes number, title, body, createdAt).
 
             Instructions:
-            - Load both files as JSON and review their contents carefully. The codex-existing-issues.json file is large, ensure you explore all of it.
             - Compare the current issue against the existing issues to find up to five that appear to describe the same underlying problem or request.
+            - Focus on the underlying intent and context of each issue—such as reported symptoms, feature requests, reproduction steps, or error messages—rather than relying solely on string similarity or synthetic metrics.
+            - After your analysis, validate your results in 1-2 lines explaining your decision to return the selected matches.
             - When unsure, prefer returning fewer matches.
             - Include at most five numbers.
 
@@ -69,9 +70,10 @@ jobs:
                   "items": {
                     "type": "string"
                   }
-                }
+                },
+                "reason": { "type": "string" }
               },
-              "required": ["issues"],
+              "required": ["issues", "reason"],
               "additionalProperties": false
             }
 
