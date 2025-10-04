@@ -293,7 +293,7 @@ impl BottomPaneView for ListSelectionView {
                     .to_digit(10)
                     .map(|d| d as usize)
                     .and_then(|d| d.checked_sub(1))
-                    && idx < self.items.len()
+                    && idx < self.visible_len()
                 {
                     self.state.selected_idx = Some(idx);
                     self.accept();

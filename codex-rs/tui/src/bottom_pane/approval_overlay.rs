@@ -94,7 +94,7 @@ impl ApprovalOverlay {
         variant: ApprovalVariant,
         header: Box<dyn Renderable>,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
-        let (options, title) = match &variant {
+        let (mut options, title) = match &variant {
             ApprovalVariant::Exec { .. } => (
                 exec_options(),
                 "Would you like to run the following command?".to_string(),
@@ -104,6 +104,8 @@ impl ApprovalOverlay {
                 "Would you like to make the following edits?".to_string(),
             ),
         };
+
+        add_numeric_shortcuts(&mut options);
 
         let header = Box::new(ColumnRenderable::new([
             Box::new(Line::from(title.bold())),
@@ -395,6 +397,16 @@ fn patch_options() -> Vec<ApprovalOption> {
     ]
 }
 
+fn add_numeric_shortcuts(options: &mut [ApprovalOption]) {
+    for (idx, option) in options.iter_mut().enumerate() {
+        if let Some(digit) = char::from_digit((idx + 1) as u32, 10) {
+            option
+                .additional_shortcuts
+                .push(key_hint::plain(KeyCode::Char(digit)));
+        }
+    }
+}
+
 fn build_exec_history_lines(
     command: Vec<String>,
     decision: ReviewDecision,
@@ -517,6 +529,23 @@ mod tests {
             }
         }
         assert!(saw_op, "expected approval decision to emit an op");
+    }
+
+    #[test]
+    fn numeric_shortcut_triggers_selection() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_exec_request(), tx);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, AppEvent::CodexOp(_)) {
+                saw_op = true;
+                break;
+            }
+        }
+        assert!(saw_op, "expected numeric shortcut to emit an approval op");
     }
 
     #[test]
