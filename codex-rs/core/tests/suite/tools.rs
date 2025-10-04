@@ -502,7 +502,7 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
         .expect("denied output string");
 
     assert!(
-        output.starts_with("execution error:"),
+        output.starts_with("sandbox error:"),
         "expected execution error prefix, got {output:?}"
     );
     assert!(
