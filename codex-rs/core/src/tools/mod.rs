@@ -145,6 +145,7 @@ pub(crate) async fn handle_container_exec_with_params(
         )
         .await;
 
+    // always make sure to truncate the output if its length isn't controlled.
     match output_result {
         Ok(output) => {
             let ExecToolCallOutput { exit_code, .. } = &output;
@@ -155,13 +156,16 @@ pub(crate) async fn handle_container_exec_with_params(
                 Err(FunctionCallError::RespondToModel(content))
             }
         }
-        Err(ExecError::Function(err)) => Err(err),
+        Err(ExecError::Function(err)) => Err(truncate_function_error(err)),
         Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
             FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
         ),
-        Err(ExecError::Codex(err)) => Err(FunctionCallError::RespondToModel(format!(
-            "execution error: {err:?}"
-        ))),
+        Err(ExecError::Codex(err)) => {
+            let message = format!("execution error: {err:?}");
+            Err(FunctionCallError::RespondToModel(
+                truncate_formatted_exec_output(&message),
+            ))
+        }
     }
 }
 
@@ -206,26 +210,28 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
         aggregated_output, ..
     } = exec_output;
 
-    // Head+tail truncation for the model: show the beginning and end with an elision.
-    // Clients still receive full streams; only this formatted summary is capped.
-
-    let mut s = &aggregated_output.text;
-    let prefixed_str: String;
+    let content = aggregated_output.text.as_str();
 
     if exec_output.timed_out {
-        prefixed_str = format!(
-            "command timed out after {} milliseconds\n",
+        let prefixed = format!(
+            "command timed out after {} milliseconds\n{content}",
             exec_output.duration.as_millis()
-        ) + s;
-        s = &prefixed_str;
+        );
+        return truncate_formatted_exec_output(&prefixed);
     }
 
-    let total_lines = s.lines().count();
-    if s.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
-        return s.to_string();
+    truncate_formatted_exec_output(content)
+}
+
+fn truncate_formatted_exec_output(content: &str) -> String {
+    // Head+tail truncation for the model: show the beginning and end with an elision.
+    // Clients still receive full streams; only this formatted summary is capped.
+    let total_lines = content.lines().count();
+    if content.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
+        return content.to_string();
     }
 
-    let segments: Vec<&str> = s.split_inclusive('\n').collect();
+    let segments: Vec<&str> = content.split_inclusive('\n').collect();
     let head_take = MODEL_FORMAT_HEAD_LINES.min(segments.len());
     let tail_take = MODEL_FORMAT_TAIL_LINES.min(segments.len().saturating_sub(head_take));
     let omitted = segments.len().saturating_sub(head_take + tail_take);
@@ -236,9 +242,9 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
         .map(|segment| segment.len())
         .sum();
     let tail_slice_start: usize = if tail_take == 0 {
-        s.len()
+        content.len()
     } else {
-        s.len()
+        content.len()
             - segments
                 .iter()
                 .rev()
@@ -260,9 +266,9 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
         head_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(marker.len());
     }
 
-    let head_slice = &s[..head_slice_end];
+    let head_slice = &content[..head_slice_end];
     let head_part = take_bytes_at_char_boundary(head_slice, head_budget);
-    let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(s.len()));
+    let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(content.len()));
 
     result.push_str(head_part);
     result.push_str(&marker);
@@ -272,9 +278,71 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
         return result;
     }
 
-    let tail_slice = &s[tail_slice_start..];
+    let tail_slice = &content[tail_slice_start..];
     let tail_part = take_last_bytes_at_char_boundary(tail_slice, remaining);
     result.push_str(tail_part);
 
     result
+}
+
+fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
+    match err {
+        FunctionCallError::RespondToModel(msg) => {
+            FunctionCallError::RespondToModel(truncate_formatted_exec_output(&msg))
+        }
+        FunctionCallError::Fatal(msg) => {
+            FunctionCallError::Fatal(truncate_formatted_exec_output(&msg))
+        }
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_formatted_exec_output_truncates_large_error() {
+        let line = "very long execution error line that should trigger truncation\n";
+        let large_error = line.repeat(2_500); // way beyond both byte and line limits
+
+        let truncated = truncate_formatted_exec_output(&large_error);
+
+        assert!(truncated.len() <= MODEL_FORMAT_MAX_BYTES);
+        assert!(truncated.starts_with(line));
+        assert!(truncated.contains("[... omitted"));
+        assert_ne!(truncated, large_error);
+    }
+
+    #[test]
+    fn truncate_function_error_trims_respond_to_model() {
+        let line = "respond-to-model error that should be truncated\n";
+        let huge = line.repeat(3_000);
+
+        let err = truncate_function_error(FunctionCallError::RespondToModel(huge));
+        match err {
+            FunctionCallError::RespondToModel(message) => {
+                assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
+                assert!(message.contains("[... omitted"));
+                assert!(message.starts_with(line));
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_function_error_trims_fatal() {
+        let line = "fatal error output that should be truncated\n";
+        let huge = line.repeat(3_000);
+
+        let err = truncate_function_error(FunctionCallError::Fatal(huge));
+        match err {
+            FunctionCallError::Fatal(message) => {
+                assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
+                assert!(message.contains("[... omitted"));
+                assert!(message.starts_with(line));
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
 }

@@ -458,3 +458,150 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-denied";
+    let long_line = "this is a long stderr line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz";
+    let script = format!(
+        "for i in $(seq 1 500); do >&2 echo '{long_line}'; done; cat <<'EOF' > denied.txt\ncontent\nEOF",
+    );
+    let args = json!({
+        "command": ["/bin/sh", "-c", script],
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    submit_turn(
+        &test,
+        "attempt to write in read-only sandbox",
+        AskForApproval::Never,
+        SandboxPolicy::ReadOnly,
+    )
+    .await?;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    let bodies = request_bodies(&requests)?;
+    let function_outputs = collect_output_items(&bodies, "function_call_output");
+    let denied_item = function_outputs
+        .iter()
+        .find(|item| item.get("call_id").and_then(Value::as_str) == Some(call_id))
+        .expect("denied output present");
+
+    let output = denied_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("denied output string");
+
+    assert!(
+        output.starts_with("failed in sandbox: "),
+        "expected sandbox error prefix, got {output:?}"
+    );
+    assert!(
+        output.contains("[... omitted"),
+        "expected truncated marker, got {output:?}"
+    );
+    assert!(
+        output.contains(long_line),
+        "expected truncated stderr sample, got {output:?}"
+    );
+    // Linux distributions may surface sandbox write failures as different errno messages
+    // depending on the underlying mechanism (e.g., EPERM, EACCES, or EROFS). Accept a
+    // small set of common variants to keep this cross-platform.
+    let denial_markers = [
+        "Operation not permitted", // EPERM
+        "Permission denied",       // EACCES
+        "Read-only file system",   // EROFS
+    ];
+    assert!(
+        denial_markers.iter().any(|m| output.contains(m)),
+        "expected sandbox denial message, got {output:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|cfg| {
+        cfg.sandbox_policy = SandboxPolicy::DangerFullAccess;
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-spawn-failure";
+    let bogus_component = "missing-bin-".repeat(700);
+    let bogus_exe = test
+        .cwd
+        .path()
+        .join(bogus_component)
+        .to_string_lossy()
+        .into_owned();
+
+    let args = json!({
+        "command": [bogus_exe],
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    submit_turn(
+        &test,
+        "spawn a missing binary",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    let bodies = request_bodies(&requests)?;
+    let function_outputs = collect_output_items(&bodies, "function_call_output");
+    let failure_item = function_outputs
+        .iter()
+        .find(|item| item.get("call_id").and_then(Value::as_str) == Some(call_id))
+        .expect("spawn failure output present");
+
+    let output = failure_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("spawn failure output string");
+
+    assert!(
+        output.starts_with("execution error:"),
+        "expected execution error prefix, got {output:?}"
+    );
+    assert!(output.len() <= 10 * 1024);
+
+    Ok(())
+}
