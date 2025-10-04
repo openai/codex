@@ -155,19 +155,7 @@ pub(crate) async fn handle_container_exec_with_params(
                 Err(FunctionCallError::RespondToModel(content))
             }
         }
-        Err(ExecError::Function(err)) => match err {
-            FunctionCallError::RespondToModel(msg) => {
-                let message = truncate_formatted_exec_output(&msg);
-                Err(FunctionCallError::RespondToModel(message))
-            }
-            FunctionCallError::MissingLocalShellCallId => {
-                Err(FunctionCallError::MissingLocalShellCallId)
-            }
-            FunctionCallError::Fatal(msg) => {
-                let message = truncate_formatted_exec_output(&msg);
-                Err(FunctionCallError::Fatal(message))
-            }
-        },
+        Err(ExecError::Function(err)) => Err(truncate_function_error(err)),
         Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
             FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
         ),
@@ -296,6 +284,18 @@ fn truncate_formatted_exec_output(content: &str) -> String {
     result
 }
 
+fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
+    match err {
+        FunctionCallError::RespondToModel(msg) => {
+            FunctionCallError::RespondToModel(truncate_formatted_exec_output(&msg))
+        }
+        FunctionCallError::Fatal(msg) => {
+            FunctionCallError::Fatal(truncate_formatted_exec_output(&msg))
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +311,37 @@ mod tests {
         assert!(truncated.starts_with(line));
         assert!(truncated.contains("[... omitted"));
         assert_ne!(truncated, large_error);
+    }
+
+    #[test]
+    fn truncate_function_error_trims_respond_to_model() {
+        let line = "respond-to-model error that should be truncated\n";
+        let huge = line.repeat(3_000);
+
+        let err = truncate_function_error(FunctionCallError::RespondToModel(huge.clone()));
+        match err {
+            FunctionCallError::RespondToModel(message) => {
+                assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
+                assert!(message.contains("[... omitted"));
+                assert!(message.starts_with(line));
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_function_error_trims_fatal() {
+        let line = "fatal error output that should be truncated\n";
+        let huge = line.repeat(3_000);
+
+        let err = truncate_function_error(FunctionCallError::Fatal(huge.clone()));
+        match err {
+            FunctionCallError::Fatal(message) => {
+                assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
+                assert!(message.contains("[... omitted"));
+                assert!(message.starts_with(line));
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
     }
 }
