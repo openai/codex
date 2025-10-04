@@ -589,6 +589,29 @@ fn ensure_profile_table<'a>(
     Ok(profile_table)
 }
 
+fn ensure_table_entry<'a>(parent: &'a mut toml_edit::Table, key: &str) -> &'a mut toml_edit::Table {
+    if !parent.contains_key(key) || parent[key].as_table().is_none() {
+        parent[key] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let table = parent
+        .get_mut(key)
+        .and_then(|item| item.as_table_mut())
+        .expect("table should exist after insertion");
+    table.set_implicit(false);
+    table
+}
+
+fn remove_threshold_tokens(parent: &mut toml_edit::Table) {
+    if let Some(auto_item) = parent.get_mut("auto_compact") {
+        if let Some(auto_table) = auto_item.as_table_mut() {
+            auto_table.remove("threshold_tokens");
+            if auto_table.is_empty() {
+                parent.remove("auto_compact");
+            }
+        }
+    }
+}
+
 // TODO(jif) refactor config persistence.
 pub async fn persist_model_selection(
     codex_home: &Path,
@@ -634,6 +657,66 @@ pub async fn persist_model_selection(
     }
 
     // TODO(jif) refactor the home creation
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_auto_compact_limit(
+    codex_home: &Path,
+    active_profile: Option<&str>,
+    limit: Option<i64>,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if let Some(profile_name) = active_profile {
+        let profile_table = ensure_profile_table(&mut doc, profile_name)?;
+        match limit {
+            Some(value) => {
+                let auto_table = ensure_table_entry(profile_table, "auto_compact");
+                auto_table["threshold_tokens"] = toml_edit::value(value);
+            }
+            None => {
+                remove_threshold_tokens(profile_table);
+            }
+        }
+    } else {
+        let root = doc.as_table_mut();
+        match limit {
+            Some(value) => {
+                let auto_table = ensure_table_entry(root, "auto_compact");
+                auto_table["threshold_tokens"] = toml_edit::value(value);
+                root["model_auto_compact_token_limit"] = toml_edit::value(value);
+            }
+            None => {
+                remove_threshold_tokens(root);
+                root.remove("model_auto_compact_token_limit");
+            }
+        }
+    }
+
     tokio::fs::create_dir_all(codex_home)
         .await
         .with_context(|| {
@@ -1928,6 +2011,82 @@ model = "gpt-5-codex"
                 .and_then(|profile| profile.model.as_deref()),
             Some("gpt-5-codex"),
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_compact_limit_updates_defaults() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_compact_limit(codex_home.path(), None, Some(200_000)).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.model_auto_compact_token_limit, Some(200_000));
+        let threshold = parsed
+            .auto_compact
+            .as_ref()
+            .and_then(|ac| ac.threshold_tokens);
+        assert_eq!(threshold, Some(200_000));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_compact_limit_clears_defaults() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+model_auto_compact_token_limit = 150000
+
+[auto_compact]
+threshold_tokens = 150000
+"#,
+        )
+        .await?;
+
+        persist_auto_compact_limit(codex_home.path(), None, None).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.model_auto_compact_token_limit, None);
+        assert!(
+            parsed
+                .auto_compact
+                .as_ref()
+                .and_then(|ac| ac.threshold_tokens)
+                .is_none()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_compact_limit_updates_profile() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_compact_limit(codex_home.path(), Some("dev"), Some(180_000)).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+        let profile = parsed
+            .profiles
+            .get("dev")
+            .expect("profile should be created");
+
+        let threshold = profile
+            .auto_compact
+            .as_ref()
+            .and_then(|ac| ac.threshold_tokens);
+        assert_eq!(threshold, Some(180_000));
 
         Ok(())
     }
