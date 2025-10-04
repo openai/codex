@@ -80,13 +80,24 @@ mod imp {
     pub(super) fn default_colors() -> Option<DefaultColors> {
         let cache = default_colors_cache();
         let mut cache = cache.lock().ok()?;
-        cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
+        cache.get_or_init_with(resolve_default_colors)
     }
 
     pub(super) fn requery_default_colors() {
         if let Ok(mut cache) = default_colors_cache().lock() {
-            cache.refresh_with(|| query_default_colors().unwrap_or_default());
+            cache.refresh_with(resolve_default_colors);
         }
+    }
+
+    fn resolve_default_colors() -> Option<DefaultColors> {
+        // Prefer OSC queries when available
+        if let Ok(result) = query_default_colors() {
+            if let Some(colors) = result {
+                return Some(colors);
+            }
+        }
+        // Fallback: parse COLORFGBG if present (works reliably in tmux)
+        parse_colorfgbg_env()
     }
 
     #[allow(dead_code)]
@@ -109,10 +120,22 @@ mod imp {
             Err(_) => return Ok(None),
         };
 
-        for index in 0..256 {
-            write!(tty, "\x1b]4;{index};?\x07")?;
+        // In tmux, pass OSC 4 queries through using DCS passthrough so the
+        // outer terminal (e.g., Alacritty) answers even when tmux filters OSC.
+        let in_tmux = std::env::var_os("TMUX").is_some();
+        if in_tmux {
+            let mut stdout = std::io::stdout();
+            for index in 0..256u16 {
+                // ESC P tmux; ESC ]4;<i>;? BEL ESC \
+                write!(stdout, "\x1bPtmux;\x1b]4;{};?\x07\x1b\\", index)?;
+            }
+            stdout.flush()?;
+        } else {
+            for index in 0..256u16 {
+                write!(tty, "\x1b]4;{};?\x07", index)?;
+            }
+            tty.flush()?;
         }
-        tty.flush()?;
 
         let fd = tty.as_raw_fd();
         let _termios_guard = unsafe { suppress_echo(fd) };
@@ -181,7 +204,15 @@ mod imp {
         if !stdout_handle.is_terminal() {
             return Ok(None);
         }
-        stdout_handle.write_all(b"\x1b]10;?\x07\x1b]11;?\x07")?;
+        // In tmux, wrap OSC queries in DCS passthrough so the outer terminal
+        // responds. Outside tmux, write OSC directly.
+        let in_tmux = std::env::var_os("TMUX").is_some();
+        if in_tmux {
+            stdout_handle.write_all(b"\x1bPtmux;\x1b\x1b]10;?\x07\x1b\\")?;
+            stdout_handle.write_all(b"\x1bPtmux;\x1b\x1b]11;?\x07\x1b\\")?;
+        } else {
+            stdout_handle.write_all(b"\x1b]10;?\x07\x1b]11;?\x07")?;
+        }
         stdout_handle.flush()?;
 
         let mut tty = match OpenOptions::new().read(true).open("/dev/tty") {
@@ -426,6 +457,45 @@ mod imp {
         let g = parse_component(parts.next()?)?;
         let b = parse_component(parts.next()?)?;
         Some((r, g, b))
+    }
+
+    // --------- Fallbacks for environments that block OSC 10/11 (e.g., tmux) ---------
+    fn parse_colorfgbg_env() -> Option<DefaultColors> {
+        use std::env;
+        let raw = env::var("COLORFGBG").ok()?;
+        // Typical values: "15;0" or sometimes more parts; we take first as fg and last as bg.
+        let values: Vec<u16> = raw
+            .split(';')
+            .filter_map(|s| s.trim().parse::<u16>().ok())
+            .collect();
+        let first = *values.first()?;
+        let last = *values.last().unwrap_or(&first);
+        let fg = map_ansi16_to_rgb(first);
+        let bg = map_ansi16_to_rgb(last);
+        Some(DefaultColors { fg, bg })
+    }
+
+    fn map_ansi16_to_rgb(idx: u16) -> (u8, u8, u8) {
+        // Standard xterm 16-color palette approximation
+        const ANSI16: [(u8, u8, u8); 16] = [
+            (0, 0, 0),       // 0 black
+            (205, 0, 0),     // 1 red
+            (0, 205, 0),     // 2 green
+            (205, 205, 0),   // 3 yellow
+            (0, 0, 238),     // 4 blue
+            (205, 0, 205),   // 5 magenta
+            (0, 205, 205),   // 6 cyan
+            (229, 229, 229), // 7 white (light gray)
+            (127, 127, 127), // 8 bright black (dark gray)
+            (255, 0, 0),     // 9 bright red
+            (0, 255, 0),     // 10 bright green
+            (255, 255, 0),   // 11 bright yellow
+            (92, 92, 255),   // 12 bright blue
+            (255, 0, 255),   // 13 bright magenta
+            (0, 255, 255),   // 14 bright cyan
+            (255, 255, 255), // 15 bright white
+        ];
+        ANSI16[idx.min(15) as usize]
     }
 }
 
