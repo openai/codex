@@ -8,8 +8,7 @@ pub fn is_safe_command_windows(command: &[String]) -> bool {
             .iter()
             .all(|cmd| is_safe_powershell_command(cmd.as_slice()));
     }
-    // Only PowerShell invocations are allowed on Windows for now; anything else is unsafe.
-    false
+    is_safe_direct_windows_command(command)
 }
 
 /// Returns each command sequence if the invocation starts with a PowerShell binary.
@@ -214,6 +213,74 @@ fn is_safe_powershell_command(words: &[String]) -> bool {
     }
 }
 
+fn is_safe_direct_windows_command(command: &[String]) -> bool {
+    let Some(cmd0) = command.first() else {
+        return false;
+    };
+    let cmd_lower = cmd0.to_ascii_lowercase();
+
+    match cmd_lower.as_str() {
+        "cat" | "cd" | "echo" | "false" | "grep" | "head" | "ls" | "nl" | "pwd" | "tail"
+        | "true" | "wc" | "which" => true,
+
+        "find" => {
+            const UNSAFE_FIND_OPTIONS: &[&str] = &[
+                "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fls", "-fprint", "-fprint0",
+                "-fprintf",
+            ];
+
+            !command.iter().skip(1).any(|arg| {
+                let lower = arg.to_ascii_lowercase();
+                UNSAFE_FIND_OPTIONS.iter().any(|opt| lower == *opt)
+            })
+        }
+
+        "rg" => is_safe_ripgrep(command),
+
+        "git" => is_safe_git_command(command),
+
+        "cargo" => command
+            .get(1)
+            .map(|sub| sub.eq_ignore_ascii_case("check"))
+            .unwrap_or(false),
+
+        "sed" => {
+            command.len() == 4
+                && command
+                    .get(1)
+                    .is_some_and(|arg| arg.eq_ignore_ascii_case("-n"))
+                && is_valid_sed_n_arg(command.get(2).map(String::as_str))
+                && command.get(3).map(|s| !s.is_empty()).unwrap_or(false)
+        }
+
+        _ => false,
+    }
+}
+
+fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
+    let s = match arg {
+        Some(s) => s,
+        None => return false,
+    };
+
+    let core = match s.strip_suffix('p') {
+        Some(rest) => rest,
+        None => return false,
+    };
+
+    let parts: Vec<&str> = core.split(',').collect();
+    match parts.as_slice() {
+        [num] => !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()),
+        [a, b] => {
+            !a.is_empty()
+                && !b.is_empty()
+                && a.chars().all(|c| c.is_ascii_digit())
+                && b.chars().all(|c| c.is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
 /// Checks that an `rg` invocation avoids options that can spawn arbitrary executables.
 fn is_safe_ripgrep(words: &[String]) -> bool {
     const UNSAFE_RIPGREP_OPTIONS_WITH_ARGS: &[&str] = &["--pre", "--hostname-bin"];
@@ -280,6 +347,89 @@ mod tests {
     /// Converts a slice of string literals into owned `String`s for the tests.
     fn vec_str(args: &[&str]) -> Vec<String> {
         args.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn allows_known_safe_direct_commands() {
+        assert!(is_safe_command_windows(&vec_str(&["ls"])));
+        assert!(is_safe_command_windows(&vec_str(&["git", "status"])));
+        assert!(is_safe_command_windows(&vec_str(&[
+            "sed", "-n", "1,5p", "file.txt"
+        ])));
+        assert!(is_safe_command_windows(&vec_str(&[
+            "nl",
+            "-nrz",
+            "Cargo.toml"
+        ])));
+        assert!(is_safe_command_windows(&vec_str(&[
+            "find", ".", "-name", "file.txt"
+        ])));
+    }
+
+    #[test]
+    fn rejects_unknown_or_dangerous_direct_commands() {
+        assert!(!is_safe_command_windows(&vec_str(&["foo"])));
+        assert!(!is_safe_command_windows(&vec_str(&["git", "fetch"])));
+        assert!(!is_safe_command_windows(&vec_str(&[
+            "sed", "-n", "xp", "file.txt"
+        ])));
+
+        for args in [
+            vec_str(&["find", ".", "-name", "file.txt", "-exec", "rm", "{}", ";"]),
+            vec_str(&[
+                "find", ".", "-name", "*.py", "-execdir", "python3", "{}", ";",
+            ]),
+            vec_str(&["find", ".", "-name", "file.txt", "-ok", "rm", "{}", ";"]),
+            vec_str(&["find", ".", "-name", "*.py", "-okdir", "python3", "{}", ";"]),
+            vec_str(&["find", ".", "-delete", "-name", "file.txt"]),
+            vec_str(&["find", ".", "-fls", "/etc/passwd"]),
+            vec_str(&["find", ".", "-fprint", "/etc/passwd"]),
+            vec_str(&["find", ".", "-fprint0", "/etc/passwd"]),
+            vec_str(&[
+                "find",
+                ".",
+                "-fprintf",
+                "/root/suid.txt",
+                "%#m %u %p
+",
+            ]),
+        ] {
+            assert!(
+                !is_safe_command_windows(&args),
+                "expected {args:?} to be unsafe",
+            );
+        }
+    }
+
+    #[test]
+    fn ripgrep_rules_for_direct_invocations() {
+        assert!(is_safe_command_windows(&vec_str(&[
+            "rg",
+            "Cargo.toml",
+            "-n"
+        ])));
+
+        for args in [
+            vec_str(&["rg", "--search-zip", "files"]),
+            vec_str(&["rg", "-z", "files"]),
+        ] {
+            assert!(
+                !is_safe_command_windows(&args),
+                "expected {args:?} to be considered unsafe due to zip-search flag",
+            );
+        }
+
+        for args in [
+            vec_str(&["rg", "--pre", "pwned", "files"]),
+            vec_str(&["rg", "--pre=pwned", "files"]),
+            vec_str(&["rg", "--hostname-bin", "pwned", "files"]),
+            vec_str(&["rg", "--hostname-bin=pwned", "files"]),
+        ] {
+            assert!(
+                !is_safe_command_windows(&args),
+                "expected {args:?} to be considered unsafe due to external-command flag",
+            );
+        }
     }
 
     #[test]

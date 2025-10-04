@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+mod windows_env;
 
 use crate::mcp_cmd::McpCli;
 
@@ -254,6 +255,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
+
+    windows_env::bootstrap_visual_studio_env_if_available();
 
     match subcommand {
         None => {
