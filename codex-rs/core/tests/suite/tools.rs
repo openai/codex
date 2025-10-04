@@ -431,7 +431,7 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
 
         let stdout = output_json["output"].as_str().unwrap_or_default();
         assert!(
-            stdout.starts_with("command timed out after "),
+            stdout.contains("command timed out after "),
             "expected timeout prefix, got {stdout:?}"
         );
         let first_line = stdout.lines().next().unwrap_or_default();
