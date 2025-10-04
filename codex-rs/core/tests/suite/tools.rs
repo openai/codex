@@ -468,8 +468,9 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
     let test = builder.build(&server).await?;
 
     let call_id = "shell-denied";
-    let long_line = "this is a long stdout line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz";
+    let long_line = "this is a long stderr line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz";
     let script = format!(
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
         "for i in $(seq 1 500); do >&2 echo '{long_line}'; done; cat <<'EOF' > denied.txt\ncontent\nEOF",
@@ -478,6 +479,9 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
 =======
         "for i in $(seq 1 500); do echo '{long_line}'; done; cat <<'EOF' > denied.txt\ncontent\nEOF",
 >>>>>>> 8598cae8 (exec-bug)
+=======
+        "for i in $(seq 1 500); do >&2 echo '{long_line}'; done; cat <<'EOF' > denied.txt\ncontent\nEOF",
+>>>>>>> 0054d004 (exec-bug)
     );
     let args = json!({
         "command": ["/bin/sh", "-c", script],
