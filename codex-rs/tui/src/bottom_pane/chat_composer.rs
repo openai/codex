@@ -1367,6 +1367,40 @@ impl ChatComposer {
         self.session_name = name.filter(|s| !s.trim().is_empty());
     }
 
+    /// Render the right-aligned session name in quotes within `area`, respecting
+    /// the current footer mode and a small width cap to avoid overlap.
+    fn render_session_name_footer(&self, area: ratatui::layout::Rect, buf: &mut Buffer) {
+        use super::footer::FooterMode;
+        if self.session_name.is_none() {
+            return;
+        }
+        if matches!(self.footer_mode(), FooterMode::ShortcutOverlay) || area.width == 0 {
+            return;
+        }
+        let max_cols = area.width.min(24) as usize;
+        if max_cols == 0 {
+            return;
+        }
+        let name = self.session_name.as_ref().unwrap();
+        let inner_max = max_cols.saturating_sub(2);
+        let inner = if inner_max > 0 {
+            crate::text_formatting::truncate_text(name, inner_max)
+        } else {
+            String::new()
+        };
+        let quoted = format!("\"{inner}\"");
+        let right_width = UnicodeWidthStr::width(quoted.as_str()) as u16;
+        let right_x = area
+            .x
+            .saturating_add(area.width.saturating_sub(right_width));
+        let y = area.y;
+        WidgetRef::render_ref(
+            &Span::from(quoted).dim(),
+            ratatui::layout::Rect::new(right_x, y, right_width, 1),
+            buf,
+        );
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
@@ -1536,67 +1570,11 @@ impl WidgetRef for ChatComposer {
                             custom_rect.width = custom_rect.width.saturating_sub(2);
                         }
                         Line::from(spans.clone()).render_ref(custom_rect, buf);
-                        // Render right-aligned session name when appropriate
-                        if let Some(name) = self.session_name.as_ref()
-                            && !matches!(
-                                self.footer_mode(),
-                                super::footer::FooterMode::ShortcutOverlay
-                            )
-                            && custom_rect.width > 0
-                        {
-                            // Simple truncation: cap to a small max and the available row width.
-                            let max_cols = custom_rect.width.min(24) as usize;
-                            if max_cols > 0 {
-                                let inner_max = max_cols.saturating_sub(2);
-                                let inner = if inner_max > 0 {
-                                    crate::text_formatting::truncate_text(name, inner_max)
-                                } else {
-                                    String::new()
-                                };
-                                let quoted = format!("\"{inner}\"");
-                                let right_width = UnicodeWidthStr::width(quoted.as_str()) as u16;
-                                let right_x = custom_rect
-                                    .x
-                                    .saturating_add(custom_rect.width.saturating_sub(right_width));
-                                let y = custom_rect.y;
-                                WidgetRef::render_ref(
-                                    &Span::from(quoted).dim(),
-                                    Rect::new(right_x, y, right_width, 1),
-                                    buf,
-                                );
-                            }
-                        }
+                        self.render_session_name_footer(custom_rect, buf);
                     }
                 } else {
                     render_footer(hint_rect, buf, footer_props);
-                    if let Some(name) = self.session_name.as_ref()
-                        && !matches!(
-                            self.footer_mode(),
-                            super::footer::FooterMode::ShortcutOverlay
-                        )
-                        && hint_rect.width > 0
-                    {
-                        let max_cols = hint_rect.width.min(24) as usize;
-                        if max_cols > 0 {
-                            let inner_max = max_cols.saturating_sub(2);
-                            let inner = if inner_max > 0 {
-                                crate::text_formatting::truncate_text(name, inner_max)
-                            } else {
-                                String::new()
-                            };
-                            let quoted = format!("\"{inner}\"");
-                            let right_width = UnicodeWidthStr::width(quoted.as_str()) as u16;
-                            let right_x = hint_rect
-                                .x
-                                .saturating_add(hint_rect.width.saturating_sub(right_width));
-                            let y = hint_rect.y;
-                            WidgetRef::render_ref(
-                                &Span::from(quoted).dim(),
-                                Rect::new(right_x, y, right_width, 1),
-                                buf,
-                            );
-                        }
-                    }
+                    self.render_session_name_footer(hint_rect, buf);
                 }
             }
         }
