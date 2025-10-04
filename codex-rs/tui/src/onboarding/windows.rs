@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use codex_core::config::set_windows_wsl_setup_acknowledged;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -126,6 +127,10 @@ impl WidgetRef for &WindowsSetupWidget {
 
 impl KeyboardHandler for WindowsSetupWidget {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if key_event.kind == KeyEventKind::Release {
+            return;
+        }
+
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.highlighted = WindowsSetupSelection::Continue;
