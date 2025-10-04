@@ -67,3 +67,9 @@ Use the MCP inspector and `codex mcp-server` to build a simple tic-tac-toe game 
 **sandbox:** workspace-write
 
 Click "Run Tool" and you should see a list of events emitted from the Codex MCP server as it builds the game.
+
+Windows toolchains:
+When Codex spawns MCP servers on Windows, it now preserves MSVC, Visual Studio, and Windows SDK environment variables (for example INCLUDE, LIB, VSINSTALLDIR, WindowsSdkDir, and VSCMD_* prefixes) when they exist. Launch Codex from a Developer Command Prompt or Developer PowerShell if you want those toolchains active. Systems without Visual Studio remain unaffected.
+
+
+

@@ -87,18 +87,24 @@ impl McpClient {
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
     ) -> std::io::Result<Self> {
-        let mut child = Command::new(program)
-            .args(args)
-            .env_clear()
-            .envs(create_env_for_mcp_server(env))
+        let base_env: HashMap<OsString, OsString> = std::env::vars_os().collect();
+        let env_vars = create_env_for_mcp_server(&base_env, env);
+
+        let mut command = Command::new(program);
+        command.args(args).env_clear();
+        for (key, value) in env_vars {
+            command.env(key, value);
+        }
+        command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             // As noted in the `kill_on_drop` documentation, the Tokio runtime makes
             // a "best effort" to reap-after-exit to avoid zombie processes, but it
             // is not a guarantee.
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+
+        let mut child = command.spawn()?;
 
         let stdin = child
             .stdin
@@ -431,45 +437,159 @@ const DEFAULT_ENV_VARS: &[&str] = &[
     "TZ",
 ];
 
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 const DEFAULT_ENV_VARS: &[&str] = &[
-    // TODO: More research is necessary to curate this list.
+    // Preserve core Windows environment variables so CLI-based MCP servers
+    // (e.g., Docker CLI plugins, npm/npx wrappers) can locate helper binaries,
+    // resolve DNS via system DLLs, and load per-user configuration and caches.
+    "COMSPEC",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMDATA",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "TEMP",
+    "TMP",
+    "POWERSHELL",
+    "PWSH",
     "PATH",
     "PATHEXT",
     "USERNAME",
     "USERDOMAIN",
-    "USERPROFILE",
-    "TEMP",
-    "TMP",
+    // Toolchain and SDK metadata required for MSVC-based workflows.
+    "INCLUDE",
+    "LIB",
+    "LIBPATH",
+    "VSINSTALLDIR",
+    "VCINSTALLDIR",
+    "VCToolsInstallDir",
+    "VCToolsVersion",
+    "VCToolsRedistDir",
+    "VisualStudioVersion",
+    "VS170COMNTOOLS",
+    "DevEnvDir",
+    "VCIDEInstallDir",
+    // Windows SDK context
+    "WindowsSdkDir",
+    "WindowsSDKVersion",
+    "WindowsSDKLibVersion",
+    "WindowsSdkBinPath",
+    "WindowsSdkVerBinPath",
+    "WindowsLibPath",
+    "UCRTVersion",
+    "UniversalCRTSdkDir",
+    "ExtensionSdkDir",
+    // .NET Framework references used by MSBuild/MSVC
+    "FrameworkDir",
+    "FrameworkDir64",
+    "FrameworkVersion",
+    "FrameworkVersion64",
 ];
+
+#[cfg(target_os = "windows")]
+const DEFAULT_ENV_PREFIXES: &[&str] = &["VSCMD_"];
 
 /// `extra_env` comes from the config for an entry in `mcp_servers` in
 /// `config.toml`.
 fn create_env_for_mcp_server(
+    base_env: &HashMap<OsString, OsString>,
     extra_env: Option<HashMap<String, String>>,
-) -> HashMap<String, String> {
-    DEFAULT_ENV_VARS
-        .iter()
-        .filter_map(|var| match std::env::var(var) {
-            Ok(value) => Some((var.to_string(), value)),
-            Err(_) => None,
-        })
-        .chain(extra_env.unwrap_or_default())
-        .collect::<HashMap<_, _>>()
+) -> HashMap<OsString, OsString> {
+    let mut env: HashMap<OsString, OsString> = HashMap::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+
+        for key in DEFAULT_ENV_VARS {
+            let key_os = OsString::from(key);
+            if let Some(value) = base_env.get(OsStr::new(key)) {
+                env.insert(key_os, value.clone());
+            }
+        }
+
+        for (key, value) in base_env {
+            if let Some(key_str) = key.to_str()
+                && DEFAULT_ENV_PREFIXES
+                    .iter()
+                    .any(|prefix| key_str.starts_with(prefix))
+            {
+                env.insert(OsString::from(key_str), value.clone());
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for key in DEFAULT_ENV_VARS {
+            let key_os = OsString::from(key);
+            if let Some(value) = base_env.get(&key_os) {
+                env.insert(key_os, value.clone());
+            }
+        }
+    }
+
+    if let Some(extra) = extra_env {
+        for (key, value) in extra {
+            env.insert(OsString::from(key), OsString::from(value));
+        }
+    }
+
+    env
+}
+
+#[cfg(target_os = "windows")]
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn build_test_command(base_env: &HashMap<OsString, OsString>) -> std::process::Command {
+    let env_vars = create_env_for_mcp_server(base_env, None);
+    let mut command = std::process::Command::new("codex-mcp-test");
+    command.env_clear();
+    for (key, value) in env_vars {
+        command.env(key, value);
+    }
+    command
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+
+    fn base_env(vars: &[(&str, &str)]) -> HashMap<OsString, OsString> {
+        vars.iter()
+            .map(|(k, v)| (OsString::from(k), OsString::from(*v)))
+            .collect()
+    }
 
     #[test]
-    fn test_create_env_for_mcp_server() {
-        let env_var = "USER";
-        let env_var_existing_value = std::env::var(env_var).unwrap_or_default();
-        let env_var_new_value = format!("{env_var_existing_value}-extra");
-        let extra_env = HashMap::from([(env_var.to_owned(), env_var_new_value.clone())]);
-        let mcp_server_env = create_env_for_mcp_server(Some(extra_env));
-        assert!(mcp_server_env.contains_key("PATH"));
-        assert_eq!(Some(&env_var_new_value), mcp_server_env.get(env_var));
+    fn extra_env_is_applied() {
+        let base = base_env(&[]);
+        let extra = HashMap::from([(String::from("CUSTOM"), String::from("value"))]);
+        let env = create_env_for_mcp_server(&base, Some(extra));
+        assert_eq!(
+            env.get(&OsString::from("CUSTOM")),
+            Some(&OsString::from("value"))
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_defaults_include_toolchain_and_prefixes() {
+        let base = base_env(&[("PATH", "p"), ("INCLUDE", "inc"), ("VSCMD_VER", "1.0")]);
+        let env = create_env_for_mcp_server(&base, None);
+        assert_eq!(
+            env.get(&OsString::from("INCLUDE")),
+            Some(&OsString::from("inc"))
+        );
+        assert_eq!(
+            env.get(&OsString::from("VSCMD_VER")),
+            Some(&OsString::from("1.0"))
+        );
     }
 }
