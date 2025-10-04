@@ -22,7 +22,7 @@ jobs:
         uses: openai/codex-action@main
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
-          require-repo-write: false
+          allow-users: "*"
           prompt: |
             You are an assistant that reviews GitHub issues for the repository.
 
