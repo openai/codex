@@ -1312,14 +1312,30 @@ impl ChatComposer {
             return false;
         }
 
-        let toggles = matches!(
-            key_event,
-            KeyEvent {
-                code: KeyCode::Char('?'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if self.is_empty()
-        );
+        // Toggle shortcut overlay on '?' when the composer is empty.
+        // Accept with or without Shift, but ignore Ctrl/Alt combos so we don't
+        // steal editor/navigation chords. This keeps Windows consoles (which
+        // sometimes omit Shift on punctuation) working while still letting
+        // users type '?' normally when there's text.
+        let toggles = if self.is_empty() {
+            match key_event {
+                KeyEvent {
+                    code: KeyCode::Char('?'),
+                    modifiers,
+                    ..
+                } => {
+                    let is_altgr = modifiers.contains(KeyModifiers::ALT)
+                        && modifiers.contains(KeyModifiers::CONTROL);
+                    // Accept plain '?' or AltGr+'?' (common on Windows international layouts).
+                    !modifiers.contains(KeyModifiers::ALT)
+                        && !modifiers.contains(KeyModifiers::CONTROL)
+                        || is_altgr
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
 
         if !toggles {
             return false;
@@ -1713,7 +1729,7 @@ mod tests {
         snapshot_composer_state("footer_mode_shortcut_overlay", true, |composer| {
             composer.set_esc_backtrack_hint(true);
             let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
         });
 
         snapshot_composer_state("footer_mode_ctrl_c_quit", true, |composer| {
@@ -1732,7 +1748,7 @@ mod tests {
 
         snapshot_composer_state("footer_mode_esc_hint_from_overlay", true, |composer| {
             let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         });
 
@@ -1746,7 +1762,7 @@ mod tests {
             true,
             |composer| {
                 let _ = composer
-                    .handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
                 composer.set_esc_backtrack_hint(true);
             },
         );
@@ -1773,13 +1789,13 @@ mod tests {
         );
 
         let (result, needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
         assert_eq!(result, InputResult::None);
         assert!(needs_redraw, "toggling overlay should request redraw");
         assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
 
         // Toggle back to prompt mode so subsequent typing captures characters.
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
         assert_eq!(composer.footer_mode, FooterMode::ShortcutPrompt);
 
         type_chars_humanlike(&mut composer, &['h']);
@@ -1813,7 +1829,7 @@ mod tests {
             false,
         );
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
         assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
 
         composer.set_task_running(true);
