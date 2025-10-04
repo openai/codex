@@ -785,22 +785,11 @@ impl Session {
     async fn set_total_tokens_full(&self, sub_id: &str, turn_context: &TurnContext) {
         let context_window = turn_context.client.get_model_context_window();
         if let Some(context_window) = context_window {
-            let current_total = {
-                let state = self.state.lock().await;
-                state
-                    .get_token_info()
-                    .map(|info| info.total_token_usage.total_tokens)
-                    .unwrap_or(0)
-            };
-
-            let delta = context_window.saturating_sub(current_total);
-            let last_usage = TokenUsage {
-                total_tokens: delta,
-                ..TokenUsage::default()
-            };
-
-            self.update_token_usage_info(sub_id, turn_context, Some(&last_usage))
-                .await;
+            {
+                let mut state = self.state.lock().await;
+                state.set_token_usage_full(context_window);
+            }
+            self.send_token_count_event(sub_id).await;
         }
     }
 
@@ -1960,7 +1949,7 @@ async fn run_turn(
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
-            Err(e @ CodexErr::ContextWindowExceeded(_)) => {
+            Err(e @ CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&sub_id, turn_context).await;
                 return Err(e);
             }

@@ -590,6 +590,31 @@ impl TokenUsageInfo {
         self.total_token_usage.add_assign(last);
         self.last_token_usage = last.clone();
     }
+
+    pub fn fill_to_context_window(&mut self, context_window: u64) {
+        let previous_total = self.total_token_usage.total_tokens;
+        let delta = context_window.saturating_sub(previous_total);
+
+        self.model_context_window = Some(context_window);
+        self.total_token_usage = TokenUsage {
+            total_tokens: context_window,
+            ..TokenUsage::default()
+        };
+        self.last_token_usage = TokenUsage {
+            total_tokens: delta,
+            ..TokenUsage::default()
+        };
+    }
+
+    pub fn full_context_window(context_window: u64) -> Self {
+        let mut info = Self {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(context_window),
+        };
+        info.fill_to_context_window(context_window);
+        info
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]

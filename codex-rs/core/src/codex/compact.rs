@@ -103,7 +103,7 @@ async fn run_compact_task_inner(
             Err(CodexErr::Interrupted) => {
                 return;
             }
-            Err(e @ CodexErr::ContextWindowExceeded(_)) => {
+            Err(e @ CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&sub_id, turn_context.as_ref())
                     .await;
                 let event = Event {

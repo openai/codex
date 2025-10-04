@@ -14,6 +14,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
+use codex_core::error::CodexErr;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -1064,29 +1065,25 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     use std::time::Duration;
 
-    let mut observed = Vec::new();
-    let mut token_payload = None;
-    for _ in 0..10 {
-        let event = wait_for_event_with_timeout(&codex, |_| true, Duration::from_secs(10)).await;
-        observed.push(event.clone());
-        match event {
-            EventMsg::TokenCount(payload)
-                if payload.info.as_ref().is_some_and(|info| {
-                    info.model_context_window == Some(info.total_token_usage.total_tokens)
-                        && info.total_token_usage.total_tokens > 0
-                }) =>
-            {
-                token_payload = Some(payload);
-                break;
-            }
-            EventMsg::TaskComplete(_) => break,
-            _ => {}
-        }
-    }
+    let token_event = wait_for_event_with_timeout(
+        &codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::TokenCount(payload)
+                    if payload.info.as_ref().is_some_and(|info| {
+                        info.model_context_window == Some(info.total_token_usage.total_tokens)
+                            && info.total_token_usage.total_tokens > 0
+                    })
+            )
+        },
+        Duration::from_secs(10),
+    )
+    .await;
 
-    let token_payload = token_payload.unwrap_or_else(|| {
-        panic!("did not observe expected TokenCount event; events observed: {observed:?}")
-    });
+    let EventMsg::TokenCount(token_payload) = token_event else {
+        unreachable!("wait_for_event_with_timeout returned unexpected event");
+    };
 
     let info = token_payload
         .info
@@ -1095,24 +1092,15 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     assert_eq!(info.model_context_window, Some(272_000));
     assert_eq!(info.total_token_usage.total_tokens, 272_000);
 
-    let error_event = wait_for_event(&codex, |ev| {
+    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    let expected_context_window_message = CodexErr::ContextWindowExceeded.to_string();
+    assert!(
         matches!(
-            ev,
-            EventMsg::Error(err) if err
-                .message
-                .contains("context window")
-        )
-    })
-    .await;
-
-    if let EventMsg::Error(err) = error_event {
-        assert_eq!(
-            err.message,
-            "Your input exceeds the context window of this model. Please adjust your input and try again."
-        );
-    } else {
-        unreachable!("expected error event after context window failure");
-    }
+            error_event,
+            EventMsg::Error(ref err) if err.message == expected_context_window_message
+        ),
+        "expected context window error; got {error_event:?}"
+    );
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 

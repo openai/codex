@@ -792,19 +792,12 @@ async fn process_sse<S>(
 
                     if let Some(error) = error {
                         match serde_json::from_value::<Error>(error.clone()) {
-                            Ok(mut error) => {
+                            Ok(error) => {
                                 if is_context_window_error(&error) {
-                                    let message = error
-                                        .message
-                                        .take()
-                                        .unwrap_or_else(|| {
-                                            "Your input exceeds the context window of this model.".
-                                                to_string()
-                                        });
-                                    response_error = Some(CodexErr::ContextWindowExceeded(message));
+                                    response_error = Some(CodexErr::ContextWindowExceeded);
                                 } else {
                                     let delay = try_parse_retry_after(&error);
-                                    let message = error.message.take().unwrap_or_default();
+                                    let message = error.message.clone().unwrap_or_default();
                                     response_error = Some(CodexErr::Stream(message, delay));
                                 }
                             }
@@ -1223,11 +1216,8 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         match &events[0] {
-            Err(CodexErr::ContextWindowExceeded(message)) => {
-                assert_eq!(
-                    message,
-                    "Your input exceeds the context window of this model. Please adjust your input and try again."
-                );
+            Err(err @ CodexErr::ContextWindowExceeded) => {
+                assert_eq!(err.to_string(), CodexErr::ContextWindowExceeded.to_string());
             }
             other => panic!("unexpected context window event: {other:?}"),
         }
@@ -1260,11 +1250,8 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         match &events[0] {
-            Err(CodexErr::ContextWindowExceeded(message)) => {
-                assert_eq!(
-                    message,
-                    "Your input exceeds the context window of this model. Please adjust your input and try\nagain."
-                );
+            Err(err @ CodexErr::ContextWindowExceeded) => {
+                assert_eq!(err.to_string(), CodexErr::ContextWindowExceeded.to_string());
             }
             other => panic!("unexpected context window event: {other:?}"),
         }

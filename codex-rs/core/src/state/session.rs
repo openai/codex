@@ -54,10 +54,6 @@ impl SessionState {
         );
     }
 
-    pub(crate) fn get_token_info(&self) -> Option<TokenUsageInfo> {
-        self.token_info.clone()
-    }
-
     pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
         self.latest_rate_limits = Some(snapshot);
     }
@@ -66,6 +62,15 @@ impl SessionState {
         &self,
     ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
         (self.token_info.clone(), self.latest_rate_limits.clone())
+    }
+
+    pub(crate) fn set_token_usage_full(&mut self, context_window: u64) {
+        match &mut self.token_info {
+            Some(info) => info.fill_to_context_window(context_window),
+            None => {
+                self.token_info = Some(TokenUsageInfo::full_context_window(context_window));
+            }
+        }
     }
 
     // Pending input/approval moved to TurnState.
