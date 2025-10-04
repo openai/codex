@@ -11,13 +11,14 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<u8>,
+    pub(crate) session_name: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,20 +59,56 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     }
 }
 
-pub(crate) fn footer_height(props: FooterProps) -> u16 {
+pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     footer_lines(props).len() as u16
 }
 
-pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
+pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: &FooterProps) {
+    use unicode_width::UnicodeWidthStr;
+    let lines = footer_lines(props);
     Paragraph::new(prefix_lines(
-        footer_lines(props),
+        lines.clone(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
     .render(area, buf);
+
+    // Optionally draw a right-aligned session name on the last footer row
+    // when not showing the overlay.
+    if !matches!(props.mode, FooterMode::ShortcutOverlay)
+        && let Some(label) = props.session_name.as_ref()
+        && area.height > 0
+        && area.width > 0
+    {
+        let cap: usize = 24; // small cap to avoid collisions
+        // Compute available width to avoid overlapping the left content.
+        let left_width = lines
+            .last()
+            .map(|l| l.width() + FOOTER_INDENT_COLS)
+            .unwrap_or(0);
+        let max_w = (area.width as usize).saturating_sub(left_width + 1);
+        if max_w > 0 {
+            let allowed = cap.min(max_w);
+            let text = crate::text_formatting::truncate_text(label, allowed);
+            let w = text.as_str().width() as u16;
+            if w > 0 {
+                let x = area.x + area.width.saturating_sub(w);
+                let y = area.y + area.height.saturating_sub(1);
+                Paragraph::new(Line::from(Span::from(text).cyan())).render(
+                    Rect {
+                        x,
+                        y,
+                        width: w,
+                        height: 1,
+                    },
+                    buf,
+                );
+            }
+        }
+    }
 }
 
-fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+fn footer_lines(props: &FooterProps) -> Vec<Line<'static>> {
     match props.mode {
         FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
             is_task_running: props.is_task_running,
@@ -141,6 +178,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut paste_image = Line::from("");
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
+    let mut rename = Line::from("");
     let mut show_transcript = Line::from("");
 
     for descriptor in SHORTCUTS {
@@ -152,6 +190,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
+                ShortcutId::Rename => rename = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
             }
         }
@@ -163,6 +202,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         file_paths,
         paste_image,
         edit_previous,
+        rename,
         quit,
         Line::from(""),
         show_transcript,
@@ -240,6 +280,7 @@ enum ShortcutId {
     FilePaths,
     PasteImage,
     EditPrevious,
+    Rename,
     Quit,
     ShowTranscript,
 }
@@ -317,6 +358,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " for commands",
     },
     ShortcutDescriptor {
+        id: ShortcutId::Rename,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('r')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " rename session",
+    },
+    ShortcutDescriptor {
         id: ShortcutId::InsertNewline,
         bindings: &[
             ShortcutBinding {
@@ -386,12 +436,12 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        let height = footer_height(props).max(1);
+        let height = footer_height(&props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                render_footer(area, f.buffer_mut(), props);
+                render_footer(area, f.buffer_mut(), &props);
             })
             .unwrap();
         assert_snapshot!(name, terminal.backend());
@@ -407,6 +457,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                session_name: None,
             },
         );
 
@@ -418,6 +469,7 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 context_window_percent: None,
+                session_name: None,
             },
         );
 
@@ -429,6 +481,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                session_name: None,
             },
         );
 
@@ -440,6 +493,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: None,
+                session_name: None,
             },
         );
 
@@ -451,6 +505,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                session_name: None,
             },
         );
 
@@ -462,6 +517,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                session_name: None,
             },
         );
 
@@ -473,6 +529,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: Some(72),
+                session_name: None,
             },
         );
     }
