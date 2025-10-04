@@ -936,12 +936,7 @@ fn is_context_window_error(error: &Error) -> bool {
     if error.code.as_deref() == Some("context_length_exceeded") {
         return true;
     }
-
-    error
-        .message
-        .as_ref()
-        .map(|msg| msg.to_ascii_lowercase())
-        .is_some_and(|msg| msg.contains("context window"))
+    false
 }
 
 #[cfg(test)]

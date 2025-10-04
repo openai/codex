@@ -1005,9 +1005,11 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_context_window","object":"response","created_at":1759510079,"status":"failed","background":false,"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try again."},"usage":null,"user":null,"metadata":{}}}"#;
-
-    let error_stream = format!("event: response.failed\ndata: {raw_error}\n\n");
+    let error_stream = responses::sse_failed(
+        "resp_context_window",
+        "context_length_exceeded",
+        "Your input exceeds the context window of this model. Please adjust your input and try again.",
+    );
 
     let second_turn = ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
