@@ -15,6 +15,7 @@ pub enum SlashCommand {
     Model,
     Approvals,
     Review,
+    Rename,
     New,
     Init,
     Compact,
@@ -33,6 +34,7 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
+            SlashCommand::Rename => "rename this session",
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
@@ -61,6 +63,7 @@ impl SlashCommand {
     pub fn available_during_task(self) -> bool {
         match self {
             SlashCommand::New
+            | SlashCommand::Rename
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Undo

@@ -1547,15 +1547,20 @@ impl WidgetRef for ChatComposer {
                             // Simple truncation: cap to a small max and the available row width.
                             let max_cols = custom_rect.width.min(24) as usize;
                             if max_cols > 0 {
-                                let truncated =
-                                    crate::text_formatting::truncate_text(name, max_cols);
-                                let right_width = UnicodeWidthStr::width(truncated.as_str()) as u16;
+                                let inner_max = max_cols.saturating_sub(2);
+                                let inner = if inner_max > 0 {
+                                    crate::text_formatting::truncate_text(name, inner_max)
+                                } else {
+                                    String::new()
+                                };
+                                let quoted = format!("\"{inner}\"");
+                                let right_width = UnicodeWidthStr::width(quoted.as_str()) as u16;
                                 let right_x = custom_rect
                                     .x
                                     .saturating_add(custom_rect.width.saturating_sub(right_width));
                                 let y = custom_rect.y;
                                 WidgetRef::render_ref(
-                                    &Span::from(truncated).dim(),
+                                    &Span::from(quoted).dim(),
                                     Rect::new(right_x, y, right_width, 1),
                                     buf,
                                 );
@@ -1573,14 +1578,20 @@ impl WidgetRef for ChatComposer {
                     {
                         let max_cols = hint_rect.width.min(24) as usize;
                         if max_cols > 0 {
-                            let truncated = crate::text_formatting::truncate_text(name, max_cols);
-                            let right_width = UnicodeWidthStr::width(truncated.as_str()) as u16;
+                            let inner_max = max_cols.saturating_sub(2);
+                            let inner = if inner_max > 0 {
+                                crate::text_formatting::truncate_text(name, inner_max)
+                            } else {
+                                String::new()
+                            };
+                            let quoted = format!("\"{inner}\"");
+                            let right_width = UnicodeWidthStr::width(quoted.as_str()) as u16;
                             let right_x = hint_rect
                                 .x
                                 .saturating_add(hint_rect.width.saturating_sub(right_width));
                             let y = hint_rect.y;
                             WidgetRef::render_ref(
-                                &Span::from(truncated).dim(),
+                                &Span::from(quoted).dim(),
                                 Rect::new(right_x, y, right_width, 1),
                                 buf,
                             );
