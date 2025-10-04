@@ -52,9 +52,9 @@ describe("Codex", () => {
         {
           type: "turn.completed",
           usage: {
-            cached_input_tokens: 0,
-            input_tokens: 0,
-            output_tokens: 0,
+            cached_input_tokens: 12,
+            input_tokens: 42,
+            output_tokens: 5,
           },
         },
       ]);
