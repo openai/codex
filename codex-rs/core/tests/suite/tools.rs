@@ -512,7 +512,7 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
         .expect("denied output string");
 
     assert!(
-        output.starts_with("failed in sandbox: "),
+        output.contains("failed in sandbox: "),
         "expected sandbox error prefix, got {output:?}"
     );
     assert!(
@@ -598,7 +598,7 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
         .expect("spawn failure output string");
 
     assert!(
-        output.starts_with("execution error:"),
+        output.contains("execution error:"),
         "expected execution error prefix, got {output:?}"
     );
     assert!(output.len() <= 10 * 1024);
