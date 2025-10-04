@@ -434,8 +434,8 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
             stdout.contains("command timed out after "),
             "expected timeout prefix, got {stdout:?}"
         );
-        let first_line = stdout.lines().next().unwrap_or_default();
-        let duration_ms = first_line
+        let second_line = stdout.lines().nth(2).unwrap_or_default();
+        let duration_ms = second_line
             .strip_prefix("command timed out after ")
             .and_then(|line| line.strip_suffix(" milliseconds"))
             .and_then(|value| value.parse::<u64>().ok())
