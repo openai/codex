@@ -156,23 +156,7 @@ pub(crate) async fn handle_container_exec_with_params(
                 Err(FunctionCallError::RespondToModel(content))
             }
         }
-<<<<<<< HEAD
         Err(ExecError::Function(err)) => Err(truncate_function_error(err)),
-=======
-        Err(ExecError::Function(err)) => match err {
-            FunctionCallError::RespondToModel(msg) => {
-                let message = truncate_formatted_exec_output(&msg);
-                Err(FunctionCallError::RespondToModel(message))
-            }
-            FunctionCallError::MissingLocalShellCallId => {
-                Err(FunctionCallError::MissingLocalShellCallId)
-            }
-            FunctionCallError::Fatal(msg) => {
-                let message = truncate_formatted_exec_output(&msg);
-                Err(FunctionCallError::Fatal(message))
-            }
-        },
->>>>>>> 0fbe4bfa (exec-bug)
         Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
             FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
         ),
@@ -335,7 +319,11 @@ mod tests {
         let line = "respond-to-model error that should be truncated\n";
         let huge = line.repeat(3_000);
 
+<<<<<<< HEAD
         let err = truncate_function_error(FunctionCallError::RespondToModel(huge));
+=======
+        let err = truncate_function_error(FunctionCallError::RespondToModel(huge.clone()));
+>>>>>>> 1de6631b (exec-bug)
         match err {
             FunctionCallError::RespondToModel(message) => {
                 assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
@@ -351,7 +339,11 @@ mod tests {
         let line = "fatal error output that should be truncated\n";
         let huge = line.repeat(3_000);
 
+<<<<<<< HEAD
         let err = truncate_function_error(FunctionCallError::Fatal(huge));
+=======
+        let err = truncate_function_error(FunctionCallError::Fatal(huge.clone()));
+>>>>>>> 1de6631b (exec-bug)
         match err {
             FunctionCallError::Fatal(message) => {
                 assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
