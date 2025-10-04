@@ -502,8 +502,8 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
         .expect("denied output string");
 
     assert!(
-        output.starts_with("failed in sandbox:"),
-        "expected sandbox failure prefix, got {output:?}"
+        output.starts_with("execution error:"),
+        "expected execution error prefix, got {output:?}"
     );
     assert!(
         output.contains("[... omitted"),
@@ -513,10 +513,7 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
         output.contains(long_line),
         "expected truncated stderr sample, got {output:?}"
     );
-    assert!(
-        output.contains("Operation not permitted"),
-        "expected sandbox error detail, got {output:?}"
-    );
+    assert!(output.contains("Operation not permitted"));
 
     Ok(())
 }
