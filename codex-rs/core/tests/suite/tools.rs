@@ -513,7 +513,18 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
         output.contains(long_line),
         "expected truncated stderr sample, got {output:?}"
     );
-    assert!(output.contains("Operation not permitted"));
+    // Linux distributions may surface sandbox write failures as different errno messages
+    // depending on the underlying mechanism (e.g., EPERM, EACCES, or EROFS). Accept a
+    // small set of common variants to keep this cross-platform.
+    let denial_markers = [
+        "Operation not permitted", // EPERM
+        "Permission denied",       // EACCES
+        "Read-only file system",   // EROFS
+    ];
+    assert!(
+        denial_markers.iter().any(|m| output.contains(m)),
+        "expected sandbox denial message, got {output:?}"
+    );
 
     Ok(())
 }
