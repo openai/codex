@@ -128,13 +128,20 @@ impl BottomPaneView for RenameSessionView {
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        // Match panel layout: content inset + input row placement
+        // Reproduce the exact layout used in render to position the caret.
         let [content_area, _] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
         let inset = content_area.inset(Insets::vh(1, 2));
+        let [header_area, _, input_area] = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(inset);
+        let _ = header_area; // maintain parity with render; not used directly
         let label_cols: u16 = 6; // "Name: "
-        let input_y = inset.y + 3; // header(2) + spacer(1)
-        let x = inset.x + label_cols + (self.input.cursor() as u16);
-        Some((x, input_y))
+        let x = input_area.x + label_cols + (self.input.cursor() as u16);
+        let y = input_area.y;
+        Some((x, y))
     }
 }
