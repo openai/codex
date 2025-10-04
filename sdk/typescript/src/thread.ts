@@ -1,5 +1,5 @@
 import { CodexOptions } from "./codexOptions";
-import { ThreadEvent } from "./events";
+import { ThreadEvent, Usage } from "./events";
 import { CodexExec } from "./exec";
 import { ThreadItem } from "./items";
 import { ThreadOptions } from "./threadOptions";
@@ -8,6 +8,7 @@ import { ThreadOptions } from "./threadOptions";
 export type Turn = {
   items: ThreadItem[];
   finalResponse: string;
+  usage: Usage | null;
 };
 
 /** Alias for `Turn` to describe the result of `run()`. */
@@ -85,14 +86,17 @@ export class Thread {
     const generator = this.runStreamedInternal(input);
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
+    let usage: Usage | null = null;
     for await (const event of generator) {
       if (event.type === "item.completed") {
         if (event.item.type === "agent_message") {
           finalResponse = event.item.text;
         }
         items.push(event.item);
+      } else if (event.type === "turn.completed") {
+        usage = event.usage;
       }
     }
-    return { items, finalResponse };
+    return { items, finalResponse, usage };
   }
 }

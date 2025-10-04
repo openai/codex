@@ -9,6 +9,7 @@ export type {
   ItemCompletedEvent,
   ThreadError,
   ThreadErrorEvent,
+  Usage,
 } from "./events";
 export type {
   ThreadItem,
