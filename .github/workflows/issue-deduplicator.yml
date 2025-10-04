@@ -45,7 +45,7 @@ jobs:
         uses: openai/codex-action@main
         with:
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
-          require-repo-write: false
+          allow-users: "*"
           model: gpt-5
           prompt: |
             You are an assistant that triages new GitHub issues by identifying potential duplicates.
