@@ -40,6 +40,7 @@ pub(crate) trait KeyboardHandler {
     fn handle_paste(&mut self, _pasted: String) {}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StepState {
     Hidden,
     InProgress,

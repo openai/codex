@@ -152,8 +152,39 @@ impl KeyboardHandler for WindowsSetupWidget {
 impl StepStateProvider for WindowsSetupWidget {
     fn get_step_state(&self) -> StepState {
         match self.selection {
-            Some(_) => StepState::Complete,
+            Some(WindowsSetupSelection::Continue) => StepState::Hidden,
+            Some(WindowsSetupSelection::Install) => StepState::Complete,
             None => StepState::InProgress,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn windows_step_hidden_after_continue() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mut widget = WindowsSetupWidget::new(temp_dir.path().to_path_buf());
+
+        assert_eq!(widget.get_step_state(), StepState::InProgress);
+
+        widget.handle_continue();
+
+        assert_eq!(widget.get_step_state(), StepState::Hidden);
+        assert!(!widget.exit_requested());
+    }
+
+    #[test]
+    fn windows_step_complete_after_install_selection() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mut widget = WindowsSetupWidget::new(temp_dir.path().to_path_buf());
+
+        widget.handle_install();
+
+        assert_eq!(widget.get_step_state(), StepState::Complete);
+        assert!(widget.exit_requested());
     }
 }
