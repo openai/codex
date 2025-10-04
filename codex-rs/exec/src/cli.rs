@@ -71,6 +71,10 @@ pub struct Cli {
     #[arg(long = "include-plan-tool", default_value_t = false)]
     pub include_plan_tool: bool,
 
+    /// Force-enable the apply_patch tool even for models that do not opt into it by default.
+    #[arg(long = "custom-apply-patch", default_value_t = false)]
+    pub custom_apply_patch: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
     pub last_message_file: Option<PathBuf>,

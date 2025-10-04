@@ -72,6 +72,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Force-enable the apply_patch tool even for models that do not opt into it by default.
+    #[arg(long = "custom-apply-patch", default_value_t = false)]
+    pub custom_apply_patch: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
