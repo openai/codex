@@ -57,6 +57,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
+use tracing::warn;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -262,6 +263,8 @@ pub(crate) struct ChatWidget {
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Optional user-set session name for footer display.
     session_name: Option<String>,
+    // Rollout path used for persisting session names across restarts.
+    rollout_path: Option<std::path::PathBuf>,
 }
 
 struct UserMessage {
@@ -310,6 +313,13 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
+        self.rollout_path = Some(event.rollout_path.clone());
+        self.apply_session_name(None);
+        if let Some(name) =
+            crate::session_name_store::read(&self.config.codex_home, &event.rollout_path)
+        {
+            self.apply_session_name(Some(name));
+        }
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -941,6 +951,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             session_name: None,
+            rollout_path: None,
         }
     }
 
@@ -1005,6 +1016,7 @@ impl ChatWidget {
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             session_name: None,
+            rollout_path: None,
         }
     }
 
@@ -1026,9 +1038,20 @@ impl ChatWidget {
 
     /// Update the current session name and propagate it to the bottom pane for footer display.
     pub(crate) fn set_session_name(&mut self, name: Option<String>) {
+        self.apply_session_name(name.clone());
+        if let Some(path) = self.rollout_path.as_ref() {
+            if let Err(err) =
+                crate::session_name_store::write(&self.config.codex_home, path, name.as_deref())
+            {
+                warn!("failed to persist session name {:?}: {}", path, err);
+            }
+        }
+        self.request_redraw();
+    }
+
+    fn apply_session_name(&mut self, name: Option<String>) {
         self.session_name = name.clone();
         self.bottom_pane.set_session_name(name);
-        self.request_redraw();
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {

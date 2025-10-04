@@ -1367,13 +1367,10 @@ impl ChatComposer {
         self.session_name = name.filter(|s| !s.trim().is_empty());
     }
 
-    /// Render the right-aligned session name in quotes within `area`, respecting
+    /// Render the right-aligned session name within `area`, respecting
     /// the current footer mode and a small width cap to avoid overlap.
     fn render_session_name_footer(&self, area: ratatui::layout::Rect, buf: &mut Buffer) {
         use super::footer::FooterMode;
-        if self.session_name.is_none() {
-            return;
-        }
         if matches!(self.footer_mode(), FooterMode::ShortcutOverlay) || area.width == 0 {
             return;
         }
@@ -1381,21 +1378,23 @@ impl ChatComposer {
         if max_cols == 0 {
             return;
         }
-        let name = self.session_name.as_ref().unwrap();
-        let inner_max = max_cols.saturating_sub(2);
+        let Some(name) = self.session_name.as_ref() else {
+            return;
+        };
+        let inner_max = max_cols;
         let inner = if inner_max > 0 {
             crate::text_formatting::truncate_text(name, inner_max)
         } else {
             String::new()
         };
-        let quoted = format!("\"{inner}\"");
-        let right_width = UnicodeWidthStr::width(quoted.as_str()) as u16;
+        let label = inner;
+        let right_width = UnicodeWidthStr::width(label.as_str()) as u16;
         let right_x = area
             .x
             .saturating_add(area.width.saturating_sub(right_width));
         let y = area.y;
         WidgetRef::render_ref(
-            &Span::from(quoted).dim(),
+            &Span::from(label).cyan(),
             ratatui::layout::Rect::new(right_x, y, right_width, 1),
             buf,
         );

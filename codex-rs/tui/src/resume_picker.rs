@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -26,6 +27,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint;
+use crate::session_name_store;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -159,6 +161,7 @@ struct PickerState {
     all_rows: Vec<Row>,
     filtered_rows: Vec<Row>,
     seen_paths: HashSet<PathBuf>,
+    session_names: HashMap<PathBuf, String>,
     selected: usize,
     scroll_top: usize,
     query: String,
@@ -221,6 +224,7 @@ impl SearchState {
 #[derive(Clone)]
 struct Row {
     path: PathBuf,
+    display_name: Option<String>,
     preview: String,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
@@ -228,6 +232,7 @@ struct Row {
 
 impl PickerState {
     fn new(codex_home: PathBuf, requester: FrameRequester, page_loader: PageLoader) -> Self {
+        let session_names = session_name_store::load_all(&codex_home);
         Self {
             codex_home,
             requester,
@@ -240,6 +245,7 @@ impl PickerState {
             all_rows: Vec::new(),
             filtered_rows: Vec::new(),
             seen_paths: HashSet::new(),
+            session_names,
             selected: 0,
             scroll_top: 0,
             query: String::new(),
@@ -253,6 +259,10 @@ impl PickerState {
 
     fn request_frame(&self) {
         self.requester.schedule_frame();
+    }
+
+    fn refresh_session_names(&mut self) {
+        self.session_names = session_name_store::load_all(&self.codex_home);
     }
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<ResumeSelection>> {
@@ -388,7 +398,9 @@ impl PickerState {
             self.pagination.reached_scan_cap = true;
         }
 
-        let rows = rows_from_items(page.items);
+        self.refresh_session_names();
+
+        let rows = rows_from_items(page.items, &self.session_names);
         for row in rows {
             if self.seen_paths.insert(row.path.clone()) {
                 self.all_rows.push(row);
@@ -570,11 +582,14 @@ impl PickerState {
     }
 }
 
-fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
-    items.into_iter().map(|item| head_to_row(&item)).collect()
+fn rows_from_items(items: Vec<ConversationItem>, names: &HashMap<PathBuf, String>) -> Vec<Row> {
+    items
+        .into_iter()
+        .map(|item| head_to_row(&item, names))
+        .collect()
 }
 
-fn head_to_row(item: &ConversationItem) -> Row {
+fn head_to_row(item: &ConversationItem, names: &HashMap<PathBuf, String>) -> Row {
     let created_at = item
         .created_at
         .as_deref()
@@ -591,8 +606,11 @@ fn head_to_row(item: &ConversationItem) -> Row {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| String::from("(no message yet)"));
 
+    let display_name = names.get(&item.path).cloned();
+
     Row {
         path: item.path.clone(),
+        display_name,
         preview,
         created_at,
         updated_at,
@@ -758,6 +776,13 @@ fn render_list(
         if max_updated_width > 0 {
             preview_width = preview_width.saturating_sub(max_updated_width + 2);
         }
+        if let Some(name) = &row.display_name {
+            use unicode_width::UnicodeWidthStr;
+            // Account for name + separator " — "
+            let sep_width = UnicodeWidthStr::width(" — ");
+            let name_w = UnicodeWidthStr::width(name.as_str());
+            preview_width = preview_width.saturating_sub(name_w + sep_width);
+        }
         let add_leading_gap = max_created_width == 0 && max_updated_width == 0;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
@@ -774,6 +799,10 @@ fn render_list(
         }
         if add_leading_gap {
             spans.push("  ".into());
+        }
+        if let Some(name) = &row.display_name {
+            spans.push(name.clone().cyan());
+            spans.push(" — ".into());
         }
         spans.push(preview.into());
 
@@ -1030,7 +1059,7 @@ mod tests {
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
-        let rows = rows_from_items(vec![a, b]);
+        let rows = rows_from_items(vec![a, b], &HashMap::new());
         assert_eq!(rows.len(), 2);
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
         assert!(rows[0].preview.contains('A'));
@@ -1059,7 +1088,7 @@ mod tests {
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };
 
-        let row = head_to_row(&item);
+        let row = head_to_row(&item, &HashMap::new());
         let expected_created = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -1087,18 +1116,21 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/a.jsonl"),
                 preview: String::from("Fix resume picker timestamps"),
+                display_name: None,
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
                 preview: String::from("Investigate lazy pagination cap"),
+                display_name: None,
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
                 preview: String::from("Explain the codebase"),
+                display_name: None,
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
             },

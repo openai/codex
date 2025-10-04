@@ -287,6 +287,7 @@ fn make_chatwidget_manual() -> (
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
         session_name: None,
+        rollout_path: None,
     };
     (widget, rx, op_rx)
 }
