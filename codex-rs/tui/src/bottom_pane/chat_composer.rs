@@ -57,6 +57,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
+use unicode_width::UnicodeWidthStr;
 
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
@@ -1543,17 +1544,22 @@ impl WidgetRef for ChatComposer {
                             )
                             && custom_rect.width > 0
                         {
-                            let right = name;
-                            let right_width = right.chars().count() as u16;
-                            let right_x = custom_rect
-                                .x
-                                .saturating_add(custom_rect.width.saturating_sub(right_width));
-                            let y = custom_rect.y;
-                            WidgetRef::render_ref(
-                                &Span::from(right.as_str()).dim(),
-                                Rect::new(right_x, y, right_width, 1),
-                                buf,
-                            );
+                            // Simple truncation: cap to a small max and the available row width.
+                            let max_cols = custom_rect.width.min(24) as usize;
+                            if max_cols > 0 {
+                                let truncated =
+                                    crate::text_formatting::truncate_text(name, max_cols);
+                                let right_width = UnicodeWidthStr::width(truncated.as_str()) as u16;
+                                let right_x = custom_rect
+                                    .x
+                                    .saturating_add(custom_rect.width.saturating_sub(right_width));
+                                let y = custom_rect.y;
+                                WidgetRef::render_ref(
+                                    &Span::from(truncated).dim(),
+                                    Rect::new(right_x, y, right_width, 1),
+                                    buf,
+                                );
+                            }
                         }
                     }
                 } else {
@@ -1565,17 +1571,20 @@ impl WidgetRef for ChatComposer {
                         )
                         && hint_rect.width > 0
                     {
-                        let right = name;
-                        let right_width = right.chars().count() as u16;
-                        let right_x = hint_rect
-                            .x
-                            .saturating_add(hint_rect.width.saturating_sub(right_width));
-                        let y = hint_rect.y;
-                        WidgetRef::render_ref(
-                            &Span::from(right.as_str()).dim(),
-                            Rect::new(right_x, y, right_width, 1),
-                            buf,
-                        );
+                        let max_cols = hint_rect.width.min(24) as usize;
+                        if max_cols > 0 {
+                            let truncated = crate::text_formatting::truncate_text(name, max_cols);
+                            let right_width = UnicodeWidthStr::width(truncated.as_str()) as u16;
+                            let right_x = hint_rect
+                                .x
+                                .saturating_add(hint_rect.width.saturating_sub(right_width));
+                            let y = hint_rect.y;
+                            WidgetRef::render_ref(
+                                &Span::from(truncated).dim(),
+                                Rect::new(right_x, y, right_width, 1),
+                                buf,
+                            );
+                        }
                     }
                 }
             }
