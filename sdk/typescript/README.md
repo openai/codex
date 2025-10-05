@@ -10,7 +10,7 @@ The TypeScript SDK wraps the bundled `codex` binary. It spawns the CLI and excha
 npm install @openai/codex-sdk
 ```
 
-Requires Node.js 18+ (uses `node:` stdlib modules and async generators).
+Requires Node.js 18+.
 
 ## Quickstart
 
