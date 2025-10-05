@@ -8,6 +8,7 @@ use chrono::Utc;
 use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
 use codex_core::Cursor;
+use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -22,7 +23,9 @@ use ratatui::text::Span;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use unicode_width::UnicodeWidthStr;
 
+use crate::key_hint;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -75,6 +78,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
+                INTERACTIVE_SESSION_SOURCES,
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -110,7 +114,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
                     }
                     TuiEvent::Draw => {
                         if let Ok(size) = alt.tui.terminal.size() {
-                            let list_height = size.height.saturating_sub(3) as usize;
+                            let list_height = size.height.saturating_sub(4) as usize;
                             state.update_view_rows(list_height);
                             state.ensure_minimum_rows_for_view(list_height);
                         }
@@ -218,7 +222,8 @@ impl SearchState {
 struct Row {
     path: PathBuf,
     preview: String,
-    ts: Option<DateTime<Utc>>,
+    created_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
 }
 
 impl PickerState {
@@ -321,7 +326,13 @@ impl PickerState {
     }
 
     async fn load_initial_page(&mut self) -> Result<()> {
-        let page = RolloutRecorder::list_conversations(&self.codex_home, PAGE_SIZE, None).await?;
+        let page = RolloutRecorder::list_conversations(
+            &self.codex_home,
+            PAGE_SIZE,
+            None,
+            INTERACTIVE_SESSION_SOURCES,
+        )
+        .await?;
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
@@ -564,13 +575,16 @@ fn rows_from_items(items: Vec<ConversationItem>) -> Vec<Row> {
 }
 
 fn head_to_row(item: &ConversationItem) -> Row {
-    let mut ts: Option<DateTime<Utc>> = None;
-    if let Some(first) = item.head.first()
-        && let Some(t) = first.get("timestamp").and_then(|v| v.as_str())
-        && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(t)
-    {
-        ts = Some(parsed.with_timezone(&Utc));
-    }
+    let created_at = item
+        .created_at
+        .as_deref()
+        .and_then(parse_timestamp_str)
+        .or_else(|| item.head.first().and_then(extract_timestamp));
+    let updated_at = item
+        .updated_at
+        .as_deref()
+        .and_then(parse_timestamp_str)
+        .or(created_at);
 
     let preview = preview_from_head(&item.head)
         .map(|s| s.trim().to_string())
@@ -580,8 +594,23 @@ fn head_to_row(item: &ConversationItem) -> Row {
     Row {
         path: item.path.clone(),
         preview,
-        ts,
+        created_at,
+        updated_at,
     }
+}
+
+fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .map(|dt| dt.with_timezone(&Utc))
+        .ok()
+}
+
+fn extract_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
+    value
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
@@ -627,10 +656,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     let height = tui.terminal.size()?.height;
     tui.draw(height, |frame| {
         let area = frame.area();
-        let [header, search, list, hint] = Layout::vertical([
+        let [header, search, columns, list, hint] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Min(area.height.saturating_sub(3)),
+            Constraint::Length(1),
+            Constraint::Min(area.height.saturating_sub(4)),
             Constraint::Length(1),
         ])
         .areas(area);
@@ -649,21 +679,26 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         };
         frame.render_widget_ref(Line::from(q), search);
 
-        // List
-        render_list(frame, list, state);
+        let metrics = calculate_column_metrics(&state.filtered_rows);
+
+        // Column headers and list
+        render_column_headers(frame, columns, &metrics);
+        render_list(frame, list, state, &metrics);
 
         // Hint line
         let hint_line: Line = vec![
-            "Enter".bold(),
-            " to resume ".into(),
-            "• ".dim(),
-            "Esc".bold(),
-            " to start new ".into(),
-            "• ".dim(),
-            "Ctrl+C".into(),
-            " to quit ".into(),
-            "• ".dim(),
-            "↑/↓".into(),
+            key_hint::plain(KeyCode::Enter).into(),
+            " to resume ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " to start new ".dim(),
+            "    ".dim(),
+            key_hint::ctrl(KeyCode::Char('c')).into(),
+            " to quit ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Up).into(),
+            "/".dim(),
+            key_hint::plain(KeyCode::Down).into(),
             " to browse".dim(),
         ]
         .into();
@@ -671,7 +706,12 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     })
 }
 
-fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &PickerState) {
+fn render_list(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    state: &PickerState,
+    metrics: &ColumnMetrics,
+) {
     if area.height == 0 {
         return;
     }
@@ -686,20 +726,58 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
     let capacity = area.height as usize;
     let start = state.scroll_top.min(rows.len().saturating_sub(1));
     let end = rows.len().min(start + capacity);
+    let labels = &metrics.labels;
     let mut y = area.y;
 
-    for (idx, row) in rows[start..end].iter().enumerate() {
+    let max_created_width = metrics.max_created_width;
+    let max_updated_width = metrics.max_updated_width;
+
+    for (idx, (row, (created_label, updated_label))) in rows[start..end]
+        .iter()
+        .zip(labels[start..end].iter())
+        .enumerate()
+    {
         let is_sel = start + idx == state.selected;
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
-        let ts = row
-            .ts
-            .map(human_time_ago)
-            .unwrap_or_else(|| "".to_string())
-            .dim();
-        let max_cols = area.width.saturating_sub(6) as usize;
-        let preview = truncate_text(&row.preview, max_cols);
+        let marker_width = 2usize;
+        let created_span = if max_created_width == 0 {
+            None
+        } else {
+            Some(Span::from(format!("{created_label:<max_created_width$}")).dim())
+        };
+        let updated_span = if max_updated_width == 0 {
+            None
+        } else {
+            Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+        };
+        let mut preview_width = area.width as usize;
+        preview_width = preview_width.saturating_sub(marker_width);
+        if max_created_width > 0 {
+            preview_width = preview_width.saturating_sub(max_created_width + 2);
+        }
+        if max_updated_width > 0 {
+            preview_width = preview_width.saturating_sub(max_updated_width + 2);
+        }
+        let add_leading_gap = max_created_width == 0 && max_updated_width == 0;
+        if add_leading_gap {
+            preview_width = preview_width.saturating_sub(2);
+        }
+        let preview = truncate_text(&row.preview, preview_width);
+        let mut spans: Vec<Span> = vec![marker];
+        if let Some(created) = created_span {
+            spans.push(created);
+            spans.push("  ".into());
+        }
+        if let Some(updated) = updated_span {
+            spans.push(updated);
+            spans.push("  ".into());
+        }
+        if add_leading_gap {
+            spans.push("  ".into());
+        }
+        spans.push(preview.into());
 
-        let line: Line = vec![marker, ts, "  ".into(), preview.into()].into();
+        let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
@@ -775,14 +853,89 @@ fn human_time_ago(ts: DateTime<Utc>) -> String {
     }
 }
 
+fn format_created_label(row: &Row) -> String {
+    row.created_at
+        .map(human_time_ago)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_updated_label(row: &Row) -> String {
+    match (row.updated_at, row.created_at) {
+        (Some(updated), _) => human_time_ago(updated),
+        (None, Some(created)) => human_time_ago(created),
+        (None, None) => "-".to_string(),
+    }
+}
+
+fn render_column_headers(
+    frame: &mut crate::custom_terminal::Frame,
+    area: Rect,
+    metrics: &ColumnMetrics,
+) {
+    if area.height == 0 {
+        return;
+    }
+
+    let mut spans: Vec<Span> = vec!["  ".into()];
+    if metrics.max_created_width > 0 {
+        let label = format!(
+            "{text:<width$}",
+            text = "Created",
+            width = metrics.max_created_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
+    if metrics.max_updated_width > 0 {
+        let label = format!(
+            "{text:<width$}",
+            text = "Updated",
+            width = metrics.max_updated_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
+    spans.push("Conversation".bold());
+    frame.render_widget_ref(Line::from(spans), area);
+}
+
+struct ColumnMetrics {
+    max_created_width: usize,
+    max_updated_width: usize,
+    labels: Vec<(String, String)>,
+}
+
+fn calculate_column_metrics(rows: &[Row]) -> ColumnMetrics {
+    let mut labels: Vec<(String, String)> = Vec::with_capacity(rows.len());
+    let mut max_created_width = UnicodeWidthStr::width("Created");
+    let mut max_updated_width = UnicodeWidthStr::width("Updated");
+
+    for row in rows {
+        let created = format_created_label(row);
+        let updated = format_updated_label(row);
+        max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
+        max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
+        labels.push((created, updated));
+    }
+
+    ColumnMetrics {
+        max_created_width,
+        max_updated_width,
+        labels,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
+    use insta::assert_snapshot;
     use serde_json::json;
     use std::future::Future;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex;
 
@@ -805,6 +958,8 @@ mod tests {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
             tail: Vec::new(),
+            created_at: Some(ts.to_string()),
+            updated_at: Some(ts.to_string()),
         }
     }
 
@@ -865,17 +1020,116 @@ mod tests {
             path: PathBuf::from("/tmp/a.jsonl"),
             head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
             tail: Vec::new(),
+            created_at: Some("2025-01-01T00:00:00Z".into()),
+            updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
         let b = ConversationItem {
             path: PathBuf::from("/tmp/b.jsonl"),
             head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
             tail: Vec::new(),
+            created_at: Some("2025-01-02T00:00:00Z".into()),
+            updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
         let rows = rows_from_items(vec![a, b]);
         assert_eq!(rows.len(), 2);
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
         assert!(rows[0].preview.contains('A'));
         assert!(rows[1].preview.contains('B'));
+    }
+
+    #[test]
+    fn row_uses_tail_timestamp_for_updated_at() {
+        let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["Hello"]);
+        let tail = vec![json!({
+            "timestamp": "2025-01-01T01:00:00Z",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "hi",
+                }
+            ],
+        })];
+        let item = ConversationItem {
+            path: PathBuf::from("/tmp/a.jsonl"),
+            head,
+            tail,
+            created_at: Some("2025-01-01T00:00:00Z".into()),
+            updated_at: Some("2025-01-01T01:00:00Z".into()),
+        };
+
+        let row = head_to_row(&item);
+        let expected_created = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let expected_updated = chrono::DateTime::parse_from_rfc3339("2025-01-01T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(row.created_at, Some(expected_created));
+        assert_eq!(row.updated_at, Some(expected_updated));
+    }
+
+    #[test]
+    fn resume_table_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+        use ratatui::layout::Constraint;
+        use ratatui::layout::Layout;
+
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state =
+            PickerState::new(PathBuf::from("/tmp"), FrameRequester::test_dummy(), loader);
+
+        let now = Utc::now();
+        let rows = vec![
+            Row {
+                path: PathBuf::from("/tmp/a.jsonl"),
+                preview: String::from("Fix resume picker timestamps"),
+                created_at: Some(now - Duration::minutes(16)),
+                updated_at: Some(now - Duration::seconds(42)),
+            },
+            Row {
+                path: PathBuf::from("/tmp/b.jsonl"),
+                preview: String::from("Investigate lazy pagination cap"),
+                created_at: Some(now - Duration::hours(1)),
+                updated_at: Some(now - Duration::minutes(35)),
+            },
+            Row {
+                path: PathBuf::from("/tmp/c.jsonl"),
+                preview: String::from("Explain the codebase"),
+                created_at: Some(now - Duration::hours(2)),
+                updated_at: Some(now - Duration::hours(2)),
+            },
+        ];
+        state.all_rows = rows.clone();
+        state.filtered_rows = rows;
+        state.view_rows = Some(3);
+        state.selected = 1;
+        state.scroll_top = 0;
+        state.update_view_rows(3);
+
+        let metrics = calculate_column_metrics(&state.filtered_rows);
+
+        let width: u16 = 80;
+        let height: u16 = 6;
+        let backend = VT100Backend::new(width, height);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, width, height));
+
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            let segments =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+            render_column_headers(&mut frame, segments[0], &metrics);
+            render_list(&mut frame, segments[1], &state, &metrics);
+        }
+        terminal.flush().expect("flush");
+
+        let snapshot = terminal.backend().to_string();
+        assert_snapshot!("resume_picker_table", snapshot);
     }
 
     #[test]

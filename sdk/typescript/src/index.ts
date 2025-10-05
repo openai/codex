@@ -9,10 +9,11 @@ export type {
   ItemCompletedEvent,
   ThreadError,
   ThreadErrorEvent,
+  Usage,
 } from "./events";
 export type {
   ThreadItem,
-  AssistantMessageItem,
+  AgentMessageItem,
   ReasoningItem,
   CommandExecutionItem,
   FileChangeItem,
@@ -22,10 +23,11 @@ export type {
   ErrorItem,
 } from "./items";
 
-export { Thread, RunResult, RunStreamedResult, Input } from "./thread";
+export { Thread } from "./thread";
+export type { RunResult, RunStreamedResult, Input } from "./thread";
 
 export { Codex } from "./codex";
 
 export type { CodexOptions } from "./codexOptions";
 
-export type { TurnOptions, ApprovalMode, SandboxMode } from "./turnOptions";
+export type { ThreadOptions as TheadOptions, ApprovalMode, SandboxMode } from "./threadOptions";

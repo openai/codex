@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 
 import { describe, expect, it } from "@jest/globals";
 
@@ -45,16 +45,16 @@ describe("Codex", () => {
           type: "item.completed",
           item: {
             id: "item_0",
-            item_type: "assistant_message",
+            type: "agent_message",
             text: "Hi!",
           },
         },
         {
           type: "turn.completed",
           usage: {
-            cached_input_tokens: 0,
-            input_tokens: 0,
-            output_tokens: 0,
+            cached_input_tokens: 12,
+            input_tokens: 42,
+            output_tokens: 5,
           },
         },
       ]);

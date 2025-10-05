@@ -22,7 +22,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Print the version that would be used and exit before making changes.",
     )
 
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--publish-alpha",
         action="store_true",
@@ -33,13 +33,30 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Publish the next stable release by bumping the minor version.",
     )
-    return parser.parse_args(argv[1:])
+    parser.add_argument(
+        "--emergency-version-override",
+        help="Publish a specific version because tag was created for the previous release but it never succeeded. Value should be semver, e.g., `0.43.0-alpha.9`.",
+    )
+
+    args = parser.parse_args(argv[1:])
+    if not (
+        args.publish_alpha
+        or args.publish_release
+        or args.emergency_version_override
+    ):
+        parser.error(
+            "Must specify --publish-alpha, --publish-release, or --emergency-version-override."
+        )
+    return args
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
-        version = determine_version(args)
+        if args.emergency_version_override:
+            version = args.emergency_version_override
+        else:
+            version = determine_version(args)
         print(f"Publishing version {version}")
         if args.dry_run:
             return 0
