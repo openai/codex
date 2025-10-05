@@ -438,11 +438,11 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
 
         let stdout = output_json["output"].as_str().unwrap_or_default();
         assert!(
-            stdout.starts_with("command timed out after "),
+            stdout.contains("command timed out after "),
             "expected timeout prefix, got {stdout:?}"
         );
-        let first_line = stdout.lines().next().unwrap_or_default();
-        let duration_ms = first_line
+        let third_line = stdout.lines().nth(2).unwrap_or_default();
+        let duration_ms = third_line
             .strip_prefix("command timed out after ")
             .and_then(|line| line.strip_suffix(" milliseconds"))
             .and_then(|value| value.parse::<u64>().ok())
@@ -519,7 +519,7 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
         .expect("denied output string");
 
     assert!(
-        output.starts_with("failed in sandbox: "),
+        output.contains("failed in sandbox: "),
         "expected sandbox error prefix, got {output:?}"
     );
     assert!(
@@ -605,7 +605,7 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
         .expect("spawn failure output string");
 
     assert!(
-        output.starts_with("execution error:"),
+        output.contains("execution error:"),
         "expected execution error prefix, got {output:?}"
     );
     assert!(output.len() <= 10 * 1024);

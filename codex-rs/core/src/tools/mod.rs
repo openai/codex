@@ -162,9 +162,9 @@ pub(crate) async fn handle_container_exec_with_params(
         ),
         Err(ExecError::Codex(err)) => {
             let message = format!("execution error: {err:?}");
-            Err(FunctionCallError::RespondToModel(
-                truncate_formatted_exec_output(&message),
-            ))
+            Err(FunctionCallError::RespondToModel(format_exec_output(
+                &message,
+            )))
         }
     }
 }
@@ -217,20 +217,34 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
             "command timed out after {} milliseconds\n{content}",
             exec_output.duration.as_millis()
         );
-        return truncate_formatted_exec_output(&prefixed);
+        return format_exec_output(&prefixed);
     }
 
-    truncate_formatted_exec_output(content)
+    format_exec_output(content)
 }
 
-fn truncate_formatted_exec_output(content: &str) -> String {
+fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
+    match err {
+        FunctionCallError::RespondToModel(msg) => {
+            FunctionCallError::RespondToModel(format_exec_output(&msg))
+        }
+        FunctionCallError::Fatal(msg) => FunctionCallError::Fatal(format_exec_output(&msg)),
+        other => other,
+    }
+}
+
+fn format_exec_output(content: &str) -> String {
     // Head+tail truncation for the model: show the beginning and end with an elision.
     // Clients still receive full streams; only this formatted summary is capped.
     let total_lines = content.lines().count();
     if content.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
         return content.to_string();
     }
+    let output = truncate_formatted_exec_output(content, total_lines);
+    format!("Total output lines: {total_lines}\n\n{output}")
+}
 
+fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
     let segments: Vec<&str> = content.split_inclusive('\n').collect();
     let head_take = MODEL_FORMAT_HEAD_LINES.min(segments.len());
     let tail_take = MODEL_FORMAT_TAIL_LINES.min(segments.len().saturating_sub(head_take));
@@ -285,32 +299,49 @@ fn truncate_formatted_exec_output(content: &str) -> String {
     result
 }
 
-fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
-    match err {
-        FunctionCallError::RespondToModel(msg) => {
-            FunctionCallError::RespondToModel(truncate_formatted_exec_output(&msg))
-        }
-        FunctionCallError::Fatal(msg) => {
-            FunctionCallError::Fatal(truncate_formatted_exec_output(&msg))
-        }
-        other => other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use regex_lite::Regex;
+
+    fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {
+        let pattern = truncated_message_pattern(line, total_lines);
+        let regex = Regex::new(&pattern).unwrap_or_else(|err| {
+            panic!("failed to compile regex {pattern}: {err}");
+        });
+        let captures = regex
+            .captures(message)
+            .unwrap_or_else(|| panic!("message failed to match pattern {pattern}: {message}"));
+        let body = captures
+            .name("body")
+            .expect("missing body capture")
+            .as_str();
+        assert!(
+            body.len() <= MODEL_FORMAT_MAX_BYTES,
+            "body exceeds byte limit: {} bytes",
+            body.len()
+        );
+    }
+
+    fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
+        let head_take = MODEL_FORMAT_HEAD_LINES.min(total_lines);
+        let tail_take = MODEL_FORMAT_TAIL_LINES.min(total_lines.saturating_sub(head_take));
+        let omitted = total_lines.saturating_sub(head_take + tail_take);
+        let escaped_line = regex_lite::escape(line);
+        format!(
+            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} omitted {omitted} of {total_lines} lines \.{{3}}]\n\n.*)$",
+        )
+    }
 
     #[test]
     fn truncate_formatted_exec_output_truncates_large_error() {
         let line = "very long execution error line that should trigger truncation\n";
         let large_error = line.repeat(2_500); // way beyond both byte and line limits
 
-        let truncated = truncate_formatted_exec_output(&large_error);
+        let truncated = format_exec_output(&large_error);
 
-        assert!(truncated.len() <= MODEL_FORMAT_MAX_BYTES);
-        assert!(truncated.starts_with(line));
-        assert!(truncated.contains("[... omitted"));
+        let total_lines = large_error.lines().count();
+        assert_truncated_message_matches(&truncated, line, total_lines);
         assert_ne!(truncated, large_error);
     }
 
@@ -318,13 +349,12 @@ mod tests {
     fn truncate_function_error_trims_respond_to_model() {
         let line = "respond-to-model error that should be truncated\n";
         let huge = line.repeat(3_000);
+        let total_lines = huge.lines().count();
 
         let err = truncate_function_error(FunctionCallError::RespondToModel(huge));
         match err {
             FunctionCallError::RespondToModel(message) => {
-                assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
-                assert!(message.contains("[... omitted"));
-                assert!(message.starts_with(line));
+                assert_truncated_message_matches(&message, line, total_lines);
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
@@ -334,13 +364,12 @@ mod tests {
     fn truncate_function_error_trims_fatal() {
         let line = "fatal error output that should be truncated\n";
         let huge = line.repeat(3_000);
+        let total_lines = huge.lines().count();
 
         let err = truncate_function_error(FunctionCallError::Fatal(huge));
         match err {
             FunctionCallError::Fatal(message) => {
-                assert!(message.len() <= MODEL_FORMAT_MAX_BYTES);
-                assert!(message.contains("[... omitted"));
-                assert!(message.starts_with(line));
+                assert_truncated_message_matches(&message, line, total_lines);
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
