@@ -926,10 +926,7 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
 }
 
 fn is_context_window_error(error: &Error) -> bool {
-    if error.code.as_deref() == Some("context_length_exceeded") {
-        return true;
-    }
-    false
+    error.code.as_deref() == Some("context_length_exceeded")
 }
 
 #[cfg(test)]

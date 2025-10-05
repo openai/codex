@@ -1006,35 +1006,23 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
-    let error_stream = responses::sse_failed(
-        "resp_context_window",
-        "context_length_exceeded",
-        "Your input exceeds the context window of this model. Please adjust your input and try again.",
-    );
+    responses::mount_sse_once_match(
+        &server,
+        body_string_contains("trigger context window"),
+        responses::sse_failed(
+            "resp_context_window",
+            "context_length_exceeded",
+            "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        ),
+    )
+    .await;
 
-    let second_turn = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(error_stream, "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(body_string_contains("trigger context window"))
-        .respond_with(second_turn)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let first_turn = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp_seed"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(body_string_contains("seed turn"))
-        .respond_with(first_turn)
-        .expect(1)
-        .mount(&server)
-        .await;
+    responses::mount_sse_once_match(
+        &server,
+        body_string_contains("seed turn"),
+        sse_completed("resp_seed"),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
@@ -1077,7 +1065,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
                     })
             )
         },
-        Duration::from_secs(10),
+        Duration::from_secs(5),
     )
     .await;
 
