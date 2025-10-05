@@ -66,7 +66,7 @@ const thread = codex.startThread({
 });
 ```
 
-To avoid unrecoverable errors, Codex requires the working directory to be a git repository. You can skip the git repository check by passing the `skipGitRepoCheck` option when creating a thread.
+To avoid unrecoverable errors, Codex requires the working directory to be a Git repository. You can skip the Git repository check by passing the `skipGitRepoCheck` option when creating a thread.
 
 ```typescript
 const thread = codex.startThread({
