@@ -510,6 +510,21 @@ fn create_env_for_mcp_server(
             let key_os = OsString::from(key);
             if let Some(value) = base_env.get(OsStr::new(key)) {
                 env.insert(key_os, value.clone());
+                continue;
+            }
+
+            if let Some((existing_key, existing_value)) =
+                base_env
+                    .iter()
+                    .find_map(|(candidate_key, candidate_value)| {
+                        candidate_key.to_str().and_then(|candidate_key_str| {
+                            candidate_key_str
+                                .eq_ignore_ascii_case(key)
+                                .then(|| (candidate_key.clone(), candidate_value.clone()))
+                        })
+                    })
+            {
+                env.insert(existing_key, existing_value);
             }
         }
 

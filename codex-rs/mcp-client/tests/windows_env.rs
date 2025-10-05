@@ -26,6 +26,7 @@ fn passes_through_msvc_and_sdk_vars() {
     ] {
         base.insert(OsString::from(key), OsString::from("VAL"));
     }
+    base.insert(OsString::from("Path"), OsString::from(r"C:\Path"));
 
     let cmd = codex_mcp_client::build_test_command(&base);
 
@@ -44,4 +45,10 @@ fn passes_through_msvc_and_sdk_vars() {
             "expected {key} in env"
         );
     }
+
+    assert!(
+        cmd.get_envs()
+            .any(|(name, value)| name == OsStr::new("Path") && value.is_some()),
+        "expected Path in env"
+    );
 }
