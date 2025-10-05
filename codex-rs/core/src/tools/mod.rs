@@ -330,9 +330,6 @@ mod tests {
         let escaped_line = regex_lite::escape(line);
         format!(
             "(?s)^Total output lines: {total_lines}\\n\\n(?P<body>{escaped_line}.*\\n\\[\\.\\.\\. omitted {omitted} of {total_lines} lines \\.(?:\\.|)\\]\n\\n.*)$",
-            total_lines = total_lines,
-            escaped_line = escaped_line,
-            omitted = omitted,
         )
     }
 
