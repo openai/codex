@@ -12,9 +12,9 @@ pub(crate) struct StreamState {
 }
 
 impl StreamState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(width: Option<usize>) -> Self {
         Self {
-            collector: MarkdownStreamCollector::new(),
+            collector: MarkdownStreamCollector::new(width),
             queued_lines: VecDeque::new(),
             has_seen_delta: false,
         }

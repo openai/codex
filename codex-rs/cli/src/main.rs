@@ -10,14 +10,16 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::login::read_api_key_from_stdin;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
-use codex_cli::proto;
+use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
+use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use dirs::home_dir;
@@ -29,7 +31,6 @@ use supports_color::Stream;
 mod mcp_cmd;
 
 use crate::mcp_cmd::McpCli;
-use crate::proto::ProtoCli;
 
 const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 const AUTH_PROFILE_ENV_VAR: &str = "CODEX_ACTIVE_AUTH_PROFILE";
@@ -80,9 +81,11 @@ enum Subcommand {
     /// [experimental] Run Codex as an MCP server and manage MCP servers.
     Mcp(McpCli),
 
-    /// Run the Protocol stream via stdin/stdout
-    #[clap(visible_alias = "p")]
-    Proto(ProtoCli),
+    /// [experimental] Run the Codex MCP server (stdio transport).
+    McpServer,
+
+    /// [experimental] Run the app server.
+    AppServer,
 
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
@@ -100,6 +103,13 @@ enum Subcommand {
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
+    /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
+    #[clap(name = "cloud", alias = "cloud-tasks")]
+    Cloud(CloudTasksCli),
+
+    /// Internal: run the responses API proxy.
+    #[clap(hide = true)]
+    ResponsesApiProxy(ResponsesApiProxyArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -144,7 +154,18 @@ struct LoginCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
 
-    #[arg(long = "api-key", value_name = "API_KEY")]
+    #[arg(
+        long = "with-api-key",
+        help = "Read the API key from stdin (e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`)"
+    )]
+    with_api_key: bool,
+
+    #[arg(
+        long = "api-key",
+        value_name = "API_KEY",
+        help = "(deprecated) Previously accepted the API key directly; now exits with guidance to use --with-api-key",
+        hide = true
+    )]
     api_key: Option<String>,
 
     /// EXPERIMENTAL: Use device code flow (not yet supported)
@@ -316,25 +337,12 @@ fn print_exit_messages(exit_info: AppExitInfo, auth_profile: Option<&str>) {
     }
 }
 
-pub(crate) const CODEX_SECURE_MODE_ENV_VAR: &str = "CODEX_SECURE_MODE";
-
-/// As early as possible in the process lifecycle, apply hardening measures
-/// if the CODEX_SECURE_MODE environment variable is set to "1".
+/// As early as possible in the process lifecycle, apply hardening measures. We
+/// skip this in debug builds to avoid interfering with debugging.
 #[ctor::ctor]
+#[cfg(not(debug_assertions))]
 fn pre_main_hardening() {
-    let secure_mode = match std::env::var(CODEX_SECURE_MODE_ENV_VAR) {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-
-    if secure_mode == "1" {
-        codex_process_hardening::pre_main_hardening();
-    }
-
-    // Always clear this env var so child processes don't inherit it.
-    unsafe {
-        std::env::remove_var(CODEX_SECURE_MODE_ENV_VAR);
-    }
+    codex_process_hardening::pre_main_hardening();
 }
 
 fn main() -> anyhow::Result<()> {
@@ -370,10 +378,16 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
+        Some(Subcommand::McpServer) => {
+            codex_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
+        }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
-            mcp_cli.run(codex_linux_sandbox_exe).await?;
+            mcp_cli.run().await?;
+        }
+        Some(Subcommand::AppServer) => {
+            codex_app_server::run_main(codex_linux_sandbox_exe, root_config_overrides).await?;
         }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,
@@ -406,7 +420,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                             login_cli.client_id,
                         )
                         .await;
-                    } else if let Some(api_key) = login_cli.api_key {
+                    } else if login_cli.api_key.is_some() {
+                        eprintln!(
+                            "The --api-key flag is no longer supported. Pipe the key instead, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`."
+                        );
+                        std::process::exit(1);
+                    } else if login_cli.with_api_key {
+                        let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
@@ -421,15 +441,15 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             run_logout(logout_cli.config_overrides).await;
         }
-        Some(Subcommand::Proto(mut proto_cli)) => {
-            prepend_config_flags(
-                &mut proto_cli.config_overrides,
-                root_config_overrides.clone(),
-            );
-            proto::run_main(proto_cli).await?;
-        }
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);
+        }
+        Some(Subcommand::Cloud(mut cloud_cli)) => {
+            prepend_config_flags(
+                &mut cloud_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
             DebugCommand::Seatbelt(mut seatbelt_cli) => {
@@ -461,6 +481,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             run_apply_command(apply_cli, None).await?;
+        }
+        Some(Subcommand::ResponsesApiProxy(args)) => {
+            tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
+                .await??;
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
@@ -559,7 +583,7 @@ fn print_completion(cmd: CompletionCommand) {
 mod tests {
     use super::*;
     use codex_core::protocol::TokenUsage;
-    use codex_protocol::mcp_protocol::ConversationId;
+    use codex_protocol::ConversationId;
 
     fn finalize_from_args(args: &[&str]) -> TuiCli {
         let cli = MultitoolCli::try_parse_from(args).expect("parse");

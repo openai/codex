@@ -1,9 +1,9 @@
 use chrono::SecondsFormat;
 use chrono::Utc;
+use codex_app_server_protocol::AuthMode;
+use codex_protocol::ConversationId;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::mcp_protocol::AuthMode;
-use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InputItem;
@@ -14,6 +14,7 @@ use eventsource_stream::EventStreamError as StreamError;
 use reqwest::Error;
 use reqwest::Response;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::fmt::Display;
 use std::time::Duration;
 use std::time::Instant;
@@ -366,10 +367,10 @@ impl OtelEventManager {
         call_id: &str,
         arguments: &str,
         f: F,
-    ) -> Result<String, E>
+    ) -> Result<(String, bool), E>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<String, E>>,
+        Fut: Future<Output = Result<(String, bool), E>>,
         E: Display,
     {
         let start = Instant::now();
@@ -377,9 +378,11 @@ impl OtelEventManager {
         let duration = start.elapsed();
 
         let (output, success) = match &result {
-            Ok(content) => (content, true),
-            Err(error) => (&error.to_string(), false),
+            Ok((preview, success)) => (Cow::Borrowed(preview.as_str()), *success),
+            Err(error) => (Cow::Owned(error.to_string()), false),
         };
+
+        let success_str = if success { "true" } else { "false" };
 
         tracing::event!(
             tracing::Level::INFO,
@@ -396,7 +399,8 @@ impl OtelEventManager {
             call_id = %call_id,
             arguments = %arguments,
             duration_ms = %duration.as_millis(),
-            success = %success,
+            success = %success_str,
+            // `output` is truncated by the tool layer before reaching telemetry.
             output = %output,
         );
 

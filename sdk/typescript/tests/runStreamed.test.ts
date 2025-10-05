@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 
 import { describe, expect, it } from "@jest/globals";
 
@@ -23,7 +23,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       const result = await thread.runStreamed("Hello, world!");
@@ -45,16 +45,16 @@ describe("Codex", () => {
           type: "item.completed",
           item: {
             id: "item_0",
-            item_type: "assistant_message",
+            type: "agent_message",
             text: "Hi!",
           },
         },
         {
           type: "turn.completed",
           usage: {
-            cached_input_tokens: 0,
-            input_tokens: 0,
-            output_tokens: 0,
+            cached_input_tokens: 12,
+            input_tokens: 42,
+            output_tokens: 5,
           },
         },
       ]);
@@ -82,7 +82,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const thread = client.startThread();
       const first = await thread.runStreamed("first input");
@@ -128,7 +128,7 @@ describe("Codex", () => {
     });
 
     try {
-      const client = new Codex({ executablePath: codexExecPath, baseUrl: url, apiKey: "test" });
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
 
       const originalThread = client.startThread();
       const first = await originalThread.runStreamed("first input");
