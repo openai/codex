@@ -329,7 +329,7 @@ mod tests {
         let omitted = total_lines.saturating_sub(head_take + tail_take);
         let escaped_line = regex_lite::escape(line);
         format!(
-            "(?s)^Total output lines: {total_lines}\\n\\n(?P<body>{escaped_line}.*\\n\\[\\.\\.\\. omitted {omitted} of {total_lines} lines \\.(?:\\.|)\\]\n\\n.*)$",
+            r"(?s)^Total output lines: {total_lines}\n\n(?P<body>{escaped_line}.*\n\[\.{{3}} omitted {omitted} of {total_lines} lines \.{{3}}]\n\n.*)$",
         )
     }
 
