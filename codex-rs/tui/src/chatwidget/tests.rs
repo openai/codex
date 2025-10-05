@@ -452,6 +452,44 @@ fn shift_tab_triggers_plan_turn() {
             .iter()
             .any(|line| line.contains("Planning request queued with gpt-5 high"))
     );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut ops_second = Vec::new();
+    while let Ok(op) = op_rx.try_recv() {
+        ops_second.push(op);
+    }
+    assert_eq!(
+        ops_second.len(),
+        3,
+        "expected second plan request to emit override/input/restore ops"
+    );
+    assert!(chat.bottom_pane.plan_mode_enabled());
+
+    let plan_input_second = &ops_second[1];
+    match plan_input_second {
+        Op::UserInput { items } => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                InputItem::Text { text } => {
+                    assert!(text.contains("Review the parser module"));
+                }
+                other => panic!("unexpected second plan input item: {other:?}"),
+            }
+        }
+        other => panic!("unexpected second op in repeat plan: {other:?}"),
+    }
+
+    let cells_second = drain_insert_history(&mut rx);
+    let merged_second: Vec<String> = cells_second
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged_second
+            .iter()
+            .any(|line| line.contains("Planning request queued with gpt-5 high"))
+    );
 }
 
 #[test]
@@ -505,6 +543,35 @@ fn shift_tab_blocked_while_task_running() {
             .iter()
             .any(|line| line.contains("Finish the current task before entering plan mode"))
     );
+}
+
+#[test]
+fn plan_mode_enter_blocked_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane
+        .set_composer_text("Iterate on onboarding".to_string());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    assert!(chat.bottom_pane.plan_mode_enabled());
+
+    chat.bottom_pane.set_task_running(true);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    let cells = drain_insert_history(&mut rx);
+    let merged: Vec<String> = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged
+            .iter()
+            .any(|line| line.contains("Finish the current task before requesting a plan"))
+    );
+    assert!(chat.bottom_pane.plan_mode_enabled());
 }
 
 #[test]
