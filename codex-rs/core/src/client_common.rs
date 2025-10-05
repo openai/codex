@@ -111,7 +111,9 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
                 *output = structured
             }
         }
-        ResponseItem::FunctionCall { name, call_id, .. } if is_shell_tool_name(name) => {
+        ResponseItem::FunctionCall { name, call_id, .. }
+            if is_shell_tool_name(name) || name == "apply_patch" =>
+        {
             shell_call_ids.insert(call_id.clone());
         }
         ResponseItem::FunctionCallOutput { call_id, output } => {
