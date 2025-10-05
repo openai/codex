@@ -472,6 +472,7 @@ fn print_completion(cmd: CompletionCommand) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use codex_core::protocol::TokenUsage;
     use codex_protocol::ConversationId;
 
@@ -604,14 +605,14 @@ mod tests {
         assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
         assert!(interactive.oss);
         assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
-        assert!(matches!(
+        assert_matches!(
             interactive.sandbox_mode,
             Some(codex_common::SandboxModeCliArg::WorkspaceWrite)
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             interactive.approval_policy,
             Some(codex_common::ApprovalModeCliArg::OnRequest)
-        ));
+        );
         assert!(interactive.full_auto);
         assert_eq!(
             interactive.cwd.as_deref(),

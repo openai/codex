@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
+use assert_matches::assert_matches;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -186,9 +187,9 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             assert_eq!(update.explanation.as_deref(), Some("Tool harness check"));
             assert_eq!(update.plan.len(), 2);
             assert_eq!(update.plan[0].step, "Inspect workspace");
-            assert!(matches!(update.plan[0].status, StepStatus::InProgress));
+            assert_matches!(update.plan[0].status, StepStatus::InProgress);
             assert_eq!(update.plan[1].step, "Report results");
-            assert!(matches!(update.plan[1].status, StepStatus::Pending));
+            assert_matches!(update.plan[1].status, StepStatus::Pending);
             false
         }
         EventMsg::TaskComplete(_) => true,

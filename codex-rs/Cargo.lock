@@ -301,6 +301,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "assert_matches"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -871,6 +877,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "assert_matches",
  "pretty_assertions",
  "similar",
  "tempfile",
@@ -933,6 +940,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "assert_matches",
  "clap",
  "clap_complete",
  "codex-app-server",
@@ -1022,6 +1030,7 @@ dependencies = [
  "anyhow",
  "askama",
  "assert_cmd",
+ "assert_matches",
  "async-channel",
  "async-trait",
  "base64",
@@ -1162,6 +1171,7 @@ dependencies = [
 name = "codex-git-tooling"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "pretty_assertions",
  "tempfile",
  "thiserror 2.0.16",
@@ -1249,6 +1259,7 @@ dependencies = [
 name = "codex-ollama"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "async-stream",
  "bytes",
  "codex-core",
@@ -1367,6 +1378,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "assert_matches",
  "async-stream",
  "base64",
  "chrono",
@@ -1432,6 +1444,7 @@ dependencies = [
 name = "codex-utils-readiness"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "async-trait",
  "thiserror 2.0.16",
  "time",

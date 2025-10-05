@@ -2231,6 +2231,7 @@ trust_level = "trusted"
 #[cfg(test)]
 mod notifications_tests {
     use crate::config_types::Notifications;
+    use assert_matches::assert_matches;
     use serde::Deserialize;
 
     #[derive(Deserialize, Debug, PartialEq)]
@@ -2250,10 +2251,7 @@ mod notifications_tests {
             notifications = true
         "#;
         let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=true");
-        assert!(matches!(
-            parsed.tui.notifications,
-            Notifications::Enabled(true)
-        ));
+        assert_matches!(parsed.tui.notifications, Notifications::Enabled(true));
     }
 
     #[test]
@@ -2264,9 +2262,9 @@ mod notifications_tests {
         "#;
         let parsed: RootTomlTest =
             toml::from_str(toml).expect("deserialize notifications=[\"foo\"]");
-        assert!(matches!(
+        assert_matches!(
             parsed.tui.notifications,
             Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
-        ));
+        );
     }
 }
