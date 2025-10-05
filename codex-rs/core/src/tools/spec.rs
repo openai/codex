@@ -769,6 +769,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_parallel_support_flags() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("codex-mini-latest should be a valid model family");

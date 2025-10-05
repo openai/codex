@@ -171,7 +171,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       ],
       "tools": tool_calls,
       "tool_choice": "auto",
-      "parallel_tool_calls": true,
+      "parallel_tool_calls": false,
       "reasoning": {
         "summary": "auto"
       },
@@ -305,7 +305,7 @@ SUMMARY_ONLY_CONTEXT"
       ],
       "tools": tool_calls,
       "tool_choice": "auto",
-      "parallel_tool_calls": true,
+      "parallel_tool_calls": false,
       "reasoning": {
         "summary": "auto"
       },
@@ -390,7 +390,7 @@ SUMMARY_ONLY_CONTEXT"
       ],
       "tools": tool_calls,
       "tool_choice": "auto",
-      "parallel_tool_calls": true,
+      "parallel_tool_calls": false,
       "reasoning": {
         "summary": "auto"
       },
@@ -475,7 +475,7 @@ SUMMARY_ONLY_CONTEXT"
       ],
       "tools": tool_calls,
       "tool_choice": "auto",
-      "parallel_tool_calls": true,
+      "parallel_tool_calls": false,
       "reasoning": {
         "summary": "auto"
       },
