@@ -61,7 +61,7 @@ You can also use Codex with an API key, but this requires [additional setup](./d
 
 ### Planning before coding
 
-Press `Shift+Tab` in the composer to toggle Plan Mode. While Plan Mode is on, type or refine your request and press `Enter` to queue a read-only planning turn with the high-effort planner. Codex keeps your text in place so you can iterate on feedback, and `Shift+Tab` cycles back to the normal composer when you're ready to execute. If a task is already running—or you press `Enter` without any text—the CLI gently explains why the plan can't start yet. Use `/plan-model` to choose which model and reasoning effort power these planning turns.
+Press `Shift+Tab` in the composer to toggle Plan Mode. While Plan Mode is on, type or refine your request and press `Enter` to queue a read-only planning turn with the high-effort planner. Codex now moves your request into the transcript and clears the composer so you can see the conversation evolve; tap `Up` to pull the last plan draft back into the composer, and `Shift+Tab` cycles back to the normal composer when you're ready to execute. If a task is already running—or you press `Enter` without any text—the CLI gently explains why the plan can't start yet. Use `/plan-model` to choose which model and reasoning effort power these planning turns.
 
 ### Model Context Protocol (MCP)
 
