@@ -37,6 +37,7 @@ use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -1319,7 +1320,9 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
     if let Ok(val) = std::env::var("CODEX_HOME")
         && !val.is_empty()
     {
-        return PathBuf::from(val).canonicalize();
+        let path = PathBuf::from(val);
+        fs::create_dir_all(&path)?;
+        return path.canonicalize();
     }
 
     let mut p = home_dir().ok_or_else(|| {
@@ -1348,8 +1351,60 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    use std::ffi::OsString;
+    use std::path::Path;
     use std::time::Duration;
     use tempfile::TempDir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(value) => unsafe {
+                    std::env::set_var(self.key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(self.key);
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn find_codex_home_creates_missing_env_directory() {
+        let tmp = TempDir::new().expect("tempdir");
+        let custom_home = tmp.path().join("nested").join("codex-home");
+        assert!(
+            !custom_home.exists(),
+            "custom codex home should not exist yet"
+        );
+
+        let _guard = EnvVarGuard::set_path("CODEX_HOME", &custom_home);
+        let resolved = find_codex_home().expect("resolve codex home when env var is set");
+
+        assert!(
+            resolved.exists(),
+            "resolved codex home should exist on disk"
+        );
+        let expected = custom_home
+            .canonicalize()
+            .expect("custom path should be canonicalizable");
+        assert_eq!(resolved, expected);
+    }
 
     #[test]
     fn test_toml_parsing() {
@@ -2113,6 +2168,8 @@ model_verbosity = "high"
         )?;
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
+            plan_model: DEFAULT_PLAN_MODEL.to_string(),
+            plan_model_reasoning_effort: Some(DEFAULT_PLAN_EFFORT),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
