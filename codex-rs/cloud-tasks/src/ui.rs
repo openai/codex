@@ -870,11 +870,11 @@ fn draw_inline_spinner(
 ) {
     use ratatui::widgets::Paragraph;
     let start = spinner_start.get_or_insert_with(Instant::now);
-    let blink_on = ((start.elapsed().as_millis() / 600) % 2) == 0;
+    let blink_on = (start.elapsed().as_millis() / 600).is_multiple_of(2);
     let dot = if blink_on {
         "• ".into()
     } else {
-        "• ".dim()
+        "◦ ".dim()
     };
     let label = label.cyan();
     let line = Line::from(vec![dot, label]);
