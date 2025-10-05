@@ -750,6 +750,7 @@ pub struct ConfigToml {
     pub experimental_use_exec_command_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
+    pub experimental_use_freeform_apply_patch: Option<bool>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
@@ -1111,7 +1112,9 @@ impl Config {
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             include_plan_tool: include_plan_tool.unwrap_or(false),
-            include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
+            include_apply_patch_tool: include_apply_patch_tool
+                .or(cfg.experimental_use_freeform_apply_patch)
+                .unwrap_or(false),
             tools_web_search_request,
             use_experimental_streamable_shell_tool: cfg
                 .experimental_use_exec_command_tool
