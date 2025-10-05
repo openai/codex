@@ -8,6 +8,7 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -131,10 +132,7 @@ async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
         .get("output")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    assert!(
-        stdout.contains("shell json"),
-        "expected stdout to include command output, got {stdout:?}"
-    );
+    assert_regex_match(r"(?s)^shell json\n?$", stdout);
 
     Ok(())
 }
@@ -190,18 +188,12 @@ async fn shell_output_is_structured_with_freeform_apply_patch() -> Result<()> {
         serde_json::from_str::<Value>(output).is_err(),
         "expected structured shell output to be plain text",
     );
-    assert!(
-        output.starts_with("Exit code: 0\n"),
-        "expected exit code prefix, got {output:?}",
-    );
-    assert!(
-        output.contains("\nOutput:\n"),
-        "expected Output section, got {output:?}"
-    );
-    assert!(
-        output.contains("freeform shell"),
-        "expected stdout content, got {output:?}"
-    );
+    let expected_pattern = r"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+freeform shell
+?$";
+    assert_regex_match(expected_pattern, output);
 
     Ok(())
 }
@@ -259,18 +251,27 @@ async fn shell_output_reserializes_truncated_content() -> Result<()> {
         serde_json::from_str::<Value>(output).is_err(),
         "expected truncated shell output to be plain text",
     );
-    assert!(
-        output.starts_with("Exit code: 0\n"),
-        "expected exit code prefix, got {output:?}",
-    );
-    assert!(
-        output.lines().any(|line| line == "Total output lines: 400"),
-        "expected total output lines marker, got {output:?}",
-    );
-    assert!(
-        output.contains("[... omitted"),
-        "expected truncated marker, got {output:?}",
-    );
+    let truncated_pattern = r#"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Total output lines: 400
+Output:
+Total output lines: 400
+
+1
+2
+3
+4
+5
+6
+.*\[\.{3} omitted \d+ of 400 lines \.{3}\]
+
+.*\n396
+397
+398
+399
+400
+$"#;
+    assert_regex_match(truncated_pattern, output);
 
     Ok(())
 }
