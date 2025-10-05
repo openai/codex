@@ -35,6 +35,10 @@ pub struct ModelFamily {
     // See https://platform.openai.com/docs/guides/tools-local-shell
     pub uses_local_shell_tool: bool,
 
+    /// Whether this model supports parallel tool calls when using the
+    /// Responses API.
+    pub supports_parallel_tool_calls: bool,
+
     /// Present if the model performs better when `apply_patch` is provided as
     /// a tool call instead of just a bash command
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
@@ -58,6 +62,7 @@ macro_rules! model_family {
             supports_reasoning_summaries: false,
             reasoning_summary_format: ReasoningSummaryFormat::None,
             uses_local_shell_tool: false,
+            supports_parallel_tool_calls: false,
             apply_patch_tool_type: None,
             base_instructions: BASE_INSTRUCTIONS.to_string(),
             experimental_supported_tools: Vec::new(),
@@ -103,6 +108,18 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         model_family!(slug, "gpt-4o", needs_special_apply_patch_instructions: true)
     } else if slug.starts_with("gpt-3.5") {
         model_family!(slug, "gpt-3.5", needs_special_apply_patch_instructions: true)
+    } else if slug.starts_with("test-gpt-5-codex") {
+        model_family!(
+            slug, slug,
+            supports_reasoning_summaries: true,
+            reasoning_summary_format: ReasoningSummaryFormat::Experimental,
+            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
+            experimental_supported_tools: vec![
+                "read_file".to_string(),
+                "test_sync_tool".to_string()
+            ],
+            supports_parallel_tool_calls: true,
+        )
     } else if slug.starts_with("codex-") || slug.starts_with("gpt-5-codex") {
         model_family!(
             slug, slug,
@@ -110,6 +127,8 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            // experimental_supported_tools: vec!["read_file".to_string()],
+            // supports_parallel_tool_calls: true,
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
@@ -130,6 +149,7 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         supports_reasoning_summaries: false,
         reasoning_summary_format: ReasoningSummaryFormat::None,
         uses_local_shell_tool: false,
+        supports_parallel_tool_calls: false,
         apply_patch_tool_type: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
         experimental_supported_tools: Vec::new(),

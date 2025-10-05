@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use codex_protocol::models::ShellToolCallParams;
+use std::sync::Arc;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
@@ -40,10 +41,7 @@ impl ToolHandler for ShellHandler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation<'_>,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -62,14 +60,14 @@ impl ToolHandler for ShellHandler {
                             "failed to parse function arguments: {e:?}"
                         ))
                     })?;
-                let exec_params = Self::to_exec_params(params, turn);
+                let exec_params = Self::to_exec_params(params, turn.as_ref());
                 let content = handle_container_exec_with_params(
                     tool_name.as_str(),
                     exec_params,
-                    session,
-                    turn,
-                    tracker,
-                    sub_id.to_string(),
+                    Arc::clone(&session),
+                    Arc::clone(&turn),
+                    Arc::clone(&tracker),
+                    sub_id.clone(),
                     call_id.clone(),
                 )
                 .await?;
@@ -79,14 +77,14 @@ impl ToolHandler for ShellHandler {
                 })
             }
             ToolPayload::LocalShell { params } => {
-                let exec_params = Self::to_exec_params(params, turn);
+                let exec_params = Self::to_exec_params(params, turn.as_ref());
                 let content = handle_container_exec_with_params(
                     tool_name.as_str(),
                     exec_params,
-                    session,
-                    turn,
-                    tracker,
-                    sub_id.to_string(),
+                    Arc::clone(&session),
+                    Arc::clone(&turn),
+                    Arc::clone(&tracker),
+                    sub_id.clone(),
                     call_id.clone(),
                 )
                 .await?;

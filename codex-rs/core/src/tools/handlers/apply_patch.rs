@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
@@ -36,10 +37,7 @@ impl ToolHandler for ApplyPatchHandler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation<'_>,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -79,10 +77,10 @@ impl ToolHandler for ApplyPatchHandler {
         let content = handle_container_exec_with_params(
             tool_name.as_str(),
             exec_params,
-            session,
-            turn,
-            tracker,
-            sub_id.to_string(),
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            Arc::clone(&tracker),
+            sub_id.clone(),
             call_id.clone(),
         )
         .await?;
