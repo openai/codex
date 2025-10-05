@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -147,7 +148,10 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a valid model");
+    });
     let test = builder.build(&server).await?;
 
     let command = ["/bin/echo", "shell ok"];
@@ -375,7 +379,10 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a valid model");
+    });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-timeout";
