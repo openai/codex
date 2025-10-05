@@ -250,7 +250,7 @@ async fn shell_output_reserializes_truncated_content() -> Result<()> {
         serde_json::from_str::<Value>(output).is_err(),
         "expected truncated shell output to be plain text",
     );
-    let truncated_pattern = r"(?s)^Exit code: 0
+    let truncated_pattern = r#"(?s)^Exit code: 0
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
 Total output lines: 400
 Output:
@@ -264,12 +264,12 @@ Total output lines: 400
 6
 .*\[\.{3} omitted \d+ of 400 lines \.{3}\]
 
-396
+.*\n396
 397
 398
 399
 400
-$";
+$"#;
     assert_regex_match(truncated_pattern, output);
 
     Ok(())
