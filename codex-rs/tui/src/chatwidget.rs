@@ -258,6 +258,15 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+
+    // Latest usage breakdown for prune UI
+    last_context_usage: Option<codex_core::protocol::ConversationUsageEvent>,
+    pending_prune_popup: bool,
+
+    // Advanced prune
+    last_context_items: Option<Vec<codex_core::protocol::ContextItemSummary>>,
+    prune_keep_indices: std::collections::HashSet<usize>,
+    pending_prune_advanced: bool,
 }
 
 struct UserMessage {
@@ -289,6 +298,76 @@ impl ChatWidget {
         {
             self.add_boxed_history(cell);
         }
+    }
+
+    /// User requested the non-destructive advanced prune view. Set a pending flag
+    /// so that when the ContextItems event arrives, we render the view.
+    pub(crate) fn open_prune_advanced(&mut self) {
+        self.pending_prune_advanced = true;
+        self.submit_op(Op::GetContextItems);
+    }
+
+    pub(crate) fn on_prune_advanced_closed(&mut self) {
+        self.pending_prune_advanced = false;
+    }
+
+    /// Render the advanced prune view listing context items with toggles.
+    fn render_prune_advanced_view(&mut self) {
+        use codex_core::protocol::Op;
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        // Control actions
+        items.push(SelectionItem {
+            name: "Refresh list".to_string(),
+            description: Some("Re-query current context".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::CodexOp(Op::GetContextItems));
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        // Build toggle entries
+        if let Some(list) = &self.last_context_items {
+            for it in list.iter() {
+                let name = format!(
+                    "{} [{}] {:?}",
+                    it.index,
+                    if it.included { 'x' } else { ' ' },
+                    it.category
+                );
+                let desc = it.preview.clone();
+                let idx = it.index;
+                let currently_included = it.included;
+                items.push(SelectionItem {
+                    name,
+                    description: Some(desc),
+                    is_current: currently_included, // visual cue only
+                    actions: vec![Box::new(move |tx: &AppEventSender| {
+                        tx.send(AppEvent::CodexOp(Op::SetContextInclusion {
+                            indices: vec![idx],
+                            included: !currently_included,
+                        }));
+                        tx.send(AppEvent::CodexOp(Op::GetContextItems));
+                    })],
+                    dismiss_on_select: true,
+                    search_value: None,
+                });
+            }
+        }
+
+        // Show view
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Prune Context (Advanced)".to_string(),
+            subtitle: Some("Toggle items to keep; unchecked will be pruned".to_string()),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Filter context items".to_string()),
+            on_complete_event: Some(AppEvent::PruneAdvancedClosed),
+            ..Default::default()
+        });
     }
 
     // --- Small event handlers ---
@@ -918,6 +997,11 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            last_context_usage: None,
+            pending_prune_popup: false,
+            last_context_items: None,
+            prune_keep_indices: std::collections::HashSet::new(),
+            pending_prune_advanced: false,
         }
     }
 
@@ -981,6 +1065,11 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            last_context_usage: None,
+            pending_prune_popup: false,
+            last_context_items: None,
+            prune_keep_indices: std::collections::HashSet::new(),
+            pending_prune_advanced: false,
         }
     }
 
@@ -1103,6 +1192,9 @@ impl ChatWidget {
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
+            }
+            SlashCommand::Prune => {
+                self.open_prune_popup();
             }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
@@ -1422,6 +1514,26 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
+            EventMsg::ConversationUsage(ev) => {
+                self.last_context_usage = Some(ev);
+                if self.pending_prune_popup {
+                    self.pending_prune_popup = false;
+                    self.open_prune_popup();
+                }
+            }
+            EventMsg::ContextItems(ev) => {
+                self.last_context_items = Some(ev.items);
+                // Initialize keep set to all indices
+                self.prune_keep_indices.clear();
+                if let Some(list) = &self.last_context_items {
+                    for it in list.iter() {
+                        self.prune_keep_indices.insert(it.index);
+                    }
+                }
+                if self.pending_prune_advanced {
+                    self.render_prune_advanced_view();
+                }
+            }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request)
             }
@@ -1631,6 +1743,176 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    /// Open a popup to prune conversation history by categories or first N turns.
+    pub(crate) fn open_prune_popup(&mut self) {
+        use codex_core::protocol::Op;
+        use codex_core::protocol::PruneCategory as PC;
+        use codex_core::protocol::PruneRange as PR;
+
+        // Prime usage, then reopen when it arrives.
+        if self.last_context_usage.is_none() {
+            self.pending_prune_popup = true;
+            self.submit_op(Op::GetContextUsage);
+        }
+
+        let mut header = vec![crate::bottom_pane::HeaderLine::Text {
+            text:
+                "Prune items from the context without summarizing. This only affects future turns."
+                    .to_string(),
+            italic: true,
+        }];
+        if let Some(usage) = &self.last_context_usage {
+            let total = usage.total_bytes.max(1);
+            let pct = |cat: PC| -> u64 {
+                usage
+                    .by_category
+                    .iter()
+                    .find(|e| e.category == cat)
+                    .map(|e| e.bytes.saturating_mul(100) / total)
+                    .unwrap_or(0)
+            };
+            header.push(crate::bottom_pane::HeaderLine::Text {
+                text: format!(
+                    "Usage: tool_output {}% | tool_call {}% | reasoning {}% | assistant {}%",
+                    pct(PC::ToolOutput),
+                    pct(PC::ToolCall),
+                    pct(PC::Reasoning),
+                    pct(PC::AssistantMessage)
+                ),
+                italic: false,
+            });
+            header.push(crate::bottom_pane::HeaderLine::Spacer);
+        } else {
+            header.push(crate::bottom_pane::HeaderLine::Text {
+                text: "Computing usage…".to_string(),
+                italic: false,
+            });
+            header.push(crate::bottom_pane::HeaderLine::Spacer);
+        }
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        // Advanced mode entry
+        items.push(SelectionItem {
+            name: "Open advanced prune…".to_string(),
+            description: Some("Mark/unmark individual items in context".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenPruneAdvanced);
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        // Category-based, entire history
+        items.push(SelectionItem {
+            name: "Prune tool_output (entire history)".to_string(),
+            description: Some(
+                "Remove all tool outputs captured into context (stdout/stderr etc.)".to_string(),
+            ),
+            is_current: false,
+            actions: vec![Box::new(|tx2| {
+                tx2.send(AppEvent::CodexOp(Op::PruneContext {
+                    categories: vec![PC::ToolOutput],
+                    range: PR::All,
+                }));
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+        items.push(SelectionItem {
+            name: "Prune tool_call (entire history)".to_string(),
+            description: Some(
+                "Remove all tool call items (function/local/custom calls).".to_string(),
+            ),
+            is_current: false,
+            actions: vec![Box::new(|tx2| {
+                tx2.send(AppEvent::CodexOp(Op::PruneContext {
+                    categories: vec![PC::ToolCall],
+                    range: PR::All,
+                }));
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+        items.push(SelectionItem {
+            name: "Prune reasoning (entire history)".to_string(),
+            description: Some("Remove all reasoning items from context.".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx2| {
+                tx2.send(AppEvent::CodexOp(Op::PruneContext {
+                    categories: vec![PC::Reasoning],
+                    range: PR::All,
+                }));
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+        items.push(SelectionItem {
+            name: "Prune assistant messages (entire history)".to_string(),
+            description: Some("Remove all assistant messages from context.".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx2| {
+                tx2.send(AppEvent::CodexOp(Op::PruneContext {
+                    categories: vec![PC::AssistantMessage],
+                    range: PR::All,
+                }));
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        // First-turns bulk actions (common presets)
+        for n in [5usize, 10, 25, 50] {
+            let title = format!("Prune first {n} turns (all categories)");
+            let cats = vec![
+                PC::ToolOutput,
+                PC::ToolCall,
+                PC::Reasoning,
+                PC::AssistantMessage,
+                PC::UserMessage,
+            ];
+            items.push(SelectionItem {
+                name: title,
+                description: Some("Remove everything from the earliest turns.".to_string()),
+                is_current: false,
+                actions: vec![Box::new(move |tx2| {
+                    tx2.send(AppEvent::CodexOp(Op::PruneContext {
+                        categories: cats.clone(),
+                        range: PR::FirstTurns { count: n },
+                    }));
+                })],
+                dismiss_on_select: true,
+                search_value: None,
+            });
+        }
+
+        // Nuclear
+        items.push(SelectionItem {
+            name: "Prune ALL categories (entire history)".to_string(),
+            description: Some("Clear conversation context except system/user instructions and environment context.".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx2| {
+                tx2.send(AppEvent::CodexOp(Op::PruneContext { categories: vec![PC::ToolOutput, PC::ToolCall, PC::Reasoning, PC::AssistantMessage, PC::UserMessage], range: PR::All }));
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Prune Context".to_string(),
+            subtitle: Some(
+                "Choose what to remove from the context. This does not edit rollout files."
+                    .to_string(),
+            ),
+            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            items,
+            header,
+            ..Default::default()
+        });
+        // no-op
     }
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).

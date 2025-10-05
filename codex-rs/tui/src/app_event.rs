@@ -76,4 +76,10 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+
+    /// Open the advanced prune view (non‑destructive selection of context items).
+    OpenPruneAdvanced,
+
+    /// Advanced prune view was dismissed (e.g., via Esc). Used to clear pending flags.
+    PruneAdvancedClosed,
 }

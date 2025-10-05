@@ -94,6 +94,24 @@ codex --sandbox danger-full-access
 
 The same setting can be persisted in `~/.codex/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
 
+### Pruning context (basic and advanced)
+
+Use `/prune` to manually reduce what goes into the next turn’s context without summarizing anything:
+
+- Basic presets: prune by category (tool output, tool calls, reasoning, assistant messages) across the entire history, or prune the first N turns across all categories.
+- Advanced mode: choose “Open advanced prune…” to list individual context items and toggle whether each is included. This is non‑destructive — items are not deleted; they are simply excluded from the next turn’s context and can be re‑included later.
+
+Notes:
+- Advanced mode reopens automatically after each toggle so you can see the updated state immediately. Press Esc to close; Codex will stop reopening automatically.
+- The agent can also use a Smart Prune tool internally to inspect/toggle inclusion when enabled (see `tools.context_prune` below).
+
+To enable/disable the Smart Prune tool exposed to the agent, set in `~/.codex/config.toml`:
+
+```toml
+[tools]
+context_prune = true  # default: true; set to false to disable
+```
+
 ## Code Organization
 
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:

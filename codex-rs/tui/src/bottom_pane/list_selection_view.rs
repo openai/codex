@@ -10,6 +10,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use textwrap::wrap;
 
+use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
 use super::CancellationEvent;
@@ -47,6 +48,7 @@ pub(crate) struct SelectionViewParams {
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
     pub header: Vec<HeaderLine>,
+    pub on_complete_event: Option<AppEvent>,
 }
 
 pub(crate) struct ListSelectionView {
@@ -63,6 +65,7 @@ pub(crate) struct ListSelectionView {
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     header: Vec<HeaderLine>,
+    on_complete_event: Option<AppEvent>,
 }
 
 impl ListSelectionView {
@@ -94,6 +97,7 @@ impl ListSelectionView {
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             header: params.header,
+            on_complete_event: params.on_complete_event,
         };
         s.apply_filter();
         s
@@ -468,6 +472,10 @@ impl BottomPaneView for ListSelectionView {
             };
             Paragraph::new(hint.clone().dim()).render(footer_area, buf);
         }
+    }
+
+    fn take_on_complete_event(&mut self) -> Option<AppEvent> {
+        self.on_complete_event.take()
     }
 }
 

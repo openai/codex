@@ -1,3 +1,4 @@
+use crate::app_event::AppEvent;
 use crate::bottom_pane::ApprovalRequest;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -45,5 +46,11 @@ pub(crate) trait BottomPaneView {
         request: ApprovalRequest,
     ) -> Option<ApprovalRequest> {
         Some(request)
+    }
+
+    /// Optional event to emit when the view completes (e.g., dismissed via Esc or selection).
+    /// Implementations should return Some(event) at most once; subsequent calls may return None.
+    fn take_on_complete_event(&mut self) -> Option<AppEvent> {
+        None
     }
 }

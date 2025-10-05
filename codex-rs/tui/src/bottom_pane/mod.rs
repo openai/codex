@@ -26,6 +26,7 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
+pub(crate) use list_selection_view::HeaderLine;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod paste_burst;
 pub mod popup_consts;
@@ -183,12 +184,20 @@ impl BottomPane {
                 && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
                 && view.is_complete()
             {
+                let completion_event = view.take_on_complete_event();
                 self.view_stack.pop();
+                if let Some(ev) = completion_event {
+                    self.app_event_tx.send(ev);
+                }
                 self.on_active_view_complete();
             } else {
                 view.handle_key_event(key_event);
                 if view.is_complete() {
+                    let completion_event = view.take_on_complete_event();
                     self.view_stack.clear();
+                    if let Some(ev) = completion_event {
+                        self.app_event_tx.send(ev);
+                    }
                     self.on_active_view_complete();
                 }
             }
@@ -224,7 +233,11 @@ impl BottomPane {
             let event = view.on_ctrl_c();
             if matches!(event, CancellationEvent::Handled) {
                 if view.is_complete() {
+                    let completion_event = view.take_on_complete_event();
                     self.view_stack.pop();
+                    if let Some(ev) = completion_event {
+                        self.app_event_tx.send(ev);
+                    }
                     self.on_active_view_complete();
                 }
                 self.show_ctrl_c_quit_hint();
@@ -244,6 +257,10 @@ impl BottomPane {
         if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
             if view.is_complete() {
+                let completion_event = view.take_on_complete_event();
+                if let Some(ev) = completion_event {
+                    self.app_event_tx.send(ev);
+                }
                 self.on_active_view_complete();
             }
             if needs_redraw {

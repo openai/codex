@@ -196,6 +196,9 @@ pub struct Config {
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
 
+    /// Include the Smart Prune tool (non-destructive context inclusion toggles).
+    pub include_context_prune_tool: bool,
+
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
 
@@ -767,6 +770,11 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Enable the Smart Prune tool (context_prune) that lets the agent list and toggle
+    /// context items non-destructively.
+    #[serde(default)]
+    pub context_prune: Option<bool>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -867,6 +875,7 @@ pub struct ConfigOverrides {
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
+    pub include_context_prune_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
 }
@@ -897,6 +906,7 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            ..
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -968,6 +978,11 @@ impl Config {
 
         let include_view_image_tool = include_view_image_tool
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
+            .unwrap_or(true);
+
+        let include_context_prune_tool = overrides
+            .include_context_prune_tool
+            .or(cfg.tools.as_ref().and_then(|t| t.context_prune))
             .unwrap_or(true);
 
         let model = model
@@ -1071,6 +1086,7 @@ impl Config {
                 .unwrap_or(false),
             use_experimental_use_rmcp_client: cfg.experimental_use_rmcp_client.unwrap_or(false),
             include_view_image_tool,
+            include_context_prune_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
@@ -1829,6 +1845,7 @@ model_verbosity = "high"
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
                 include_view_image_tool: true,
+                include_context_prune_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
@@ -1889,6 +1906,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            include_context_prune_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -1964,6 +1982,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            include_context_prune_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -2025,6 +2044,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            include_context_prune_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),

@@ -68,6 +68,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
+    pub include_context_prune_tool: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -78,6 +79,9 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
+    /// Include the Smart Prune freeform tool that lets the agent list and toggle
+    /// inclusion of context items without deleting them.
+    pub(crate) include_context_prune_tool: bool,
 }
 
 impl ToolsConfig {
@@ -90,6 +94,7 @@ impl ToolsConfig {
             use_streamable_shell_tool,
             include_view_image_tool,
             experimental_unified_exec_tool,
+            include_context_prune_tool,
         } = params;
         let shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::Streamable
@@ -118,6 +123,7 @@ impl ToolsConfig {
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
+            include_context_prune_tool: *include_context_prune_tool,
         }
     }
 }
@@ -541,6 +547,28 @@ pub(crate) fn get_openai_tools(
         }
     }
 
+    // Smart prune tool (freeform JSON): { action: "usage"|"list"|"set_inclusion", indices?: number[], included?: bool }
+    if config.include_context_prune_tool {
+        tools.push(OpenAiTool::Freeform(FreeformTool {
+            name: "context_prune".to_string(),
+            description: "Inspect and include/exclude items from the context without deleting them. Input JSON: { action: 'usage'|'list'|'set_inclusion', indices?: number[], included?: boolean }".to_string(),
+            format: FreeformToolFormat {
+                r#type: "json".to_string(),
+                syntax: "json".to_string(),
+                definition: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "action": {"type":"string","enum":["usage","list","set_inclusion"]},
+                        "indices": {"type":"array","items":{"type":"integer","minimum":0}},
+                        "included": {"type":"boolean"}
+                    },
+                    "required": ["action"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+        }));
+    }
+
     tools
 }
 
@@ -588,12 +616,19 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
         assert_eq_tool_names(
             &tools,
-            &["unified_exec", "update_plan", "web_search", "view_image"],
+            &[
+                "unified_exec",
+                "update_plan",
+                "web_search",
+                "view_image",
+                "context_prune",
+            ],
         );
     }
 
@@ -608,12 +643,19 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
         assert_eq_tool_names(
             &tools,
-            &["unified_exec", "update_plan", "web_search", "view_image"],
+            &[
+                "unified_exec",
+                "update_plan",
+                "web_search",
+                "view_image",
+                "context_prune",
+            ],
         );
     }
 
@@ -628,6 +670,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: true,
         });
         let tools = get_openai_tools(
             &config,
@@ -674,6 +717,7 @@ mod tests {
                 "web_search",
                 "view_image",
                 "test_server/do_something_cool",
+                "context_prune",
             ],
         );
 
@@ -732,6 +776,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: true,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -793,6 +838,7 @@ mod tests {
                 "test_server/cool",
                 "test_server/do",
                 "test_server/something",
+                "context_prune",
             ],
         );
     }
@@ -808,6 +854,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -835,7 +882,13 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["unified_exec", "web_search", "view_image", "dash/search"],
+            &[
+                "unified_exec",
+                "web_search",
+                "view_image",
+                "dash/search",
+                "context_prune",
+            ],
         );
 
         assert_eq!(
@@ -869,6 +922,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -894,7 +948,13 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["unified_exec", "web_search", "view_image", "dash/paginate"],
+            &[
+                "unified_exec",
+                "web_search",
+                "view_image",
+                "dash/paginate",
+                "context_prune",
+            ],
         );
         assert_eq!(
             tools[3],
@@ -925,6 +985,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -950,7 +1011,13 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["unified_exec", "web_search", "view_image", "dash/tags"],
+            &[
+                "unified_exec",
+                "web_search",
+                "view_image",
+                "dash/tags",
+                "context_prune",
+            ],
         );
         assert_eq!(
             tools[3],
@@ -984,6 +1051,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -1009,7 +1077,13 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["unified_exec", "web_search", "view_image", "dash/value"],
+            &[
+                "unified_exec",
+                "web_search",
+                "view_image",
+                "dash/value",
+                "context_prune",
+            ],
         );
         assert_eq!(
             tools[3],

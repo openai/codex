@@ -363,6 +363,12 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::OpenPruneAdvanced => {
+                self.chat_widget.open_prune_advanced();
+            }
+            AppEvent::PruneAdvancedClosed => {
+                self.chat_widget.on_prune_advanced_closed();
+            }
         }
         Ok(true)
     }

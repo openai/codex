@@ -24,6 +24,7 @@ pub enum SlashCommand {
     Status,
     Mcp,
     Logout,
+    Prune,
     Quit,
     #[cfg(debug_assertions)]
     TestApproval,
@@ -37,6 +38,9 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
+            SlashCommand::Prune => {
+                "manually prune items from the context (by category or first N turns)"
+            }
             SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -67,6 +71,7 @@ impl SlashCommand {
             | SlashCommand::Model
             | SlashCommand::Approvals
             | SlashCommand::Review
+            | SlashCommand::Prune
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention

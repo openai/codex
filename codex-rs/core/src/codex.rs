@@ -81,6 +81,7 @@ use crate::parse_command::parse_command;
 use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
+use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
 use crate::protocol::AgentReasoningRawContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -133,7 +134,11 @@ use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
+use codex_protocol::protocol::ConversationUsageByCategory;
+use codex_protocol::protocol::ConversationUsageEvent;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::PruneCategory;
+use codex_protocol::protocol::PruneRange;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -465,6 +470,7 @@ impl Session {
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 include_view_image_tool: config.include_view_image_tool,
                 experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                include_context_prune_tool: config.include_context_prune_tool,
             }),
             user_instructions,
             base_instructions,
@@ -681,6 +687,12 @@ impl Session {
         self.persist_rollout_response_items(items).await;
     }
 
+    /// Mark end-of-turn with the number of items added to history in this turn.
+    async fn note_turn_committed(&self, items_in_turn: usize) {
+        let mut state = self.state.lock().await;
+        state.note_turn_committed(items_in_turn);
+    }
+
     fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
@@ -795,6 +807,307 @@ impl Session {
             msg: EventMsg::TokenCount(TokenCountEvent { info, rate_limits }),
         };
         self.send_event(event).await;
+    }
+
+    /// Prune conversation history by categories and range. Returns number of items removed.
+    async fn prune_context(&self, categories: Vec<PruneCategory>, range: PruneRange) -> usize {
+        use std::collections::HashSet;
+        let mut state = self.state.lock().await;
+        let items = state.history_snapshot();
+
+        // Determine [start,end) indices by turn range.
+        let (start_idx, end_idx_exclusive) = match range {
+            PruneRange::All => (0usize, items.len()),
+            PruneRange::FirstTurns { count } => {
+                let mut end = 0usize;
+                for (i, c) in state.turn_item_counts.iter().copied().enumerate() {
+                    if i < count {
+                        end = end.saturating_add(c)
+                    } else {
+                        break;
+                    }
+                }
+                (0, end.min(items.len()))
+            }
+        };
+
+        fn is_user_text_prefixed(content: &[ContentItem], prefix: &str) -> bool {
+            content.iter().any(|c| match c {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    text.starts_with(prefix)
+                }
+                _ => false,
+            })
+        }
+
+        fn matches_category(item: &ResponseItem, cat: &PruneCategory) -> bool {
+            match (item, cat) {
+                (ResponseItem::FunctionCallOutput { .. }, PruneCategory::ToolOutput) => true,
+                (ResponseItem::CustomToolCallOutput { .. }, PruneCategory::ToolOutput) => true,
+                (ResponseItem::FunctionCall { .. }, PruneCategory::ToolCall) => true,
+                (ResponseItem::CustomToolCall { .. }, PruneCategory::ToolCall) => true,
+                (ResponseItem::LocalShellCall { .. }, PruneCategory::ToolCall) => true,
+                (ResponseItem::Reasoning { .. }, PruneCategory::Reasoning) => true,
+                (ResponseItem::Message { role, .. }, PruneCategory::AssistantMessage) => {
+                    role == "assistant"
+                }
+                (ResponseItem::Message { role, .. }, PruneCategory::UserMessage) => role == "user",
+                (ResponseItem::Message { content, .. }, PruneCategory::UserInstructions) => {
+                    is_user_text_prefixed(content, crate::protocol::USER_INSTRUCTIONS_OPEN_TAG)
+                }
+                (ResponseItem::Message { content, .. }, PruneCategory::EnvironmentContext) => {
+                    is_user_text_prefixed(content, crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG)
+                }
+                _ => false,
+            }
+        }
+
+        let cat_set: HashSet<PruneCategory> = categories.into_iter().collect();
+
+        // Build kept_mask over original indices and the kept vector simultaneously.
+        let mut kept_mask: Vec<bool> = Vec::with_capacity(items.len());
+        let mut kept: Vec<ResponseItem> = Vec::with_capacity(items.len());
+        for (idx, it) in items.into_iter().enumerate() {
+            let mut drop = false;
+            if idx >= start_idx
+                && idx < end_idx_exclusive
+                && cat_set.iter().any(|c| matches_category(&it, c))
+            {
+                drop = true;
+            }
+            if drop {
+                kept_mask.push(false);
+            } else {
+                kept_mask.push(true);
+                kept.push(it);
+            }
+        }
+
+        // Recompute counts: for each original turn slice, count trues in kept_mask.
+        let mut new_counts: Vec<usize> = Vec::with_capacity(state.turn_item_counts.len());
+        let mut turn_start = 0usize;
+        for orig in state.turn_item_counts.clone().into_iter() {
+            let turn_end = turn_start.saturating_add(orig);
+            let remain = kept_mask[turn_start..turn_end]
+                .iter()
+                .filter(|b| **b)
+                .count();
+            new_counts.push(remain);
+            turn_start = turn_end;
+        }
+
+        let removed = state.history_snapshot().len().saturating_sub(kept.len());
+        state.replace_history(kept);
+        state.replace_turn_counts(new_counts);
+        removed
+    }
+
+    /// Compute an approximate usage breakdown (by bytes and counts) of the current
+    /// in-memory conversation context. This is a heuristic size based on text lengths.
+    async fn compute_context_usage(&self) -> ConversationUsageEvent {
+        let state = self.state.lock().await;
+        let items = state.history_snapshot();
+
+        fn text_len(s: &str) -> usize {
+            s.len()
+        }
+        fn is_prefixed(content: &[ContentItem], prefix: &str) -> bool {
+            content.iter().any(|c| match c {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    text.starts_with(prefix)
+                }
+                _ => false,
+            })
+        }
+        fn message_bytes(role: &str, content: &[ContentItem]) -> (PruneCategory, usize) {
+            let total: usize = content
+                .iter()
+                .map(|c| match c {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        text_len(text)
+                    }
+                    _ => 0,
+                })
+                .sum();
+            if is_prefixed(content, crate::protocol::USER_INSTRUCTIONS_OPEN_TAG) {
+                (PruneCategory::UserInstructions, total)
+            } else if is_prefixed(content, crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG) {
+                (PruneCategory::EnvironmentContext, total)
+            } else if role == "assistant" {
+                (PruneCategory::AssistantMessage, total)
+            } else {
+                (PruneCategory::UserMessage, total)
+            }
+        }
+
+        use std::collections::HashMap;
+        let mut bytes: HashMap<PruneCategory, u64> = HashMap::new();
+        let mut counts: HashMap<PruneCategory, u64> = HashMap::new();
+        let mut total: u64 = 0;
+
+        for it in items.iter() {
+            let (cat, b) = match it {
+                ResponseItem::Message { role, content, .. } => message_bytes(role, content),
+                ResponseItem::Reasoning {
+                    summary, content, ..
+                } => {
+                    let sum: usize = summary.iter().map(|s| match s { codex_protocol::models::ReasoningItemReasoningSummary::SummaryText { text } => text_len(text) }).sum::<usize>()
+                        + content.as_ref().map(|v| v.iter().map(|c| match c { codex_protocol::models::ReasoningItemContent::ReasoningText { text } | codex_protocol::models::ReasoningItemContent::Text { text } => text_len(text) }).sum::<usize>()).unwrap_or(0);
+                    (PruneCategory::Reasoning, sum)
+                }
+                ResponseItem::FunctionCall {
+                    name, arguments, ..
+                } => (
+                    PruneCategory::ToolCall,
+                    text_len(name) + text_len(arguments),
+                ),
+                ResponseItem::CustomToolCall { name, input, .. } => {
+                    (PruneCategory::ToolCall, text_len(name) + text_len(input))
+                }
+                ResponseItem::LocalShellCall { action, .. } => {
+                    let approx = format!("{action:?}"); // cheap approx
+                    (PruneCategory::ToolCall, approx.len())
+                }
+                ResponseItem::FunctionCallOutput { output, .. } => {
+                    (PruneCategory::ToolOutput, output.content.len())
+                }
+                ResponseItem::CustomToolCallOutput { output, .. } => {
+                    (PruneCategory::ToolOutput, output.len())
+                }
+                ResponseItem::WebSearchCall { action, .. } => {
+                    let q = match action {
+                        codex_protocol::models::WebSearchAction::Search { query } => query.clone(),
+                        _ => String::new(),
+                    };
+                    (PruneCategory::ToolCall, q.len())
+                }
+                ResponseItem::Other => (PruneCategory::AssistantMessage, 0),
+            };
+            let b = b as u64;
+            *bytes.entry(cat.clone()).or_default() += b;
+            *counts.entry(cat).or_default() += 1;
+            total += b;
+        }
+
+        let mut by_category: Vec<ConversationUsageByCategory> = bytes
+            .iter()
+            .map(|(k, v)| ConversationUsageByCategory {
+                category: k.clone(),
+                bytes: *v,
+                count: counts.get(k).copied(),
+            })
+            .collect();
+        by_category.sort_by_key(|e| std::cmp::Reverse(e.bytes));
+
+        ConversationUsageEvent {
+            total_bytes: total,
+            by_category,
+        }
+    }
+
+    /// Build a summary list of context items (index + category + preview text).
+    async fn compute_context_items(&self) -> crate::protocol::ContextItemsEvent {
+        let state = self.state.lock().await;
+        let items = state.history_snapshot();
+        let include_mask = state.include_mask.clone();
+        let mut out: Vec<crate::protocol::ContextItemSummary> = Vec::with_capacity(items.len());
+
+        for (idx, it) in items.iter().enumerate() {
+            let (category, preview) = match it {
+                ResponseItem::Message { role, content, .. } => {
+                    let text = content
+                        .iter()
+                        .filter_map(|c| match c {
+                            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                                Some(text.clone())
+                            }
+                            _ => None,
+                        })
+                        .next()
+                        .unwrap_or_default();
+                    let cat = if text.starts_with(crate::protocol::USER_INSTRUCTIONS_OPEN_TAG) {
+                        PruneCategory::UserInstructions
+                    } else if text.starts_with(crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG) {
+                        PruneCategory::EnvironmentContext
+                    } else if role == "assistant" {
+                        PruneCategory::AssistantMessage
+                    } else {
+                        PruneCategory::UserMessage
+                    };
+                    (cat, text)
+                }
+                ResponseItem::Reasoning { summary, .. } => {
+                    let text = summary
+                        .iter()
+                        .map(|s| match s {
+                            codex_protocol::models::ReasoningItemReasoningSummary::SummaryText { text } => text.clone(),
+                        })
+                        .next()
+                        .unwrap_or_default();
+                    (PruneCategory::Reasoning, text)
+                }
+                ResponseItem::FunctionCall {
+                    name, arguments, ..
+                } => (PruneCategory::ToolCall, format!("{name} {arguments}")),
+                ResponseItem::CustomToolCall { name, input, .. } => {
+                    (PruneCategory::ToolCall, format!("{name} {input}"))
+                }
+                ResponseItem::LocalShellCall { action, .. } => {
+                    (PruneCategory::ToolCall, format!("{action:?}"))
+                }
+                ResponseItem::FunctionCallOutput { output, .. } => {
+                    (PruneCategory::ToolOutput, output.content.clone())
+                }
+                ResponseItem::CustomToolCallOutput { output, .. } => {
+                    (PruneCategory::ToolOutput, output.clone())
+                }
+                ResponseItem::WebSearchCall { action, .. } => {
+                    let q = match action {
+                        codex_protocol::models::WebSearchAction::Search { query } => query.clone(),
+                        _ => String::new(),
+                    };
+                    (PruneCategory::ToolCall, q)
+                }
+                ResponseItem::Other => (PruneCategory::AssistantMessage, String::new()),
+            };
+            let preview = if preview.len() > 200 {
+                format!("{}…", &preview[..200])
+            } else {
+                preview
+            };
+            out.push(crate::protocol::ContextItemSummary {
+                index: idx,
+                category,
+                preview,
+                included: include_mask.get(idx).copied().unwrap_or(true),
+            });
+        }
+
+        crate::protocol::ContextItemsEvent {
+            total: out.len(),
+            items: out,
+        }
+    }
+
+    /// Prune by explicit indices. Indices out of range are ignored.
+    async fn prune_context_indices(&self, indices: Vec<usize>) -> usize {
+        use std::collections::HashSet;
+        let mut state = self.state.lock().await;
+        let items = state.history_snapshot();
+        let drop: HashSet<usize> = indices.into_iter().collect();
+        let mut kept: Vec<ResponseItem> = Vec::with_capacity(items.len());
+        for (idx, it) in items.into_iter().enumerate() {
+            if drop.contains(&idx) {
+                continue;
+            }
+            kept.push(it);
+        }
+        // Recompute turn counts conservatively: single bucket equal ao total restante
+        let new_len = kept.len();
+        state.replace_history(kept);
+        state.replace_turn_counts(vec![new_len]);
+        // Removed
+        drop.len()
     }
 
     /// Record a user input item to conversation history and also persist a
@@ -993,7 +1306,7 @@ impl Session {
     pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
         let history = {
             let state = self.state.lock().await;
-            state.history_snapshot()
+            state.included_history_snapshot()
         };
         [history, extra].concat()
     }
@@ -1167,6 +1480,7 @@ async fn submission_loop(
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
                     experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                    include_context_prune_tool: config.include_context_prune_tool,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1271,6 +1585,7 @@ async fn submission_loop(
                             include_view_image_tool: config.include_view_image_tool,
                             experimental_unified_exec_tool: config
                                 .use_experimental_unified_exec_tool,
+                            include_context_prune_tool: config.include_context_prune_tool,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1438,6 +1753,60 @@ async fn submission_loop(
                 sess.send_event(event).await;
                 break;
             }
+            Op::PruneContext { categories, range } => {
+                let removed = sess.prune_context(categories, range).await;
+                let summary =
+                    format!("Pruned context: removed {removed} items across selected categories.");
+                let event = Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::AgentMessage(AgentMessageEvent { message: summary }),
+                };
+                sess.send_event(event).await;
+            }
+            Op::GetContextUsage => {
+                let usage = sess.compute_context_usage().await;
+                let event = Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::ConversationUsage(usage),
+                };
+                sess.send_event(event).await;
+            }
+            Op::GetContextItems => {
+                let items = sess.compute_context_items().await;
+                let event = Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::ContextItems(items),
+                };
+                sess.send_event(event).await;
+            }
+            Op::PruneContextByIndices { indices } => {
+                let removed = sess.prune_context_indices(indices).await;
+                let summary = format!("Pruned context: removed {removed} items by selection.");
+                let event = Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::AgentMessage(AgentMessageEvent { message: summary }),
+                };
+                sess.send_event(event).await;
+            }
+            Op::SetContextInclusion { indices, included } => {
+                {
+                    let mut state = sess.state.lock().await;
+                    state.set_inclusion(&indices, included);
+                }
+                // Send updated usage and list so UI can refresh
+                let usage = sess.compute_context_usage().await;
+                sess.send_event(Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::ConversationUsage(usage),
+                })
+                .await;
+                let items = sess.compute_context_items().await;
+                sess.send_event(Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::ContextItems(items),
+                })
+                .await;
+            }
             Op::GetPath => {
                 let sub_id = sub.id.clone();
                 // Flush rollout writes before returning the path so readers observe a consistent file.
@@ -1502,6 +1871,7 @@ async fn spawn_review_thread(
         use_streamable_shell_tool: false,
         include_view_image_tool: false,
         experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+        include_context_prune_tool: config.include_context_prune_tool,
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -1793,6 +2163,8 @@ pub(crate) async fn run_task(
                             .extend(items_to_record_in_conversation_history.clone());
                     } else {
                         sess.record_conversation_items(&items_to_record_in_conversation_history)
+                            .await;
+                        sess.note_turn_committed(items_to_record_in_conversation_history.len())
                             .await;
                     }
                 }
@@ -2577,6 +2949,45 @@ async fn handle_custom_tool_call(
             )
             .await
         }
+        "context_prune" => {
+            // Input: JSON { action: "usage"|"list"|"set_inclusion", indices?: [usize], included?: bool }
+            #[derive(serde::Deserialize)]
+            struct PruneArgs {
+                action: String,
+                #[serde(default)]
+                indices: Vec<usize>,
+                #[serde(default)]
+                included: Option<bool>,
+            }
+            let args: PruneArgs = serde_json::from_str(&input).map_err(|e| {
+                FunctionCallError::RespondToModel(format!("invalid context_prune input JSON: {e}"))
+            })?;
+            match args.action.as_str() {
+                "usage" => {
+                    let usage = sess.compute_context_usage().await;
+                    serde_json::to_string(&usage)
+                        .map_err(|e| FunctionCallError::RespondToModel(format!("{e}")))
+                }
+                "list" => {
+                    let items = sess.compute_context_items().await;
+                    serde_json::to_string(&items)
+                        .map_err(|e| FunctionCallError::RespondToModel(format!("{e}")))
+                }
+                "set_inclusion" => {
+                    {
+                        let mut state = sess.state.lock().await;
+                        let included = args.included.unwrap_or(true);
+                        state.set_inclusion(&args.indices, included);
+                    }
+                    let items = sess.compute_context_items().await;
+                    serde_json::to_string(&items)
+                        .map_err(|e| FunctionCallError::RespondToModel(format!("{e}")))
+                }
+                other => Err(FunctionCallError::RespondToModel(format!(
+                    "unknown action: {other}"
+                ))),
+            }
+        }
         _ => {
             debug!("unexpected CustomToolCall from stream");
             Err(FunctionCallError::RespondToModel(format!(
@@ -3283,6 +3694,7 @@ mod tests {
             use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
             include_view_image_tool: config.include_view_image_tool,
             experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+            include_context_prune_tool: config.include_context_prune_tool,
         });
         let turn_context = TurnContext {
             client,
@@ -3356,6 +3768,7 @@ mod tests {
             use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
             include_view_image_tool: config.include_view_image_tool,
             experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+            include_context_prune_tool: config.include_context_prune_tool,
         });
         let turn_context = Arc::new(TurnContext {
             client,
