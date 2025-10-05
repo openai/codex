@@ -69,7 +69,7 @@ impl Prompt {
         let mut input = self.input.clone();
 
         // when using the *Freeform* apply_patch tool specifically, tool outputs
-        // should be structured text, not json. Do NOT re-serialized when using
+        // should be structured text, not json. Do NOT reserialize when using
         // the Function tool - note that this differs from the check above for
         // instructions. We declare the result as a named variable for clarity.
         let is_freeform_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
