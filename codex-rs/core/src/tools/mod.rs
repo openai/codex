@@ -302,6 +302,39 @@ fn truncate_formatted_exec_output(content: &str, total_lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use regex_lite::Regex;
+
+    fn assert_truncated_message_matches(message: &str, line: &str, total_lines: usize) {
+        let pattern = truncated_message_pattern(line, total_lines);
+        let regex = Regex::new(&pattern).unwrap_or_else(|err| {
+            panic!("failed to compile regex {pattern}: {err}");
+        });
+        let captures = regex
+            .captures(message)
+            .unwrap_or_else(|| panic!("message failed to match pattern {pattern}: {message}"));
+        let body = captures
+            .name("body")
+            .expect("missing body capture")
+            .as_str();
+        assert!(
+            body.len() <= MODEL_FORMAT_MAX_BYTES,
+            "body exceeds byte limit: {} bytes",
+            body.len()
+        );
+    }
+
+    fn truncated_message_pattern(line: &str, total_lines: usize) -> String {
+        let head_take = MODEL_FORMAT_HEAD_LINES.min(total_lines);
+        let tail_take = MODEL_FORMAT_TAIL_LINES.min(total_lines.saturating_sub(head_take));
+        let omitted = total_lines.saturating_sub(head_take + tail_take);
+        let escaped_line = regex_lite::escape(line);
+        format!(
+            "(?s)^Total output lines: {total_lines}\\n\\n(?P<body>{escaped_line}.*\\n\\[\\.\\.\\. omitted {omitted} of {total_lines} lines \\.(?:\\.|)\\]\n\\n.*)$",
+            total_lines = total_lines,
+            escaped_line = escaped_line,
+            omitted = omitted,
+        )
+    }
 
     #[test]
     fn truncate_formatted_exec_output_truncates_large_error() {
@@ -310,14 +343,8 @@ mod tests {
 
         let truncated = format_exec_output(&large_error);
 
-        assert!(truncated.contains("Total output lines: "));
-        let body = truncated
-            .split_once("\n\n")
-            .map(|x| x.1)
-            .unwrap_or(truncated.as_str());
-        assert!(body.len() <= MODEL_FORMAT_MAX_BYTES);
-        assert!(body.starts_with(line));
-        assert!(body.contains("[... omitted"));
+        let total_lines = large_error.lines().count();
+        assert_truncated_message_matches(&truncated, line, total_lines);
         assert_ne!(truncated, large_error);
     }
 
@@ -325,18 +352,12 @@ mod tests {
     fn truncate_function_error_trims_respond_to_model() {
         let line = "respond-to-model error that should be truncated\n";
         let huge = line.repeat(3_000);
+        let total_lines = huge.lines().count();
 
         let err = truncate_function_error(FunctionCallError::RespondToModel(huge));
         match err {
             FunctionCallError::RespondToModel(message) => {
-                assert!(message.contains("Total output lines: "));
-                let body = message
-                    .split_once("\n\n")
-                    .map(|x| x.1)
-                    .unwrap_or(message.as_str());
-                assert!(body.len() <= MODEL_FORMAT_MAX_BYTES);
-                assert!(body.contains("[... omitted"));
-                assert!(body.starts_with(line));
+                assert_truncated_message_matches(&message, line, total_lines);
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
@@ -346,18 +367,12 @@ mod tests {
     fn truncate_function_error_trims_fatal() {
         let line = "fatal error output that should be truncated\n";
         let huge = line.repeat(3_000);
+        let total_lines = huge.lines().count();
 
         let err = truncate_function_error(FunctionCallError::Fatal(huge));
         match err {
             FunctionCallError::Fatal(message) => {
-                assert!(message.contains("Total output lines: "));
-                let body = message
-                    .split_once("\n\n")
-                    .map(|x| x.1)
-                    .unwrap_or(message.as_str());
-                assert!(body.len() <= MODEL_FORMAT_MAX_BYTES);
-                assert!(body.contains("[... omitted"));
-                assert!(body.starts_with(line));
+                assert_truncated_message_matches(&message, line, total_lines);
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
