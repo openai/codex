@@ -19,6 +19,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use serde_json::Value;
 
 fn extract_output_text(item: &Value) -> Option<&str> {
@@ -122,12 +123,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
         })
         .await?;
 
-    loop {
-        let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");

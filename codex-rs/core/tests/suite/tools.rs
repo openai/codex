@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -18,6 +19,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
 use wiremock::Request;
@@ -45,12 +47,10 @@ async fn submit_turn(
         })
         .await?;
 
-    loop {
-        let event = test.codex.next_event().await?;
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TaskComplete(_))
+    })
+    .await;
 
     Ok(())
 }
@@ -147,7 +147,10 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a valid model");
+    });
     let test = builder.build(&server).await?;
 
     let command = ["/bin/echo", "shell ok"];
@@ -375,7 +378,10 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a valid model");
+    });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-timeout";
@@ -431,11 +437,11 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
 
         let stdout = output_json["output"].as_str().unwrap_or_default();
         assert!(
-            stdout.starts_with("command timed out after "),
+            stdout.contains("command timed out after "),
             "expected timeout prefix, got {stdout:?}"
         );
-        let first_line = stdout.lines().next().unwrap_or_default();
-        let duration_ms = first_line
+        let third_line = stdout.lines().nth(2).unwrap_or_default();
+        let duration_ms = third_line
             .strip_prefix("command timed out after ")
             .and_then(|line| line.strip_suffix(" milliseconds"))
             .and_then(|value| value.parse::<u64>().ok())
@@ -455,6 +461,153 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
             "expected signal classification in error output, got {output_str:?}"
         );
     }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-denied";
+    let long_line = "this is a long stderr line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz";
+    let script = format!(
+        "for i in $(seq 1 500); do >&2 echo '{long_line}'; done; cat <<'EOF' > denied.txt\ncontent\nEOF",
+    );
+    let args = json!({
+        "command": ["/bin/sh", "-c", script],
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    submit_turn(
+        &test,
+        "attempt to write in read-only sandbox",
+        AskForApproval::Never,
+        SandboxPolicy::ReadOnly,
+    )
+    .await?;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    let bodies = request_bodies(&requests)?;
+    let function_outputs = collect_output_items(&bodies, "function_call_output");
+    let denied_item = function_outputs
+        .iter()
+        .find(|item| item.get("call_id").and_then(Value::as_str) == Some(call_id))
+        .expect("denied output present");
+
+    let output = denied_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("denied output string");
+
+    assert!(
+        output.contains("failed in sandbox: "),
+        "expected sandbox error prefix, got {output:?}"
+    );
+    assert!(
+        output.contains("[... omitted"),
+        "expected truncated marker, got {output:?}"
+    );
+    assert!(
+        output.contains(long_line),
+        "expected truncated stderr sample, got {output:?}"
+    );
+    // Linux distributions may surface sandbox write failures as different errno messages
+    // depending on the underlying mechanism (e.g., EPERM, EACCES, or EROFS). Accept a
+    // small set of common variants to keep this cross-platform.
+    let denial_markers = [
+        "Operation not permitted", // EPERM
+        "Permission denied",       // EACCES
+        "Read-only file system",   // EROFS
+    ];
+    assert!(
+        denial_markers.iter().any(|m| output.contains(m)),
+        "expected sandbox denial message, got {output:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|cfg| {
+        cfg.sandbox_policy = SandboxPolicy::DangerFullAccess;
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "shell-spawn-failure";
+    let bogus_component = "missing-bin-".repeat(700);
+    let bogus_exe = test
+        .cwd
+        .path()
+        .join(bogus_component)
+        .to_string_lossy()
+        .into_owned();
+
+    let args = json!({
+        "command": [bogus_exe],
+        "timeout_ms": 1_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    submit_turn(
+        &test,
+        "spawn a missing binary",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = server.received_requests().await.expect("recorded requests");
+    let bodies = request_bodies(&requests)?;
+    let function_outputs = collect_output_items(&bodies, "function_call_output");
+    let failure_item = function_outputs
+        .iter()
+        .find(|item| item.get("call_id").and_then(Value::as_str) == Some(call_id))
+        .expect("spawn failure output present");
+
+    let output = failure_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("spawn failure output string");
+
+    assert!(
+        output.contains("execution error:"),
+        "expected execution error prefix, got {output:?}"
+    );
+    assert!(output.len() <= 10 * 1024);
 
     Ok(())
 }
