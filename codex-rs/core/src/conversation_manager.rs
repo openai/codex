@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn drops_from_last_user_only() {
-        let items = vec![
+        let items = [
             user_msg("u1"),
             assistant_msg("a1"),
             assistant_msg("a2"),
