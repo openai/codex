@@ -1,6 +1,6 @@
 # Codex SDK
 
-Embed the Codex agent in your application.
+Embed the Codex agent in your workflows and apps.
 
 The TypeScript SDK wraps the bundled `codex` binary. It spawns the CLI and exchanges JSONL events over stdin/stdout, so anything you can do in the Codex CLI can also be done in the SDK.
 
@@ -33,7 +33,7 @@ const nextTurn = await thread.run("Implement the fix");
 
 ### Streaming responses
 
-`run()` buffers events until the turn finishes. To react to intermediate progress—tool calls, streaming responses, file diffs—use `runStreamed()` instead, which returns an async generator of structured events.
+`run()` buffers events until the turn finishes. To react to intermediate progress—tool calls, streaming responses, and file diffs—use `runStreamed()` instead, which returns an async generator of structured events.
 
 ```typescript
 const { events } = await thread.runStreamed("Diagnose the test failure and propose a fix");
@@ -62,7 +62,7 @@ await thread.run("Implement the fix");
 
 ### Working directory controls
 
-Codex runs in the current working directory by default. Override it or opt out of the Git guard using `ThreadOptions`.
+Codex runs in the current working directory by default. To avoid unrecoverable errors, Codex requires the working directory to be a Git repository. You can skip the Git repository check by passing the `skipGitRepoCheck` option when creating a thread. 
 
 ```typescript
 const thread = codex.startThread({
