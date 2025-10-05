@@ -180,8 +180,12 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
+    config.model = "gpt-5-codex".to_string();
+    config.model_family =
+        find_family_for_model("gpt-5-codex").expect("gpt-5-codex is a valid model");
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
     config.include_plan_tool = true;
