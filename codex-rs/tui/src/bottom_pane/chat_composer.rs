@@ -2487,6 +2487,64 @@ mod tests {
     }
 
     #[test]
+    fn plan_mode_persists_across_submissions() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.insert_str("Investigate caching");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert!(
+            composer.plan_mode_enabled(),
+            "plan mode should be active after toggle"
+        );
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::PlanRequested(text) => assert_eq!(text, "Investigate caching"),
+            other => panic!("expected plan request, got {other:?}"),
+        }
+        assert!(
+            composer.plan_mode_enabled(),
+            "plan mode should remain active after submit"
+        );
+        assert!(
+            !composer.is_empty(),
+            "composer text should remain for iteration"
+        );
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::PlanRequested(text) => assert_eq!(text, "Investigate caching"),
+            other => panic!("expected second plan request, got {other:?}"),
+        }
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(
+            !composer.plan_mode_enabled(),
+            "plan mode should deactivate after second toggle"
+        );
+    }
+
+    #[test]
     fn test_multiple_pastes_submission() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
