@@ -385,6 +385,11 @@ impl BottomPane {
         self.composer.is_empty()
     }
 
+    #[cfg(test)]
+    pub(crate) fn plan_mode_enabled(&self) -> bool {
+        self.composer.plan_mode_enabled()
+    }
+
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
     }

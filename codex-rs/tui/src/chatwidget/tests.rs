@@ -369,6 +369,11 @@ fn shift_tab_triggers_plan_turn() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
 
+    assert!(chat.bottom_pane.plan_mode_enabled());
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
     let mut ops = Vec::new();
     while let Ok(op) = op_rx.try_recv() {
         ops.push(op);
@@ -434,6 +439,7 @@ fn shift_tab_triggers_plan_turn() {
         other => panic!("unexpected third op: {other:?}"),
     }
 
+    assert!(chat.bottom_pane.plan_mode_enabled());
     assert_eq!(chat.bottom_pane.composer_text(), "Review the parser module");
 
     let cells = drain_insert_history(&mut rx);
@@ -456,6 +462,13 @@ fn shift_tab_requires_input_before_plan() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
 
+    // Entering plan mode should not immediately emit a request or an info message.
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
     assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
 
     let cells = drain_insert_history(&mut rx);
@@ -466,7 +479,7 @@ fn shift_tab_requires_input_before_plan() {
     assert!(
         merged
             .iter()
-            .any(|line| line.contains("Type your request before generating a plan"))
+            .any(|line| line.contains("Type your request before submitting a plan"))
     );
 }
 
@@ -490,7 +503,7 @@ fn shift_tab_blocked_while_task_running() {
     assert!(
         merged
             .iter()
-            .any(|line| line.contains("Finish the current task before requesting a plan"))
+            .any(|line| line.contains("Finish the current task before entering plan mode"))
     );
 }
 
