@@ -782,6 +782,17 @@ impl Session {
         self.send_event(event).await;
     }
 
+    async fn set_total_tokens_full(&self, sub_id: &str, turn_context: &TurnContext) {
+        let context_window = turn_context.client.get_model_context_window();
+        if let Some(context_window) = context_window {
+            {
+                let mut state = self.state.lock().await;
+                state.set_token_usage_full(context_window);
+            }
+            self.send_token_count_event(sub_id).await;
+        }
+    }
+
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
     async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
@@ -1938,6 +1949,10 @@ async fn run_turn(
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
+            Err(e @ CodexErr::ContextWindowExceeded) => {
+                sess.set_total_tokens_full(&sub_id, turn_context).await;
+                return Err(e);
+            }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
