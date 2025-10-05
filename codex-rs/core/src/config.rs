@@ -209,6 +209,9 @@ pub struct Config {
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
 
+    /// Tracks whether the Windows onboarding screen has been acknowledged.
+    pub windows_wsl_setup_acknowledged: bool,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -466,6 +469,29 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     std::fs::write(tmp_file.path(), doc.to_string())?;
 
     // atomically move the tmp file into config.toml
+    tmp_file.persist(config_path)?;
+
+    Ok(())
+}
+
+/// Persist the acknowledgement flag for the Windows onboarding screen.
+pub fn set_windows_wsl_setup_acknowledged(
+    codex_home: &Path,
+    acknowledged: bool,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let mut doc = match std::fs::read_to_string(config_path.clone()) {
+        Ok(s) => s.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    doc["windows_wsl_setup_acknowledged"] = toml_edit::value(acknowledged);
+
+    std::fs::create_dir_all(codex_home)?;
+
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
     tmp_file.persist(config_path)?;
 
     Ok(())
@@ -737,6 +763,9 @@ pub struct ConfigToml {
 
     /// OTEL configuration.
     pub otel: Option<crate::config_types::OtelConfigToml>,
+
+    /// Tracks whether the Windows onboarding screen has been acknowledged.
+    pub windows_wsl_setup_acknowledged: Option<bool>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1093,6 +1122,7 @@ impl Config {
             use_experimental_use_rmcp_client: cfg.experimental_use_rmcp_client.unwrap_or(false),
             include_view_image_tool,
             active_profile: active_profile_name,
+            windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
                 .tui
@@ -1885,6 +1915,7 @@ model_verbosity = "high"
                 use_experimental_use_rmcp_client: false,
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
+                windows_wsl_setup_acknowledged: false,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 otel: OtelConfig::default(),
@@ -1946,6 +1977,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
+            windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
@@ -2022,6 +2054,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
+            windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
@@ -2084,6 +2117,7 @@ model_verbosity = "high"
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
+            windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
