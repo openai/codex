@@ -135,7 +135,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             slug, "gpt-5",
             supports_reasoning_summaries: true,
             needs_special_apply_patch_instructions: true,
-            supports_parallel_tool_calls: true,
         )
     } else {
         None
