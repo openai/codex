@@ -21,6 +21,7 @@ use serde_json::Value;
 use wiremock::matchers::any;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "disabled until we enable read_file tool"]
 async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
