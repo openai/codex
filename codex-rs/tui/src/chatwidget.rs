@@ -1299,6 +1299,10 @@ impl ChatWidget {
             return;
         }
 
+        let request_text = trimmed.to_string();
+        self.add_to_history(history_cell::new_user_prompt(request_text.clone()));
+        self.needs_final_message_separator = false;
+
         let (target_model, target_effort) = self.preferred_plan_target();
         let original_model = self.config.model.clone();
         let original_effort = self.config.model_reasoning_effort;
@@ -1334,6 +1338,8 @@ impl ChatWidget {
                 summary: None,
             });
         }
+
+        self.submit_op(Op::AddToHistory { text: request_text });
 
         let effort_label = target_effort
             .map(|eff| eff.to_string())

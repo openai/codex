@@ -383,8 +383,8 @@ fn shift_tab_triggers_plan_turn() {
     }
     assert_eq!(
         ops.len(),
-        3,
-        "expected override, user input, override sequence"
+        4,
+        "expected override, user input, override, and history ops"
     );
 
     let plan_override = &ops[0];
@@ -442,8 +442,16 @@ fn shift_tab_triggers_plan_turn() {
         other => panic!("unexpected third op: {other:?}"),
     }
 
+    match &ops[3] {
+        Op::AddToHistory { text } => assert_eq!(text, "Review the parser module"),
+        other => panic!("unexpected fourth op: {other:?}"),
+    }
+
     assert!(chat.bottom_pane.plan_mode_enabled());
-    assert_eq!(chat.bottom_pane.composer_text(), "Review the parser module");
+    assert!(
+        chat.bottom_pane.composer_text().is_empty(),
+        "composer should clear after plan submission"
+    );
 
     let cells = drain_insert_history(&mut rx);
     let merged: Vec<String> = cells
@@ -453,9 +461,17 @@ fn shift_tab_triggers_plan_turn() {
     assert!(
         merged
             .iter()
+            .any(|line| line.contains("Review the parser module")),
+        "expected user request to appear in history"
+    );
+    assert!(
+        merged
+            .iter()
             .any(|line| line.contains("Planning request queued with gpt-5 high"))
     );
 
+    chat.bottom_pane
+        .set_composer_text("Review the parser module".to_string());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let mut ops_second = Vec::new();
@@ -464,8 +480,8 @@ fn shift_tab_triggers_plan_turn() {
     }
     assert_eq!(
         ops_second.len(),
-        3,
-        "expected second plan request to emit override/input/restore ops"
+        4,
+        "expected second plan request to emit override/input/restore/history ops"
     );
     assert!(chat.bottom_pane.plan_mode_enabled());
 
@@ -489,11 +505,22 @@ fn shift_tab_triggers_plan_turn() {
         panic!("unexpected second revert op: {:?}", ops_second[2]);
     }
 
+    match &ops_second[3] {
+        Op::AddToHistory { text } => assert_eq!(text, "Review the parser module"),
+        other => panic!("unexpected fourth op in repeat plan: {other:?}"),
+    }
+
     let cells_second = drain_insert_history(&mut rx);
     let merged_second: Vec<String> = cells_second
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect();
+    assert!(
+        merged_second
+            .iter()
+            .any(|line| line.contains("Review the parser module")),
+        "expected repeated user request to appear in history"
+    );
     assert!(
         merged_second
             .iter()
