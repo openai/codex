@@ -40,6 +40,209 @@ impl From<ParsedCommand> for codex_protocol::parse_command::ParsedCommand {
     }
 }
 
+/// Parses metadata out of an arbitrary command.
+/// These commands are model driven and could include just about anything.
+/// The parsing is slightly lossy due to the ~infinite expressiveness of an arbitrary command.
+/// The goal of the parsed metadata is to be able to provide the user with a human readable gis
+/// of what it is doing.
+pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
+    // Parse and then collapse consecutive duplicate commands to avoid redundant summaries.
+    let parsed = parse_command_impl(command).unwrap_or(vec![ParsedCommand::Unknown { 
+        cmd: format!("parse command unkown: {}", command.join(" "))
+    }]);
+    let mut deduped: Vec<ParsedCommand> = Vec::with_capacity(parsed.len());
+    for cmd in parsed.into_iter() {
+        if deduped.last().is_some_and(|prev| prev == &cmd) {
+            continue;
+        }
+        deduped.push(cmd);
+    }
+    deduped
+}
+
+
+fn parse_command_impl(original: &[String]) -> Option<Vec<ParsedCommand>> {
+    let script = if original.len() >= 3 && original[0] == "bash" && original[1] == "-lc" {
+        &original[2]
+    } else if original.len() >= 1 {
+        &original[0..].join(" ")
+    } else {
+        return None;
+    };
+    let mut p = BashCommandParser::new();
+    p.parse(&script);
+    Some(p.parsed_commands)
+}
+
+
+pub fn opt_parse_command(original: &[String]) -> Option<Vec<Vec<String>>> {
+    let script = if original.len() >= 3 && original[0] == "bash" && original[1] == "-lc" {
+        &original[2]
+    } else if !original.is_empty() {
+        &original.join(" ")
+    } else {
+        return None;
+    };
+
+    let mut p = BashCommandParser::new();
+    p.parse(&script);
+
+    // Wrap the collected Vec<Vec<String>> in Some(...)
+    Some(
+        p.orign_commands
+            .iter()
+            .map(|c| {
+                c.tided_parts(TidiedPathParams { 
+                    include_name: true, 
+                    include_options_key: true, 
+                    include_options_val: true
+                })
+            })
+            .collect::<Vec<Vec<String>>>()
+    )
+}
+
+
+fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
+    if commands.len() <= 1 {
+        return None;
+    }
+
+    // echo ... && ...rest => ...rest
+    if let ParsedCommand::Unknown { cmd } = &commands[0]
+        && shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("echo"))
+    {
+        return Some(commands[1..].to_vec());
+    }
+
+    // cd foo && [any command] => [any command] (keep non-cd when a cd is followed by something)
+    if let Some(idx) = commands.iter().position(|pc| match pc {
+        ParsedCommand::Unknown { cmd } => {
+            shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("cd"))
+        }
+        _ => false,
+    }) && commands.len() > idx + 1
+    {
+        let mut out = Vec::with_capacity(commands.len() - 1);
+        out.extend_from_slice(&commands[..idx]);
+        out.extend_from_slice(&commands[idx + 1..]);
+        return Some(out);
+    }
+
+    // cmd || true => cmd
+    if let Some(idx) = commands
+        .iter()
+        .position(|pc| matches!(pc, ParsedCommand::Unknown { cmd } if cmd == "true"))
+    {
+        let mut out = Vec::with_capacity(commands.len() - 1);
+        out.extend_from_slice(&commands[..idx]);
+        out.extend_from_slice(&commands[idx + 1..]);
+        return Some(out);
+    }
+
+    // nl -[any_flags] && ...rest => ...rest
+    if let Some(idx) = commands.iter().position(|pc| match pc {
+        ParsedCommand::Unknown { cmd } => {
+            if let Some(tokens) = shlex_split(cmd) {
+                tokens.first().is_some_and(|s| s.as_str() == "nl")
+                    && tokens.iter().skip(1).all(|t| t.starts_with('-'))
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }) {
+        let mut out = Vec::with_capacity(commands.len() - 1);
+        out.extend_from_slice(&commands[..idx]);
+        out.extend_from_slice(&commands[idx + 1..]);
+        return Some(out);
+    }
+
+    None
+}
+
+/// Validates that this is a `sed -n 123,123p` command.
+fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
+    let s = match arg {
+        Some(s) => s,
+        None => return false,
+    };
+    let core = match s.strip_suffix('p') {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let parts: Vec<&str> = core.split(',').collect();
+    match parts.as_slice() {
+        [num] => !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()),
+        [a, b] => {
+            !a.is_empty()
+                && !b.is_empty()
+                && a.chars().all(|c| c.is_ascii_digit())
+                && b.chars().all(|c| c.is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
+/// Normalize a command by:
+/// - Removing `yes`/`no`/`bash -c`/`bash -lc` prefixes.
+/// - Splitting on `|` and `&&`/`||`/`;
+fn normalize_tokens(cmd: &[String]) -> Vec<String> {
+    match cmd {
+        [first, pipe, rest @ ..] if (first == "yes" || first == "y") && pipe == "|" => {
+            // Do not re-shlex already-tokenized input; just drop the prefix.
+            rest.to_vec()
+        }
+        [first, pipe, rest @ ..] if (first == "no" || first == "n") && pipe == "|" => {
+            // Do not re-shlex already-tokenized input; just drop the prefix.
+            rest.to_vec()
+        }
+        [bash, flag, script] if bash == "bash" && (flag == "-c" || flag == "-lc") => {
+            shlex_split(script)
+                .unwrap_or_else(|| vec!["bash".to_string(), flag.clone(), script.clone()])
+        }
+        _ => cmd.to_vec(),
+    }
+}
+
+/// Return true if this looks like a small formatting helper in a pipeline.
+/// Examples: `head -n 40`, `tail -n +10`, `wc -l`, `awk ...`, `cut ...`, `tr ...`.
+/// We try to keep variants that clearly include a file path (e.g. `tail -n 30 file`).
+fn is_small_formatting_command(tokens: &[String]) -> bool {
+
+    if tokens.is_empty() {
+        return false;
+    }
+    let cmd = tokens[0].as_str();
+    match cmd {
+        // Always formatting; typically used in pipes.
+        // `nl` is special-cased below to allow `nl <file>` to be treated as a read command.
+        "wc" | "tr" | "cut" | "sort" | "uniq" | "xargs" | "tee" | "column" | "awk" | "yes"
+        | "printf" => true,
+        "head" => {
+            // Treat as formatting when no explicit file operand is present.
+            // Common forms: `head -n 40`, `head -c 100`.
+            // Keep cases like `head -n 40 file`.
+            tokens.len() < 3
+        }
+        "tail" => {
+            // Treat as formatting when no explicit file operand is present.
+            // Common forms: `tail -n +10`, `tail -n 30`.
+            // Keep cases like `tail -n 30 file`.
+            tokens.len() < 3
+        }
+        "sed" => {
+            // Keep `sed -n <range> file` (treated as a file read elsewhere);
+            // otherwise consider it a formatting helper in a pipeline.
+            tokens.len() < 4
+                || !(tokens[1] == "-n" && is_valid_sed_n_arg(tokens.get(2).map(String::as_str)))
+        }
+        _ => false,
+    }
+}
+
+
+
 define_bash_commands!(
     Unknown, 
     Ls, 
@@ -379,207 +582,6 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         );
     }
 }
-
-/// Parses metadata out of an arbitrary command.
-/// These commands are model driven and could include just about anything.
-/// The parsing is slightly lossy due to the ~infinite expressiveness of an arbitrary command.
-/// The goal of the parsed metadata is to be able to provide the user with a human readable gis
-/// of what it is doing.
-pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
-    // Parse and then collapse consecutive duplicate commands to avoid redundant summaries.
-    let parsed = parse_command_impl(command).unwrap_or(vec![ParsedCommand::Unknown { 
-        cmd: format!("parse command unkown: {}", command.join(" "))
-    }]);
-    let mut deduped: Vec<ParsedCommand> = Vec::with_capacity(parsed.len());
-    for cmd in parsed.into_iter() {
-        if deduped.last().is_some_and(|prev| prev == &cmd) {
-            continue;
-        }
-        deduped.push(cmd);
-    }
-    deduped
-}
-
-
-fn parse_command_impl(original: &[String]) -> Option<Vec<ParsedCommand>> {
-    let script = if original.len() >= 3 && original[0] == "bash" && original[1] == "-lc" {
-        &original[2]
-    } else if original.len() >= 1 {
-        &original[0..].join(" ")
-    } else {
-        return None;
-    };
-    let mut p = BashCommandParser::new();
-    p.parse(&script);
-    Some(p.parsed_commands)
-}
-
-
-pub fn opt_parse_command(original: &[String]) -> Option<Vec<Vec<String>>> {
-    let script = if original.len() >= 3 && original[0] == "bash" && original[1] == "-lc" {
-        &original[2]
-    } else if !original.is_empty() {
-        &original.join(" ")
-    } else {
-        return None;
-    };
-
-    let mut p = BashCommandParser::new();
-    p.parse(&script);
-
-    // Wrap the collected Vec<Vec<String>> in Some(...)
-    Some(
-        p.orign_commands
-            .iter()
-            .map(|c| {
-                c.tided_parts(TidiedPathParams { 
-                    include_name: true, 
-                    include_options_key: true, 
-                    include_options_val: true
-                })
-            })
-            .collect::<Vec<Vec<String>>>()
-    )
-}
-
-
-fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
-    if commands.len() <= 1 {
-        return None;
-    }
-
-    // echo ... && ...rest => ...rest
-    if let ParsedCommand::Unknown { cmd } = &commands[0]
-        && shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("echo"))
-    {
-        return Some(commands[1..].to_vec());
-    }
-
-    // cd foo && [any command] => [any command] (keep non-cd when a cd is followed by something)
-    if let Some(idx) = commands.iter().position(|pc| match pc {
-        ParsedCommand::Unknown { cmd } => {
-            shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("cd"))
-        }
-        _ => false,
-    }) && commands.len() > idx + 1
-    {
-        let mut out = Vec::with_capacity(commands.len() - 1);
-        out.extend_from_slice(&commands[..idx]);
-        out.extend_from_slice(&commands[idx + 1..]);
-        return Some(out);
-    }
-
-    // cmd || true => cmd
-    if let Some(idx) = commands
-        .iter()
-        .position(|pc| matches!(pc, ParsedCommand::Unknown { cmd } if cmd == "true"))
-    {
-        let mut out = Vec::with_capacity(commands.len() - 1);
-        out.extend_from_slice(&commands[..idx]);
-        out.extend_from_slice(&commands[idx + 1..]);
-        return Some(out);
-    }
-
-    // nl -[any_flags] && ...rest => ...rest
-    if let Some(idx) = commands.iter().position(|pc| match pc {
-        ParsedCommand::Unknown { cmd } => {
-            if let Some(tokens) = shlex_split(cmd) {
-                tokens.first().is_some_and(|s| s.as_str() == "nl")
-                    && tokens.iter().skip(1).all(|t| t.starts_with('-'))
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }) {
-        let mut out = Vec::with_capacity(commands.len() - 1);
-        out.extend_from_slice(&commands[..idx]);
-        out.extend_from_slice(&commands[idx + 1..]);
-        return Some(out);
-    }
-
-    None
-}
-
-/// Validates that this is a `sed -n 123,123p` command.
-fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
-    let s = match arg {
-        Some(s) => s,
-        None => return false,
-    };
-    let core = match s.strip_suffix('p') {
-        Some(rest) => rest,
-        None => return false,
-    };
-    let parts: Vec<&str> = core.split(',').collect();
-    match parts.as_slice() {
-        [num] => !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()),
-        [a, b] => {
-            !a.is_empty()
-                && !b.is_empty()
-                && a.chars().all(|c| c.is_ascii_digit())
-                && b.chars().all(|c| c.is_ascii_digit())
-        }
-        _ => false,
-    }
-}
-
-/// Normalize a command by:
-/// - Removing `yes`/`no`/`bash -c`/`bash -lc` prefixes.
-/// - Splitting on `|` and `&&`/`||`/`;
-fn normalize_tokens(cmd: &[String]) -> Vec<String> {
-    match cmd {
-        [first, pipe, rest @ ..] if (first == "yes" || first == "y") && pipe == "|" => {
-            // Do not re-shlex already-tokenized input; just drop the prefix.
-            rest.to_vec()
-        }
-        [first, pipe, rest @ ..] if (first == "no" || first == "n") && pipe == "|" => {
-            // Do not re-shlex already-tokenized input; just drop the prefix.
-            rest.to_vec()
-        }
-        [bash, flag, script] if bash == "bash" && (flag == "-c" || flag == "-lc") => {
-            shlex_split(script)
-                .unwrap_or_else(|| vec!["bash".to_string(), flag.clone(), script.clone()])
-        }
-        _ => cmd.to_vec(),
-    }
-}
-
-/// Return true if this looks like a small formatting helper in a pipeline.
-/// Examples: `head -n 40`, `tail -n +10`, `wc -l`, `awk ...`, `cut ...`, `tr ...`.
-/// We try to keep variants that clearly include a file path (e.g. `tail -n 30 file`).
-fn is_small_formatting_command(tokens: &[String]) -> bool {
-    if tokens.is_empty() {
-        return false;
-    }
-    let cmd = tokens[0].as_str();
-    match cmd {
-        // Always formatting; typically used in pipes.
-        // `nl` is special-cased below to allow `nl <file>` to be treated as a read command.
-        "wc" | "tr" | "cut" | "sort" | "uniq" | "xargs" | "tee" | "column" | "awk" | "yes"
-        | "printf" => true,
-        "head" => {
-            // Treat as formatting when no explicit file operand is present.
-            // Common forms: `head -n 40`, `head -c 100`.
-            // Keep cases like `head -n 40 file`.
-            tokens.len() < 3
-        }
-        "tail" => {
-            // Treat as formatting when no explicit file operand is present.
-            // Common forms: `tail -n +10`, `tail -n 30`.
-            // Keep cases like `tail -n 30 file`.
-            tokens.len() < 3
-        }
-        "sed" => {
-            // Keep `sed -n <range> file` (treated as a file read elsewhere);
-            // otherwise consider it a formatting helper in a pipeline.
-            tokens.len() < 4
-                || !(tokens[1] == "-n" && is_valid_sed_n_arg(tokens.get(2).map(String::as_str)))
-        }
-        _ => false,
-    }
-}
-
 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]

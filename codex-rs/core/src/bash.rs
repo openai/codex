@@ -235,7 +235,7 @@ macro_rules! define_bash_commands {
                     Some(BashNodeKind::Pipeline) => self.visit_pipeline(node),
                     Some(BashNodeKind::Subshell) => self.visit_subshell(node),
                     Some(BashNodeKind::Command) => {
-                        if let Some(node) = self.parse_to_command(node, self.source_code()) {
+                        if let Some(node) = self.parse_to_command(node) {
                             if let Ok(ty) = BashCommands::from_str(&node.name) {
                                 match ty {
                                     $(
@@ -266,8 +266,8 @@ macro_rules! define_bash_commands {
                 &self.source_code()[start..end]
             }
 
-            fn get_unescaped_text(&self, node: Node, src: &str) -> String {
-                let text = &src[node.start_byte()..node.end_byte()];
+            fn get_unescaped_text(&self, node: Node) -> String {
+                let text = &self.source_code()[node.start_byte()..node.end_byte()];
                 
                 // Try to parse as shell token, fall back to raw text
                 shlex::split(text)
@@ -288,7 +288,8 @@ macro_rules! define_bash_commands {
                     .find(|child| child.kind() == expected_kind)
             }
 
-            fn parse_to_command(&self, node: Node<'tree>, src: &str) -> Option<Command> {
+            fn parse_to_command(&self, node: Node<'tree>) -> Option<Command> {
+                let cmd_text = self.get_text(node);
                 let mut cursor = node.walk();
                 let name = self.get_command_name(node)?;
                 let mut options = IndexMap::new();
@@ -304,7 +305,7 @@ macro_rules! define_bash_commands {
                     }
                     
                     // Get the properly unescaped text
-                    let text = self.get_unescaped_text(child, src);
+                    let text = self.get_unescaped_text(child);
                     println!("EEEEEEEEEEEEEE: {}", text);
                     
                     if seen_double_dash {
@@ -330,7 +331,7 @@ macro_rules! define_bash_commands {
                     // Handle options with separate values
                     if text.starts_with('-') {
                         if let Some(next) = children.peek() {
-                            let next_text = self.get_unescaped_text(*next, src);
+                            let next_text = self.get_unescaped_text(*next);
                             if !next_text.starts_with('-') {
                                 options.insert(text, next_text);
                                 children.next();
@@ -344,7 +345,7 @@ macro_rules! define_bash_commands {
                 }
 
                 // NOTE: we have to maintain the same order and unescape 
-                let original_cmd: Vec<String> = src
+                let original_cmd: Vec<String> = cmd_text
                     .split(' ') 
                     .filter_map(|cmd| {
                         shlex::split(cmd.trim()).map(|parts| parts.join(" "))
