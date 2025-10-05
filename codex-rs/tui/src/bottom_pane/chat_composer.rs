@@ -67,6 +67,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 pub enum InputResult {
     Submitted(String),
     Command(SlashCommand),
+    PlanRequested(String),
     None,
 }
 
@@ -856,6 +857,15 @@ impl ChatComposer {
         }
         match key_event {
             KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            } => self.handle_plan_shortcut(),
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::SHIFT) => self.handle_plan_shortcut(),
+            KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
@@ -997,6 +1007,31 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    fn handle_plan_shortcut(&mut self) -> (InputResult, bool) {
+        if self.is_task_running {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    "Finish the current task before requesting a plan.".to_string(),
+                    None,
+                ),
+            )));
+            return (InputResult::None, true);
+        }
+
+        let text = self.current_text();
+        if text.trim().is_empty() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    "Type your request before generating a plan with Shift+Tab.".to_string(),
+                    None,
+                ),
+            )));
+            return (InputResult::None, true);
+        }
+
+        (InputResult::PlanRequested(text), true)
     }
 
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
@@ -2250,6 +2285,9 @@ mod tests {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
+            InputResult::PlanRequested(_) => {
+                panic!("unexpected plan request while testing '/init'")
+            }
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
@@ -2323,6 +2361,9 @@ mod tests {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
             InputResult::None => panic!("expected Command result for '/diff'"),
+            InputResult::PlanRequested(_) => {
+                panic!("unexpected plan request while testing '/diff'")
+            }
         }
         assert!(composer.textarea.is_empty());
     }
@@ -2356,6 +2397,9 @@ mod tests {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
+            InputResult::PlanRequested(_) => {
+                panic!("unexpected plan request while testing '/mention'")
+            }
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
         composer.insert_str("@");

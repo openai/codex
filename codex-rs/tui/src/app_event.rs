@@ -55,14 +55,32 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Update the current planning model slug in the running app and widget.
+    UpdatePlanModel(String),
+
+    /// Update the planning reasoning effort in the running app and widget.
+    UpdatePlanReasoningEffort(Option<ReasoningEffort>),
+
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
     },
 
+    /// Persist the selected planning model and reasoning effort to the appropriate config.
+    PersistPlanModelSelection {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
+        model: String,
+        presets: Vec<ModelPreset>,
+    },
+
+    /// Open the planning reasoning selection popup after picking a planning model.
+    OpenPlanReasoningPopup {
         model: String,
         presets: Vec<ModelPreset>,
     },

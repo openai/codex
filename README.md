@@ -59,6 +59,10 @@ Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your 
 
 You can also use Codex with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please comment on [this issue](https://github.com/openai/codex/issues/1243).
 
+### Planning before coding
+
+Press `Shift+Tab` in the composer to launch a read-only planning turn. Codex keeps your text in place, routes the request to a high-effort planning model, and asks the model to propose an implementation plan via the `update_plan` tool. If a task is already running or the input is empty, the CLI gently reminds you why planning can't start yet. Use `/plan-model` to choose which model and reasoning effort power these planning turns.
+
 ### Model Context Protocol (MCP)
 
 Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
