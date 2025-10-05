@@ -19,6 +19,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
 use wiremock::Request;
@@ -46,12 +47,10 @@ async fn submit_turn(
         })
         .await?;
 
-    loop {
-        let event = test.codex.next_event().await?;
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TaskComplete(_))
+    })
+    .await;
 
     Ok(())
 }
