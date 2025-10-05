@@ -93,6 +93,24 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
                 shell_call_ids.insert(identifier);
             }
         }
+        ResponseItem::CustomToolCall {
+            id: _,
+            status: _,
+            call_id,
+            name,
+            input: _,
+        } => {
+            if name == "apply_patch" {
+                shell_call_ids.insert(call_id.clone());
+            }
+        }
+        ResponseItem::CustomToolCallOutput { call_id, output } => {
+            if shell_call_ids.remove(call_id)
+                && let Some(structured) = parse_structured_shell_output(output)
+            {
+                *output = structured
+            }
+        }
         ResponseItem::FunctionCall { name, call_id, .. } if is_shell_tool_name(name) => {
             shell_call_ids.insert(call_id.clone());
         }
