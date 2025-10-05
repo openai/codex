@@ -1304,12 +1304,15 @@ impl ChatWidget {
         let original_effort = self.config.model_reasoning_effort;
         let plan_prompt = self.build_plan_prompt(trimmed);
 
+        let original_sandbox = self.config.sandbox_policy.clone();
+        let sandbox_changed = !matches!(original_sandbox, SandboxPolicy::ReadOnly);
+
         let mut context_changed = false;
-        if target_model != original_model || target_effort != original_effort {
+        if target_model != original_model || target_effort != original_effort || sandbox_changed {
             self.submit_op(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
-                sandbox_policy: None,
+                sandbox_policy: Some(SandboxPolicy::ReadOnly),
                 model: Some(target_model.clone()),
                 effort: Some(target_effort),
                 summary: None,
@@ -1325,7 +1328,7 @@ impl ChatWidget {
             self.submit_op(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
-                sandbox_policy: None,
+                sandbox_policy: Some(original_sandbox),
                 model: Some(original_model),
                 effort: Some(original_effort),
                 summary: None,
