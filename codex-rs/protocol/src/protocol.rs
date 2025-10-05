@@ -1217,6 +1217,11 @@ pub enum ReviewDecision {
     /// remainder of the session.
     ApprovedForSession,
 
+    /// User has approved this command and wants to automatically approve any
+    /// future identical instances (`command` and `cwd` match exactly) for all
+    /// future sessions.
+    ApprovedAlways,
+
     /// User has denied this command and the agent should not execute it, but
     /// it should continue the session and try something else.
     #[default]

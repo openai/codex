@@ -149,6 +149,14 @@ impl ApprovalOverlay {
                 history_cell::new_user_approval_decision(lines),
             )));
         }
+        
+        // If user chose "Always allow", mark the command as always allowed
+        if decision == ReviewDecision::ApprovedAlways {
+            // Import the function from the core module
+            use codex_core::mark_command_always_allowed;
+            mark_command_always_allowed(command);
+        }
+        
         self.app_event_tx.send(AppEvent::CodexOp(Op::ExecApproval {
             id: id.to_string(),
             decision,
@@ -342,21 +350,28 @@ struct ApprovalOption {
 fn exec_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
-            label: "Approve and run now".to_string(),
-            description: "(Y) Run this command one time".to_string(),
+            label: "Diesen Befehl zulassen".to_string(),
+            description: "(Y) Führe diesen Befehl einmal aus".to_string(),
             decision: ReviewDecision::Approved,
             shortcut: Some('y'),
         },
         ApprovalOption {
-            label: "Always approve this session".to_string(),
-            description: "(A) Automatically approve this command for the rest of the session"
+            label: "In dieser Session zulassen".to_string(),
+            description: "(A) Erlaube diesen Befehl automatisch für den Rest der Session"
                 .to_string(),
             decision: ReviewDecision::ApprovedForSession,
             shortcut: Some('a'),
         },
         ApprovalOption {
-            label: "Cancel".to_string(),
-            description: "(N) Do not run the command".to_string(),
+            label: "Für immer zulassen".to_string(),
+            description: "(P) Erlaube diesen Befehl automatisch für alle zukünftigen Sessions"
+                .to_string(),
+            decision: ReviewDecision::ApprovedAlways,
+            shortcut: Some('p'),
+        },
+        ApprovalOption {
+            label: "Abbrechen".to_string(),
+            description: "(N) Führe den Befehl nicht aus".to_string(),
             decision: ReviewDecision::Abort,
             shortcut: Some('n'),
         },
@@ -410,6 +425,19 @@ fn build_exec_history_lines(
                     " codex to run ".into(),
                     snippet,
                     " every time this session".bold(),
+                ],
+            )
+        }
+        ApprovedAlways => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " every time in all future sessions".bold(),
                 ],
             )
         }

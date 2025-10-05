@@ -117,6 +117,8 @@ use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
+use crate::command_safety::windows_safe_commands::set_always_allowed_file;
+use crate::command_safety::windows_safe_commands::mark_command_always_allowed;
 use crate::tasks::CompactTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
@@ -462,6 +464,8 @@ impl Session {
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         };
+
+        set_always_allowed_file(config.codex_home.join("always_allowed.json"));
 
         let sess = Arc::new(Session {
             conversation_id,
@@ -2665,6 +2669,10 @@ async fn handle_container_exec_with_params(
                 ReviewDecision::ApprovedForSession => {
                     sess.add_approved_command(params.command.clone()).await;
                 }
+                ReviewDecision::ApprovedAlways => {
+                    sess.add_approved_command(params.command.clone()).await;
+                    mark_command_always_allowed(&params.command);
+                }
                 ReviewDecision::Denied | ReviewDecision::Abort => {
                     return Err(FunctionCallError::RespondToModel(
                         "exec command rejected by user".to_string(),
@@ -2804,12 +2812,113 @@ async fn handle_sandbox_error(
         .await;
 
     match decision {
-        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
+        ReviewDecision::Approved => {
             // Persist this command as pre‑approved for the
             // remainder of the session so future
             // executions skip the sandbox directly.
             // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
             sess.add_approved_command(params.command.clone()).await;
+            // Inform UI we are retrying without sandbox.
+            sess.notify_background_event(&sub_id, "retrying command without sandbox")
+                .await;
+
+            // This is an escalated retry; the policy will not be
+            // examined and the sandbox has been set to `None`.
+            let retry_output_result = sess
+                .run_exec_with_events(
+                    turn_diff_tracker,
+                    exec_command_context.clone(),
+                    ExecInvokeArgs {
+                        params,
+                        sandbox_type: SandboxType::None,
+                        sandbox_policy: &turn_context.sandbox_policy,
+                        sandbox_cwd: &turn_context.cwd,
+                        codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
+                        stdout_stream: if exec_command_context.apply_patch.is_some() {
+                            None
+                        } else {
+                            Some(StdoutStream {
+                                sub_id: sub_id.clone(),
+                                call_id: call_id.clone(),
+                                tx_event: sess.tx_event.clone(),
+                            })
+                        },
+                    },
+                )
+                .await;
+
+            match retry_output_result {
+                Ok(retry_output) => {
+                    let ExecToolCallOutput { exit_code, .. } = &retry_output;
+                    let content = format_exec_output(&retry_output);
+                    if *exit_code == 0 {
+                        Ok(content)
+                    } else {
+                        Err(FunctionCallError::RespondToModel(content))
+                    }
+                }
+                Err(e) => Err(FunctionCallError::RespondToModel(format!(
+                    "retry failed: {e}"
+                ))),
+            }
+        }
+        ReviewDecision::ApprovedForSession => {
+            // Persist this command as pre‑approved for the
+            // remainder of the session so future
+            // executions skip the sandbox directly.
+            // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
+            sess.add_approved_command(params.command.clone()).await;
+            // Inform UI we are retrying without sandbox.
+            sess.notify_background_event(&sub_id, "retrying command without sandbox")
+                .await;
+
+            // This is an escalated retry; the policy will not be
+            // examined and the sandbox has been set to `None`.
+            let retry_output_result = sess
+                .run_exec_with_events(
+                    turn_diff_tracker,
+                    exec_command_context.clone(),
+                    ExecInvokeArgs {
+                        params,
+                        sandbox_type: SandboxType::None,
+                        sandbox_policy: &turn_context.sandbox_policy,
+                        sandbox_cwd: &turn_context.cwd,
+                        codex_linux_sandbox_exe: &sess.services.codex_linux_sandbox_exe,
+                        stdout_stream: if exec_command_context.apply_patch.is_some() {
+                            None
+                        } else {
+                            Some(StdoutStream {
+                                sub_id: sub_id.clone(),
+                                call_id: call_id.clone(),
+                                tx_event: sess.tx_event.clone(),
+                            })
+                        },
+                    },
+                )
+                .await;
+
+            match retry_output_result {
+                Ok(retry_output) => {
+                    let ExecToolCallOutput { exit_code, .. } = &retry_output;
+                    let content = format_exec_output(&retry_output);
+                    if *exit_code == 0 {
+                        Ok(content)
+                    } else {
+                        Err(FunctionCallError::RespondToModel(content))
+                    }
+                }
+                Err(e) => Err(FunctionCallError::RespondToModel(format!(
+                    "retry failed: {e}"
+                ))),
+            }
+        }
+        ReviewDecision::ApprovedAlways => {
+            // Persist this command as pre‑approved for the
+            // remainder of the session so future
+            // executions skip the sandbox directly.
+            // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
+            sess.add_approved_command(params.command.clone()).await;
+            mark_command_always_allowed(&params.command);
             // Inform UI we are retrying without sandbox.
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;

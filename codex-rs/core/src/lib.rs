@@ -82,6 +82,7 @@ pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use command_safety::is_safe_command;
+pub use command_safety::windows_safe_commands::mark_command_always_allowed;
 pub use safety::get_platform_sandbox;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
