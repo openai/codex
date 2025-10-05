@@ -184,7 +184,6 @@ async fn prompt_tools_are_consistent_across_requests() {
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
-    config.include_apply_patch_tool = true;
     config.include_plan_tool = true;
 
     let conversation_manager =
@@ -222,19 +221,10 @@ async fn prompt_tools_are_consistent_across_requests() {
     // our internal implementation is responsible for keeping tools in sync
     // with the OpenAI schema, so we just verify the tool presence here
     let tools_by_model: HashMap<&'static str, Vec<&'static str>> = HashMap::from([
-        (
-            "gpt-5",
-            vec!["shell", "update_plan", "apply_patch", "view_image"],
-        ),
+        ("gpt-5", vec!["shell", "update_plan", "view_image"]),
         (
             "gpt-5-codex",
-            vec![
-                "shell",
-                "update_plan",
-                "apply_patch",
-                "read_file",
-                "view_image",
-            ],
+            vec!["shell", "update_plan", "apply_patch", "view_image"],
         ),
     ]);
     let expected_tools_names = tools_by_model

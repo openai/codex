@@ -125,11 +125,7 @@ async fn model_selects_expected_tools() {
     let gpt5_codex_tools = collect_tool_identifiers_for_model("gpt-5-codex").await;
     assert_eq!(
         gpt5_codex_tools,
-        vec![
-            "shell".to_string(),
-            "apply_patch".to_string(),
-            "read_file".to_string()
-        ],
-        "gpt-5-codex should expose the beta read_file tool",
+        vec!["shell".to_string(), "apply_patch".to_string(),],
+        "gpt-5-codex should expose the apply_patch tool",
     );
 }
