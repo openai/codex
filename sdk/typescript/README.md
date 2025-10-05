@@ -2,7 +2,7 @@
 
 Embed the Codex agent in your workflows and apps.
 
-The TypeScript SDK wraps the bundled `codex` binary. It spawns the CLI and exchanges JSONL events over stdin/stdout, so anything you can do in the Codex CLI can also be done in the SDK.
+The TypeScript SDK wraps the bundled `codex` binary. It spawns the CLI and exchanges JSONL events over stdin/stdout.
 
 ## Installation
 
@@ -70,5 +70,4 @@ const thread = codex.startThread({
   skipGitRepoCheck: true,
 });
 ```
-
 
