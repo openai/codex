@@ -371,12 +371,13 @@ impl ChatWidget {
 
         // Show view
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: "Prune Context (Advanced)".to_string(),
+            title: Some("Prune Context (Advanced)".to_string()),
             subtitle: Some("Toggle items to keep; unchecked will be pruned".to_string()),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Filter context items".to_string()),
+            header: Box::new(()),
             on_complete_event: Some(AppEvent::PruneAdvancedClosed),
             ..Default::default()
         });
@@ -1891,13 +1892,8 @@ impl ChatWidget {
             self.submit_op(Op::GetContextUsage);
         }
 
-        let mut header = vec![crate::bottom_pane::HeaderLine::Text {
-            text:
-                "Prune items from the context without summarizing. This only affects future turns."
-                    .to_string(),
-            italic: true,
-        }];
-        if let Some(usage) = &self.last_context_usage {
+        // Build header (renderable) with usage if available
+        let header: Box<dyn crate::render::renderable::Renderable> = if let Some(usage) = &self.last_context_usage {
             let total = usage.total_bytes.max(1);
             let pct = |cat: PC| -> u64 {
                 usage
@@ -1907,24 +1903,19 @@ impl ChatWidget {
                     .map(|e| e.bytes.saturating_mul(100) / total)
                     .unwrap_or(0)
             };
-            header.push(crate::bottom_pane::HeaderLine::Text {
-                text: format!(
-                    "Usage: tool_output {}% | tool_call {}% | reasoning {}% | assistant {}%",
-                    pct(PC::ToolOutput),
-                    pct(PC::ToolCall),
-                    pct(PC::Reasoning),
-                    pct(PC::AssistantMessage)
-                ),
-                italic: false,
-            });
-            header.push(crate::bottom_pane::HeaderLine::Spacer);
+            let line = format!(
+                "Usage: tool_output {}% | tool_call {}% | reasoning {}% | assistant {}%",
+                pct(PC::ToolOutput),
+                pct(PC::ToolCall),
+                pct(PC::Reasoning),
+                pct(PC::AssistantMessage)
+            );
+            Box::new(ratatui::widgets::Paragraph::new(ratatui::text::Line::from(line)))
         } else {
-            header.push(crate::bottom_pane::HeaderLine::Text {
-                text: "Computing usage…".to_string(),
-                italic: false,
-            });
-            header.push(crate::bottom_pane::HeaderLine::Spacer);
-        }
+            Box::new(ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
+                "Computing usage…",
+            )))
+        };
 
         let mut items: Vec<SelectionItem> = Vec::new();
 
@@ -2036,12 +2027,11 @@ impl ChatWidget {
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: "Prune Context".to_string(),
+            title: Some("Prune Context".to_string()),
             subtitle: Some(
-                "Choose what to remove from the context. This does not edit rollout files."
-                    .to_string(),
+                "Choose what to remove from the context. This does not edit rollout files.".to_string(),
             ),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             header,
             ..Default::default()

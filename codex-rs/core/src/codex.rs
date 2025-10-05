@@ -115,7 +115,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::ConversationUsageByCategory;
 use codex_protocol::protocol::ConversationUsageEvent;
 use codex_protocol::protocol::InitialHistory;
