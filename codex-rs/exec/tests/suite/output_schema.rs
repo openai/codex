@@ -24,10 +24,7 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
 
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
-        serde_json::json!({
-            "type": "response.created",
-            "response": {"id": "resp1"}
-        }),
+        responses::ev_response_created("resp1"),
         responses::ev_assistant_message("m1", "fixture hello"),
         responses::ev_completed("resp1"),
     ]);

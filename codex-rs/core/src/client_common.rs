@@ -9,9 +9,11 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use futures::Stream;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
@@ -30,6 +32,9 @@ pub struct Prompt {
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
     pub(crate) tools: Vec<ToolSpec>,
+
+    /// Whether parallel tool calls are permitted for this prompt.
+    pub(crate) parallel_tool_calls: bool,
 
     /// Optional override for the built-in BASE_INSTRUCTIONS.
     pub base_instructions_override: Option<String>,
@@ -64,8 +69,112 @@ impl Prompt {
     }
 
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        self.input.clone()
+        let mut input = self.input.clone();
+
+        // when using the *Freeform* apply_patch tool specifically, tool outputs
+        // should be structured text, not json. Do NOT reserialize when using
+        // the Function tool - note that this differs from the check above for
+        // instructions. We declare the result as a named variable for clarity.
+        let is_freeform_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
+            ToolSpec::Freeform(f) => f.name == "apply_patch",
+            _ => false,
+        });
+        if is_freeform_apply_patch_tool_present {
+            reserialize_shell_outputs(&mut input);
+        }
+
+        input
     }
+}
+
+fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
+    let mut shell_call_ids: HashSet<String> = HashSet::new();
+
+    items.iter_mut().for_each(|item| match item {
+        ResponseItem::LocalShellCall { call_id, id, .. } => {
+            if let Some(identifier) = call_id.clone().or_else(|| id.clone()) {
+                shell_call_ids.insert(identifier);
+            }
+        }
+        ResponseItem::CustomToolCall {
+            id: _,
+            status: _,
+            call_id,
+            name,
+            input: _,
+        } => {
+            if name == "apply_patch" {
+                shell_call_ids.insert(call_id.clone());
+            }
+        }
+        ResponseItem::CustomToolCallOutput { call_id, output } => {
+            if shell_call_ids.remove(call_id)
+                && let Some(structured) = parse_structured_shell_output(output)
+            {
+                *output = structured
+            }
+        }
+        ResponseItem::FunctionCall { name, call_id, .. }
+            if is_shell_tool_name(name) || name == "apply_patch" =>
+        {
+            shell_call_ids.insert(call_id.clone());
+        }
+        ResponseItem::FunctionCallOutput { call_id, output } => {
+            if shell_call_ids.remove(call_id)
+                && let Some(structured) = parse_structured_shell_output(&output.content)
+            {
+                output.content = structured
+            }
+        }
+        _ => {}
+    })
+}
+
+fn is_shell_tool_name(name: &str) -> bool {
+    matches!(name, "shell" | "container.exec")
+}
+
+#[derive(Deserialize)]
+struct ExecOutputJson {
+    output: String,
+    metadata: ExecOutputMetadataJson,
+}
+
+#[derive(Deserialize)]
+struct ExecOutputMetadataJson {
+    exit_code: i32,
+    duration_seconds: f32,
+}
+
+fn parse_structured_shell_output(raw: &str) -> Option<String> {
+    let parsed: ExecOutputJson = serde_json::from_str(raw).ok()?;
+    Some(build_structured_output(&parsed))
+}
+
+fn build_structured_output(parsed: &ExecOutputJson) -> String {
+    let mut sections = Vec::new();
+    sections.push(format!("Exit code: {}", parsed.metadata.exit_code));
+    sections.push(format!(
+        "Wall time: {} seconds",
+        parsed.metadata.duration_seconds
+    ));
+
+    if let Some(total_lines) = extract_total_output_lines(&parsed.output) {
+        sections.push(format!("Total output lines: {total_lines}"));
+    }
+
+    sections.push("Output:".to_string());
+    sections.push(parsed.output.clone());
+
+    sections.join("\n")
+}
+
+fn extract_total_output_lines(output: &str) -> Option<u32> {
+    let marker_start = output.find("[... omitted ")?;
+    let marker = &output[marker_start..];
+    let (_, after_of) = marker.split_once(" of ")?;
+    let (total_segment, _) = after_of.split_once(' ')?;
+    total_segment.parse::<u32>().ok()
 }
 
 #[derive(Debug)]
@@ -180,6 +289,17 @@ pub(crate) mod tools {
         WebSearch {},
         #[serde(rename = "custom")]
         Freeform(FreeformTool),
+    }
+
+    impl ToolSpec {
+        pub(crate) fn name(&self) -> &str {
+            match self {
+                ToolSpec::Function(tool) => tool.name.as_str(),
+                ToolSpec::LocalShell {} => "local_shell",
+                ToolSpec::WebSearch {} => "web_search",
+                ToolSpec::Freeform(tool) => tool.name.as_str(),
+            }
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -327,7 +447,7 @@ mod tests {
             input: &input,
             tools: &tools,
             tool_choice: "auto",
-            parallel_tool_calls: false,
+            parallel_tool_calls: true,
             reasoning: None,
             store: false,
             stream: true,
@@ -368,7 +488,7 @@ mod tests {
             input: &input,
             tools: &tools,
             tool_choice: "auto",
-            parallel_tool_calls: false,
+            parallel_tool_calls: true,
             reasoning: None,
             store: false,
             stream: true,
@@ -404,7 +524,7 @@ mod tests {
             input: &input,
             tools: &tools,
             tool_choice: "auto",
-            parallel_tool_calls: false,
+            parallel_tool_calls: true,
             reasoning: None,
             store: false,
             stream: true,

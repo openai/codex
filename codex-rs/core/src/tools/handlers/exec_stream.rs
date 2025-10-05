@@ -19,10 +19,7 @@ impl ToolHandler for ExecStreamHandler {
         ToolKind::Function
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation<'_>,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
             tool_name,
