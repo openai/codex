@@ -219,7 +219,6 @@ macro_rules! define_bash_commands {
         use strum_macros::EnumString;
         use std::str::FromStr;
         use tree_sitter::Node;
-        use tree_sitter::Tree;
         use indexmap::IndexMap;
 
         /// All supported bash AST node kinds.
@@ -290,10 +289,10 @@ macro_rules! define_bash_commands {
                 &self.source_code()[start..end]
             }
 
-            fn get_unescaped_text(&self, node: Node) -> String {
+            /// Try to parse as shell token, fall back to raw text
+            fn get_unescaped_token(&self, node: Node) -> String {
                 let text = &self.source_code()[node.start_byte()..node.end_byte()];
 
-                // Try to parse as shell token, fall back to raw text
                 shlex::split(text)
                     .and_then(|parts| parts.into_iter().next())
                     .unwrap_or_else(|| text.to_string())
@@ -327,9 +326,8 @@ macro_rules! define_bash_commands {
                         continue;
                     }
 
-                    // Get the properly unescaped text
-                    let text = self.get_unescaped_text(child);
-                    println!("EEEEEEEEEEEEEE: {}", text);
+                    // Get the properly unescaped token
+                    let text = self.get_unescaped_token(child);
 
                     if seen_double_dash {
                         arguments.push(text);
@@ -352,7 +350,7 @@ macro_rules! define_bash_commands {
                     // Handle options with separate values
                     if text.starts_with('-') {
                         if let Some(next) = children.peek() {
-                            let next_text = self.get_unescaped_text(*next);
+                            let next_text = self.get_unescaped_token(*next);
                             if !next_text.starts_with('-') {
                                 options.entry(text).or_insert_with(Vec::new).push(next_text);
                                 children.next();
@@ -366,7 +364,6 @@ macro_rules! define_bash_commands {
                 }
 
                 let cmd_text = self.get_text(node);
-                println!("XXXXXXXXX {}", cmd_text);
                 let original_cmd: Vec<String> = match shlex::split(&cmd_text) {
                     Some(parts) => parts,
                     None => vec![cmd_text.to_string()],

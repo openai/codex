@@ -68,7 +68,6 @@ fn parse_command_impl(original: &[String]) -> Option<Vec<ParsedCommand>> {
     } else {
         return None;
     };
-    println!("Parsing {}", script);
     let mut p = BashCommandParser::new();
     p.parse(&script);
     Some(p.parsed_commands)
@@ -82,11 +81,9 @@ pub fn opt_parse_command(original: &[String]) -> Option<Vec<Vec<String>>> {
     } else {
         return None;
     };
-    println!("Parsing {}", script);
     let mut p = BashCommandParser::new();
     p.parse(&script);
 
-    // Wrap the collected Vec<Vec<String>> in Some(...)
     Some(
         p.orign_commands
             .iter()
@@ -101,64 +98,6 @@ pub fn opt_parse_command(original: &[String]) -> Option<Vec<Vec<String>>> {
             })
             .collect::<Vec<Vec<String>>>(),
     )
-}
-
-fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
-    if commands.len() <= 1 {
-        return None;
-    }
-
-    // echo ... && ...rest => ...rest
-    if let ParsedCommand::Unknown { cmd } = &commands[0]
-        && shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("echo"))
-    {
-        return Some(commands[1..].to_vec());
-    }
-
-    // cd foo && [any command] => [any command] (keep non-cd when a cd is followed by something)
-    if let Some(idx) = commands.iter().position(|pc| match pc {
-        ParsedCommand::Unknown { cmd } => {
-            shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("cd"))
-        }
-        _ => false,
-    }) && commands.len() > idx + 1
-    {
-        let mut out = Vec::with_capacity(commands.len() - 1);
-        out.extend_from_slice(&commands[..idx]);
-        out.extend_from_slice(&commands[idx + 1..]);
-        return Some(out);
-    }
-
-    // cmd || true => cmd
-    if let Some(idx) = commands
-        .iter()
-        .position(|pc| matches!(pc, ParsedCommand::Unknown { cmd } if cmd == "true"))
-    {
-        let mut out = Vec::with_capacity(commands.len() - 1);
-        out.extend_from_slice(&commands[..idx]);
-        out.extend_from_slice(&commands[idx + 1..]);
-        return Some(out);
-    }
-
-    // nl -[any_flags] && ...rest => ...rest
-    if let Some(idx) = commands.iter().position(|pc| match pc {
-        ParsedCommand::Unknown { cmd } => {
-            if let Some(tokens) = shlex_split(cmd) {
-                tokens.first().is_some_and(|s| s.as_str() == "nl")
-                    && tokens.iter().skip(1).all(|t| t.starts_with('-'))
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }) {
-        let mut out = Vec::with_capacity(commands.len() - 1);
-        out.extend_from_slice(&commands[..idx]);
-        out.extend_from_slice(&commands[idx + 1..]);
-        return Some(out);
-    }
-
-    None
 }
 
 /// Validates that this is a `sed -n 123,123p` command.
@@ -184,65 +123,33 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
     }
 }
 
-/// Normalize a command by:
-/// - Removing `yes`/`no`/`bash -c`/`bash -lc` prefixes.
-/// - Splitting on `|` and `&&`/`||`/`;
-fn normalize_tokens(cmd: &[String]) -> Vec<String> {
-    match cmd {
-        [first, pipe, rest @ ..] if (first == "yes" || first == "y") && pipe == "|" => {
-            // Do not re-shlex already-tokenized input; just drop the prefix.
-            rest.to_vec()
-        }
-        [first, pipe, rest @ ..] if (first == "no" || first == "n") && pipe == "|" => {
-            // Do not re-shlex already-tokenized input; just drop the prefix.
-            rest.to_vec()
-        }
-        [bash, flag, script] if bash == "bash" && (flag == "-c" || flag == "-lc") => {
-            shlex_split(script)
-                .unwrap_or_else(|| vec!["bash".to_string(), flag.clone(), script.clone()])
-        }
-        _ => cmd.to_vec(),
-    }
-}
-
-/// Return true if this looks like a small formatting helper in a pipeline.
-/// Examples: `head -n 40`, `tail -n +10`, `wc -l`, `awk ...`, `cut ...`, `tr ...`.
-/// We try to keep variants that clearly include a file path (e.g. `tail -n 30 file`).
-fn is_small_formatting_command(tokens: &[String]) -> bool {
-    if tokens.is_empty() {
-        return false;
-    }
-    let cmd = tokens[0].as_str();
-    match cmd {
-        // Always formatting; typically used in pipes.
-        // `nl` is special-cased below to allow `nl <file>` to be treated as a read command.
-        "wc" | "tr" | "cut" | "sort" | "uniq" | "xargs" | "tee" | "column" | "awk" | "yes"
-        | "printf" => true,
-        "head" => {
-            // Treat as formatting when no explicit file operand is present.
-            // Common forms: `head -n 40`, `head -c 100`.
-            // Keep cases like `head -n 40 file`.
-            tokens.len() < 3
-        }
-        "tail" => {
-            // Treat as formatting when no explicit file operand is present.
-            // Common forms: `tail -n +10`, `tail -n 30`.
-            // Keep cases like `tail -n 30 file`.
-            tokens.len() < 3
-        }
-        "sed" => {
-            // Keep `sed -n <range> file` (treated as a file read elsewhere);
-            // otherwise consider it a formatting helper in a pipeline.
-            tokens.len() < 4
-                || !(tokens[1] == "-n" && is_valid_sed_n_arg(tokens.get(2).map(String::as_str)))
-        }
-        _ => false,
-    }
-}
-
+#[rustfmt::skip]
 define_bash_commands!(
-    Unknown, Ls, Rg, Fd, Find, Sed, Grep, Cd, Echo, Nl, Head, Tail, Cat, Wc, Tr, Cut, Sort, Uniq,
-    Xargs, Tree, Column, Awk, Yes, Printf, True,
+    Unknown, 
+    Ls, 
+    Rg, 
+    Fd, 
+    Find, 
+    Sed, 
+    Grep, 
+    Cd,
+    Echo,
+    Nl,
+    Head,
+    Tail,
+    Cat,
+    Wc,
+    Tr,
+    Cut,
+    Sort,
+    Uniq,
+    Xargs,
+    Tree,
+    Column,
+    Awk,
+    Yes,
+    Printf,
+    True,
 );
 
 #[derive(Debug)]
@@ -454,7 +361,6 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
 
         // Handle both `-n 50`, `-n+50`, `-n50`, and `--lines 50` forms
         let n_value = cmd.find_option_val_strip_key(&["-n", "--lines"]);
-        println!("TTTTTt {:?}", n_value);
 
         let valid_n = n_value.as_ref().map_or(false, |n| {
             let s = n.strip_prefix('+').unwrap_or(n);
@@ -578,7 +484,6 @@ mod tests {
     }
 
     fn assert_parsed(args: &[String], expected: Vec<ParsedCommand>) {
-        println!("ARGS: {:?}", args);
         let out = parse_command(args);
         assert_eq!(out, expected);
     }
@@ -892,85 +797,6 @@ mod tests {
                 path: None,
             }],
         );
-    }
-
-    // ---- is_small_formatting_command unit tests ----
-    #[test]
-    fn small_formatting_always_true_commands() {
-        for cmd in [
-            "wc", "tr", "cut", "sort", "uniq", "xargs", "tee", "column", "awk",
-        ] {
-            assert!(is_small_formatting_command(&shlex_split_safe(cmd)));
-            assert!(is_small_formatting_command(&shlex_split_safe(&format!(
-                "{cmd} -x"
-            ))));
-        }
-    }
-
-    #[test]
-    fn head_behavior() {
-        // No args -> small formatting
-        assert!(is_small_formatting_command(&vec_str(&["head"])));
-        // Numeric count only -> not considered small formatting by implementation
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "head -n 40"
-        )));
-        // With explicit file -> not small formatting
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "head -n 40 file.txt"
-        )));
-        // File only (no count) -> treated as small formatting by implementation
-        assert!(is_small_formatting_command(&vec_str(&["head", "file.txt"])));
-    }
-
-    #[test]
-    fn tail_behavior() {
-        // No args -> small formatting
-        assert!(is_small_formatting_command(&vec_str(&["tail"])));
-        // Numeric with plus offset -> not small formatting
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "tail -n +10"
-        )));
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "tail -n +10 file.txt"
-        )));
-        // Numeric count
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "tail -n 30"
-        )));
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "tail -n 30 file.txt"
-        )));
-        // File only -> small formatting by implementation
-        assert!(is_small_formatting_command(&vec_str(&["tail", "file.txt"])));
-    }
-
-    #[test]
-    fn sed_behavior() {
-        // Plain sed -> small formatting
-        assert!(is_small_formatting_command(&vec_str(&["sed"])));
-        // sed -n <range> (no file) -> still small formatting
-        assert!(is_small_formatting_command(&vec_str(&["sed", "-n", "10p"])));
-        // Valid range with file -> not small formatting
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "sed -n 10p file.txt"
-        )));
-        assert!(!is_small_formatting_command(&shlex_split_safe(
-            "sed -n 1,200p file.txt"
-        )));
-        // Invalid ranges with file -> small formatting
-        assert!(is_small_formatting_command(&shlex_split_safe(
-            "sed -n p file.txt"
-        )));
-        assert!(is_small_formatting_command(&shlex_split_safe(
-            "sed -n +10p file.txt"
-        )));
-    }
-
-    #[test]
-    fn empty_tokens_is_not_small() {
-        let empty: Vec<String> = Vec::new();
-        assert!(!is_small_formatting_command(&empty));
     }
 
     #[test]
