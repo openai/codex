@@ -9,6 +9,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::plan_tool::StepStatus;
+use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
@@ -116,10 +117,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
     let exec_output: Value = serde_json::from_str(output_text)?;
     assert_eq!(exec_output["metadata"]["exit_code"], 0);
     let stdout = exec_output["output"].as_str().expect("stdout field");
-    assert!(
-        stdout.contains("tool harness"),
-        "expected stdout to contain command output, got {stdout:?}"
-    );
+    assert_regex_match(r"(?s)^tool harness\n?$", stdout);
 
     Ok(())
 }
