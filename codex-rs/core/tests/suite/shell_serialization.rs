@@ -11,6 +11,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -88,7 +89,7 @@ async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
     });
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
@@ -155,7 +156,7 @@ async fn shell_output_is_structured_with_freeform_apply_patch() -> Result<()> {
     });
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
@@ -224,7 +225,7 @@ async fn shell_output_reserializes_truncated_content() -> Result<()> {
     });
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),

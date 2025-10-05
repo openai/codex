@@ -13,6 +13,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -106,7 +107,7 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_custom_tool_call(call_id, tool_name, "\"payload\""),
             ev_completed("resp-1"),
         ]),
@@ -169,7 +170,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(
                 call_id_blocked,
                 "shell",
@@ -178,7 +179,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
             ev_completed("resp-1"),
         ]),
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-2"}}),
+            ev_response_created("resp-2"),
             ev_function_call(
                 call_id_success,
                 "shell",
@@ -283,7 +284,7 @@ async fn local_shell_missing_ids_maps_to_function_output_error() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             local_shell_event,
             ev_completed("resp-1"),
         ]),
@@ -324,7 +325,7 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
     let server = start_mock_server().await;
 
     let responses = vec![sse(vec![
-        json!({"type": "response.created", "response": {"id": "resp-1"}}),
+        ev_response_created("resp-1"),
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-1"),
     ])];
@@ -393,7 +394,7 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
@@ -485,7 +486,7 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
@@ -571,7 +572,7 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
