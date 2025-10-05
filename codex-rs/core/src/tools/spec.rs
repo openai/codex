@@ -695,7 +695,7 @@ mod tests {
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
-        assert_eq_tool_names(&tools, &["unified_exec", "read_file"]);
+        assert_eq_tool_names(&tools, &["unified_exec", "apply_patch", "read_file"]);
     }
 
     #[test]
@@ -921,6 +921,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
+                "apply_patch",
                 "read_file",
                 "web_search",
                 "view_image",
@@ -929,7 +930,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[4],
+            tools[5],
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -988,6 +989,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
+                "apply_patch",
                 "read_file",
                 "web_search",
                 "view_image",
@@ -995,7 +997,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            tools[4],
+            tools[5],
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -1019,7 +1021,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
-            include_apply_patch_tool: false,
+            include_apply_patch_tool: true,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
@@ -1052,6 +1054,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
+                "apply_patch",
                 "read_file",
                 "web_search",
                 "view_image",
@@ -1059,7 +1062,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            tools[4],
+            tools[5],
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -1119,6 +1122,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
+                "apply_patch",
                 "read_file",
                 "web_search",
                 "view_image",
@@ -1126,7 +1130,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            tools[4],
+            tools[5],
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {
@@ -1223,6 +1227,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
+                "apply_patch",
                 "read_file",
                 "web_search",
                 "view_image",
@@ -1231,7 +1236,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[4],
+            tools[5],
             ToolSpec::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
