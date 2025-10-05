@@ -17,6 +17,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use serde_json::Value;
 use wiremock::matchers::any;
 
@@ -121,16 +122,20 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         .await?;
 
     let mut tool_event = None;
-    loop {
-        let event = codex.next_event().await.expect("event");
-        match event.msg {
-            EventMsg::ViewImageToolCall(ev) => tool_event = Some(ev),
-            EventMsg::TaskComplete(_) => break,
-            _ => {}
+    wait_for_event(&codex, |event| match event {
+        EventMsg::ViewImageToolCall(_) => {
+            tool_event = Some(event.clone());
+            false
         }
-    }
+        EventMsg::TaskComplete(_) => true,
+        _ => false,
+    })
+    .await;
 
-    let tool_event = tool_event.expect("view image tool event emitted");
+    let tool_event = match tool_event.expect("view image tool event emitted") {
+        EventMsg::ViewImageToolCall(event) => event,
+        _ => unreachable!("stored event must be ViewImageToolCall"),
+    };
     assert_eq!(tool_event.call_id, call_id);
     assert_eq!(tool_event.path, abs_path);
 
@@ -229,12 +234,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         })
         .await?;
 
-    loop {
-        let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(
@@ -314,12 +314,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         })
         .await?;
 
-    loop {
-        let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(

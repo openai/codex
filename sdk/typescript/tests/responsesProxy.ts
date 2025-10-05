@@ -173,16 +173,19 @@ export function assistantMessage(text: string, itemId: string = DEFAULT_MESSAGE_
   };
 }
 
+export function responseFailed(errorMessage: string): SseEvent {
+  return {
+    type: "error",
+    error: { code: "rate_limit_exceeded", message: errorMessage },
+  };
+}
+
 export function responseCompleted(
   responseId: string = DEFAULT_RESPONSE_ID,
   usage: ResponseCompletedUsage = DEFAULT_COMPLETED_USAGE,
 ): SseEvent {
-  const inputDetails = usage.input_tokens_details
-    ? { ...usage.input_tokens_details }
-    : null;
-  const outputDetails = usage.output_tokens_details
-    ? { ...usage.output_tokens_details }
-    : null;
+  const inputDetails = usage.input_tokens_details ? { ...usage.input_tokens_details } : null;
+  const outputDetails = usage.output_tokens_details ? { ...usage.output_tokens_details } : null;
   return {
     type: "response.completed",
     response: {

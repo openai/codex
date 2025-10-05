@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -18,6 +19,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
 use wiremock::matchers::any;
@@ -53,7 +55,8 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a valid model");
     });
     let TestCodex {
         codex,
@@ -97,12 +100,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
         })
         .await?;
 
-    loop {
-        let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
@@ -187,23 +185,21 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         .await?;
 
     let mut saw_plan_update = false;
-
-    loop {
-        let event = codex.next_event().await.expect("event");
-        match event.msg {
-            EventMsg::PlanUpdate(update) => {
-                saw_plan_update = true;
-                assert_eq!(update.explanation.as_deref(), Some("Tool harness check"));
-                assert_eq!(update.plan.len(), 2);
-                assert_eq!(update.plan[0].step, "Inspect workspace");
-                assert!(matches!(update.plan[0].status, StepStatus::InProgress));
-                assert_eq!(update.plan[1].step, "Report results");
-                assert!(matches!(update.plan[1].status, StepStatus::Pending));
-            }
-            EventMsg::TaskComplete(_) => break,
-            _ => {}
+    wait_for_event(&codex, |event| match event {
+        EventMsg::PlanUpdate(update) => {
+            saw_plan_update = true;
+            assert_eq!(update.explanation.as_deref(), Some("Tool harness check"));
+            assert_eq!(update.plan.len(), 2);
+            assert_eq!(update.plan[0].step, "Inspect workspace");
+            assert!(matches!(update.plan[0].status, StepStatus::InProgress));
+            assert_eq!(update.plan[1].step, "Report results");
+            assert!(matches!(update.plan[1].status, StepStatus::Pending));
+            false
         }
-    }
+        EventMsg::TaskComplete(_) => true,
+        _ => false,
+    })
+    .await;
 
     assert!(saw_plan_update, "expected PlanUpdate event");
 
@@ -284,15 +280,15 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
         .await?;
 
     let mut saw_plan_update = false;
-
-    loop {
-        let event = codex.next_event().await.expect("event");
-        match event.msg {
-            EventMsg::PlanUpdate(_) => saw_plan_update = true,
-            EventMsg::TaskComplete(_) => break,
-            _ => {}
+    wait_for_event(&codex, |event| match event {
+        EventMsg::PlanUpdate(_) => {
+            saw_plan_update = true;
+            false
         }
-    }
+        EventMsg::TaskComplete(_) => true,
+        _ => false,
+    })
+    .await;
 
     assert!(
         !saw_plan_update,
@@ -391,22 +387,21 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
 
     let mut saw_patch_begin = false;
     let mut patch_end_success = None;
-
-    loop {
-        let event = codex.next_event().await.expect("event");
-        match event.msg {
-            EventMsg::PatchApplyBegin(begin) => {
-                saw_patch_begin = true;
-                assert_eq!(begin.call_id, call_id);
-            }
-            EventMsg::PatchApplyEnd(end) => {
-                assert_eq!(end.call_id, call_id);
-                patch_end_success = Some(end.success);
-            }
-            EventMsg::TaskComplete(_) => break,
-            _ => {}
+    wait_for_event(&codex, |event| match event {
+        EventMsg::PatchApplyBegin(begin) => {
+            saw_patch_begin = true;
+            assert_eq!(begin.call_id, call_id);
+            false
         }
-    }
+        EventMsg::PatchApplyEnd(end) => {
+            assert_eq!(end.call_id, call_id);
+            patch_end_success = Some(end.success);
+            false
+        }
+        EventMsg::TaskComplete(_) => true,
+        _ => false,
+    })
+    .await;
 
     assert!(saw_patch_begin, "expected PatchApplyBegin event");
     let patch_end_success =
@@ -519,12 +514,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
         })
         .await?;
 
-    loop {
-        let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");

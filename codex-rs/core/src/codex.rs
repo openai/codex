@@ -782,6 +782,17 @@ impl Session {
         self.send_event(event).await;
     }
 
+    async fn set_total_tokens_full(&self, sub_id: &str, turn_context: &TurnContext) {
+        let context_window = turn_context.client.get_model_context_window();
+        if let Some(context_window) = context_window {
+            {
+                let mut state = self.state.lock().await;
+                state.set_token_usage_full(context_window);
+            }
+            self.send_token_count_event(sub_id).await;
+        }
+    }
+
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
     async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
@@ -1938,6 +1949,10 @@ async fn run_turn(
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
+            Err(e @ CodexErr::ContextWindowExceeded) => {
+                sess.set_total_tokens_full(&sub_id, turn_context).await;
+                return Err(e);
+            }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
@@ -2505,13 +2520,19 @@ mod tests {
 
         let out = format_exec_output_str(&exec);
 
+        // Strip truncation header if present for subsequent assertions
+        let body = out
+            .strip_prefix("Total output lines: ")
+            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
+            .unwrap_or(out.as_str());
+
         // Expect elision marker with correct counts
         let omitted = 400 - MODEL_FORMAT_MAX_LINES; // 144
         let marker = format!("\n[... omitted {omitted} of 400 lines ...]\n\n");
         assert!(out.contains(&marker), "missing marker: {out}");
 
         // Validate head and tail
-        let parts: Vec<&str> = out.split(&marker).collect();
+        let parts: Vec<&str> = body.split(&marker).collect();
         assert_eq!(parts.len(), 2, "expected one marker split");
         let head = parts[0];
         let tail = parts[1];
@@ -2547,14 +2568,19 @@ mod tests {
         };
 
         let out = format_exec_output_str(&exec);
-        assert!(out.len() <= MODEL_FORMAT_MAX_BYTES, "exceeds byte budget");
+        // Keep strict budget on the truncated body (excluding header)
+        let body = out
+            .strip_prefix("Total output lines: ")
+            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
+            .unwrap_or(out.as_str());
+        assert!(body.len() <= MODEL_FORMAT_MAX_BYTES, "exceeds byte budget");
         assert!(out.contains("omitted"), "should contain elision marker");
 
         // Ensure head and tail are drawn from the original
-        assert!(full.starts_with(out.chars().take(8).collect::<String>().as_str()));
+        assert!(full.starts_with(body.chars().take(8).collect::<String>().as_str()));
         assert!(
             full.ends_with(
-                out.chars()
+                body.chars()
                     .rev()
                     .take(8)
                     .collect::<String>()
