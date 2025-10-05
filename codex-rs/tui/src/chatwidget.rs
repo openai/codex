@@ -1348,7 +1348,6 @@ impl ChatWidget {
     }
 
     fn build_plan_prompt(&self, user_request: &str) -> String {
-        format!("Plan-Only Mode (Read-Only)\n\n");
         let objective = "Objective\n- Produce a clear, staged implementation plan for the request below.\n- Do not change the system in any way.\n\n";
         let constraints = "Constraints\n- Read/inspect only: code, files, repo history, docs, and web sources.\n- No side effects: do not edit/create/delete files, run mutating commands, install packages, commit, or change config.\n\n";
         let produce = "What to produce\n1) Call update_plan with a concise, sequenced plan:\n   - 5-9 steps max, each 5-7 words.\n   - Status values: pending | in_progress | completed.\n   - Exactly one step may be in_progress; none completed unless already done.\n2) After update_plan, present a brief rationale and ask for approval before any execution.\n3) If essential info is missing, include an \"Open Questions\" note and keep steps pending.\n\n";
