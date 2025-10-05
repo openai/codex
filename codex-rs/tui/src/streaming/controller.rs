@@ -91,15 +91,14 @@ mod tests {
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
 
-    fn test_config() -> Config {
+    async fn test_config() -> Config {
         let overrides = ConfigOverrides {
             cwd: std::env::current_dir().ok(),
             ..Default::default()
         };
-        match Config::load_with_cli_overrides(vec![], overrides) {
-            Ok(c) => c,
-            Err(e) => panic!("load test config: {e}"),
-        }
+        Config::load_with_cli_overrides(vec![], overrides)
+            .await
+            .expect("load test config")
     }
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
@@ -115,9 +114,9 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
-        let cfg = test_config();
+    #[tokio::test]
+    async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
+        let cfg = test_config().await;
         let mut ctrl = StreamController::new(cfg.clone(), None);
         let mut lines = Vec::new();
 

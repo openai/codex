@@ -135,6 +135,16 @@ pub fn ev_apply_patch_function_call(call_id: &str, patch: &str) -> Value {
     })
 }
 
+pub fn sse_failed(id: &str, code: &str, message: &str) -> String {
+    sse(vec![serde_json::json!({
+        "type": "response.failed",
+        "response": {
+            "id": id,
+            "error": {"code": code, "message": message}
+        }
+    })])
+}
+
 pub fn sse_response(body: String) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")

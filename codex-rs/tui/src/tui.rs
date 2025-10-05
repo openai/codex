@@ -362,6 +362,8 @@ impl Tui {
                             }
                             Event::FocusGained => {
                                 terminal_focused.store(true, Ordering::Relaxed);
+                                crate::terminal_palette::requery_default_colors();
+                                yield TuiEvent::Draw;
                             }
                             Event::FocusLost => {
                                 terminal_focused.store(false, Ordering::Relaxed);
