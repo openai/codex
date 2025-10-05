@@ -12,7 +12,7 @@ import {
   responseCompleted,
   responseStarted,
   sse,
-  turnFailed as responseFailed,
+  responseFailed,
   startResponsesTestProxy,
 } from "./responsesProxy";
 

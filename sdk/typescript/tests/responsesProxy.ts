@@ -173,7 +173,7 @@ export function assistantMessage(text: string, itemId: string = DEFAULT_MESSAGE_
   };
 }
 
-export function turnFailed(errorMessage: string): SseEvent {
+export function responseFailed(errorMessage: string): SseEvent {
   return {
     type: "error",
     error: { code: "rate_limit_exceeded", message: errorMessage },
