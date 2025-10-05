@@ -55,6 +55,8 @@ pub(crate) struct TidiedPathParams {
     pub include_name: bool,
     pub include_options_key: bool,
     pub include_options_val: bool,
+    pub include_options_assign_key: bool,
+    pub include_options_assign_value: bool,
 }
 
 impl Command {
@@ -142,7 +144,7 @@ impl Command {
                 for val in vals {
                     if key.starts_with("--") && key.contains('=') {
                         // Already in --flag=value form
-                        if param.include_options_key && param.include_options_val {
+                        if param.include_options_assign_key && param.include_options_assign_value {
                             parts.push(format!("{}={}", key, val));
                         }
                     } else {
@@ -333,10 +335,8 @@ macro_rules! define_bash_commands {
                     
                     // Handle --flag=value
                     if text.starts_with("--") && text.contains('=') {
-                        let mut parts = text.splitn(2, '=');
-                        let key = parts.next().unwrap_or_default().to_string();
-                        let val = parts.next().unwrap_or_default().to_string();
-                        options.entry(key).or_insert_with(Vec::new).push(val);
+                        let key = text;
+                        options.entry(key).or_insert_with(Vec::new).push("".into());
                         continue;
                     }
                     

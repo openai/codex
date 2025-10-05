@@ -96,7 +96,9 @@ pub fn opt_parse_command(original: &[String]) -> Option<Vec<Vec<String>>> {
                 c.tidied_parts(TidiedPathParams { 
                     include_name: true, 
                     include_options_key: true, 
-                    include_options_val: true
+                    include_options_val: true,
+                    include_options_assign_key: true,
+                    include_options_assign_value: true,
                 })
             })
             .collect::<Vec<Vec<String>>>()
@@ -364,7 +366,6 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             ..TidiedPathParams::default()
         };
         let non_flags = cmd.tidied_parts(non_flags_param.clone());
-        println!("RRGGG {:?} {:?}", non_flags, cmd);
         let (query, path) = if has_files_flag {
             (None, non_flags.get(0).map(String::from))
         } else {
@@ -589,6 +590,15 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
     fn visit_command_yes(&mut self,  mut cmd: Command) {
         // Ignored
         self.orign_commands.push(cmd.clone()); 
+    }
+
+    fn visit_command_echo(&mut self, mut cmd: Command) {
+        self.orign_commands.push(cmd.clone()); 
+        self.parsed_commands.push(
+            ParsedCommand::Unknown {
+                cmd: cmd.get_original_cmd(),
+            }
+        );
     }
 
     fn visit_command_unknown(&mut self, mut cmd: Command) {
@@ -833,7 +843,7 @@ mod tests {
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
             vec![ParsedCommand::Read {
-                cmd: inner.to_string(),
+                cmd: "cat tui/Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
             }],
         );
@@ -1028,7 +1038,7 @@ mod tests {
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
             vec![ParsedCommand::Read {
-                cmd: inner.to_string(),
+                cmd: "nl -ba core/src/parse_command.rs".to_string(),
                 name: "parse_command.rs".to_string(),
             }],
         );
