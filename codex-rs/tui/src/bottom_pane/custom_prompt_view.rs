@@ -196,7 +196,8 @@ impl Renderable for CustomPromptView {
                         width: input_area.width.saturating_sub(2),
                         height: 1,
                     };
-                    Block::default().style(input_style).render(blank_rect, buf);
+                    Clear.render(blank_rect, buf);
+                    buf.set_style(blank_rect, input_style);
                 }
                 let textarea_rect = Rect {
                     x: input_area.x.saturating_add(2),
