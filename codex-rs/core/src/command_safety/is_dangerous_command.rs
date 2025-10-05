@@ -1,6 +1,5 @@
 use crate::parse_command::opt_parse_command;
 
-
 pub fn command_might_be_dangerous(command: &[String]) -> bool {
     if is_dangerous_to_call_with_exec(command) {
         return true;
