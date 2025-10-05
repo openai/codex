@@ -17,6 +17,7 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
+use codex_core::config::persist_plan_model_selection;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -324,8 +325,19 @@ impl App {
                     self.config.model_family = family;
                 }
             }
+            AppEvent::UpdatePlanModel(model) => {
+                self.chat_widget.set_plan_model(&model);
+                self.config.plan_model = model;
+            }
+            AppEvent::UpdatePlanReasoningEffort(effort) => {
+                self.chat_widget.set_plan_reasoning_effort(effort);
+                self.config.plan_model_reasoning_effort = effort;
+            }
             AppEvent::OpenReasoningPopup { model, presets } => {
                 self.chat_widget.open_reasoning_popup(model, presets);
+            }
+            AppEvent::OpenPlanReasoningPopup { model, presets } => {
+                self.chat_widget.open_plan_reasoning_popup(model, presets);
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
@@ -362,6 +374,45 @@ impl App {
                         } else {
                             self.chat_widget
                                 .add_error_message(format!("Failed to save default model: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistPlanModelSelection { model, effort } => {
+                let profile = self.active_profile.as_deref();
+                match persist_plan_model_selection(&self.config.codex_home, profile, &model, effort)
+                    .await
+                {
+                    Ok(()) => {
+                        let effort_label = effort
+                            .map(|eff| format!(" with {eff} reasoning"))
+                            .unwrap_or_else(|| " with default reasoning".to_string());
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_info_message(
+                                format!(
+                                    "Planning model changed to {model}{effort_label} for {profile} profile"
+                                ),
+                                None,
+                            );
+                        } else {
+                            self.chat_widget.add_info_message(
+                                format!("Planning model changed to {model}{effort_label}"),
+                                None,
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist planning model selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save planning model for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save planning model: {err}"));
                         }
                     }
                 }

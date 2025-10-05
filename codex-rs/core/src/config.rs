@@ -51,6 +51,8 @@ pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 #[cfg(not(target_os = "windows"))]
 pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5-codex";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5-codex";
+const DEFAULT_PLAN_MODEL: &str = "gpt-5";
+const DEFAULT_PLAN_EFFORT: ReasoningEffort = ReasoningEffort::High;
 pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
@@ -65,6 +67,12 @@ pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 pub struct Config {
     /// Optional override of model selection.
     pub model: String,
+
+    /// Model dedicated to planning turns. Defaults to "gpt-5".
+    pub plan_model: String,
+
+    /// Reasoning effort applied to planning turns.
+    pub plan_model_reasoning_effort: Option<ReasoningEffort>,
 
     /// Model used specifically for review sessions. Defaults to "gpt-5-codex".
     pub review_model: String,
@@ -608,6 +616,65 @@ pub async fn persist_model_selection(
     Ok(())
 }
 
+pub async fn persist_plan_model_selection(
+    codex_home: &Path,
+    active_profile: Option<&str>,
+    model: &str,
+    effort: Option<ReasoningEffort>,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if let Some(profile_name) = active_profile {
+        let profile_table = ensure_profile_table(&mut doc, profile_name)?;
+        profile_table["plan_model"] = toml_edit::value(model);
+        match effort {
+            Some(effort) => {
+                profile_table["plan_model_reasoning_effort"] = toml_edit::value(effort.to_string());
+            }
+            None => {
+                profile_table.remove("plan_model_reasoning_effort");
+            }
+        }
+    } else {
+        let table = doc.as_table_mut();
+        table["plan_model"] = toml_edit::value(model);
+        match effort {
+            Some(effort) => {
+                table["plan_model_reasoning_effort"] = toml_edit::value(effort.to_string());
+            }
+            None => {
+                table.remove("plan_model_reasoning_effort");
+            }
+        }
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
 /// Apply a single dotted-path override onto a TOML value.
 fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
     use toml::value::Table;
@@ -656,6 +723,9 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
+    /// Optional override of the planning model selection.
+    pub plan_model: Option<String>,
+    pub plan_model_reasoning_effort: Option<ReasoningEffort>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 
@@ -782,6 +852,8 @@ impl From<ConfigToml> for UserSavedConfig {
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
             model: config_toml.model,
+            plan_model: config_toml.plan_model,
+            plan_model_reasoning_effort: config_toml.plan_model_reasoning_effort,
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
@@ -895,6 +967,8 @@ impl ConfigToml {
 pub struct ConfigOverrides {
     pub model: Option<String>,
     pub review_model: Option<String>,
+    pub plan_model: Option<String>,
+    pub plan_model_reasoning_effort: Option<ReasoningEffort>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
@@ -923,6 +997,8 @@ impl Config {
         let ConfigOverrides {
             model,
             review_model: override_review_model,
+            plan_model: override_plan_model,
+            plan_model_reasoning_effort: override_plan_effort,
             cwd,
             approval_policy,
             sandbox_mode,
@@ -1009,12 +1085,22 @@ impl Config {
             .unwrap_or(true);
 
         let model = model
-            .or(config_profile.model)
-            .or(cfg.model)
+            .or(config_profile.model.clone())
+            .or(cfg.model.clone())
             .unwrap_or_else(default_model);
 
         let mut model_family =
             find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
+
+        let plan_model = override_plan_model
+            .or(config_profile.plan_model.clone())
+            .or(cfg.plan_model.clone())
+            .unwrap_or_else(|| DEFAULT_PLAN_MODEL.to_string());
+
+        let plan_model_reasoning_effort = override_plan_effort
+            .or(config_profile.plan_model_reasoning_effort)
+            .or(cfg.plan_model_reasoning_effort)
+            .or(Some(DEFAULT_PLAN_EFFORT));
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
@@ -1056,6 +1142,8 @@ impl Config {
 
         let config = Self {
             model,
+            plan_model,
+            plan_model_reasoning_effort,
             review_model,
             model_family,
             model_context_window,
@@ -1882,6 +1970,8 @@ model_verbosity = "high"
         assert_eq!(
             Config {
                 model: "o3".to_string(),
+                plan_model: DEFAULT_PLAN_MODEL.to_string(),
+                plan_model_reasoning_effort: Some(DEFAULT_PLAN_EFFORT),
                 review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
                 model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
@@ -1944,6 +2034,8 @@ model_verbosity = "high"
         )?;
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
+            plan_model: DEFAULT_PLAN_MODEL.to_string(),
+            plan_model_reasoning_effort: Some(DEFAULT_PLAN_EFFORT),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
@@ -2084,6 +2176,8 @@ model_verbosity = "high"
         )?;
         let expected_gpt5_profile_config = Config {
             model: "gpt-5".to_string(),
+            plan_model: DEFAULT_PLAN_MODEL.to_string(),
+            plan_model_reasoning_effort: Some(DEFAULT_PLAN_EFFORT),
             review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
             model_family: find_family_for_model("gpt-5").expect("known model slug"),
             model_context_window: Some(272_000),

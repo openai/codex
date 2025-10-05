@@ -361,6 +361,140 @@ fn rate_limit_warnings_emit_thresholds() {
 }
 
 #[test]
+fn shift_tab_triggers_plan_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane
+        .set_composer_text("Review the parser module".to_string());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+
+    let mut ops = Vec::new();
+    while let Ok(op) = op_rx.try_recv() {
+        ops.push(op);
+    }
+    assert_eq!(
+        ops.len(),
+        3,
+        "expected override, user input, override sequence"
+    );
+
+    let plan_override = &ops[0];
+    match plan_override {
+        Op::OverrideTurnContext {
+            model,
+            effort,
+            approval_policy,
+            sandbox_policy,
+            cwd,
+            summary,
+        } => {
+            assert_eq!(model.as_deref(), Some("gpt-5"));
+            assert_eq!(effort, &Some(Some(ReasoningEffortConfig::High)));
+            assert!(approval_policy.is_none());
+            assert!(sandbox_policy.is_none());
+            assert!(cwd.is_none());
+            assert!(summary.is_none());
+        }
+        other => panic!("unexpected first op: {other:?}"),
+    }
+
+    let plan_input = &ops[1];
+    let plan_text = match plan_input {
+        Op::UserInput { items } => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                InputItem::Text { text } => text.clone(),
+                other => panic!("unexpected input item: {other:?}"),
+            }
+        }
+        other => panic!("unexpected second op: {other:?}"),
+    };
+    assert!(plan_text.contains("Plan-Only Mode"));
+    assert!(plan_text.contains("Constraints"));
+    assert!(plan_text.contains("Review the parser module"));
+
+    let revert_override = &ops[2];
+    match revert_override {
+        Op::OverrideTurnContext {
+            model,
+            effort,
+            approval_policy,
+            sandbox_policy,
+            cwd,
+            summary,
+        } => {
+            assert_eq!(model.as_deref(), Some("gpt-5-codex"));
+            assert_eq!(effort, &Some(None));
+            assert!(approval_policy.is_none());
+            assert!(sandbox_policy.is_none());
+            assert!(cwd.is_none());
+            assert!(summary.is_none());
+        }
+        other => panic!("unexpected third op: {other:?}"),
+    }
+
+    assert_eq!(chat.bottom_pane.composer_text(), "Review the parser module");
+
+    let cells = drain_insert_history(&mut rx);
+    let merged: Vec<String> = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged
+            .iter()
+            .any(|line| line.contains("Planning request queued with gpt-5 high"))
+    );
+}
+
+#[test]
+fn shift_tab_requires_input_before_plan() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane.set_composer_text(String::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    let cells = drain_insert_history(&mut rx);
+    let merged: Vec<String> = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged
+            .iter()
+            .any(|line| line.contains("Type your request before generating a plan"))
+    );
+}
+
+#[test]
+fn shift_tab_blocked_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane
+        .set_composer_text("Investigate login flow".to_string());
+    chat.bottom_pane.set_task_running(true);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    let cells = drain_insert_history(&mut rx);
+    let merged: Vec<String> = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged
+            .iter()
+            .any(|line| line.contains("Finish the current task before requesting a plan"))
+    );
+}
+
+#[test]
 fn test_rate_limit_warnings_monthly() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();

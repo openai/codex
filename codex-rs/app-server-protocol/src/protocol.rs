@@ -476,6 +476,10 @@ pub struct UserSavedConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_model_reasoning_effort: Option<ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model_reasoning_effort: Option<ReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_reasoning_summary: Option<ReasoningSummary>,
@@ -498,6 +502,8 @@ pub struct UserSavedConfig {
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub model: Option<String>,
+    pub plan_model: Option<String>,
+    pub plan_model_reasoning_effort: Option<ReasoningEffort>,
     /// The key in the `model_providers` map identifying the
     /// [`ModelProviderInfo`] to use.
     pub model_provider: Option<String>,
