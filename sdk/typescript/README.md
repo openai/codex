@@ -15,31 +15,19 @@ Call `startThread()` and `run()` to start a thread with Codex.
 ```typescript
 import { Codex } from "@openai/codex-sdk";
 
-async function main() {
-  const codex = new Codex();
-  const thread = codex.startThread();
-  const result = await thread.run("Diagnose the test failure and propose a fix");
+const codex = new Codex();
+const thread = codex.startThread();
+const result = await thread.run("Diagnose the test failure and propose a fix");
 
-  console.log(result);
-}
-
-main().catch((error) => {
-  console.error(error);
-});
+console.log(result);
 ```
 
 You can call `run()` again to continue the same thread.
 
 ```typescript
-async function continueThread() {
-  const result = await thread.run("Implement the fix");
+const result = await thread.run("Implement the fix");
 
-  console.log(result);
-}
-
-continueThread().catch((error) => {
-  console.error(error);
-});
+console.log(result);
 ```
 
 ### Streaming
