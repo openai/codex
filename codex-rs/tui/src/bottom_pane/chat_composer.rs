@@ -456,12 +456,12 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::BackTab,
                 ..
-            } => return self.handle_plan_shortcut(),
+            } => self.handle_plan_shortcut(),
             KeyEvent {
                 code: KeyCode::Tab,
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::SHIFT) => return self.handle_plan_shortcut(),
+            } if modifiers.contains(KeyModifiers::SHIFT) => self.handle_plan_shortcut(),
             KeyEvent {
                 code: KeyCode::Up, ..
             } => {
@@ -629,12 +629,12 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::BackTab,
                 ..
-            } => return self.handle_plan_shortcut(),
+            } => self.handle_plan_shortcut(),
             KeyEvent {
                 code: KeyCode::Tab,
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::SHIFT) => return self.handle_plan_shortcut(),
+            } if modifiers.contains(KeyModifiers::SHIFT) => self.handle_plan_shortcut(),
             KeyEvent {
                 code: KeyCode::Up, ..
             } => {

@@ -30,6 +30,7 @@ use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
@@ -364,6 +365,8 @@ fn rate_limit_warnings_emit_thresholds() {
 fn shift_tab_triggers_plan_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
 
+    let original_sandbox = chat.config.sandbox_policy.clone();
+
     chat.bottom_pane
         .set_composer_text("Review the parser module".to_string());
 
@@ -397,7 +400,7 @@ fn shift_tab_triggers_plan_turn() {
             assert_eq!(model.as_deref(), Some("gpt-5"));
             assert_eq!(effort, &Some(Some(ReasoningEffortConfig::High)));
             assert!(approval_policy.is_none());
-            assert!(sandbox_policy.is_none());
+            assert!(matches!(sandbox_policy, Some(SandboxPolicy::ReadOnly)));
             assert!(cwd.is_none());
             assert!(summary.is_none());
         }
@@ -432,7 +435,7 @@ fn shift_tab_triggers_plan_turn() {
             assert_eq!(model.as_deref(), Some("gpt-5-codex"));
             assert_eq!(effort, &Some(None));
             assert!(approval_policy.is_none());
-            assert!(sandbox_policy.is_none());
+            assert_eq!(sandbox_policy, &Some(original_sandbox.clone()));
             assert!(cwd.is_none());
             assert!(summary.is_none());
         }
@@ -478,6 +481,12 @@ fn shift_tab_triggers_plan_turn() {
             }
         }
         other => panic!("unexpected second op in repeat plan: {other:?}"),
+    }
+
+    if let Op::OverrideTurnContext { sandbox_policy, .. } = &ops_second[2] {
+        assert_eq!(sandbox_policy, &Some(original_sandbox));
+    } else {
+        panic!("unexpected second revert op: {:?}", ops_second[2]);
     }
 
     let cells_second = drain_insert_history(&mut rx);
