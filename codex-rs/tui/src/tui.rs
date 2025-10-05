@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io::IsTerminal;
 use std::io::Result;
 use std::io::Stdout;
@@ -318,14 +319,18 @@ impl Tui {
         let suspend_cursor_y = self.suspend_cursor_y.clone();
         let terminal_focused = self.terminal_focused.clone();
         let event_stream = async_stream::stream! {
+            let mut osc_filter = OscResponseFilter::default();
+            osc_filter.expect_default_color_sequences();
             loop {
                 select! {
                     Some(Ok(event)) = crossterm_events.next() => {
-                        match event {
-                            crossterm::event::Event::Key(key_event) => {
-                                #[cfg(unix)]
-                                if matches!(
-                                    key_event,
+                        osc_filter.push(event);
+                        while let Some(event) = osc_filter.pop() {
+                            match event {
+                                crossterm::event::Event::Key(key_event) => {
+                                    #[cfg(unix)]
+                                    if matches!(
+                                        key_event,
                                     crossterm::event::KeyEvent {
                                         code: crossterm::event::KeyCode::Char('z'),
                                         modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -352,23 +357,25 @@ impl Tui {
                                     yield TuiEvent::Draw;
                                     continue;
                                 }
-                                yield TuiEvent::Key(key_event);
+                                    yield TuiEvent::Key(key_event);
+                                }
+                                Event::Resize(_, _) => {
+                                    yield TuiEvent::Draw;
+                                }
+                                Event::Paste(pasted) => {
+                                    yield TuiEvent::Paste(pasted);
+                                }
+                                Event::FocusGained => {
+                                    terminal_focused.store(true, Ordering::Relaxed);
+                                    osc_filter.expect_default_color_sequences();
+                                    crate::terminal_palette::requery_default_colors();
+                                    yield TuiEvent::Draw;
+                                }
+                                Event::FocusLost => {
+                                    terminal_focused.store(false, Ordering::Relaxed);
+                                }
+                                _ => {}
                             }
-                            Event::Resize(_, _) => {
-                                yield TuiEvent::Draw;
-                            }
-                            Event::Paste(pasted) => {
-                                yield TuiEvent::Paste(pasted);
-                            }
-                            Event::FocusGained => {
-                                terminal_focused.store(true, Ordering::Relaxed);
-                                crate::terminal_palette::requery_default_colors();
-                                yield TuiEvent::Draw;
-                            }
-                            Event::FocusLost => {
-                                terminal_focused.store(false, Ordering::Relaxed);
-                            }
-                            _ => {}
                         }
                     }
                     result = draw_rx.recv() => {
@@ -591,5 +598,205 @@ impl Command for PostNotification {
     #[cfg(windows)]
     fn is_ansi_code_supported(&self) -> bool {
         true
+    }
+}
+
+#[derive(Default)]
+struct OscResponseFilter {
+    state: OscState,
+    stash: Vec<Event>,
+    buffer: String,
+    expect_st_terminator: bool,
+    pending_default_color_sequences: u8,
+    expect_until: Option<Instant>,
+    output: VecDeque<Event>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OscState {
+    Idle,
+    AwaitingBracket,
+    Collecting,
+}
+
+impl Default for OscState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl OscResponseFilter {
+    fn push(&mut self, event: Event) {
+        self.expire_expectation();
+        if !self.output.is_empty() {
+            self.output.push_back(event);
+            return;
+        }
+
+        match self.state {
+            OscState::Idle => self.handle_idle(event),
+            OscState::AwaitingBracket => self.handle_awaiting_bracket(event),
+            OscState::Collecting => self.handle_collecting(event),
+        }
+    }
+
+    fn pop(&mut self) -> Option<Event> {
+        self.output.pop_front()
+    }
+
+    fn expect_default_color_sequences(&mut self) {
+        self.pending_default_color_sequences = 2;
+        self.expect_until = Some(Instant::now() + Duration::from_millis(500));
+    }
+
+    fn handle_idle(&mut self, event: Event) {
+        match event {
+            Event::Paste(text) => {
+                if !self.pending_sequences_active() || !Self::looks_like_osc_paste(&text) {
+                    self.output.push_back(Event::Paste(text));
+                }
+            }
+            Event::Key(key_event) => {
+                let is_press = Self::is_press(&key_event);
+                let modifiers = key_event.modifiers;
+                if self.pending_sequences_active()
+                    && is_press
+                    && modifiers.is_empty()
+                    && matches!(key_event.code, crossterm::event::KeyCode::Esc)
+                {
+                    self.begin_sequence(Event::Key(key_event));
+                } else {
+                    self.output.push_back(Event::Key(key_event));
+                }
+            }
+            other => self.output.push_back(other),
+        }
+    }
+
+    fn handle_awaiting_bracket(&mut self, event: Event) {
+        self.stash.push(event);
+        let Some(Event::Key(key_event)) = self.stash.last() else {
+            self.flush_stash();
+            return;
+        };
+        if Self::is_press(key_event)
+            && key_event.modifiers.is_empty()
+            && matches!(key_event.code, crossterm::event::KeyCode::Char(']'))
+        {
+            self.buffer.clear();
+            self.expect_st_terminator = false;
+            self.state = OscState::Collecting;
+        } else {
+            self.flush_stash();
+        }
+    }
+
+    fn handle_collecting(&mut self, event: Event) {
+        self.stash.push(event);
+        let Some(Event::Key(key_event)) = self.stash.last() else {
+            self.flush_stash();
+            return;
+        };
+
+        if !Self::is_press(key_event) || !key_event.modifiers.is_empty() {
+            self.flush_stash();
+            return;
+        }
+
+        if self.expect_st_terminator {
+            match key_event.code {
+                crossterm::event::KeyCode::Char('\\') => {
+                    self.complete_sequence();
+                }
+                _ => self.flush_stash(),
+            }
+            return;
+        }
+
+        match key_event.code {
+            crossterm::event::KeyCode::Char(ch) => {
+                if ch == '\u{7}' {
+                    self.complete_sequence();
+                } else {
+                    if self.buffer.len() >= 256 {
+                        self.flush_stash();
+                        return;
+                    }
+                    self.buffer.push(ch);
+                }
+            }
+            crossterm::event::KeyCode::Esc => {
+                self.expect_st_terminator = true;
+            }
+            _ => self.flush_stash(),
+        }
+    }
+
+    fn begin_sequence(&mut self, event: Event) {
+        self.state = OscState::AwaitingBracket;
+        self.buffer.clear();
+        self.expect_st_terminator = false;
+        self.stash.clear();
+        self.stash.push(event);
+    }
+
+    fn complete_sequence(&mut self) {
+        if Self::is_default_color_response(&self.buffer) {
+            if self.pending_default_color_sequences > 0 {
+                self.pending_default_color_sequences -= 1;
+            }
+            self.reset();
+        } else {
+            self.flush_stash();
+        }
+    }
+
+    fn flush_stash(&mut self) {
+        if !self.stash.is_empty() {
+            self.output.extend(self.stash.drain(..));
+        }
+        self.reset_state();
+    }
+
+    fn reset(&mut self) {
+        self.stash.clear();
+        self.reset_state();
+    }
+
+    fn reset_state(&mut self) {
+        self.state = OscState::Idle;
+        self.buffer.clear();
+        self.expect_st_terminator = false;
+        if self.pending_default_color_sequences == 0 {
+            self.expect_until = None;
+        }
+    }
+
+    fn expire_expectation(&mut self) {
+        if let Some(deadline) = self.expect_until
+            && Instant::now() >= deadline
+        {
+            self.pending_default_color_sequences = 0;
+            self.expect_until = None;
+        }
+    }
+
+    fn pending_sequences_active(&self) -> bool {
+        self.pending_default_color_sequences > 0
+    }
+
+    fn is_press(key_event: &KeyEvent) -> bool {
+        matches!(
+            key_event.kind,
+            crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat
+        )
+    }
+
+    fn is_default_color_response(payload: &str) -> bool {
+        payload.starts_with("10;") || payload.starts_with("11;")
+    }
+
+    fn looks_like_osc_paste(text: &str) -> bool {
+        text.contains("\u{1b}]10;") || text.contains("\u{1b}]11;")
     }
 }
