@@ -1340,20 +1340,6 @@ impl ChatWidget {
         }
 
         self.submit_op(Op::AddToHistory { text: request_text });
-
-        let effort_label = target_effort
-            .map(|eff| eff.to_string())
-            .unwrap_or_else(|| "default".to_string());
-        let model_label = format!("{target_model} {effort_label}");
-        self.add_info_message(
-            format!(
-                "Planning request queued with {model_label}. The assistant will only perform read-only analysis until you approve."
-            ),
-            Some(
-                "Shift+Tab keeps your message in the composer while the plan is prepared."
-                    .to_string(),
-            ),
-        );
     }
 
     fn build_plan_prompt(&self, user_request: &str) -> String {
