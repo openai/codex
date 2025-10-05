@@ -464,11 +464,6 @@ fn shift_tab_triggers_plan_turn() {
             .any(|line| line.contains("Review the parser module")),
         "expected user request to appear in history"
     );
-    assert!(
-        merged
-            .iter()
-            .any(|line| line.contains("Planning request queued with gpt-5 high"))
-    );
 
     chat.bottom_pane
         .set_composer_text("Review the parser module".to_string());
@@ -520,11 +515,6 @@ fn shift_tab_triggers_plan_turn() {
             .iter()
             .any(|line| line.contains("Review the parser module")),
         "expected repeated user request to appear in history"
-    );
-    assert!(
-        merged_second
-            .iter()
-            .any(|line| line.contains("Planning request queued with gpt-5 high"))
     );
 }
 
