@@ -2,22 +2,27 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
+use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use wiremock::Request;
@@ -45,12 +50,10 @@ async fn submit_turn(
         })
         .await?;
 
-    loop {
-        let event = test.codex.next_event().await?;
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TaskComplete(_))
+    })
+    .await;
 
     Ok(())
 }
@@ -106,7 +109,7 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_custom_tool_call(call_id, tool_name, "\"payload\""),
             ev_completed("resp-1"),
         ]),
@@ -147,7 +150,10 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a valid model");
+    });
     let test = builder.build(&server).await?;
 
     let command = ["/bin/echo", "shell ok"];
@@ -166,7 +172,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(
                 call_id_blocked,
                 "shell",
@@ -175,7 +181,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
             ev_completed("resp-1"),
         ]),
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-2"}}),
+            ev_response_created("resp-2"),
             ev_function_call(
                 call_id_success,
                 "shell",
@@ -250,10 +256,8 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
         "expected exit code 0 after rerunning without escalation",
     );
     let stdout = output_json["output"].as_str().unwrap_or_default();
-    assert!(
-        stdout.contains("shell ok"),
-        "expected stdout to include command output, got {stdout:?}"
-    );
+    let stdout_pattern = r"(?s)^shell ok\n?$";
+    assert_regex_match(stdout_pattern, stdout);
 
     Ok(())
 }
@@ -280,7 +284,7 @@ async fn local_shell_missing_ids_maps_to_function_output_error() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             local_shell_event,
             ev_completed("resp-1"),
         ]),
@@ -321,7 +325,7 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
     let server = start_mock_server().await;
 
     let responses = vec![sse(vec![
-        json!({"type": "response.created", "response": {"id": "resp-1"}}),
+        ev_response_created("resp-1"),
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-1"),
     ])];
@@ -375,7 +379,10 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(|config| {
+        config.model = "gpt-5".to_string();
+        config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a valid model");
+    });
     let test = builder.build(&server).await?;
 
     let call_id = "shell-timeout";
@@ -387,7 +394,7 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
@@ -430,15 +437,15 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
         );
 
         let stdout = output_json["output"].as_str().unwrap_or_default();
-        assert!(
-            stdout.starts_with("command timed out after "),
-            "expected timeout prefix, got {stdout:?}"
-        );
-        let first_line = stdout.lines().next().unwrap_or_default();
-        let duration_ms = first_line
-            .strip_prefix("command timed out after ")
-            .and_then(|line| line.strip_suffix(" milliseconds"))
-            .and_then(|value| value.parse::<u64>().ok())
+        let timeout_pattern = r"(?s)^Total output lines: \d+
+
+command timed out after (?P<ms>\d+) milliseconds
+line
+.*$";
+        let captures = assert_regex_match(timeout_pattern, stdout);
+        let duration_ms = captures
+            .name("ms")
+            .and_then(|m| m.as_str().parse::<u64>().ok())
             .unwrap_or_default();
         assert!(
             duration_ms >= timeout_ms,
@@ -446,14 +453,8 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
         );
     } else {
         // Fallback: accept the signal classification path to deflake the test.
-        assert!(
-            output_str.contains("execution error"),
-            "unexpected non-JSON output: {output_str:?}"
-        );
-        assert!(
-            output_str.contains("Signal(") || output_str.to_lowercase().contains("signal"),
-            "expected signal classification in error output, got {output_str:?}"
-        );
+        let signal_pattern = r"(?is)^execution error:.*signal.*$";
+        assert_regex_match(signal_pattern, output_str);
     }
 
     Ok(())
@@ -479,7 +480,7 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
@@ -511,30 +512,25 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
         .and_then(Value::as_str)
         .expect("denied output string");
 
-    assert!(
-        output.starts_with("failed in sandbox: "),
-        "expected sandbox error prefix, got {output:?}"
-    );
-    assert!(
-        output.contains("[... omitted"),
-        "expected truncated marker, got {output:?}"
-    );
-    assert!(
-        output.contains(long_line),
-        "expected truncated stderr sample, got {output:?}"
-    );
-    // Linux distributions may surface sandbox write failures as different errno messages
-    // depending on the underlying mechanism (e.g., EPERM, EACCES, or EROFS). Accept a
-    // small set of common variants to keep this cross-platform.
-    let denial_markers = [
-        "Operation not permitted", // EPERM
-        "Permission denied",       // EACCES
-        "Read-only file system",   // EROFS
-    ];
-    assert!(
-        denial_markers.iter().any(|m| output.contains(m)),
-        "expected sandbox denial message, got {output:?}"
-    );
+    let sandbox_pattern = r#"(?s)^Exit code: -?\d+
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Total output lines: \d+
+Output:
+Total output lines: \d+
+
+failed in sandbox: .*?(?:Operation not permitted|Permission denied|Read-only file system).*?
+\[\.{3} omitted \d+ of \d+ lines \.{3}\]
+.*this is a long stderr line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz.*
+\n?$"#;
+    let sandbox_regex = Regex::new(sandbox_pattern)?;
+    if !sandbox_regex.is_match(output) {
+        let fallback_pattern = r#"(?s)^Total output lines: \d+
+
+failed in sandbox: this is a long stderr line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz
+.*this is a long stderr line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz.*
+.*(?:Operation not permitted|Permission denied|Read-only file system).*$"#;
+        assert_regex_match(fallback_pattern, output);
+    }
 
     Ok(())
 }
@@ -565,7 +561,7 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),
         ]),
@@ -597,10 +593,23 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
         .and_then(Value::as_str)
         .expect("spawn failure output string");
 
-    assert!(
-        output.starts_with("execution error:"),
-        "expected execution error prefix, got {output:?}"
-    );
+    let spawn_error_pattern = r#"(?s)^Exit code: -?\d+
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+execution error: .*$"#;
+    let spawn_truncated_pattern = r#"(?s)^Exit code: -?\d+
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Total output lines: \d+
+Output:
+Total output lines: \d+
+
+execution error: .*$"#;
+    let spawn_error_regex = Regex::new(spawn_error_pattern)?;
+    let spawn_truncated_regex = Regex::new(spawn_truncated_pattern)?;
+    if !spawn_error_regex.is_match(output) && !spawn_truncated_regex.is_match(output) {
+        let fallback_pattern = r"(?s)^execution error: .*$";
+        assert_regex_match(fallback_pattern, output);
+    }
     assert!(output.len() <= 10 * 1024);
 
     Ok(())

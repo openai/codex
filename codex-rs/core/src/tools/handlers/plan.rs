@@ -65,10 +65,7 @@ impl ToolHandler for PlanHandler {
         ToolKind::Function
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation<'_>,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
             sub_id,
@@ -86,7 +83,8 @@ impl ToolHandler for PlanHandler {
             }
         };
 
-        let content = handle_update_plan(session, arguments, sub_id.to_string(), call_id).await?;
+        let content =
+            handle_update_plan(session.as_ref(), arguments, sub_id.clone(), call_id).await?;
 
         Ok(ToolOutput::Function {
             content,

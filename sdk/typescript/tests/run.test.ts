@@ -12,6 +12,7 @@ import {
   responseCompleted,
   responseStarted,
   sse,
+  responseFailed,
   startResponsesTestProxy,
 } from "./responsesProxy";
 
@@ -287,6 +288,23 @@ describe("Codex", () => {
       await close();
     }
   });
+  it("throws ThreadRunError on turn failures", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(responseStarted("response_1")),
+        sse(responseFailed("rate limit exceeded")),
+      ],
+    });
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+      const thread = client.startThread();
+      await expect(thread.run("fail")).rejects.toThrow("stream disconnected before completion:");
+    } finally {
+      await close();
+    }
+  }, 10000); // TODO(pakrym): remove timeout
 });
 function expectPair(args: string[] | undefined, pair: [string, string]) {
   if (!args) {
