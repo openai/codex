@@ -3,7 +3,7 @@ use tree_sitter::Parser;
 use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
 use indexmap::IndexMap;
-use shlex::try_join as shlex_try_join;
+use shlex::try_quote;
 
 /// Parse the provided bash source using tree-sitter-bash, returning a Tree on
 /// success or None if parsing failed.
@@ -41,12 +41,11 @@ pub fn print_node(node: Node, source: &str, indent: usize) {
         print_node(child, source, indent + 1);
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Command {
     pub original_cmd: String,
     pub name: String,
-    pub options: IndexMap<String, String>,
+    pub options: IndexMap<String, Vec<String>>,
     pub arguments: Vec<String>,
     pub extra: IndexMap<String, String>,
 }
@@ -59,18 +58,45 @@ pub(crate) struct TidiedPathParams {
 }
 
 impl Command {
+    pub(crate) fn len(&self) -> usize {
+        let options_count: usize = self.options.iter()
+            .map(|(key, vals)| {
+                if vals.is_empty() {
+                    1  
+                } else {
+                    vals.len() * 2                  }
+            })
+            .sum();
+        
+        self.arguments.len()
+            .saturating_add(options_count)
+            .saturating_add(if self.name.is_empty() { 0 } else { 1 })
+    }
+    
+    /// Get the first value for any of the given keys
     pub(crate) fn find_option_val(&self, keys: &[&str]) -> Option<String> {
         keys.iter()
-            .find_map(|key| self.options.get(*key).cloned())
+            .find_map(|key| {
+                self.options.get(*key)
+                    .and_then(|vals| vals.first())
+                    .cloned()
+            })
     }
-
+    
+    /// Get all values for any of the given keys
+    pub(crate) fn find_option_vals(&self, keys: &[&str]) -> Vec<String> {
+        keys.iter()
+            .find_map(|key| self.options.get(*key).cloned())
+            .unwrap_or_default()
+    }
+    
     /// Similar to `find_option_val`, but also supports combined short flags
     /// like `-n50` (no space between key and value).
     pub(crate) fn find_option_val_strip_key(&self, keys: &[&str]) -> Option<String> {
         if let Some(val) = self.find_option_val(keys) {
             return Some(val);
         }
-
+        
         for opt_key in self.options.keys() {
             for &key in keys {
                 if opt_key.starts_with(key) && opt_key.len() > key.len() {
@@ -82,88 +108,75 @@ impl Command {
         }
         None
     }
-
+    
     /// Remove options whose keys are in `flags_with_vals`.
     pub(crate) fn skip_flag_values(&mut self, flags_with_vals: &[&str]) {
-        let mut keys_to_remove = Vec::new();
-
-        for key in self.options.keys() {
-            if flags_with_vals.contains(&key.as_str()) {
-                keys_to_remove.push(key.clone());
-            }
-        }
-
+        let keys_to_remove: Vec<String> = self.options.keys()
+            .filter(|key| flags_with_vals.contains(&key.as_str()))
+            .cloned()
+            .collect();
+        
         for key in keys_to_remove {
             self.options.remove(&key);
         }
     }
-
-    pub(crate) fn get_orinigal_cmd(&self) -> String {
+    
+    pub(crate) fn get_original_cmd(&self) -> String {
         self.original_cmd.clone()
     }
-
-    pub(crate) fn tided_path(&self, param: TidiedPathParams) -> Option<String> {
-        self.shlex_join_parts(&self.tided_parts(param))
-    }
-
-    pub(crate) fn shlex_join_parts(&self, parts: &[String]) -> Option<String> {
-        if !parts.is_empty() {
-            return Some(Self::shlex_join(&parts));
-        } else {
-            None
-        }
-    }
-
-    /// Get the tidied path
-    pub(crate) fn tided_parts(&self, param: TidiedPathParams) -> Vec<String> {
+    
+    /// Get the tidied parts
+    pub(crate) fn tidied_parts(&self, param: TidiedPathParams) -> Vec<String> {
         let mut parts = Vec::new();
-
+        
         if param.include_name {
-            // Command name
             parts.push(self.name.clone());
         }
-
-        for (key, val) in &self.options {
-            if val.is_empty() {
+        
+        for (key, vals) in &self.options {
+            if vals.is_empty() {
                 if param.include_options_key {
                     parts.push(key.clone());
-                }
-            } else if key.starts_with("--") && key.contains('=') {
-                // Already in --flag=value form
-                if param.include_options_key && param.include_options_val {
-                    parts.push(format!("{}={}", key, val));
                 }
             } else {
-                if param.include_options_key {
-                    parts.push(key.clone());
-                }
-                if param.include_options_val {
-                    parts.push(val.clone());
+                for val in vals {
+                    if key.starts_with("--") && key.contains('=') {
+                        // Already in --flag=value form
+                        if param.include_options_key && param.include_options_val {
+                            parts.push(format!("{}={}", key, val));
+                        }
+                    } else {
+                        if param.include_options_key {
+                            parts.push(key.clone());
+                        }
+                        if param.include_options_val {
+                            parts.push(val.clone());
+                        }
+                    }
                 }
             }
         }
-
-        // Positional arguments: apply short_display_path for paths
+        
+        // Positional arguments
         for arg in &self.arguments {
-            let arg_to_add = if arg.starts_with('-') {
-                // keep flags as-is
-                arg.clone()
-            } else {
-                arg.clone()
-
-                // treat as path and shorten for display
-                // Self::short_display_path(arg)
-            };
-            parts.push(arg_to_add);
+            parts.push(arg.clone());
         }
-
+        
         parts
     }
 
-
     pub(crate) fn shlex_join(tokens: &[String]) -> String {
-        shlex_try_join(tokens.iter().map(String::as_str))
-            .unwrap_or_else(|_| "<command included NUL byte>".to_string())
+        tokens
+            .iter()
+            .map(|t| match t.as_str() {
+                // Keep shell connectors as-is
+                "|" | "&&" | "||" | ";" => t.clone(),
+                // Safely quote everything else
+                _ => try_quote(t)
+                    .unwrap_or_else(|_| "<command included NUL byte>".into()).to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
 
@@ -289,10 +302,9 @@ macro_rules! define_bash_commands {
             }
 
             fn parse_to_command(&self, node: Node<'tree>) -> Option<Command> {
-                let cmd_text = self.get_text(node);
                 let mut cursor = node.walk();
                 let name = self.get_command_name(node)?;
-                let mut options = IndexMap::new();
+                let mut options: IndexMap<String, Vec<String>> = IndexMap::new();
                 let mut arguments = Vec::new();
                 let mut extra = IndexMap::new();
                 let mut children = node.children(&mut cursor).peekable();
@@ -324,7 +336,7 @@ macro_rules! define_bash_commands {
                         let mut parts = text.splitn(2, '=');
                         let key = parts.next().unwrap_or_default().to_string();
                         let val = parts.next().unwrap_or_default().to_string();
-                        options.insert(key, val);
+                        options.entry(key).or_insert_with(Vec::new).push(val);
                         continue;
                     }
                     
@@ -333,24 +345,23 @@ macro_rules! define_bash_commands {
                         if let Some(next) = children.peek() {
                             let next_text = self.get_unescaped_text(*next);
                             if !next_text.starts_with('-') {
-                                options.insert(text, next_text);
+                                options.entry(text).or_insert_with(Vec::new).push(next_text);
                                 children.next();
                                 continue;
                             }
                         }
-                        options.insert(text, String::new());
+                        options.entry(text).or_insert_with(Vec::new);
                     } else {
                         arguments.push(text);
                     }
                 }
 
-                // NOTE: we have to maintain the same order and unescape 
-                let original_cmd: Vec<String> = cmd_text
-                    .split(' ') 
-                    .filter_map(|cmd| {
-                        shlex::split(cmd.trim()).map(|parts| parts.join(" "))
-                    })
-                    .collect();
+                let cmd_text = self.get_text(node);
+                println!("XXXXXXXXX {}", cmd_text);
+                let original_cmd: Vec<String> = match shlex::split(&cmd_text) {
+                    Some(parts) => parts,
+                    None => vec![cmd_text.to_string()],
+                };
                 
                 Some(Command {
                     original_cmd: Command::shlex_join(&original_cmd),
@@ -360,8 +371,6 @@ macro_rules! define_bash_commands {
                     extra,
                 })
             }
-
-
 
             fn visit_children(&mut self, node: Node<'tree>) {
                 let mut cursor = node.walk();
