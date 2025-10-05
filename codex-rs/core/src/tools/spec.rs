@@ -769,24 +769,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_specs_includes_beta_read_file_tool() {
-        let model_family = find_family_for_model("gpt-5-codex")
-            .expect("gpt-5-codex should be a valid model family");
-        let config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            include_plan_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: false,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: false,
-            experimental_unified_exec_tool: true,
-        });
-        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
-
-        assert_eq_tool_names(&tools, &["unified_exec", "read_file"]);
-    }
-
-    #[test]
     fn test_parallel_support_flags() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("codex-mini-latest should be a valid model family");
@@ -1055,7 +1037,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "dash/search",
@@ -1122,7 +1104,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "dash/paginate",
@@ -1153,7 +1135,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
-            include_apply_patch_tool: false,
+            include_apply_patch_tool: true,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
@@ -1186,7 +1168,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "dash/tags",
@@ -1253,7 +1235,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "dash/value",
@@ -1357,7 +1339,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "test_server/do_something_cool",

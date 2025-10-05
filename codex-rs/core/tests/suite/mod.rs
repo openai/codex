@@ -20,6 +20,7 @@ mod review;
 mod rmcp_client;
 mod rollout_list_find;
 mod seatbelt;
+mod shell_serialization;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod tool_harness;
