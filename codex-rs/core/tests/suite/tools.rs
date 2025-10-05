@@ -516,7 +516,6 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
 Total output lines: \d+
 Output:
-Total output lines: \d+
 
 failed in sandbox: .*?(?:Operation not permitted|Permission denied|Read-only file system).*?
 \[\.{3} omitted \d+ of \d+ lines \.{3}\]
@@ -593,23 +592,9 @@ async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
         .and_then(Value::as_str)
         .expect("spawn failure output string");
 
-    let spawn_error_pattern = r#"(?s)^Exit code: -?\d+
-Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Output:
-execution error: .*$"#;
-    let spawn_truncated_pattern = r#"(?s)^Exit code: -?\d+
-Wall time: [0-9]+(?:\.[0-9]+)? seconds
-Total output lines: \d+
-Output:
-Total output lines: \d+
+    let fallback_pattern = r"(?s)^execution error: .*$";
+    assert_regex_match(fallback_pattern, output);
 
-execution error: .*$"#;
-    let spawn_error_regex = Regex::new(spawn_error_pattern)?;
-    let spawn_truncated_regex = Regex::new(spawn_truncated_pattern)?;
-    if !spawn_error_regex.is_match(output) && !spawn_truncated_regex.is_match(output) {
-        let fallback_pattern = r"(?s)^execution error: .*$";
-        assert_regex_match(fallback_pattern, output);
-    }
     assert!(output.len() <= 10 * 1024);
 
     Ok(())

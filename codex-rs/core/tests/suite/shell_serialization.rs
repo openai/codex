@@ -255,17 +255,17 @@ async fn shell_output_reserializes_truncated_content() -> Result<()> {
 Wall time: [0-9]+(?:\.[0-9]+)? seconds
 Total output lines: 400
 Output:
-Total output lines: 400
-
 1
 2
 3
 4
 5
 6
-.*\[\.{3} omitted \d+ of 400 lines \.{3}\]
+.*
+\[\.{3} omitted \d+ of 400 lines \.{3}\]
 
-.*\n396
+.*
+396
 397
 398
 399
