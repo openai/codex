@@ -1091,8 +1091,14 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
 
-        let text = self.current_text();
-        if text.trim().is_empty() {
+        let mut text = self.textarea.text().to_string();
+        for (placeholder, actual) in &self.pending_pastes {
+            if text.contains(placeholder) {
+                text = text.replace(placeholder, actual);
+            }
+        }
+        let trimmed = text.trim().to_string();
+        if trimmed.is_empty() {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_info_event(
                     "Type your request before submitting a plan.".to_string(),
@@ -1102,7 +1108,13 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
 
-        (InputResult::PlanRequested(text), true)
+        self.pending_pastes.clear();
+        self.attached_images.clear();
+        self.set_text_content(String::new());
+
+        self.history.record_local_submission(&trimmed);
+
+        (InputResult::PlanRequested(trimmed), true)
     }
 
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
@@ -2524,10 +2536,11 @@ mod tests {
             "plan mode should remain active after submit"
         );
         assert!(
-            !composer.is_empty(),
-            "composer text should remain for iteration"
+            composer.is_empty(),
+            "composer text should clear after submit"
         );
 
+        composer.insert_str("Investigate caching");
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
