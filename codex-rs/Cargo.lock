@@ -1562,6 +1562,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "codex-core",
+ "regex-lite",
  "serde_json",
  "tempfile",
  "tokio",
