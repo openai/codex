@@ -77,7 +77,11 @@ macro_rules! model_family {
 
 /// Returns a `ModelFamily` for the given model slug, or `None` if the slug
 /// does not match any known model family.
-pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
+pub fn find_family_for_model(mut slug: &str) -> Option<ModelFamily> {
+    // TODO(jif) clean once we have proper feature flags
+    if matches!(std::env::var("CODEX_EXPERIMENTAL").as_deref(), Ok("1")) {
+        slug = "codex-experimental";
+    }
     if slug.starts_with("o3") {
         model_family!(
             slug, "o3",
@@ -120,15 +124,27 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             ],
             supports_parallel_tool_calls: true,
         )
-    } else if slug.starts_with("codex-") || slug.starts_with("gpt-5-codex") {
+
+    // Internal models.
+    } else if slug.starts_with("codex-") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-            // experimental_supported_tools: vec!["read_file".to_string()],
-            // supports_parallel_tool_calls: true,
+            experimental_supported_tools: vec!["read_file".to_string()],
+            supports_parallel_tool_calls: true,
+        )
+
+    // Production models.
+    } else if slug.starts_with("gpt-5-codex") {
+        model_family!(
+            slug, slug,
+            supports_reasoning_summaries: true,
+            reasoning_summary_format: ReasoningSummaryFormat::Experimental,
+            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
