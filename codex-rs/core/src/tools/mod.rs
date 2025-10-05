@@ -1,5 +1,6 @@
 pub mod context;
 pub(crate) mod handlers;
+pub mod parallel;
 pub mod registry;
 pub mod router;
 pub mod spec;
@@ -21,7 +22,7 @@ use crate::executor::linkers::PreparedExec;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ApplyPatchCommandContext;
 use crate::tools::context::ExecCommandContext;
-use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::tools::context::SharedTurnDiffTracker;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::protocol::AskForApproval;
@@ -29,6 +30,7 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use codex_utils_string::take_last_bytes_at_char_boundary;
 pub use router::ToolRouter;
 use serde::Serialize;
+use std::sync::Arc;
 use tracing::trace;
 
 // Model-formatting limits: clients get full streams; only content sent to the model is truncated.
@@ -48,9 +50,9 @@ pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
 pub(crate) async fn handle_container_exec_with_params(
     tool_name: &str,
     params: ExecParams,
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    turn_diff_tracker: SharedTurnDiffTracker,
     sub_id: String,
     call_id: String,
 ) -> Result<String, FunctionCallError> {
@@ -68,7 +70,15 @@ pub(crate) async fn handle_container_exec_with_params(
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
-            match apply_patch::apply_patch(sess, turn_context, &sub_id, &call_id, changes).await {
+            match apply_patch::apply_patch(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                &sub_id,
+                &call_id,
+                changes,
+            )
+            .await
+            {
                 InternalApplyPatchInvocation::Output(item) => return item,
                 InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
                     Some(apply_patch_exec)
@@ -139,7 +149,7 @@ pub(crate) async fn handle_container_exec_with_params(
 
     let output_result = sess
         .run_exec_with_events(
-            turn_diff_tracker,
+            turn_diff_tracker.clone(),
             prepared_exec,
             turn_context.approval_policy,
         )
