@@ -7,7 +7,6 @@ use serde::Deserialize;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
-use tokio::time::sleep;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
