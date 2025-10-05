@@ -1,9 +1,9 @@
+use indexmap::IndexMap;
+use shlex::try_quote;
 use tree_sitter::Node;
 use tree_sitter::Parser;
 use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
-use indexmap::IndexMap;
-use shlex::try_quote;
 
 /// Parse the provided bash source using tree-sitter-bash, returning a Tree on
 /// success or None if parsing failed.
@@ -61,44 +61,46 @@ pub(crate) struct TidiedPathParams {
 
 impl Command {
     pub(crate) fn len(&self) -> usize {
-        let options_count: usize = self.options.iter()
-            .map(|(key, vals)| {
-                if vals.is_empty() {
-                    1  
-                } else {
-                    vals.len() * 2                  }
-            })
+        let options_count: usize = self
+            .options
+            .iter()
+            .map(
+                |(key, vals)| {
+                    if vals.is_empty() { 1 } else { vals.len() * 2 }
+                },
+            )
             .sum();
-        
-        self.arguments.len()
+
+        self.arguments
+            .len()
             .saturating_add(options_count)
             .saturating_add(if self.name.is_empty() { 0 } else { 1 })
     }
-    
+
     /// Get the first value for any of the given keys
     pub(crate) fn find_option_val(&self, keys: &[&str]) -> Option<String> {
-        keys.iter()
-            .find_map(|key| {
-                self.options.get(*key)
-                    .and_then(|vals| vals.first())
-                    .cloned()
-            })
+        keys.iter().find_map(|key| {
+            self.options
+                .get(*key)
+                .and_then(|vals| vals.first())
+                .cloned()
+        })
     }
-    
+
     /// Get all values for any of the given keys
     pub(crate) fn find_option_vals(&self, keys: &[&str]) -> Vec<String> {
         keys.iter()
             .find_map(|key| self.options.get(*key).cloned())
             .unwrap_or_default()
     }
-    
+
     /// Similar to `find_option_val`, but also supports combined short flags
     /// like `-n50` (no space between key and value).
     pub(crate) fn find_option_val_strip_key(&self, keys: &[&str]) -> Option<String> {
         if let Some(val) = self.find_option_val(keys) {
             return Some(val);
         }
-        
+
         for opt_key in self.options.keys() {
             for &key in keys {
                 if opt_key.starts_with(key) && opt_key.len() > key.len() {
@@ -110,31 +112,33 @@ impl Command {
         }
         None
     }
-    
+
     /// Remove options whose keys are in `flags_with_vals`.
     pub(crate) fn skip_flag_values(&mut self, flags_with_vals: &[&str]) {
-        let keys_to_remove: Vec<String> = self.options.keys()
+        let keys_to_remove: Vec<String> = self
+            .options
+            .keys()
             .filter(|key| flags_with_vals.contains(&key.as_str()))
             .cloned()
             .collect();
-        
+
         for key in keys_to_remove {
             self.options.remove(&key);
         }
     }
-    
+
     pub(crate) fn get_original_cmd(&self) -> String {
         self.original_cmd.clone()
     }
-    
+
     /// Get the tidied parts
     pub(crate) fn tidied_parts(&self, param: TidiedPathParams) -> Vec<String> {
         let mut parts = Vec::new();
-        
+
         if param.include_name {
             parts.push(self.name.clone());
         }
-        
+
         for (key, vals) in &self.options {
             if vals.is_empty() {
                 if param.include_options_key {
@@ -158,12 +162,12 @@ impl Command {
                 }
             }
         }
-        
+
         // Positional arguments
         for arg in &self.arguments {
             parts.push(arg.clone());
         }
-        
+
         parts
     }
 
@@ -175,12 +179,12 @@ impl Command {
                 "|" | "&&" | "||" | ";" => t.clone(),
                 // Safely quote everything else
                 _ => try_quote(t)
-                    .unwrap_or_else(|_| "<command included NUL byte>".into()).to_string(),
+                    .unwrap_or_else(|_| "<command included NUL byte>".into())
+                    .to_string(),
             })
             .collect::<Vec<_>>()
             .join(" ")
     }
-
 
     /// Shorten a path to the last component, excluding `build`/`dist`/`node_modules`/`src`.
     /// It also pulls out a useful path from a directory such as:
@@ -193,7 +197,11 @@ impl Command {
             let normalized = p.replace('\\', "/");
             let trimmed = normalized.trim_end_matches('/');
             let mut parts = trimmed.split('/').rev().filter(|p| {
-                !p.is_empty() && *p != "build" && *p != "dist" && *p != "node_modules" && *p != "src"
+                !p.is_empty()
+                    && *p != "build"
+                    && *p != "dist"
+                    && *p != "node_modules"
+                    && *p != "src"
             });
             parts
                 .next()
@@ -202,7 +210,6 @@ impl Command {
         })
     }
 }
-
 
 /// Macro to define bash commands and generate visitor methods
 #[macro_export]
@@ -224,6 +231,7 @@ macro_rules! define_bash_commands {
             Pipeline,
             Command,
             Subshell,
+            RedirectedStatement,
         }
 
         impl BashNodeKind {
@@ -249,6 +257,7 @@ macro_rules! define_bash_commands {
                     Some(BashNodeKind::List) => self.visit_list(node),
                     Some(BashNodeKind::Pipeline) => self.visit_pipeline(node),
                     Some(BashNodeKind::Subshell) => self.visit_subshell(node),
+                    Some(BashNodeKind::RedirectedStatement) => self.visit_redirected_statement(node),
                     Some(BashNodeKind::Command) => {
                         if let Some(node) = self.parse_to_command(node) {
                             if let Ok(ty) = BashCommands::from_str(&node.name) {
@@ -283,7 +292,7 @@ macro_rules! define_bash_commands {
 
             fn get_unescaped_text(&self, node: Node) -> String {
                 let text = &self.source_code()[node.start_byte()..node.end_byte()];
-                
+
                 // Try to parse as shell token, fall back to raw text
                 shlex::split(text)
                     .and_then(|parts| parts.into_iter().next())
@@ -311,35 +320,35 @@ macro_rules! define_bash_commands {
                 let mut extra = IndexMap::new();
                 let mut children = node.children(&mut cursor).peekable();
                 let mut seen_double_dash = false;
-                
+
                 while let Some(child) = children.next() {
                     // Skip command name
                     if child.kind() == "command_name" {
                         continue;
                     }
-                    
+
                     // Get the properly unescaped text
                     let text = self.get_unescaped_text(child);
                     println!("EEEEEEEEEEEEEE: {}", text);
-                    
+
                     if seen_double_dash {
                         arguments.push(text);
                         continue;
                     }
-                    
+
                     if text == "--" {
                         seen_double_dash = true;
                         // arguments.push(text);
                         continue;
                     }
-                    
+
                     // Handle --flag=value
                     if text.starts_with("--") && text.contains('=') {
                         let key = text;
                         options.entry(key).or_insert_with(Vec::new).push("".into());
                         continue;
                     }
-                    
+
                     // Handle options with separate values
                     if text.starts_with('-') {
                         if let Some(next) = children.peek() {
@@ -362,7 +371,7 @@ macro_rules! define_bash_commands {
                     Some(parts) => parts,
                     None => vec![cmd_text.to_string()],
                 };
-                
+
                 Some(Command {
                     original_cmd: Command::shlex_join(&original_cmd),
                     name,
@@ -377,6 +386,10 @@ macro_rules! define_bash_commands {
                 for child in node.children(&mut cursor) {
                     self.visit(child);
                 }
+            }
+
+            fn visit_redirected_statement(&mut self, node: Node<'tree>) {
+                self.visit_children(node)
             }
 
             fn visit_program(&mut self, node: Node<'tree>) {
