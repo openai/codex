@@ -110,6 +110,11 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<u8>,
+    footer_model_label: Option<String>,
+    footer_directory: Option<String>,
+    footer_account_email: Option<String>,
+    footer_primary_limit_percent: Option<u8>,
+    footer_weekly_limit_percent: Option<u8>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -153,6 +158,11 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutPrompt,
             footer_hint_override: None,
             context_window_percent: None,
+            footer_model_label: None,
+            footer_directory: None,
+            footer_account_email: None,
+            footer_primary_limit_percent: None,
+            footer_weekly_limit_percent: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -1338,6 +1348,11 @@ impl ChatComposer {
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
+            model_label: self.footer_model_label.as_deref(),
+            directory: self.footer_directory.as_deref(),
+            account_email: self.footer_account_email.as_deref(),
+            primary_limit_percent: self.footer_primary_limit_percent,
+            weekly_limit_percent: self.footer_weekly_limit_percent,
         }
     }
 
@@ -1472,6 +1487,23 @@ impl ChatComposer {
         if self.context_window_percent != percent {
             self.context_window_percent = percent;
         }
+    }
+
+    pub(crate) fn set_footer_model_label(&mut self, label: Option<String>) {
+        self.footer_model_label = label;
+    }
+
+    pub(crate) fn set_footer_directory(&mut self, directory: Option<String>) {
+        self.footer_directory = directory;
+    }
+
+    pub(crate) fn set_footer_account_email(&mut self, email: Option<String>) {
+        self.footer_account_email = email;
+    }
+
+    pub(crate) fn set_footer_limits(&mut self, primary: Option<u8>, weekly: Option<u8>) {
+        self.footer_primary_limit_percent = primary;
+        self.footer_weekly_limit_percent = weekly;
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {

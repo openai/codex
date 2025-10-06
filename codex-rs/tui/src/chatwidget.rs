@@ -93,6 +93,8 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
+use crate::status::helpers::compose_account_display;
+use crate::status::helpers::format_directory_display;
 use crate::streaming::controller::StreamController;
 use std::path::Path;
 
@@ -379,6 +381,23 @@ impl ChatWidget {
             event,
             self.show_welcome_banner,
         ));
+        // Footer: model + reasoning, directory, and account email
+        let effort = self
+            .config
+            .model_reasoning_effort
+            .map(|e| e.to_string().to_ascii_lowercase())
+            .unwrap_or_else(|| "auto".to_string());
+        let model_label = format!("{} {}", self.config.model, effort);
+        self.bottom_pane.set_footer_model_label(Some(model_label));
+        let dir = format_directory_display(&self.config.cwd, None);
+        self.bottom_pane.set_footer_directory(Some(dir));
+        let email = match compose_account_display(&self.config) {
+            Some(crate::status::account::StatusAccountDisplay::ChatGpt { email, .. }) => {
+                email.filter(|s| !s.is_empty())
+            }
+            _ => None,
+        };
+        self.bottom_pane.set_footer_account_email(email);
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -504,6 +523,17 @@ impl ChatWidget {
 
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
+            let primary = self
+                .rate_limit_snapshot
+                .as_ref()
+                .and_then(|s| s.primary.as_ref().map(|w| w.used_percent))
+                .map(|v| v.round().clamp(0.0, 100.0) as u8);
+            let weekly = self
+                .rate_limit_snapshot
+                .as_ref()
+                .and_then(|s| s.secondary.as_ref().map(|w| w.used_percent))
+                .map(|v| v.round().clamp(0.0, 100.0) as u8);
+            self.bottom_pane.set_footer_limits(primary, weekly);
 
             if !warnings.is_empty() {
                 for warning in warnings {
@@ -513,6 +543,7 @@ impl ChatWidget {
             }
         } else {
             self.rate_limit_snapshot = None;
+            self.bottom_pane.set_footer_limits(None, None);
         }
     }
     /// Finalize any active exec as failed and stop/clear running UI state.
@@ -2089,12 +2120,26 @@ impl ChatWidget {
     /// Set the reasoning effort in the widget's config copy.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.config.model_reasoning_effort = effort;
+        let eff = self
+            .config
+            .model_reasoning_effort
+            .map(|e| e.to_string().to_ascii_lowercase())
+            .unwrap_or_else(|| "auto".to_string());
+        let label = format!("{} {}", self.config.model, eff);
+        self.bottom_pane.set_footer_model_label(Some(label));
     }
 
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
         self.config.model = model.to_string();
+        let eff = self
+            .config
+            .model_reasoning_effort
+            .map(|e| e.to_string().to_ascii_lowercase())
+            .unwrap_or_else(|| "auto".to_string());
+        let label = format!("{} {}", self.config.model, eff);
+        self.bottom_pane.set_footer_model_label(Some(label));
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

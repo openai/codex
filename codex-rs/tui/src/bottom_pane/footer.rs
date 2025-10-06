@@ -18,6 +18,11 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<u8>,
+    pub(crate) model_label: Option<&'static str>,
+    pub(crate) directory: Option<&'static str>,
+    pub(crate) account_email: Option<&'static str>,
+    pub(crate) primary_limit_percent: Option<u8>,
+    pub(crate) weekly_limit_percent: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,21 +97,37 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
         }
         FooterMode::ShortcutPrompt => {
             if props.is_task_running {
-                vec![context_window_only_line(props.context_window_percent)]
+                vec![info_line(
+                    props.model_label,
+                    props.directory,
+                    props.account_email,
+                    props.primary_limit_percent,
+                    props.weekly_limit_percent,
+                    props.context_window_percent,
+                    /*with_shortcuts_hint=*/ false,
+                )]
             } else {
-                // Context first, then the "? for shortcuts" hint.
-                let mut line = Line::from("");
-                append_context_span(&mut line, props.context_window_percent);
-                line.push_span(" · ".dim());
-                line.extend(vec![
-                    key_hint::plain(KeyCode::Char('?')).into(),
-                    " for shortcuts".dim(),
-                ]);
-                vec![line]
+                vec![info_line(
+                    props.model_label,
+                    props.directory,
+                    props.account_email,
+                    props.primary_limit_percent,
+                    props.weekly_limit_percent,
+                    props.context_window_percent,
+                    /*with_shortcuts_hint=*/ true,
+                )]
             }
         }
         // When otherwise empty, still show the context indicator.
-        FooterMode::Empty => vec![context_window_only_line(props.context_window_percent)],
+        FooterMode::Empty => vec![info_line(
+            props.model_label,
+            props.directory,
+            props.account_email,
+            props.primary_limit_percent,
+            props.weekly_limit_percent,
+            props.context_window_percent,
+            /*with_shortcuts_hint=*/ false,
+        )],
     }
 }
 
@@ -242,9 +263,48 @@ fn context_window_only_line(percent: Option<u8>) -> Line<'static> {
 fn append_context_span(line: &mut Line<'static>, percent: Option<u8>) {
     let percent = percent.unwrap_or(100);
     if !line.spans.is_empty() {
-        line.push_span(Span::from("   "));
+        line.push_span(Span::from(" | "));
     }
     line.push_span(Span::from(format!("{percent}% context left")).dim());
+}
+
+fn append_segment<S: Into<String>>(line: &mut Line<'static>, text: Option<S>) {
+    if let Some(text) = text.map(Into::into) {
+        if !text.is_empty() {
+            if !line.spans.is_empty() {
+                line.push_span(Span::from(" | "));
+            }
+            line.push_span(Span::from(text).dim());
+        }
+    }
+}
+
+fn info_line(
+    model_label: Option<&'static str>,
+    directory: Option<&'static str>,
+    account_email: Option<&'static str>,
+    primary_limit_percent: Option<u8>,
+    weekly_limit_percent: Option<u8>,
+    context_percent: Option<u8>,
+    with_shortcuts_hint: bool,
+) -> Line<'static> {
+    let mut line = Line::from("");
+    append_segment(&mut line, model_label);
+    append_segment(&mut line, directory);
+    append_segment(&mut line, account_email);
+    if let Some(p) = primary_limit_percent {
+        append_segment(&mut line, Some(format!("5h {p}%")));
+    }
+    if let Some(w) = weekly_limit_percent {
+        append_segment(&mut line, Some(format!("weekly {w}%")));
+    }
+    append_context_span(&mut line, context_percent);
+    if with_shortcuts_hint {
+        line.push_span(Span::from(" · ").dim());
+        line.push_span(key_hint::plain(KeyCode::Char('?')).into());
+        line.push_span(Span::from(" for shortcuts").dim());
+    }
+    line
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
