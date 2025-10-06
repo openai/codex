@@ -369,9 +369,9 @@ API_KEY = "value"
 # Streamable HTTP requires the experimental rmcp client
 experimental_use_rmcp_client = true
 [mcp_servers.figma]
-url = "http://127.0.0.1:3845/mcp"
+url = "https://mcp.linear.app/mcp"
 # Optional bearer token to be passed into an `Authorization: Bearer <token>` header
-# Use this with caution because the token is in plaintext.
+# Use this with caution because the token is in plaintext and can be read by Codex itself.
 bearer_token = "<token>"
 ```
 
