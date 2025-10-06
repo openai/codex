@@ -16,7 +16,7 @@ See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env
 
 ## Model Context Protocol (MCP)
 
-The Codex CLI and IDE extension is a MCP client which means that it can be configured to connect to MCP servers. For more information, refer to the [`config docs`](./config.md#mcp_servers).
+The Codex CLI and IDE extension is a MCP client which means that it can be configured to connect to MCP servers. For more information, refer to the [`config docs`](./config.md#connecting-to-mcp-servers).
 
 ## Using Codex as an MCP Server
 
