@@ -7,24 +7,23 @@ use tree_sitter_bash::LANGUAGE as BASH;
 
 /// Parse the provided bash source using tree-sitter-bash, returning a Tree on
 /// success or None if parsing failed.
-pub fn try_parse_bash(bash_lc_arg: &str) -> Option<Tree> {
+pub fn try_parse_bash(bash_lc_arg: &str, debug: bool) -> Option<Tree> {
     let lang = BASH.into();
     let mut parser = Parser::new();
     #[expect(clippy::expect_used)]
     parser.set_language(&lang).expect("load bash grammar");
     let old_tree: Option<&Tree> = None;
     let tree = parser.parse(bash_lc_arg, old_tree);
-    if let Some(ref t) = tree {
+    if debug && let Some(ref t) = tree {
         print_node(t.root_node(), bash_lc_arg, 2);
     }
     tree
 }
 
-pub fn print_node(node: Node, source: &str, indent: usize) {
+pub(crate) fn print_node(node: Node, source: &str, indent: usize) {
     let prefix = "  ".repeat(indent);
     print!("{}{}", prefix, node.kind());
 
-    // Print text for leaf nodes
     if node.child_count() == 0 {
         if let Ok(text) = node.utf8_text(source.as_bytes()) {
             println!(": '{}'", text);
@@ -35,7 +34,6 @@ pub fn print_node(node: Node, source: &str, indent: usize) {
         println!();
     }
 
-    // Recursively print children
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         print_node(child, source, indent + 1);
@@ -51,7 +49,7 @@ pub(crate) struct Command {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct TidiedPathParams {
+pub(crate) struct TidiedPartsParam {
     pub include_name: bool,
     pub include_options_key: bool,
     pub include_options_val: bool,
@@ -87,13 +85,6 @@ impl Command {
         })
     }
 
-    /// Get all values for any of the given keys
-    pub(crate) fn find_option_vals(&self, keys: &[&str]) -> Vec<String> {
-        keys.iter()
-            .find_map(|key| self.options.get(*key).cloned())
-            .unwrap_or_default()
-    }
-
     /// Similar to `find_option_val`, but also supports combined short flags
     /// like `-n50` (no space between key and value).
     pub(crate) fn find_option_val_strip_key(&self, keys: &[&str]) -> Option<String> {
@@ -123,7 +114,7 @@ impl Command {
             .collect();
 
         for key in keys_to_remove {
-            self.options.remove(&key);
+            self.options.shift_remove(&key);
         }
     }
 
@@ -132,7 +123,7 @@ impl Command {
     }
 
     /// Get the tidied parts
-    pub(crate) fn tidied_parts(&self, param: TidiedPathParams) -> Vec<String> {
+    pub(crate) fn tidied_parts(&self, param: TidiedPartsParam) -> Vec<String> {
         let mut parts = Vec::new();
 
         if param.include_name {
@@ -264,7 +255,6 @@ macro_rules! define_bash_commands {
                                     $(
                                         BashCommands::$cmd => {
                                             paste::paste! {
-                                                println!("visiting {}", &node.name);
                                                 self.[<visit_command_ $cmd:lower>](node);
                                             }
                                         },

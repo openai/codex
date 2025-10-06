@@ -1,4 +1,4 @@
-use crate::parse_command::opt_parse_command;
+use crate::parse_command::parse_command_as_tokens;
 
 pub fn command_might_be_dangerous(command: &[String]) -> bool {
     if is_dangerous_to_call_with_exec(command) {
@@ -6,7 +6,7 @@ pub fn command_might_be_dangerous(command: &[String]) -> bool {
     }
 
     // Support `bash -lc "<script>"` where the any part of the script might contain a dangerous command.
-    if let Some(all_commands) = opt_parse_command(command)
+    if let Some(all_commands) = parse_command_as_tokens(command)
         && all_commands
             .iter()
             .any(|cmd| is_dangerous_to_call_with_exec(cmd))
