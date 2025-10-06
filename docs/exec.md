@@ -30,14 +30,14 @@ Supported event types:
 
 Supported item types:
 
-- `assistant_message` - assistant message.
+- `agent_message` - assistant message.
 - `reasoning` - a summary of the assistant's thinking.
 - `command_execution` - assistant executing a command.
 - `file_change` - assistant making file changes.
 - `mcp_tool_call` - assistant calling an MCP tool.
 - `web_search` - assistant performing a web search.
 
-Typically, an `assistant_message` is added at the end of the turn.
+Typically, an `agent_message` is added at the end of the turn.
 
 Sample output:
 
@@ -48,7 +48,7 @@ Sample output:
 {"type":"item.started","item":{"id":"item_1","item_type":"command_execution","command":"bash -lc ls","aggregated_output":"","status":"in_progress"}}
 {"type":"item.completed","item":{"id":"item_1","item_type":"command_execution","command":"bash -lc ls","aggregated_output":"2025-09-11\nAGENTS.md\nCHANGELOG.md\ncliff.toml\ncodex-cli\ncodex-rs\ndocs\nexamples\nflake.lock\nflake.nix\nLICENSE\nnode_modules\nNOTICE\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\nPNPM.md\nREADME.md\nscripts\nsdk\ntmp\n","exit_code":0,"status":"completed"}}
 {"type":"item.completed","item":{"id":"item_2","item_type":"reasoning","text":"**Checking repository root for README**"}}
-{"type":"item.completed","item":{"id":"item_3","item_type":"assistant_message","text":"Yep — there’s a `README.md` in the repository root."}}
+{"type":"item.completed","item":{"id":"item_3","item_type":"agent_message","text":"Yep — there’s a `README.md` in the repository root."}}
 {"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}
 ```
 
