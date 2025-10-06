@@ -179,10 +179,24 @@ mod tests {
     }
 
     #[test]
+    fn fix_unclosed_json_delimiters_adds_missing_array_bracket() {
+        let args = "{\"items\": [1, 2";
+        let fixed = fix_unclosed_json_delimiters(args).expect("should fix");
+        assert_eq!(fixed, "{\"items\": [1, 2]}");
+    }
+
+    #[test]
     fn fix_unclosed_json_delimiters_ignores_braces_in_strings() {
         let args = "{\"text\": \"use {curly}\"";
         let fixed = fix_unclosed_json_delimiters(args).expect("should fix");
         assert_eq!(fixed, "{\"text\": \"use {curly}\"}");
+    }
+
+    #[test]
+    fn fix_unclosed_json_delimiters_preserves_trailing_whitespace() {
+        let args = "{\"foo\": 1\n";
+        let fixed = fix_unclosed_json_delimiters(args).expect("should fix");
+        assert_eq!(fixed, "{\"foo\": 1}\n");
     }
 
     #[test]
