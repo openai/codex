@@ -79,6 +79,9 @@ Icon?
 *.webp
 *.svg
 
+# local stash files
+stash_*.rs
+
 # Unwanted package managers
 .yarn/
 yarn.lock
@@ -91,3 +94,8 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
+
+# local toolchains/caches
+codex-rs/.cargo/
+codex-rs/.cargo-home/
+codex-rs/.rustup/
