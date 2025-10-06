@@ -392,7 +392,7 @@ impl ChatWidget {
         let dir = format_directory_display(&self.config.cwd, None);
         self.bottom_pane.set_footer_directory(Some(dir));
         let email = match compose_account_display(&self.config) {
-            Some(crate::status::account::StatusAccountDisplay::ChatGpt { email, .. }) => {
+            Some(crate::status::StatusAccountDisplay::ChatGpt { email, .. }) => {
                 email.filter(|s| !s.is_empty())
             }
             _ => None,

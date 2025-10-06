@@ -1557,7 +1557,7 @@ impl WidgetRef for ChatComposer {
                         // custom hint items are provided.
                         let percent = self.context_window_percent.unwrap_or(100);
                         if !spans.is_empty() {
-                            spans.push("   ".into());
+                            spans.push(" | ".dim().into());
                         }
                         spans.push(format!("{percent}% context left").dim());
                         let mut custom_rect = hint_rect;
