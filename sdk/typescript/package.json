@@ -59,5 +59,9 @@
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.45.0"
+  },
+  "dependencies": {
+    "zod": "^3.24.2",
+    "zod-to-json-schema": "^3.24.6"
   }
 }
