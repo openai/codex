@@ -105,7 +105,7 @@ jobs:
 
             const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
             const currentIssueNumber = String(context.payload.issue.number);
-            
+
             console.log(`Current issue number: ${currentIssueNumber}`);
             console.log(issues);
 
