@@ -72,7 +72,6 @@ tree-sitter-bash = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
-multimap = { workspace = true }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

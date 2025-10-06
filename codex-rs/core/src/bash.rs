@@ -1,11 +1,10 @@
 use indexmap::IndexMap;
 use shlex::try_quote;
+use tracing::debug;
 use tree_sitter::Node;
 use tree_sitter::Parser;
 use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
-use tracing::debug;
-
 
 const PRINT_TREE_DEBUG: bool = true;
 
@@ -44,7 +43,6 @@ fn print_node(node: Node, source: &str, indent: usize) {
         print_node(child, source, indent + 1);
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Command {
@@ -336,7 +334,6 @@ macro_rules! define_bash_commands {
 
                     if text == "--" {
                         seen_double_dash = true;
-                        // arguments.push(text);
                         continue;
                     }
 
@@ -417,7 +414,6 @@ macro_rules! define_bash_commands {
     };
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,7 +454,6 @@ mod tests {
         p.visit(root);
         p.command
     }
-
 
     #[test]
     fn test_parse_simple_command_name_only() {
@@ -514,7 +509,10 @@ mod tests {
         let cmd = parse_command("cat file1.txt file2.txt file3.txt");
 
         assert_eq!(cmd[0].name, "cat");
-        assert_eq!(cmd[0].arguments, vec!["file1.txt", "file2.txt", "file3.txt"]);
+        assert_eq!(
+            cmd[0].arguments,
+            vec!["file1.txt", "file2.txt", "file3.txt"]
+        );
     }
 
     #[test]
@@ -790,7 +788,9 @@ mod tests {
 
         assert_eq!(cmd[0].name, "echo");
         // -42 might be treated as a flag
-        assert!(cmd[0].options.contains_key("-42") || cmd[0].arguments.contains(&"-42".to_string()));
+        assert!(
+            cmd[0].options.contains_key("-42") || cmd[0].arguments.contains(&"-42".to_string())
+        );
     }
 
     #[test]
@@ -807,7 +807,10 @@ mod tests {
         let cmd = parse_command("grep -A 5 -B 3 -C 2");
 
         let keys: Vec<&String> = cmd[0].options.keys().collect();
-        assert_eq!(keys, vec![&"-A".to_string(), &"-B".to_string(), &"-C".to_string()]);
+        assert_eq!(
+            keys,
+            vec![&"-A".to_string(), &"-B".to_string(), &"-C".to_string()]
+        );
     }
 
     #[test]
