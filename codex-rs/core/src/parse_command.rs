@@ -216,7 +216,6 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             if self.reject_whole || self.skip_rest {
                 return;
             }
-            // println!("visit child: {}", self.get_text(child));
             self.visit(child);
         }
     }
@@ -234,9 +233,10 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         ]);
         let non_flags_param = TidiedPartsParam {
             include_options_val: true,
+            include_argument: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param);
+        let non_flags = cmd.get_tidied_parts(non_flags_param);
         let path = non_flags.first().cloned();
         self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::ListFiles {
@@ -249,9 +249,10 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         let has_files_flag = cmd.options.contains_key("--files");
         let non_flags_param = TidiedPartsParam {
             include_options_val: true,
+            include_argument: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param);
+        let non_flags = cmd.get_tidied_parts(non_flags_param);
         let (query, path) = if has_files_flag {
             (None, non_flags.first().map(String::from))
         } else {
@@ -281,9 +282,10 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         ]);
         let non_flags_param = TidiedPartsParam {
             include_options_val: true,
+            include_argument: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param);
+        let non_flags = cmd.get_tidied_parts(non_flags_param);
         fn is_pathish(s: &str) -> bool {
             s == "."
                 || s == ".."
@@ -328,9 +330,10 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         let main_cmd = cmd.get_original_cmd();
         let non_flags_param = TidiedPartsParam {
             include_options_val: true,
+            include_argument: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param);
+        let non_flags = cmd.get_tidied_parts(non_flags_param);
         let query = non_flags.first().cloned();
         let path = non_flags.get(1).cloned();
         self.origin_commands.push(cmd.clone());
@@ -373,9 +376,10 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
 
         let non_flags_param = TidiedPartsParam {
             include_options_val: true,
+            include_argument: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param);
+        let non_flags = cmd.get_tidied_parts(non_flags_param);
         if valid_n 
             && let Some(p) = non_flags.last() 
             // assume a file shouldn't be named just with digits
@@ -402,9 +406,10 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         cmd.skip_flag_values(&["-s", "-w", "-v", "-i", "-b"]);
         let non_flags_param = TidiedPartsParam {
             include_options_val: true,
+            include_argument: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param);
+        let non_flags = cmd.get_tidied_parts(non_flags_param);
         if !non_flags.is_empty() {
             let name = non_flags.first().cloned();
             self.parsed_commands.push(ParsedCommand::Read {
@@ -423,19 +428,18 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         // Look up the value of the -n option (e.g., "1,10p")
         let n_val = cmd.find_option_val_strip_key(&["-n"]);
 
-        if let Some(val) = n_val {
-            // Validate the -n value
-            if is_valid_sed_n_arg(Some(&val)) {
-                // The first argument is the target file
-                let file_path = cmd.arguments.first().cloned();
-                let name = cmd.short_display_path(file_path).unwrap_or_default();
+        if let Some(val) = n_val
+            && is_valid_sed_n_arg(Some(&val))
+        {
+            // The first argument is the target file
+            let file_path = cmd.arguments.first().cloned();
+            let name = cmd.short_display_path(file_path).unwrap_or_default();
 
-                self.parsed_commands.push(ParsedCommand::Read {
-                    cmd: cmd.get_original_cmd(),
-                    name,
-                });
-                return;
-            }
+            self.parsed_commands.push(ParsedCommand::Read {
+                cmd: cmd.get_original_cmd(),
+                name,
+            });
+            return;
         }
 
         self.visit_command_unknown(cmd);
@@ -449,7 +453,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
     }
 
     /// Any known commands(eg. cd) not listed here are ignored by default
-    /// Any unknown command will go to this branch
+    /// Any unknown command will go to this function
     fn visit_command_unknown(&mut self, mut cmd: Command) {
         self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Unknown {

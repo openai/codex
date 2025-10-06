@@ -6,7 +6,7 @@ use tree_sitter::Parser;
 use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
 
-const PRINT_TREE_DEBUG: bool = true;
+const PRINT_TREE_DEBUG: bool = false;
 
 /// Parse the provided bash source using tree-sitter-bash, returning a Tree on
 /// success or None if parsing failed.
@@ -59,6 +59,7 @@ pub(crate) struct TidiedPartsParam {
     pub include_options_val: bool,
     pub include_options_assign_key: bool,
     pub include_options_assign_value: bool,
+    pub include_argument: bool,
 }
 
 impl Command {
@@ -127,7 +128,7 @@ impl Command {
     }
 
     /// Get the tidied parts
-    pub(crate) fn tidied_parts(&self, param: TidiedPartsParam) -> Vec<String> {
+    pub(crate) fn get_tidied_parts(&self, param: TidiedPartsParam) -> Vec<String> {
         let mut parts = Vec::new();
 
         if param.include_name {
@@ -157,9 +158,10 @@ impl Command {
             }
         }
 
-        // Positional arguments
-        for arg in &self.arguments {
-            parts.push(arg.clone());
+        if param.include_argument {
+            for arg in &self.arguments {
+                parts.push(arg.clone());
+            }
         }
 
         parts
