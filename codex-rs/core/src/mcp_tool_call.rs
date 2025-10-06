@@ -8,6 +8,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
+use crate::tool_arguments::parse_tool_arguments;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 
@@ -22,22 +23,20 @@ pub(crate) async fn handle_mcp_tool_call(
     arguments: String,
 ) -> ResponseInputItem {
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
-    // is not.
-    let arguments_value = if arguments.trim().is_empty() {
-        None
-    } else {
-        match serde_json::from_str::<serde_json::Value>(&arguments) {
-            Ok(value) => Some(value),
-            Err(e) => {
-                error!("failed to parse tool call arguments: {e}");
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        content: format!("err: {e}"),
-                        success: Some(false),
-                    },
-                };
-            }
+    // is not. If parsing fails because the model omitted a closing delimiter,
+    // attempt to synthesize the missing characters so that we can still run
+    // the tool call.
+    let arguments_value = match parse_tool_arguments(&arguments) {
+        Ok(value) => value,
+        Err(e) => {
+            error!("failed to parse tool call arguments: {e}");
+            return ResponseInputItem::FunctionCallOutput {
+                call_id: call_id.clone(),
+                output: FunctionCallOutputPayload {
+                    content: format!("err: {e}"),
+                    success: Some(false),
+                },
+            };
         }
     };
 
