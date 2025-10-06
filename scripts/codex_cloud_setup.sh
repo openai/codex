@@ -15,9 +15,8 @@ fi
 # Load environment variables if .env exists
 if [[ -f ".env" ]]; then
     echo "📄 Loading environment from .env"
-    set -a
     source .env
-    set +a
+    export CODEX_MODE CODEX_RESONANCE CODEX_CLOUD_ENDPOINT CODEX_API_KEY CODEX_ORGANIZATION
 fi
 
 # Set default values for cloud Codex configuration
