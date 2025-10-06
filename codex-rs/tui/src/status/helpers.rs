@@ -186,3 +186,25 @@ pub(crate) fn title_case(s: &str) -> String {
     let rest: String = chars.as_str().to_ascii_lowercase();
     first.to_uppercase().collect::<String>() + &rest
 }
+
+/// Human-friendly label for rate-limit windows based on minutes.
+/// Matches the semantics used in the TUI for status/rate limits and warnings.
+pub(crate) fn get_limits_duration(windows_minutes: u64) -> String {
+    const MINUTES_PER_HOUR: u64 = 60;
+    const MINUTES_PER_DAY: u64 = 24 * MINUTES_PER_HOUR;
+    const MINUTES_PER_WEEK: u64 = 7 * MINUTES_PER_DAY;
+    const MINUTES_PER_MONTH: u64 = 30 * MINUTES_PER_DAY;
+    const ROUNDING_BIAS_MINUTES: u64 = 3;
+
+    if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
+        let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
+        let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
+        format!("{hours}h")
+    } else if windows_minutes <= MINUTES_PER_WEEK.saturating_add(ROUNDING_BIAS_MINUTES) {
+        "weekly".to_string()
+    } else if windows_minutes <= MINUTES_PER_MONTH.saturating_add(ROUNDING_BIAS_MINUTES) {
+        "monthly".to_string()
+    } else {
+        "annual".to_string()
+    }
+}

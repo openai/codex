@@ -1,4 +1,5 @@
 pub mod apply_patch;
+mod context_prune;
 mod exec_stream;
 mod mcp;
 mod plan;
@@ -11,6 +12,7 @@ mod view_image;
 pub use plan::PLAN_TOOL;
 
 pub use apply_patch::ApplyPatchHandler;
+pub use context_prune::ContextPruneHandler;
 pub use exec_stream::ExecStreamHandler;
 pub use mcp::McpHandler;
 pub use plan::PlanHandler;

@@ -1,5 +1,3 @@
-use crate::client_common::tools::FreeformTool;
-use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::model_family::ModelFamily;
@@ -259,6 +257,58 @@ fn create_view_image_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_context_prune_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "action".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "One of: list | usage | set_inclusion | set_pinned_tail_turns".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "indices".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::Number {
+                description: Some("0-based indices of items to toggle".to_string()),
+            }),
+            description: Some(
+                "Indices to include or exclude when action is set_inclusion".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "included".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether specified indices should be included (true) or excluded (false) when action is set_inclusion".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "pinned_tail_turns".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Number of most recent turns to pin when action is set_pinned_tail_turns"
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "context_prune".to_string(),
+        description:
+            "Inspect context usage, list items, or adjust inclusion/pinning without deleting history.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["action".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -570,6 +620,7 @@ pub(crate) fn build_specs(
     use crate::exec_command::create_exec_command_tool_for_responses_api;
     use crate::exec_command::create_write_stdin_tool_for_responses_api;
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::ContextPruneHandler;
     use crate::tools::handlers::ExecStreamHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::PlanHandler;
@@ -667,7 +718,7 @@ pub(crate) fn build_specs(
 
     if config.include_context_prune_tool {
         builder.push_spec(create_context_prune_tool());
-        // No handler registration; treated as agent-facing metadata tool only.
+        builder.register_handler("context_prune", Arc::new(ContextPruneHandler));
     }
 
     if let Some(mcp_tools) = mcp_tools {
@@ -782,6 +833,25 @@ mod tests {
     }
 
     #[test]
+    fn test_build_specs_includes_context_prune_when_enabled() {
+        let model_family = find_family_for_model("codex-mini-latest")
+            .expect("codex-mini-latest should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            experimental_unified_exec_tool: true,
+            include_context_prune_tool: true,
+        });
+        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
+
+        find_tool(&tools, "context_prune");
+    }
+
+    #[test]
     #[ignore]
     fn test_parallel_support_flags() {
         let model_family = find_family_for_model("gpt-5-codex")
@@ -814,6 +884,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: false,
             experimental_unified_exec_tool: false,
+            include_context_prune_tool: false,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -946,6 +1017,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: false,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -1306,6 +1378,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_context_prune_tool: false,
         });
         let (tools, _) = build_specs(
             &config,

@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -117,15 +119,19 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ContextItemsEvent;
 use codex_protocol::protocol::ConversationUsageByCategory;
 use codex_protocol::protocol::ConversationUsageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::PruneCategory;
 use codex_protocol::protocol::PruneRange;
+use codex_utils_string::take_bytes_at_char_boundary;
 
 pub mod compact;
 use self::compact::build_compacted_history;
 use self::compact::collect_user_messages;
+
+const CONTEXT_ITEM_PREVIEW_MAX_BYTES: usize = 200;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -805,6 +811,207 @@ impl Session {
             }
             self.send_token_count_event(sub_id).await;
         }
+    }
+
+    pub(crate) async fn compute_context_usage(&self) -> ConversationUsageEvent {
+        let state = self.state.lock().await;
+        let items = state.history_snapshot();
+        let mut totals: HashMap<PruneCategory, (u64, u64)> = HashMap::new();
+
+        for item in &items {
+            let (category, text) = context_item_category_and_text(item);
+            let bytes = text.len() as u64;
+            let entry = totals.entry(category).or_insert((0, 0));
+            entry.0 = entry.0.saturating_add(bytes);
+            entry.1 = entry.1.saturating_add(1);
+        }
+
+        let order = [
+            PruneCategory::ToolOutput,
+            PruneCategory::ToolCall,
+            PruneCategory::Reasoning,
+            PruneCategory::AssistantMessage,
+            PruneCategory::UserMessage,
+            PruneCategory::UserInstructions,
+            PruneCategory::EnvironmentContext,
+        ];
+
+        let mut total_bytes: u64 = 0;
+        let mut by_category = Vec::with_capacity(order.len());
+        for category in order {
+            let (bytes, count) = totals.get(&category).copied().unwrap_or((0, 0));
+            total_bytes = total_bytes.saturating_add(bytes);
+            by_category.push(ConversationUsageByCategory {
+                category,
+                bytes,
+                count: Some(count),
+            });
+        }
+
+        ConversationUsageEvent {
+            total_bytes,
+            by_category,
+        }
+    }
+
+    async fn prune_context(&self, categories: Vec<PruneCategory>, range: PruneRange) -> usize {
+        let mut state = self.state.lock().await;
+        let items = state.history_snapshot();
+
+        let (start_idx, end_idx_exclusive) = match range {
+            PruneRange::All => (0usize, items.len()),
+            PruneRange::FirstTurns { count } => {
+                let mut end = 0usize;
+                for (i, c) in state.turn_item_counts.iter().copied().enumerate() {
+                    if i < count {
+                        end = end.saturating_add(c)
+                    } else {
+                        break;
+                    }
+                }
+                (0, end.min(items.len()))
+            }
+        };
+
+        fn is_user_text_prefixed(content: &[ContentItem], prefix: &str) -> bool {
+            content.iter().any(|c| match c {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    text.starts_with(prefix)
+                }
+                _ => false,
+            })
+        }
+
+        fn matches_category(item: &ResponseItem, cat: &PruneCategory) -> bool {
+            match (item, cat) {
+                (ResponseItem::FunctionCallOutput { .. }, PruneCategory::ToolOutput)
+                | (ResponseItem::CustomToolCallOutput { .. }, PruneCategory::ToolOutput) => true,
+                (ResponseItem::FunctionCall { .. }, PruneCategory::ToolCall)
+                | (ResponseItem::CustomToolCall { .. }, PruneCategory::ToolCall)
+                | (ResponseItem::LocalShellCall { .. }, PruneCategory::ToolCall) => true,
+                (ResponseItem::Reasoning { .. }, PruneCategory::Reasoning) => true,
+                (ResponseItem::Message { role, .. }, PruneCategory::AssistantMessage) => {
+                    role == "assistant"
+                }
+                (ResponseItem::Message { role, .. }, PruneCategory::UserMessage) => role == "user",
+                (ResponseItem::Message { content, .. }, PruneCategory::UserInstructions) => {
+                    is_user_text_prefixed(content, crate::protocol::USER_INSTRUCTIONS_OPEN_TAG)
+                }
+                (ResponseItem::Message { content, .. }, PruneCategory::EnvironmentContext) => {
+                    is_user_text_prefixed(content, crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG)
+                }
+                _ => false,
+            }
+        }
+
+        let cat_set: HashSet<PruneCategory> = categories.into_iter().collect();
+
+        let mut kept_mask: Vec<bool> = Vec::with_capacity(items.len());
+        let mut kept: Vec<ResponseItem> = Vec::with_capacity(items.len());
+        for (idx, it) in items.into_iter().enumerate() {
+            let mut drop = false;
+            if idx
+                >= state
+                    .pinned_tail_start_index(state.pinned_tail_turns)
+                    .unwrap_or(usize::MAX)
+            {
+                drop = false;
+            } else if idx >= start_idx
+                && idx < end_idx_exclusive
+                && cat_set.iter().any(|c| matches_category(&it, c))
+            {
+                drop = true;
+            }
+            if drop {
+                kept_mask.push(false);
+            } else {
+                kept_mask.push(true);
+                kept.push(it);
+            }
+        }
+
+        let mut new_counts: Vec<usize> = Vec::with_capacity(state.turn_item_counts.len());
+        let mut turn_start = 0usize;
+        for orig in state.turn_item_counts.clone().into_iter() {
+            let turn_end = turn_start.saturating_add(orig);
+            let remain = kept_mask[turn_start..turn_end]
+                .iter()
+                .filter(|b| **b)
+                .count();
+            new_counts.push(remain);
+            turn_start = turn_end;
+        }
+
+        let removed = state.history_snapshot().len().saturating_sub(kept.len());
+        state.replace_history(kept);
+        state.replace_turn_counts(new_counts);
+        removed
+    }
+
+    pub(crate) async fn compute_context_items(&self) -> ContextItemsEvent {
+        let state = self.state.lock().await;
+        let items = state.history_snapshot();
+        let include_mask = state.include_mask.clone();
+        let pinned_start = state
+            .pinned_tail_start_index(state.pinned_tail_turns)
+            .unwrap_or(usize::MAX);
+        let mut out: Vec<crate::protocol::ContextItemSummary> = Vec::with_capacity(items.len());
+
+        for (idx, it) in items.iter().enumerate() {
+            let (category, text) = context_item_category_and_text(it);
+            let text_len = text.len();
+            let safe = take_bytes_at_char_boundary(text.as_ref(), CONTEXT_ITEM_PREVIEW_MAX_BYTES);
+            let preview = if safe.len() < text_len {
+                format!("{safe}…")
+            } else {
+                text.into_owned()
+            };
+            out.push(crate::protocol::ContextItemSummary {
+                index: idx,
+                category,
+                preview,
+                included: if idx >= pinned_start {
+                    true
+                } else {
+                    include_mask.get(idx).copied().unwrap_or(true)
+                },
+            });
+        }
+
+        ContextItemsEvent {
+            total: out.len(),
+            items: out,
+        }
+    }
+
+    async fn prune_context_indices(&self, indices: Vec<usize>) -> usize {
+        let mut state = self.state.lock().await;
+        let items = state.history_snapshot();
+        let pinned_start = state
+            .pinned_tail_start_index(state.pinned_tail_turns)
+            .unwrap_or(usize::MAX);
+        let drop: HashSet<usize> = indices.into_iter().filter(|i| *i < pinned_start).collect();
+        let mut kept: Vec<ResponseItem> = Vec::with_capacity(items.len());
+        for (idx, it) in items.into_iter().enumerate() {
+            if drop.contains(&idx) {
+                continue;
+            }
+            kept.push(it);
+        }
+        let new_len = kept.len();
+        state.replace_history(kept);
+        state.replace_turn_counts(vec![new_len]);
+        drop.len()
+    }
+
+    pub(crate) async fn set_context_inclusion(&self, indices: &[usize], included: bool) {
+        let mut state = self.state.lock().await;
+        state.set_inclusion(indices, included);
+    }
+
+    pub(crate) async fn set_pinned_tail_turns(&self, turns: usize) {
+        let mut state = self.state.lock().await;
+        state.set_pinned_tail_turns(turns);
     }
 
     /// Record a user input item to conversation history and also persist a
@@ -1718,6 +1925,7 @@ pub(crate) async fn run_task(
             .await;
     }
 
+    let mut pending_turn_item_count: usize = if is_review_mode { 0 } else { 1 };
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -1752,6 +1960,10 @@ pub(crate) async fn run_task(
             review_thread_history.clone()
         } else {
             sess.record_conversation_items(&pending_input).await;
+            if !is_review_mode {
+                pending_turn_item_count =
+                    pending_turn_item_count.saturating_add(pending_input.len());
+            }
             sess.turn_input_with_history(pending_input).await
         };
 
@@ -1893,8 +2105,10 @@ pub(crate) async fn run_task(
                     } else {
                         sess.record_conversation_items(&items_to_record_in_conversation_history)
                             .await;
-                        sess.note_turn_committed(items_to_record_in_conversation_history.len())
-                            .await;
+                        pending_turn_item_count = pending_turn_item_count
+                            .saturating_add(items_to_record_in_conversation_history.len());
+                        sess.note_turn_committed(pending_turn_item_count).await;
+                        pending_turn_item_count = 0;
                     }
                 }
 
@@ -1949,6 +2163,10 @@ pub(crate) async fn run_task(
                 break;
             }
         }
+    }
+
+    if !is_review_mode && pending_turn_item_count > 0 {
+        sess.note_turn_committed(pending_turn_item_count).await;
     }
 
     // If this was a review thread and we have a final assistant message,
@@ -2499,6 +2717,71 @@ pub(crate) async fn exit_review_mode(
             content: vec![ContentItem::InputText { text: user_message }],
         }])
         .await;
+}
+
+pub(crate) fn context_item_category_and_text(item: &ResponseItem) -> (PruneCategory, Cow<'_, str>) {
+    match item {
+        ResponseItem::Message { role, content, .. } => {
+            let text = content
+                .iter()
+                .find_map(|c| match c {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+                .unwrap_or("");
+            let category = if text.starts_with(crate::protocol::USER_INSTRUCTIONS_OPEN_TAG) {
+                PruneCategory::UserInstructions
+            } else if text.starts_with(crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG) {
+                PruneCategory::EnvironmentContext
+            } else if role == "assistant" {
+                PruneCategory::AssistantMessage
+            } else {
+                PruneCategory::UserMessage
+            };
+            (category, Cow::Borrowed(text))
+        }
+        ResponseItem::Reasoning { summary, .. } => {
+            let text = summary
+                .iter()
+                .map(|s| match s {
+                    codex_protocol::models::ReasoningItemReasoningSummary::SummaryText { text } => {
+                        text.as_str()
+                    }
+                })
+                .next()
+                .unwrap_or("");
+            (PruneCategory::Reasoning, Cow::Borrowed(text))
+        }
+        ResponseItem::FunctionCall {
+            name, arguments, ..
+        } => (
+            PruneCategory::ToolCall,
+            Cow::Owned(format!("{name} {arguments}")),
+        ),
+        ResponseItem::CustomToolCall { name, input, .. } => (
+            PruneCategory::ToolCall,
+            Cow::Owned(format!("{name} {input}")),
+        ),
+        ResponseItem::LocalShellCall { action, .. } => {
+            (PruneCategory::ToolCall, Cow::Owned(format!("{action:?}")))
+        }
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            (PruneCategory::ToolOutput, Cow::Borrowed(&output.content))
+        }
+        ResponseItem::CustomToolCallOutput { output, .. } => {
+            (PruneCategory::ToolOutput, Cow::Borrowed(output))
+        }
+        ResponseItem::WebSearchCall { action, .. } => {
+            let query = match action {
+                codex_protocol::models::WebSearchAction::Search { query } => query.as_str(),
+                _ => "",
+            };
+            (PruneCategory::ToolCall, Cow::Borrowed(query))
+        }
+        ResponseItem::Other => (PruneCategory::AssistantMessage, Cow::Borrowed("")),
+    }
 }
 
 use crate::executor::errors::ExecError;

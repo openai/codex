@@ -69,6 +69,16 @@ Thumbs.db
 Icon?
 .Spotlight-V100/
 
+# images (local screenshots, assets not intended for source control)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.webp
+*.svg
+
 # Unwanted package managers
 .yarn/
 yarn.lock

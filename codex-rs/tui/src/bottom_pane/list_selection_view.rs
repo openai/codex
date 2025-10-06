@@ -321,6 +321,10 @@ impl BottomPaneView for ListSelectionView {
         self.complete = true;
         CancellationEvent::Handled
     }
+
+    fn take_on_complete_event(&mut self) -> Option<AppEvent> {
+        self.on_complete_event.take()
+    }
 }
 
 impl Renderable for ListSelectionView {
@@ -424,10 +428,6 @@ impl Renderable for ListSelectionView {
             };
             hint.clone().dim().render(hint_area, buf);
         }
-    }
-
-    fn take_on_complete_event(&mut self) -> Option<AppEvent> {
-        self.on_complete_event.take()
     }
 }
 

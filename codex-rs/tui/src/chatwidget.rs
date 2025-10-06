@@ -83,6 +83,7 @@ use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
+use crate::status::helpers::get_limits_duration;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
@@ -184,26 +185,6 @@ impl RateLimitWarningState {
         }
 
         warnings
-    }
-}
-
-pub(crate) fn get_limits_duration(windows_minutes: u64) -> String {
-    const MINUTES_PER_HOUR: u64 = 60;
-    const MINUTES_PER_DAY: u64 = 24 * MINUTES_PER_HOUR;
-    const MINUTES_PER_WEEK: u64 = 7 * MINUTES_PER_DAY;
-    const MINUTES_PER_MONTH: u64 = 30 * MINUTES_PER_DAY;
-    const ROUNDING_BIAS_MINUTES: u64 = 3;
-
-    if windows_minutes <= MINUTES_PER_DAY.saturating_add(ROUNDING_BIAS_MINUTES) {
-        let adjusted = windows_minutes.saturating_add(ROUNDING_BIAS_MINUTES);
-        let hours = std::cmp::max(1, adjusted / MINUTES_PER_HOUR);
-        format!("{hours}h")
-    } else if windows_minutes <= MINUTES_PER_WEEK.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "weekly".to_string()
-    } else if windows_minutes <= MINUTES_PER_MONTH.saturating_add(ROUNDING_BIAS_MINUTES) {
-        "monthly".to_string()
-    } else {
-        "annual".to_string()
     }
 }
 
@@ -331,6 +312,7 @@ impl ChatWidget {
         // Control actions
         items.push(SelectionItem {
             name: "Refresh list".to_string(),
+            display_shortcut: None,
             description: Some("Re-query current context".to_string()),
             is_current: false,
             actions: vec![Box::new(|tx: &AppEventSender| {
@@ -354,6 +336,7 @@ impl ChatWidget {
                 let currently_included = it.included;
                 items.push(SelectionItem {
                     name,
+                    display_shortcut: None,
                     description: Some(desc),
                     is_current: currently_included, // visual cue only
                     actions: vec![Box::new(move |tx: &AppEventSender| {
@@ -1893,35 +1876,39 @@ impl ChatWidget {
         }
 
         // Build header (renderable) with usage if available
-        let header: Box<dyn crate::render::renderable::Renderable> = if let Some(usage) = &self.last_context_usage {
-            let total = usage.total_bytes.max(1);
-            let pct = |cat: PC| -> u64 {
-                usage
-                    .by_category
-                    .iter()
-                    .find(|e| e.category == cat)
-                    .map(|e| e.bytes.saturating_mul(100) / total)
-                    .unwrap_or(0)
+        let header: Box<dyn crate::render::renderable::Renderable> =
+            if let Some(usage) = &self.last_context_usage {
+                let total = usage.total_bytes.max(1);
+                let pct = |cat: PC| -> u64 {
+                    usage
+                        .by_category
+                        .iter()
+                        .find(|e| e.category == cat)
+                        .map(|e| e.bytes.saturating_mul(100) / total)
+                        .unwrap_or(0)
+                };
+                let line = format!(
+                    "Usage: tool_output {}% | tool_call {}% | reasoning {}% | assistant {}%",
+                    pct(PC::ToolOutput),
+                    pct(PC::ToolCall),
+                    pct(PC::Reasoning),
+                    pct(PC::AssistantMessage)
+                );
+                Box::new(ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
+                    line,
+                )))
+            } else {
+                Box::new(ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
+                    "Computing usage…",
+                )))
             };
-            let line = format!(
-                "Usage: tool_output {}% | tool_call {}% | reasoning {}% | assistant {}%",
-                pct(PC::ToolOutput),
-                pct(PC::ToolCall),
-                pct(PC::Reasoning),
-                pct(PC::AssistantMessage)
-            );
-            Box::new(ratatui::widgets::Paragraph::new(ratatui::text::Line::from(line)))
-        } else {
-            Box::new(ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
-                "Computing usage…",
-            )))
-        };
 
         let mut items: Vec<SelectionItem> = Vec::new();
 
         // Advanced mode entry
         items.push(SelectionItem {
             name: "Open advanced prune…".to_string(),
+            display_shortcut: None,
             description: Some("Mark/unmark individual items in context".to_string()),
             is_current: false,
             actions: vec![Box::new(|tx: &AppEventSender| {
@@ -1934,6 +1921,7 @@ impl ChatWidget {
         // Category-based, entire history
         items.push(SelectionItem {
             name: "Prune tool_output (entire history)".to_string(),
+            display_shortcut: None,
             description: Some(
                 "Remove all tool outputs captured into context (stdout/stderr etc.)".to_string(),
             ),
@@ -1949,6 +1937,7 @@ impl ChatWidget {
         });
         items.push(SelectionItem {
             name: "Prune tool_call (entire history)".to_string(),
+            display_shortcut: None,
             description: Some(
                 "Remove all tool call items (function/local/custom calls).".to_string(),
             ),
@@ -1964,6 +1953,7 @@ impl ChatWidget {
         });
         items.push(SelectionItem {
             name: "Prune reasoning (entire history)".to_string(),
+            display_shortcut: None,
             description: Some("Remove all reasoning items from context.".to_string()),
             is_current: false,
             actions: vec![Box::new(|tx2| {
@@ -1977,6 +1967,7 @@ impl ChatWidget {
         });
         items.push(SelectionItem {
             name: "Prune assistant messages (entire history)".to_string(),
+            display_shortcut: None,
             description: Some("Remove all assistant messages from context.".to_string()),
             is_current: false,
             actions: vec![Box::new(|tx2| {
@@ -2001,6 +1992,7 @@ impl ChatWidget {
             ];
             items.push(SelectionItem {
                 name: title,
+                display_shortcut: None,
                 description: Some("Remove everything from the earliest turns.".to_string()),
                 is_current: false,
                 actions: vec![Box::new(move |tx2| {
@@ -2017,6 +2009,7 @@ impl ChatWidget {
         // Nuclear
         items.push(SelectionItem {
             name: "Prune ALL categories (entire history)".to_string(),
+            display_shortcut: None,
             description: Some("Clear conversation context except system/user instructions and environment context.".to_string()),
             is_current: false,
             actions: vec![Box::new(|tx2| {
@@ -2029,7 +2022,8 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Prune Context".to_string()),
             subtitle: Some(
-                "Choose what to remove from the context. This does not edit rollout files.".to_string(),
+                "Choose what to remove from the context. This does not edit rollout files."
+                    .to_string(),
             ),
             footer_hint: Some(standard_popup_hint_line()),
             items,

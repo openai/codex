@@ -26,7 +26,6 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
-pub(crate) use list_selection_view::HeaderLine;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod paste_burst;
 pub mod popup_consts;

@@ -942,6 +942,7 @@ impl Config {
             include_plan_tool,
             include_apply_patch_tool,
             include_view_image_tool,
+            include_context_prune_tool: override_include_context_prune_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             ..
@@ -1018,8 +1019,7 @@ impl Config {
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
 
-        let include_context_prune_tool = overrides
-            .include_context_prune_tool
+        let include_context_prune_tool = override_include_context_prune_tool
             .or(cfg.tools.as_ref().and_then(|t| t.context_prune))
             .unwrap_or(true);
 
