@@ -222,6 +222,63 @@ describe("Codex", () => {
       await close();
     }
   });
+
+  it("writes output schema to a temporary file and forwards it", async () => {
+    const { url, close, requests } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Structured response", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+
+    const schema = {
+      type: "object",
+      properties: {
+        answer: { type: "string" },
+      },
+      required: ["answer"],
+      additionalProperties: false,
+    } as const;
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run("structured", { outputSchema: schema });
+
+      expect(requests.length).toBeGreaterThanOrEqual(1);
+      const payload = requests[0];
+      expect(payload).toBeDefined();
+      const text = payload!.json.text;
+      expect(text).toBeDefined();
+      expect(text?.format).toEqual({
+        name: "codex_output_schema",
+        type: "json_schema",
+        strict: true,
+        schema,
+      });
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      const schemaFlagIndex = commandArgs!.indexOf("--output-schema");
+      expect(schemaFlagIndex).toBeGreaterThan(-1);
+      const schemaPath = commandArgs![schemaFlagIndex + 1];
+      expect(typeof schemaPath).toBe("string");
+      if (typeof schemaPath !== "string") {
+        throw new Error("--output-schema flag missing path argument");
+      }
+      expect(fs.existsSync(schemaPath)).toBe(false);
+    } finally {
+      restore();
+      await close();
+    }
+  });
   it("runs in provided working directory", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,

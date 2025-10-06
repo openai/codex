@@ -10,6 +10,7 @@ use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -47,10 +48,7 @@ async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
     .to_string();
 
     let first_response = sse(vec![
-        serde_json::json!({
-            "type": "response.created",
-            "response": {"id": "resp-1"}
-        }),
+        ev_response_created("resp-1"),
         ev_function_call(call_id, "read_file", &arguments),
         ev_completed("resp-1"),
     ]);
