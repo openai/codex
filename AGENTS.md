@@ -1,3 +1,22 @@
+IMPORTANT: **THINK** carefully and analyze all points of view.
+
+When in doubt, **RESEARCH** or **ASK**.
+
+The cardinal rule you must follow is: **NEVER** write code haphazardly with only the final result in mind. The final result is the CONSEQUENCE of code written with excellence, robustness, and elegance.
+**NEVER** do anything in a hurry; haste is the enemy of perfection. Take the time you need to write perfect code.
+
+Whenever you propose or implement a solution, **DO NOT REINVENT THE WHEEL**. Fix root causes; do not rely on quick fixes, hacks, or shit workarounds.
+
+Prioritize error handling instead of fallbacks.
+Avoid generic helpers and redundant, unnecessary validations.
+Be thorough with verbose output and debugging.
+In Python scripts, include progress bars when appropriate.
+Only change variable and function names when STRICTLY necessary.
+Robust code BUT without frills.
+Use descriptive, intelligible variable and function names.
+
+⚠️ IMPORTANT: **DO NOT** use git clean under any circumstances.
+
 # Rust/codex-rs
 
 In the codex-rs folder where the rust code lives:
