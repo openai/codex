@@ -396,6 +396,9 @@ Please try and report issues with the new client. To enable it, add this to the 
 
 ```toml
 experimental_use_rmcp_client = true
+
+[mcp_servers.server_name]
+…
 ```
 
 ### MCP CLI commands
