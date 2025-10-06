@@ -1348,9 +1348,9 @@ impl ChatComposer {
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
-            model_label: self.footer_model_label.as_deref(),
-            directory: self.footer_directory.as_deref(),
-            account_email: self.footer_account_email.as_deref(),
+            model_label: self.footer_model_label.clone(),
+            directory: self.footer_directory.clone(),
+            account_email: self.footer_account_email.clone(),
             primary_limit_percent: self.footer_primary_limit_percent,
             weekly_limit_percent: self.footer_weekly_limit_percent,
         }

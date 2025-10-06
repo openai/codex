@@ -18,9 +18,9 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<u8>,
-    pub(crate) model_label: Option<&'static str>,
-    pub(crate) directory: Option<&'static str>,
-    pub(crate) account_email: Option<&'static str>,
+    pub(crate) model_label: Option<String>,
+    pub(crate) directory: Option<String>,
+    pub(crate) account_email: Option<String>,
     pub(crate) primary_limit_percent: Option<u8>,
     pub(crate) weekly_limit_percent: Option<u8>,
 }
@@ -84,15 +84,21 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             esc_backtrack_hint: props.esc_backtrack_hint,
         }),
         FooterMode::CtrlCReminder => {
-            let mut line = ctrl_c_reminder_line(CtrlCReminderState {
+            let mut line = Line::from("");
+            append_context_span(&mut line, props.context_window_percent);
+            line.push_span(Span::from(" | ").dim());
+            let ctrl = ctrl_c_reminder_line(CtrlCReminderState {
                 is_task_running: props.is_task_running,
             });
-            append_context_span(&mut line, props.context_window_percent);
+            line.extend(ctrl.spans);
             vec![line]
         }
         FooterMode::EscHint => {
-            let mut line = esc_hint_line(props.esc_backtrack_hint);
+            let mut line = Line::from("");
             append_context_span(&mut line, props.context_window_percent);
+            line.push_span(Span::from(" | ").dim());
+            let esc = esc_hint_line(props.esc_backtrack_hint);
+            line.extend(esc.spans);
             vec![line]
         }
         FooterMode::ShortcutPrompt => {
@@ -280,15 +286,16 @@ fn append_segment<S: Into<String>>(line: &mut Line<'static>, text: Option<S>) {
 }
 
 fn info_line(
-    model_label: Option<&'static str>,
-    directory: Option<&'static str>,
-    account_email: Option<&'static str>,
+    model_label: Option<String>,
+    directory: Option<String>,
+    account_email: Option<String>,
     primary_limit_percent: Option<u8>,
     weekly_limit_percent: Option<u8>,
     context_percent: Option<u8>,
     with_shortcuts_hint: bool,
 ) -> Line<'static> {
     let mut line = Line::from("");
+    append_context_span(&mut line, context_percent);
     append_segment(&mut line, model_label);
     append_segment(&mut line, directory);
     append_segment(&mut line, account_email);
@@ -298,11 +305,12 @@ fn info_line(
     if let Some(w) = weekly_limit_percent {
         append_segment(&mut line, Some(format!("weekly {w}%")));
     }
-    append_context_span(&mut line, context_percent);
     if with_shortcuts_hint {
         line.push_span(Span::from(" · ").dim());
-        line.push_span(key_hint::plain(KeyCode::Char('?')).into());
-        line.push_span(Span::from(" for shortcuts").dim());
+        line.extend(vec![
+            key_hint::plain(KeyCode::Char('?')).into(),
+            Span::from(" for shortcuts").dim(),
+        ]);
     }
     line
 }
