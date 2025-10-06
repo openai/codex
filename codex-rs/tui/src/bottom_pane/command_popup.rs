@@ -6,10 +6,13 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+use crate::render::Insets;
+use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
@@ -120,8 +123,12 @@ impl CommandPopup {
                 out.push((CommandItem::Builtin(*cmd), Some(indices), score));
             }
         }
+        // Support both search styles:
+        // - Typing "name" should surface "/prompts:name" results.
+        // - Typing "prompts:name" should also work.
         for (idx, p) in self.prompts.iter().enumerate() {
-            if let Some((indices, score)) = fuzzy_match(&p.name, filter) {
+            let display = format!("{PROMPTS_CMD_PREFIX}:{}", p.name);
+            if let Some((indices, score)) = fuzzy_match(&display, filter) {
                 out.push((CommandItem::UserPrompt(idx), Some(indices), score));
             }
         }
@@ -158,7 +165,7 @@ impl CommandPopup {
                         (format!("/{}", cmd.command()), cmd.description().to_string())
                     }
                     CommandItem::UserPrompt(i) => (
-                        format!("/{}", self.prompts[i].name),
+                        format!("/{PROMPTS_CMD_PREFIX}:{}", self.prompts[i].name),
                         "send saved prompt".to_string(),
                     ),
                 };
@@ -166,6 +173,7 @@ impl CommandPopup {
                     name,
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     is_current: false,
+                    display_shortcut: None,
                     description: Some(description),
                 }
             })
@@ -200,13 +208,12 @@ impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
         render_rows(
-            area,
+            area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
             "no matches",
-            false,
         );
     }
 }

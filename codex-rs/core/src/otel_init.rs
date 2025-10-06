@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::config_types::OtelExporterKind as Kind;
 use crate::config_types::OtelHttpProtocol as Protocol;
-use crate::default_client::ORIGINATOR;
+use crate::default_client::originator;
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
 use codex_otel::config::OtelSettings;
@@ -46,7 +46,7 @@ pub fn build_provider(
     };
 
     OtelProvider::from(&OtelSettings {
-        service_name: ORIGINATOR.value.to_owned(),
+        service_name: originator().value.to_owned(),
         service_version: service_version.to_string(),
         codex_home: config.codex_home.clone(),
         environment: config.otel.environment.to_string(),

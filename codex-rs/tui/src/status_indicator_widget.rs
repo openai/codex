@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_core::protocol::Op;
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -17,7 +18,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
-use crate::ui_consts::LIVE_PREFIX_COLS;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
@@ -160,12 +160,12 @@ impl WidgetRef for StatusIndicatorWidget {
         let pretty_elapsed = fmt_elapsed_compact(elapsed);
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];
+        let mut spans = vec!["• ".dim()];
         spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),
             format!("({pretty_elapsed} • ").dim(),
-            "Esc".dim().bold(),
+            key_hint::plain(KeyCode::Esc).into(),
             " to interrupt)".dim(),
         ]);
 
@@ -189,8 +189,14 @@ impl WidgetRef for StatusIndicatorWidget {
             }
         }
         if !self.queued_messages.is_empty() {
-            let shortcut = key_hint::alt("↑");
-            lines.push(Line::from(vec!["   ".into(), shortcut, " edit".into()]).dim());
+            lines.push(
+                Line::from(vec![
+                    "   ".into(),
+                    key_hint::alt(KeyCode::Up).into(),
+                    " edit".into(),
+                ])
+                .dim(),
+            );
         }
 
         let paragraph = Paragraph::new(lines);

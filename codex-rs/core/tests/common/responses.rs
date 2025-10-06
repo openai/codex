@@ -34,6 +34,16 @@ pub fn ev_completed(id: &str) -> Value {
     })
 }
 
+/// Convenience: SSE event for a created response with a specific id.
+pub fn ev_response_created(id: &str) -> Value {
+    serde_json::json!({
+        "type": "response.created",
+        "response": {
+            "id": id,
+        }
+    })
+}
+
 pub fn ev_completed_with_tokens(id: &str, total_tokens: u64) -> Value {
     serde_json::json!({
         "type": "response.completed",
@@ -133,6 +143,16 @@ pub fn ev_apply_patch_function_call(call_id: &str, patch: &str) -> Value {
             "call_id": call_id
         }
     })
+}
+
+pub fn sse_failed(id: &str, code: &str, message: &str) -> String {
+    sse(vec![serde_json::json!({
+        "type": "response.failed",
+        "response": {
+            "id": id,
+            "error": {"code": code, "message": message}
+        }
+    })])
 }
 
 pub fn sse_response(body: String) -> ResponseTemplate {

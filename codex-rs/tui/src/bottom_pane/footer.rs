@@ -1,11 +1,15 @@
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
+use crate::render::line_utils::prefix_lines;
+use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
-use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
@@ -13,6 +17,7 @@ pub(crate) struct FooterProps {
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
+    pub(crate) context_window_percent: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,12 +26,14 @@ pub(crate) enum FooterMode {
     ShortcutPrompt,
     ShortcutOverlay,
     EscHint,
+    Empty,
 }
 
 pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
-    if ctrl_c_hint {
+    if ctrl_c_hint && matches!(current, FooterMode::CtrlCReminder) {
         return current;
     }
+
     match current {
         FooterMode::ShortcutOverlay | FooterMode::CtrlCReminder => FooterMode::ShortcutPrompt,
         _ => FooterMode::ShortcutOverlay,
@@ -43,13 +50,12 @@ pub(crate) fn esc_hint_mode(current: FooterMode, is_task_running: bool) -> Foote
 
 pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     match current {
-        FooterMode::EscHint | FooterMode::ShortcutOverlay => FooterMode::ShortcutPrompt,
+        FooterMode::EscHint
+        | FooterMode::ShortcutOverlay
+        | FooterMode::CtrlCReminder
+        | FooterMode::Empty => FooterMode::ShortcutPrompt,
         other => other,
     }
-}
-
-pub(crate) fn prompt_mode() -> FooterMode {
-    FooterMode::ShortcutPrompt
 }
 
 pub(crate) fn footer_height(props: FooterProps) -> u16 {
@@ -57,37 +63,35 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
 }
 
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
-    let lines = footer_lines(props);
-    for (idx, line) in lines.into_iter().enumerate() {
-        let y = area.y + idx as u16;
-        if y >= area.y + area.height {
-            break;
-        }
-        let row = Rect::new(area.x, y, area.width, 1);
-        line.render_ref(row, buf);
-    }
+    Paragraph::new(prefix_lines(
+        footer_lines(props),
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+    ))
+    .render(area, buf);
 }
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     match props.mode {
-        FooterMode::CtrlCReminder => {
-            vec![ctrl_c_reminder_line(CtrlCReminderState {
-                is_task_running: props.is_task_running,
-            })]
+        FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
+            is_task_running: props.is_task_running,
+        })],
+        FooterMode::ShortcutPrompt => {
+            if props.is_task_running {
+                vec![context_window_line(props.context_window_percent)]
+            } else {
+                vec![Line::from(vec![
+                    key_hint::plain(KeyCode::Char('?')).into(),
+                    " for shortcuts".dim(),
+                ])]
+            }
         }
-        FooterMode::ShortcutPrompt => vec![Line::from(vec!["? for shortcuts".dim()])],
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
             use_shift_enter_hint: props.use_shift_enter_hint,
             esc_backtrack_hint: props.esc_backtrack_hint,
-            is_task_running: props.is_task_running,
         }),
-        FooterMode::EscHint => {
-            vec![esc_hint_line(ShortcutsState {
-                use_shift_enter_hint: props.use_shift_enter_hint,
-                esc_backtrack_hint: props.esc_backtrack_hint,
-                is_task_running: props.is_task_running,
-            })]
-        }
+        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
+        FooterMode::Empty => Vec::new(),
     }
 }
 
@@ -100,7 +104,6 @@ struct CtrlCReminderState {
 struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
-    is_task_running: bool,
 }
 
 fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
@@ -110,79 +113,130 @@ fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
         "quit"
     };
     Line::from(vec![
-        Span::from(format!("  ctrl + c again to {action}")).dim(),
+        key_hint::ctrl(KeyCode::Char('c')).into(),
+        format!(" again to {action}").into(),
     ])
+    .dim()
 }
 
-fn esc_hint_line(state: ShortcutsState) -> Line<'static> {
-    let text = if state.esc_backtrack_hint {
-        "  esc again to edit previous message"
+fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
+    let esc = key_hint::plain(KeyCode::Esc);
+    if esc_backtrack_hint {
+        Line::from(vec![esc.into(), " again to edit previous message".into()]).dim()
     } else {
-        "  esc esc to edit previous message"
-    };
-    Line::from(vec![Span::from(text).dim()])
+        Line::from(vec![
+            esc.into(),
+            " ".into(),
+            esc.into(),
+            " to edit previous message".into(),
+        ])
+        .dim()
+    }
 }
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
-    let mut rendered = Vec::new();
+    let mut commands = Line::from("");
+    let mut newline = Line::from("");
+    let mut file_paths = Line::from("");
+    let mut paste_image = Line::from("");
+    let mut edit_previous = Line::from("");
+    let mut quit = Line::from("");
+    let mut show_transcript = Line::from("");
+
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
-            rendered.push(text);
+            match descriptor.id {
+                ShortcutId::Commands => commands = text,
+                ShortcutId::InsertNewline => newline = text,
+                ShortcutId::FilePaths => file_paths = text,
+                ShortcutId::PasteImage => paste_image = text,
+                ShortcutId::EditPrevious => edit_previous = text,
+                ShortcutId::Quit => quit = text,
+                ShortcutId::ShowTranscript => show_transcript = text,
+            }
         }
     }
-    build_columns(rendered)
+
+    let ordered = vec![
+        commands,
+        newline,
+        file_paths,
+        paste_image,
+        edit_previous,
+        quit,
+        Line::from(""),
+        show_transcript,
+    ];
+
+    build_columns(ordered)
 }
 
-fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
+fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
     if entries.is_empty() {
         return Vec::new();
     }
 
-    const COLUMNS: usize = 3;
-    const MAX_PADDED_WIDTHS: [usize; COLUMNS - 1] = [24, 28];
-    const MIN_PADDED_WIDTHS: [usize; COLUMNS - 1] = [22, 0];
+    const COLUMNS: usize = 2;
+    const COLUMN_PADDING: [usize; COLUMNS] = [4, 4];
+    const COLUMN_GAP: usize = 4;
 
     let rows = entries.len().div_ceil(COLUMNS);
+    let target_len = rows * COLUMNS;
+    let mut entries = entries;
+    if entries.len() < target_len {
+        entries.extend(std::iter::repeat_n(
+            Line::from(""),
+            target_len - entries.len(),
+        ));
+    }
+
     let mut column_widths = [0usize; COLUMNS];
 
     for (idx, entry) in entries.iter().enumerate() {
         let column = idx % COLUMNS;
-        column_widths[column] = column_widths[column].max(entry.len());
+        column_widths[column] = column_widths[column].max(entry.width());
     }
 
-    let mut lines = Vec::new();
-    for row in 0..rows {
-        let mut line = String::from("  ");
-        for col in 0..COLUMNS {
-            let idx = row * COLUMNS + col;
-            if idx >= entries.len() {
-                continue;
-            }
-            let entry = &entries[idx];
-            if col < COLUMNS - 1 {
-                let max_width = MAX_PADDED_WIDTHS[col];
-                let mut target_width = column_widths[col];
-                target_width = target_width.max(MIN_PADDED_WIDTHS[col]).min(max_width);
-                let pad_width = target_width + 2;
-                line.push_str(&format!("{entry:<pad_width$}"));
-            } else {
-                if col != 0 {
-                    line.push_str("  ");
+    for (idx, width) in column_widths.iter_mut().enumerate() {
+        *width += COLUMN_PADDING[idx];
+    }
+
+    entries
+        .chunks(COLUMNS)
+        .map(|chunk| {
+            let mut line = Line::from("");
+            for (col, entry) in chunk.iter().enumerate() {
+                line.extend(entry.spans.clone());
+                if col < COLUMNS - 1 {
+                    let target_width = column_widths[col];
+                    let padding = target_width.saturating_sub(entry.width()) + COLUMN_GAP;
+                    line.push_span(Span::from(" ".repeat(padding)));
                 }
-                line.push_str(entry);
             }
-        }
-        lines.push(Line::from(vec![Span::from(line).dim()]));
-    }
+            line.dim()
+        })
+        .collect()
+}
 
-    lines
+fn context_window_line(percent: Option<u8>) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    match percent {
+        Some(percent) => {
+            spans.push(format!("{percent}%").dim());
+            spans.push(" context left".dim());
+        }
+        None => {
+            spans.push(key_hint::plain(KeyCode::Char('?')).into());
+            spans.push(" for shortcuts".dim());
+        }
+    }
+    Line::from(spans)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
     InsertNewline,
-    ChangeMode,
     FilePaths,
     PasteImage,
     EditPrevious,
@@ -192,9 +246,7 @@ enum ShortcutId {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ShortcutBinding {
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    overlay_text: &'static str,
+    key: KeyBinding,
     condition: DisplayCondition,
 }
 
@@ -233,32 +285,24 @@ impl ShortcutDescriptor {
         self.bindings.iter().find(|binding| binding.matches(state))
     }
 
-    fn overlay_entry(&self, state: ShortcutsState) -> Option<String> {
+    fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
         let binding = self.binding_for(state)?;
-        let label = match self.id {
-            ShortcutId::Quit => {
-                if state.is_task_running {
-                    " to interrupt"
-                } else {
-                    self.label
-                }
-            }
+        let mut line = Line::from(vec![self.prefix.into(), binding.key.into()]);
+        match self.id {
             ShortcutId::EditPrevious => {
                 if state.esc_backtrack_hint {
-                    " again to edit previous message"
+                    line.push_span(" again to edit previous message");
                 } else {
-                    " esc to edit previous message"
+                    line.extend(vec![
+                        " ".into(),
+                        key_hint::plain(KeyCode::Esc).into(),
+                        " to edit previous message".into(),
+                    ]);
                 }
             }
-            _ => self.label,
+            _ => line.push_span(self.label),
         };
-        let text = match self.id {
-            ShortcutId::Quit if state.is_task_running => {
-                format!("{}{} to interrupt", self.prefix, binding.overlay_text)
-            }
-            _ => format!("{}{}{}", self.prefix, binding.overlay_text, label),
-        };
-        Some(text)
+        Some(line)
     }
 }
 
@@ -266,9 +310,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::Commands,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('/'),
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "/",
+            key: key_hint::plain(KeyCode::Char('/')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -278,15 +320,11 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         id: ShortcutId::InsertNewline,
         bindings: &[
             ShortcutBinding {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::SHIFT,
-                overlay_text: "shift + enter",
+                key: key_hint::shift(KeyCode::Enter),
                 condition: DisplayCondition::WhenShiftEnterHint,
             },
             ShortcutBinding {
-                code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::CONTROL,
-                overlay_text: "ctrl + j",
+                key: key_hint::ctrl(KeyCode::Char('j')),
                 condition: DisplayCondition::WhenNotShiftEnterHint,
             },
         ],
@@ -294,22 +332,9 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         label: " for newline",
     },
     ShortcutDescriptor {
-        id: ShortcutId::ChangeMode,
-        bindings: &[ShortcutBinding {
-            code: KeyCode::BackTab,
-            modifiers: KeyModifiers::SHIFT,
-            overlay_text: "shift + tab",
-            condition: DisplayCondition::Always,
-        }],
-        prefix: "",
-        label: " to change mode",
-    },
-    ShortcutDescriptor {
         id: ShortcutId::FilePaths,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('@'),
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "@",
+            key: key_hint::plain(KeyCode::Char('@')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -318,9 +343,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::PasteImage,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('v'),
-            modifiers: KeyModifiers::CONTROL,
-            overlay_text: "ctrl + v",
+            key: key_hint::ctrl(KeyCode::Char('v')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -329,9 +352,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::EditPrevious,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Esc,
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "esc",
+            key: key_hint::plain(KeyCode::Esc),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -340,9 +361,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::Quit,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('c'),
-            modifiers: KeyModifiers::CONTROL,
-            overlay_text: "ctrl + c",
+            key: key_hint::ctrl(KeyCode::Char('c')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -351,9 +370,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::ShowTranscript,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('t'),
-            modifiers: KeyModifiers::CONTROL,
-            overlay_text: "ctrl + t",
+            key: key_hint::ctrl(KeyCode::Char('t')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -389,6 +406,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                context_window_percent: None,
             },
         );
 
@@ -399,6 +417,7 @@ mod tests {
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: true,
                 is_task_running: false,
+                context_window_percent: None,
             },
         );
 
@@ -409,6 +428,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                context_window_percent: None,
             },
         );
 
@@ -419,6 +439,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
+                context_window_percent: None,
             },
         );
 
@@ -429,6 +450,7 @@ mod tests {
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                context_window_percent: None,
             },
         );
 
@@ -439,6 +461,18 @@ mod tests {
                 esc_backtrack_hint: true,
                 use_shift_enter_hint: false,
                 is_task_running: false,
+                context_window_percent: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_shortcuts_context_running",
+            FooterProps {
+                mode: FooterMode::ShortcutPrompt,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: true,
+                context_window_percent: Some(72),
             },
         );
     }

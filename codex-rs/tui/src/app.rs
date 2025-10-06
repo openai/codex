@@ -1,10 +1,14 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
+use crate::diff_render::DiffSummary;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
+use crate::render::highlight::highlight_bash_to_lines;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -14,9 +18,10 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -82,7 +87,10 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
+        let conversation_manager = Arc::new(ConversationManager::new(
+            auth_manager.clone(),
+            SessionSource::Cli,
+        ));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
 
@@ -292,7 +300,7 @@ impl App {
                 } else {
                     text.lines().map(ansi_escape_line).collect()
                 };
-                self.overlay = Some(Overlay::new_static_with_title(
+                self.overlay = Some(Overlay::new_static_with_lines(
                     pager_lines,
                     "D I F F".to_string(),
                 ));
@@ -316,20 +324,30 @@ impl App {
                     self.config.model_family = family;
                 }
             }
+            AppEvent::OpenReasoningPopup { model, presets } => {
+                self.chat_widget.open_reasoning_popup(model, presets);
+            }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
                 match persist_model_selection(&self.config.codex_home, profile, &model, effort)
                     .await
                 {
                     Ok(()) => {
+                        let effort_label = effort
+                            .map(|eff| format!(" with {eff} reasoning"))
+                            .unwrap_or_else(|| " with default reasoning".to_string());
                         if let Some(profile) = profile {
                             self.chat_widget.add_info_message(
-                                format!("Model changed to {model} for {profile} profile"),
+                                format!(
+                                    "Model changed to {model}{effort_label} for {profile} profile"
+                                ),
                                 None,
                             );
                         } else {
-                            self.chat_widget
-                                .add_info_message(format!("Model changed to {model}"), None);
+                            self.chat_widget.add_info_message(
+                                format!("Model changed to {model}{effort_label}"),
+                                None,
+                            );
                         }
                     }
                     Err(err) => {
@@ -363,6 +381,25 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::FullScreenApprovalRequest(request) => match request {
+                ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let diff_summary = DiffSummary::new(changes, cwd);
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![diff_summary.into()],
+                        "P A T C H".to_string(),
+                    ));
+                }
+                ApprovalRequest::Exec { command, .. } => {
+                    let _ = tui.enter_alt_screen();
+                    let full_cmd = strip_bash_lc_and_escape(&command);
+                    let full_cmd_lines = highlight_bash_to_lines(&full_cmd);
+                    self.overlay = Some(Overlay::new_static_with_lines(
+                        full_cmd_lines,
+                        "E X E C".to_string(),
+                    ));
+                }
+            },
         }
         Ok(true)
     }
@@ -451,7 +488,7 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
     use codex_core::protocol::SessionConfiguredEvent;
-    use codex_protocol::mcp_protocol::ConversationId;
+    use codex_protocol::ConversationId;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;

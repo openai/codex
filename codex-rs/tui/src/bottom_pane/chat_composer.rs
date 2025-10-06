@@ -7,6 +7,7 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -22,7 +23,6 @@ use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
-use super::footer::prompt_mode;
 use super::footer::render_footer;
 use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
@@ -32,11 +32,15 @@ use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
 use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::bottom_pane::prompt_args::prompt_argument_names;
+use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
 use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -44,6 +48,7 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
+use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
@@ -71,6 +76,16 @@ struct AttachedImage {
     path: PathBuf,
 }
 
+enum PromptSelectionMode {
+    Completion,
+    Submit,
+}
+
+enum PromptSelectionAction {
+    Insert { text: String, cursor: Option<usize> },
+    Submit { text: String },
+}
+
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
@@ -93,6 +108,8 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
     footer_mode: FooterMode,
+    footer_hint_override: Option<Vec<(String, String)>>,
+    context_window_percent: Option<u8>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -102,7 +119,7 @@ enum ActivePopup {
     File(FileSearchPopup),
 }
 
-const FOOTER_SPACING_HEIGHT: u16 = 1;
+const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 impl ChatComposer {
     pub fn new(
@@ -134,6 +151,8 @@ impl ChatComposer {
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
             footer_mode: FooterMode::ShortcutPrompt,
+            footer_hint_override: None,
+            context_window_percent: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -142,12 +161,10 @@ impl ChatComposer {
 
     pub fn desired_height(&self, width: u16) -> u16 {
         let footer_props = self.footer_props();
-        let footer_hint_height = footer_height(footer_props);
-        let footer_spacing = if footer_hint_height > 0 {
-            FOOTER_SPACING_HEIGHT
-        } else {
-            0
-        };
+        let footer_hint_height = self
+            .custom_footer_height()
+            .unwrap_or_else(|| footer_height(footer_props));
+        let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         self.textarea
             .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
@@ -161,12 +178,10 @@ impl ChatComposer {
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
-        let footer_hint_height = footer_height(footer_props);
-        let footer_spacing = if footer_hint_height > 0 {
-            FOOTER_SPACING_HEIGHT
-        } else {
-            0
-        };
+        let footer_hint_height = self
+            .custom_footer_height()
+            .unwrap_or_else(|| footer_height(footer_props));
+        let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => {
@@ -186,6 +201,14 @@ impl ChatComposer {
         textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
         textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
         [composer_rect, textarea_rect, popup_rect]
+    }
+
+    fn footer_spacing(footer_hint_height: u16) -> u16 {
+        if footer_hint_height == 0 {
+            0
+        } else {
+            FOOTER_SPACING_HEIGHT
+        }
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -273,6 +296,12 @@ impl ChatComposer {
         }
     }
 
+    /// Override the footer hint items displayed beneath the composer. Passing
+    /// `None` restores the default shortcut footer.
+    pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.footer_hint_override = items;
+    }
+
     /// Replace the entire composer content with `text` and reset cursor.
     pub(crate) fn set_text_content(&mut self, text: String) {
         // Clear any existing content, placeholders, and attachments first.
@@ -337,7 +366,7 @@ impl ChatComposer {
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
         if show {
-            self.footer_mode = prompt_mode();
+            self.footer_mode = FooterMode::CtrlCReminder;
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
@@ -436,15 +465,17 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
-                                let name = prompt.name.clone();
-                                let starts_with_cmd = first_line
-                                    .trim_start()
-                                    .starts_with(format!("/{name}").as_str());
-                                if !starts_with_cmd {
-                                    self.textarea.set_text(format!("/{name} ").as_str());
-                                }
-                                if !self.textarea.text().is_empty() {
-                                    cursor_target = Some(self.textarea.text().len());
+                                match prompt_selection_action(
+                                    prompt,
+                                    first_line,
+                                    PromptSelectionMode::Completion,
+                                ) {
+                                    PromptSelectionAction::Insert { text, cursor } => {
+                                        let target = cursor.unwrap_or(text.len());
+                                        self.textarea.set_text(&text);
+                                        cursor_target = Some(target);
+                                    }
+                                    PromptSelectionAction::Submit { .. } => {}
                                 }
                             }
                         }
@@ -465,7 +496,8 @@ impl ChatComposer {
                 // immediately regardless of the popup selection.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 if let Some((name, _rest)) = parse_slash_name(first_line)
-                    && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == name)
+                    && let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
+                    && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name)
                     && let Some(expanded) =
                         expand_if_numeric_with_positional_args(prompt, first_line)
                 {
@@ -481,27 +513,21 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(idx) => {
                             if let Some(prompt) = popup.prompt(idx) {
-                                let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
-
-                                if !has_numeric {
-                                    // No placeholders at all: auto-submit the literal content
-                                    self.textarea.set_text("");
-                                    return (InputResult::Submitted(prompt.content.clone()), true);
-                                }
-                                // Numeric placeholders present.
-                                // If the user already typed positional args on the first line,
-                                // expand immediately and submit; otherwise insert "/name " so
-                                // they can type args.
-                                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                                if let Some(expanded) =
-                                    expand_if_numeric_with_positional_args(prompt, first_line)
-                                {
-                                    self.textarea.set_text("");
-                                    return (InputResult::Submitted(expanded), true);
-                                } else {
-                                    let text = format!("/{} ", prompt.name);
-                                    self.textarea.set_text(&text);
-                                    self.textarea.set_cursor(self.textarea.text().len());
+                                match prompt_selection_action(
+                                    prompt,
+                                    first_line,
+                                    PromptSelectionMode::Submit,
+                                ) {
+                                    PromptSelectionAction::Submit { text } => {
+                                        self.textarea.set_text("");
+                                        return (InputResult::Submitted(text), true);
+                                    }
+                                    PromptSelectionAction::Insert { text, cursor } => {
+                                        let target = cursor.unwrap_or(text.len());
+                                        self.textarea.set_text(&text);
+                                        self.textarea.set_cursor(target);
+                                        return (InputResult::None, true);
+                                    }
                                 }
                             }
                             return (InputResult::None, true);
@@ -869,6 +895,23 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
+                // If the first line is a bare built-in slash command (no args),
+                // dispatch it even when the slash popup isn't visible. This preserves
+                // the workflow: type a prefix ("/di"), press Tab to complete to
+                // "/diff ", then press Enter to run it. Tab moves the cursor beyond
+                // the '/name' token and our caret-based heuristic hides the popup,
+                // but Enter should still dispatch the command rather than submit
+                // literal text.
+                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                if let Some((name, rest)) = parse_slash_name(first_line)
+                    && rest.is_empty()
+                    && let Some((_n, cmd)) = built_in_slash_commands()
+                        .into_iter()
+                        .find(|(n, _)| *n == name)
+                {
+                    self.textarea.set_text("");
+                    return (InputResult::Command(cmd), true);
+                }
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
                 // Do not treat Enter as paste inside a slash-command context.
@@ -915,6 +958,7 @@ impl ChatComposer {
                     return (InputResult::None, true);
                 }
                 let mut text = self.textarea.text().to_string();
+                let original_input = text.clone();
                 self.textarea.set_text("");
 
                 // Replace all pending pastes in the text
@@ -928,13 +972,20 @@ impl ChatComposer {
                 // If there is neither text nor attachments, suppress submission entirely.
                 let has_attachments = !self.attached_images.is_empty();
                 text = text.trim().to_string();
-
-                if let Some(expanded) =
-                    expand_custom_prompt(&text, &self.custom_prompts).unwrap_or_default()
-                {
+                let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
+                    Ok(expanded) => expanded,
+                    Err(err) => {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(err.user_message()),
+                        )));
+                        self.textarea.set_text(&original_input);
+                        self.textarea.set_cursor(original_input.len());
+                        return (InputResult::None, true);
+                    }
+                };
+                if let Some(expanded) = expanded_prompt {
                     text = expanded;
                 }
-
                 if text.is_empty() && !has_attachments {
                     return (InputResult::None, true);
                 }
@@ -1261,12 +1312,14 @@ impl ChatComposer {
             return false;
         }
 
-        let toggles = match key_event.code {
-            KeyCode::Char('?') if key_event.modifiers.is_empty() => true,
-            KeyCode::BackTab => true,
-            KeyCode::Tab if key_event.modifiers.contains(KeyModifiers::SHIFT) => true,
-            _ => false,
-        };
+        let toggles = matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('?'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.is_empty()
+        );
 
         if !toggles {
             return false;
@@ -1284,17 +1337,25 @@ impl ChatComposer {
             esc_backtrack_hint: self.esc_backtrack_hint,
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
+            context_window_percent: self.context_window_percent,
         }
     }
 
     fn footer_mode(&self) -> FooterMode {
-        if matches!(self.footer_mode, FooterMode::EscHint) {
-            FooterMode::EscHint
-        } else if self.ctrl_c_quit_hint {
-            FooterMode::CtrlCReminder
-        } else {
-            self.footer_mode
+        match self.footer_mode {
+            FooterMode::EscHint => FooterMode::EscHint,
+            FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
+            FooterMode::CtrlCReminder => FooterMode::CtrlCReminder,
+            FooterMode::ShortcutPrompt if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
+            FooterMode::ShortcutPrompt if !self.is_empty() => FooterMode::Empty,
+            other => other,
         }
+    }
+
+    fn custom_footer_height(&self) -> Option<u16> {
+        self.footer_hint_override
+            .as_ref()
+            .map(|items| if items.is_empty() { 0 } else { 1 })
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -1405,8 +1466,11 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
-        if running {
-            self.footer_mode = prompt_mode();
+    }
+
+    pub(crate) fn set_context_window_percent(&mut self, percent: Option<u8>) {
+        if self.context_window_percent != percent {
+            self.context_window_percent = percent;
         }
     }
 
@@ -1431,12 +1495,11 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let footer_hint_height = footer_height(self.footer_props());
-                let footer_spacing = if footer_hint_height > 0 {
-                    FOOTER_SPACING_HEIGHT
-                } else {
-                    0
-                };
+                let footer_props = self.footer_props();
+                let custom_height = self.custom_footer_height();
+                let footer_hint_height =
+                    custom_height.unwrap_or_else(|| footer_height(footer_props));
+                let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([
                         Constraint::Length(footer_spacing),
@@ -1447,10 +1510,27 @@ impl WidgetRef for ChatComposer {
                 } else {
                     popup_rect
                 };
-                let mut footer_rect = hint_rect;
-                footer_rect.x = footer_rect.x.saturating_add(2);
-                footer_rect.width = footer_rect.width.saturating_sub(2);
-                render_footer(footer_rect, buf, self.footer_props());
+                if let Some(items) = self.footer_hint_override.as_ref() {
+                    if !items.is_empty() {
+                        let mut spans = Vec::with_capacity(items.len() * 4);
+                        for (idx, (key, label)) in items.iter().enumerate() {
+                            spans.push(" ".into());
+                            spans.push(Span::styled(key.clone(), Style::default().bold()));
+                            spans.push(format!(" {label}").into());
+                            if idx + 1 != items.len() {
+                                spans.push("   ".into());
+                            }
+                        }
+                        let mut custom_rect = hint_rect;
+                        if custom_rect.width > 2 {
+                            custom_rect.x += 2;
+                            custom_rect.width = custom_rect.width.saturating_sub(2);
+                        }
+                        Line::from(spans).render_ref(custom_rect, buf);
+                    }
+                } else {
+                    render_footer(hint_rect, buf, footer_props);
+                }
             }
         }
         let style = user_message_style(terminal_palette::default_bg());
@@ -1474,6 +1554,54 @@ impl WidgetRef for ChatComposer {
     }
 }
 
+fn prompt_selection_action(
+    prompt: &CustomPrompt,
+    first_line: &str,
+    mode: PromptSelectionMode,
+) -> PromptSelectionAction {
+    let named_args = prompt_argument_names(&prompt.content);
+    let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
+
+    match mode {
+        PromptSelectionMode::Completion => {
+            if !named_args.is_empty() {
+                let (text, cursor) =
+                    prompt_command_with_arg_placeholders(&prompt.name, &named_args);
+                return PromptSelectionAction::Insert {
+                    text,
+                    cursor: Some(cursor),
+                };
+            }
+            if has_numeric {
+                let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
+                return PromptSelectionAction::Insert { text, cursor: None };
+            }
+            let text = format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name);
+            PromptSelectionAction::Insert { text, cursor: None }
+        }
+        PromptSelectionMode::Submit => {
+            if !named_args.is_empty() {
+                let (text, cursor) =
+                    prompt_command_with_arg_placeholders(&prompt.name, &named_args);
+                return PromptSelectionAction::Insert {
+                    text,
+                    cursor: Some(cursor),
+                };
+            }
+            if has_numeric {
+                if let Some(expanded) = expand_if_numeric_with_positional_args(prompt, first_line) {
+                    return PromptSelectionAction::Submit { text: expanded };
+                }
+                let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
+                return PromptSelectionAction::Insert { text, cursor: None };
+            }
+            PromptSelectionAction::Submit {
+                text: prompt.content.clone(),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1489,7 +1617,6 @@ mod tests {
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
-    use crate::bottom_pane::footer::footer_height;
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
@@ -1566,8 +1693,10 @@ mod tests {
             false,
         );
         setup(&mut composer);
-        let footer_lines = footer_height(composer.footer_props());
-        let height = footer_lines + 8;
+        let footer_props = composer.footer_props();
+        let footer_lines = footer_height(footer_props);
+        let footer_spacing = ChatComposer::footer_spacing(footer_lines);
+        let height = footer_lines + footer_spacing + 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|f| f.render_widget_ref(composer, f.area()))
@@ -1621,6 +1750,76 @@ mod tests {
                 composer.set_esc_backtrack_hint(true);
             },
         );
+
+        snapshot_composer_state("footer_mode_hidden_while_typing", true, |composer| {
+            type_chars_humanlike(composer, &['h']);
+        });
+    }
+
+    #[test]
+    fn question_mark_only_toggles_on_first_char() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw, "toggling overlay should request redraw");
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
+
+        // Toggle back to prompt mode so subsequent typing captures characters.
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutPrompt);
+
+        type_chars_humanlike(&mut composer, &['h']);
+        assert_eq!(composer.textarea.text(), "h");
+        assert_eq!(composer.footer_mode(), FooterMode::Empty);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw, "typing should still mark the view dirty");
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let _ = composer.flush_paste_burst_if_due();
+        assert_eq!(composer.textarea.text(), "h?");
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutPrompt);
+        assert_eq!(composer.footer_mode(), FooterMode::Empty);
+    }
+
+    #[test]
+    fn shortcut_overlay_persists_while_task_running() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
+
+        composer.set_task_running(true);
+
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutOverlay);
+        assert_eq!(composer.footer_mode(), FooterMode::ShortcutOverlay);
     }
 
     #[test]
@@ -2057,13 +2256,17 @@ mod tests {
 
     #[test]
     fn extract_args_supports_quoted_paths_single_arg() {
-        let args = extract_positional_args_for_prompt_line("/review \"docs/My File.md\"", "review");
+        let args = extract_positional_args_for_prompt_line(
+            "/prompts:review \"docs/My File.md\"",
+            "review",
+        );
         assert_eq!(args, vec!["docs/My File.md".to_string()]);
     }
 
     #[test]
     fn extract_args_supports_mixed_quoted_and_unquoted() {
-        let args = extract_positional_args_for_prompt_line("/cmd \"with spaces\" simple", "cmd");
+        let args =
+            extract_positional_args_for_prompt_line("/prompts:cmd \"with spaces\" simple", "cmd");
         assert_eq!(args, vec!["with spaces".to_string(), "simple".to_string()]);
     }
 
@@ -2090,6 +2293,38 @@ mod tests {
 
         assert_eq!(composer.textarea.text(), "/compact ");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn slash_tab_then_enter_dispatches_builtin_command() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Type a prefix and complete with Tab, which inserts a trailing space
+        // and moves the cursor beyond the '/name' token (hides the popup).
+        type_chars_humanlike(&mut composer, &['/', 'd', 'i']);
+        let (_res, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "/diff ");
+
+        // Press Enter: should dispatch the command, not submit literal text.
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Command(cmd) => assert_eq!(cmd.command(), "diff"),
+            InputResult::Submitted(text) => {
+                panic!("expected command dispatch after Tab completion, got literal submit: {text}")
+            }
+            InputResult::None => panic!("expected Command result for '/diff'"),
+        }
+        assert!(composer.textarea.is_empty());
     }
 
     #[test]
@@ -2538,7 +2773,10 @@ mod tests {
 
         type_chars_humanlike(
             &mut composer,
-            &['/', 'm', 'y', '-', 'p', 'r', 'o', 'm', 'p', 't'],
+            &[
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'm', 'y', '-', 'p', 'r', 'o', 'm',
+                'p', 't',
+            ],
         );
 
         let (result, _needs_redraw) =
@@ -2546,6 +2784,174 @@ mod tests {
 
         assert_eq!(InputResult::Submitted(prompt_text.to_string()), result);
         assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_submission_expands_arguments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes on $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text("/prompts:my-prompt USER=Alice BRANCH=main");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            InputResult::Submitted("Review Alice changes on main".to_string()),
+            result
+        );
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_submission_accepts_quoted_values() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Pair $USER with $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text("/prompts:my-prompt USER=\"Alice Smith\" BRANCH=dev-main");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            InputResult::Submitted("Pair Alice Smith with dev-main".to_string()),
+            result
+        );
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_invalid_args_reports_error() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text("/prompts:my-prompt USER=Alice stray");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(
+            "/prompts:my-prompt USER=Alice stray",
+            composer.textarea.text()
+        );
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.contains("expected key=value"));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "expected error history cell to be sent");
+    }
+
+    #[test]
+    fn custom_prompt_missing_required_args_reports_error() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes on $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        // Provide only one of the required args
+        composer.textarea.set_text("/prompts:my-prompt USER=Alice");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("/prompts:my-prompt USER=Alice", composer.textarea.text());
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.to_lowercase().contains("missing required args"));
+                assert!(message.contains("BRANCH"));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(
+            found_error,
+            "expected missing args error history cell to be sent"
+        );
     }
 
     #[test]
@@ -2575,8 +2981,8 @@ mod tests {
         type_chars_humanlike(
             &mut composer,
             &[
-                '/', 'm', 'y', '-', 'p', 'r', 'o', 'm', 'p', 't', ' ', 'f', 'o', 'o', ' ', 'b',
-                'a', 'r',
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'm', 'y', '-', 'p', 'r', 'o', 'm',
+                'p', 't', ' ', 'f', 'o', 'o', ' ', 'b', 'a', 'r',
             ],
         );
         let (result, _needs_redraw) =
@@ -2584,6 +2990,37 @@ mod tests {
 
         let expected = "Header: foo\nArgs: foo bar\nNinth: \n".to_string();
         assert_eq!(InputResult::Submitted(expected), result);
+    }
+
+    #[test]
+    fn numeric_prompt_positional_args_does_not_error() {
+        // Ensure that a prompt with only numeric placeholders does not trigger
+        // key=value parsing errors when given positional arguments.
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "elegant".to_string(),
+            path: "/tmp/elegant.md".to_string().into(),
+            content: "Echo: $ARGUMENTS".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        // Type positional args; should submit with numeric expansion, no errors.
+        composer.textarea.set_text("/prompts:elegant hi");
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::Submitted("Echo: hi".to_string()), result);
+        assert!(composer.textarea.is_empty());
     }
 
     #[test]
@@ -2608,14 +3045,17 @@ mod tests {
             argument_hint: None,
         }]);
 
-        type_chars_humanlike(&mut composer, &['/', 'p']);
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'p'],
+        );
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         // With no args typed, selecting the prompt inserts the command template
         // and does not submit immediately.
         assert_eq!(InputResult::None, result);
-        assert_eq!("/p ", composer.textarea.text());
+        assert_eq!("/prompts:p ", composer.textarea.text());
     }
 
     #[test]
@@ -2641,7 +3081,12 @@ mod tests {
             argument_hint: None,
         }]);
 
-        type_chars_humanlike(&mut composer, &['/', 'p', 'r', 'i', 'c', 'e', ' ', 'x']);
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'p', 'r', 'i', 'c', 'e', ' ', 'x',
+            ],
+        );
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -2676,7 +3121,8 @@ mod tests {
         type_chars_humanlike(
             &mut composer,
             &[
-                '/', 'r', 'e', 'p', 'e', 'a', 't', ' ', 'o', 'n', 'e', ' ', 't', 'w', 'o',
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'r', 'e', 'p', 'e', 'a', 't', ' ',
+                'o', 'n', 'e', ' ', 't', 'w', 'o',
             ],
         );
         let (result, _needs_redraw) =
