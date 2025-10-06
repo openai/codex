@@ -50,6 +50,41 @@ for await (const event of events) {
 }
 ```
 
+### Structured output
+
+Provide a JSON schema per turn to have Codex respond with structured JSON. Pass schemas as
+plain JavaScript objects.
+
+
+```typescript
+const schema = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    status: { type: "string", enum: ["ok", "action_required"] },
+  },
+  required: ["summary", "status"],
+  additionalProperties: false,
+} as const;
+
+const turn = await thread.run("Summarize repository status", { outputSchema: schema });
+console.log(turn.finalResponse);
+```
+
+You can also create JSON schemas for Zod types using the `zod-to-json-schema` package and setting the `target` to `"openAi"`.
+
+```typescript
+const schema = z.object({
+  summary: z.string(),
+  status: z.enum(["ok", "action_required"]),
+});
+
+const turn = await thread.run("Summarize repository status", {
+  outputSchema: zodToJsonSchema(schema, { target: "openAi" }),
+});
+console.log(turn.finalResponse);
+```
+
 ### Resuming an existing thread
 
 Threads are persisted in `~/.codex/sessions`. If you lose the in-memory `Thread` object, reconstruct it with `resumeThread()` and keep going.
@@ -70,4 +105,3 @@ const thread = codex.startThread({
   skipGitRepoCheck: true,
 });
 ```
-
