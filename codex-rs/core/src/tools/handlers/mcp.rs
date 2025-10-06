@@ -16,10 +16,7 @@ impl ToolHandler for McpHandler {
         ToolKind::Mcp
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation<'_>,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
             sub_id,
@@ -45,8 +42,8 @@ impl ToolHandler for McpHandler {
         let arguments_str = raw_arguments;
 
         let response = handle_mcp_tool_call(
-            session,
-            sub_id,
+            session.as_ref(),
+            &sub_id,
             call_id.clone(),
             server,
             tool,

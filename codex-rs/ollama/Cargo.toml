@@ -28,3 +28,4 @@ tracing = { workspace = true, features = ["log"] }
 wiremock = { workspace = true }
 
 [dev-dependencies]
+assert_matches = { workspace = true }
