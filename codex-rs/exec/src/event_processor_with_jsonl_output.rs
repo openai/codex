@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU64;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
-use crate::exec_events::AssistantMessageItem;
+use crate::exec_events::AgentMessageItem;
 use crate::exec_events::CommandExecutionItem;
 use crate::exec_events::CommandExecutionStatus;
 use crate::exec_events::FileChangeItem;
@@ -31,8 +31,6 @@ use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
 use codex_core::config::Config;
-use codex_core::plan_tool::StepStatus;
-use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::Event;
@@ -48,6 +46,8 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use tracing::error;
 use tracing::warn;
 
@@ -162,7 +162,7 @@ impl EventProcessorWithJsonOutput {
         let item = ThreadItem {
             id: self.get_next_item_id(),
 
-            details: ThreadItemDetails::AssistantMessage(AssistantMessageItem {
+            details: ThreadItemDetails::AgentMessage(AgentMessageItem {
                 text: payload.message.clone(),
             }),
         };
@@ -428,6 +428,7 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         });
     }
 
+    #[allow(clippy::print_stdout)]
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let aggregated = self.collect_thread_events(&event);
         for conv_event in aggregated {

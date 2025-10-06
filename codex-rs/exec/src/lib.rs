@@ -1,3 +1,9 @@
+// - In the default output mode, it is paramount that the only thing written to
+//   stdout is the final message (if any).
+// - In --json mode, stdout must be valid JSONL, one event per line.
+// For both modes, any other output must be written to stderr.
+#![deny(clippy::print_stdout)]
+
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
@@ -17,6 +23,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::SessionSource;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
@@ -27,6 +34,7 @@ use serde_json::Value;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
+use supports_color::Stream;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -112,8 +120,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cli::Color::Always => (true, true),
         cli::Color::Never => (false, false),
         cli::Color::Auto => (
-            std::io::stdout().is_terminal(),
-            std::io::stderr().is_terminal(),
+            supports_color::on_cached(Stream::Stdout).is_some(),
+            supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
 
@@ -183,7 +191,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 
@@ -236,8 +244,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let conversation_manager =
-        ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
+    let auth_manager = AuthManager::shared(config.codex_home.clone(), true);
+    let conversation_manager = ConversationManager::new(auth_manager.clone(), SessionSource::Exec);
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewConversation {
@@ -249,11 +257,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
         if let Some(path) = resume_path {
             conversation_manager
-                .resume_conversation_from_rollout(
-                    config.clone(),
-                    path,
-                    AuthManager::shared(config.codex_home.clone()),
-                )
+                .resume_conversation_from_rollout(config.clone(), path, auth_manager.clone())
                 .await?
         } else {
             conversation_manager
@@ -367,6 +371,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             }
         }
     }
+    event_processor.print_final_output();
     if error_seen {
         std::process::exit(1);
     }
@@ -379,7 +384,9 @@ async fn resolve_resume_path(
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
-        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
+        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None, &[])
+            .await
+        {
             Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
             Err(e) => {
                 error!("Error listing conversations: {e}");

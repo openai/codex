@@ -14,9 +14,12 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
+use codex_core::error::CodexErr;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::SessionSource;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -25,8 +28,10 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
@@ -36,6 +41,7 @@ use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
 use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -538,7 +544,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         Ok(None) => panic!("No CodexAuth found in codex_home"),
         Err(e) => panic!("Failed to load CodexAuth: {e}"),
     };
-    let conversation_manager = ConversationManager::new(auth_manager);
+    let conversation_manager = ConversationManager::new(auth_manager, SessionSource::Exec);
     let NewConversation {
         conversation: codex,
         ..
@@ -991,6 +997,100 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         "unexpected error message for submission {submission_id}: {}",
         error_event.message
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    responses::mount_sse_once_match(
+        &server,
+        body_string_contains("trigger context window"),
+        responses::sse_failed(
+            "resp_context_window",
+            "context_length_exceeded",
+            "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        ),
+    )
+    .await;
+
+    responses::mount_sse_once_match(
+        &server,
+        body_string_contains("seed turn"),
+        sse_completed("resp_seed"),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model = "gpt-5".to_string();
+            config.model_family = find_family_for_model("gpt-5").expect("known gpt-5 model family");
+            config.model_context_window = Some(272_000);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "seed turn".into(),
+            }],
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "trigger context window".into(),
+            }],
+        })
+        .await?;
+
+    use std::time::Duration;
+
+    let token_event = wait_for_event_with_timeout(
+        &codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::TokenCount(payload)
+                    if payload.info.as_ref().is_some_and(|info| {
+                        info.model_context_window == Some(info.total_token_usage.total_tokens)
+                            && info.total_token_usage.total_tokens > 0
+                    })
+            )
+        },
+        Duration::from_secs(5),
+    )
+    .await;
+
+    let EventMsg::TokenCount(token_payload) = token_event else {
+        unreachable!("wait_for_event_with_timeout returned unexpected event");
+    };
+
+    let info = token_payload
+        .info
+        .expect("token usage info present when context window is exceeded");
+
+    assert_eq!(info.model_context_window, Some(272_000));
+    assert_eq!(info.total_token_usage.total_tokens, 272_000);
+
+    let error_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
+    let expected_context_window_message = CodexErr::ContextWindowExceeded.to_string();
+    assert!(
+        matches!(
+            error_event,
+            EventMsg::Error(ref err) if err.message == expected_context_window_message
+        ),
+        "expected context window error; got {error_event:?}"
+    );
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     Ok(())
 }

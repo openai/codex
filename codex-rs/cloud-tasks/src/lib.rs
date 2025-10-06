@@ -190,7 +190,7 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
         // Require ChatGPT login (SWIC). Exit with a clear message if missing.
         let _token = match codex_core::config::find_codex_home()
             .ok()
-            .map(codex_login::AuthManager::new)
+            .map(|home| codex_login::AuthManager::new(home, false))
             .and_then(|am| am.auth())
         {
             Some(auth) => {
@@ -400,16 +400,20 @@ pub async fn run_main(_cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> a
                         let _ = frame_tx.send(Instant::now() + codex_tui::ComposerInput::recommended_flush_delay());
                     }
                 }
-                // Advance throbber only while loading.
+                // Keep spinner pulsing only while loading.
                 if app.refresh_inflight
                     || app.details_inflight
                     || app.env_loading
                     || app.apply_preflight_inflight
                     || app.apply_inflight
                 {
-                    app.throbber.calc_next();
+                    if app.spinner_start.is_none() {
+                        app.spinner_start = Some(Instant::now());
+                    }
                     needs_redraw = true;
-                    let _ = frame_tx.send(Instant::now() + Duration::from_millis(100));
+                    let _ = frame_tx.send(Instant::now() + Duration::from_millis(600));
+                } else {
+                    app.spinner_start = None;
                 }
                 render_if_needed(&mut terminal, &mut app, &mut needs_redraw)?;
             }

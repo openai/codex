@@ -11,6 +11,8 @@ use crate::bottom_pane::list_selection_view::SelectionViewParams;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -93,8 +95,14 @@ impl ApprovalOverlay {
         header: Box<dyn Renderable>,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
-            ApprovalVariant::Exec { .. } => (exec_options(), "Allow command?".to_string()),
-            ApprovalVariant::ApplyPatch { .. } => (patch_options(), "Apply changes?".to_string()),
+            ApprovalVariant::Exec { .. } => (
+                exec_options(),
+                "Would you like to run the following command?".to_string(),
+            ),
+            ApprovalVariant::ApplyPatch { .. } => (
+                patch_options(),
+                "Would you like to make the following edits?".to_string(),
+            ),
         };
 
         let header = Box::new(ColumnRenderable::new([
@@ -107,16 +115,20 @@ impl ApprovalOverlay {
             .iter()
             .map(|opt| SelectionItem {
                 name: opt.label.clone(),
-                description: Some(opt.description.clone()),
-                is_current: false,
-                actions: Vec::new(),
+                display_shortcut: opt.display_shortcut,
                 dismiss_on_select: false,
-                search_value: None,
+                ..Default::default()
             })
             .collect();
 
         let params = SelectionViewParams {
-            footer_hint: Some("Press Enter to confirm or Esc to cancel".to_string()),
+            footer_hint: Some(Line::from(vec![
+                "Press ".into(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " to confirm or ".into(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " to cancel".into(),
+            ])),
             items,
             header,
             ..Default::default()
@@ -190,28 +202,18 @@ impl ApprovalOverlay {
                     false
                 }
             }
-            KeyEvent {
-                kind: KeyEventKind::Press,
-                code: KeyCode::Char(c),
-                modifiers,
-                ..
-            } if !modifiers.contains(KeyModifiers::CONTROL)
-                && !modifiers.contains(KeyModifiers::ALT) =>
-            {
-                let lower = c.to_ascii_lowercase();
-                match self
+            e => {
+                if let Some(idx) = self
                     .options
                     .iter()
-                    .position(|opt| opt.shortcut.map(|s| s == lower).unwrap_or(false))
+                    .position(|opt| opt.shortcuts().any(|s| s.is_press(*e)))
                 {
-                    Some(idx) => {
-                        self.apply_selection(idx);
-                        true
-                    }
-                    None => false,
+                    self.apply_selection(idx);
+                    true
+                } else {
+                    false
                 }
             }
-            _ => false,
         }
     }
 }
@@ -292,7 +294,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 if let Some(reason) = reason
                     && !reason.is_empty()
                 {
-                    header.push(reason.italic().into());
+                    header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
                     header.push(Line::from(""));
                 }
                 let full_cmd = strip_bash_lc_and_escape(&command);
@@ -340,31 +342,38 @@ enum ApprovalVariant {
 #[derive(Clone)]
 struct ApprovalOption {
     label: String,
-    description: String,
     decision: ReviewDecision,
-    shortcut: Option<char>,
+    display_shortcut: Option<KeyBinding>,
+    additional_shortcuts: Vec<KeyBinding>,
+}
+
+impl ApprovalOption {
+    fn shortcuts(&self) -> impl Iterator<Item = KeyBinding> + '_ {
+        self.display_shortcut
+            .into_iter()
+            .chain(self.additional_shortcuts.iter().copied())
+    }
 }
 
 fn exec_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
-            label: "Approve and run now".to_string(),
-            description: "Run this command one time".to_string(),
+            label: "Yes, proceed".to_string(),
             decision: ReviewDecision::Approved,
-            shortcut: Some('y'),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
-            label: "Always approve this session".to_string(),
-            description: "Automatically approve this command for the rest of the session"
-                .to_string(),
+            label: "Yes, and don't ask again for this command".to_string(),
             decision: ReviewDecision::ApprovedForSession,
-            shortcut: Some('a'),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
-            label: "Cancel".to_string(),
-            description: "Do not run the command".to_string(),
+            label: "No, and tell Codex what to do differently".to_string(),
             decision: ReviewDecision::Abort,
-            shortcut: Some('n'),
+            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
     ]
 }
@@ -372,16 +381,16 @@ fn exec_options() -> Vec<ApprovalOption> {
 fn patch_options() -> Vec<ApprovalOption> {
     vec![
         ApprovalOption {
-            label: "Approve".to_string(),
-            description: "Apply the proposed changes".to_string(),
+            label: "Yes, proceed".to_string(),
             decision: ReviewDecision::Approved,
-            shortcut: Some('y'),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
         },
         ApprovalOption {
-            label: "Cancel".to_string(),
-            description: "Do not apply the changes".to_string(),
+            label: "No, and tell Codex what to do differently".to_string(),
             decision: ReviewDecision::Abort,
-            shortcut: Some('n'),
+            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
     ]
 }

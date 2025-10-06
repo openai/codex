@@ -17,4 +17,5 @@ walkdir = "2"
 workspace = true
 
 [dev-dependencies]
+assert_matches = { workspace = true }
 pretty_assertions = "1.4.1"

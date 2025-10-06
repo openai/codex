@@ -36,6 +36,7 @@ use crate::bottom_pane::prompt_args::prompt_argument_names;
 use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
+use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
 use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -894,6 +895,23 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
+                // If the first line is a bare built-in slash command (no args),
+                // dispatch it even when the slash popup isn't visible. This preserves
+                // the workflow: type a prefix ("/di"), press Tab to complete to
+                // "/diff ", then press Enter to run it. Tab moves the cursor beyond
+                // the '/name' token and our caret-based heuristic hides the popup,
+                // but Enter should still dispatch the command rather than submit
+                // literal text.
+                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                if let Some((name, rest)) = parse_slash_name(first_line)
+                    && rest.is_empty()
+                    && let Some((_n, cmd)) = built_in_slash_commands()
+                        .into_iter()
+                        .find(|(n, _)| *n == name)
+                {
+                    self.textarea.set_text("");
+                    return (InputResult::Command(cmd), true);
+                }
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
                 // Do not treat Enter as paste inside a slash-command context.
@@ -2275,6 +2293,38 @@ mod tests {
 
         assert_eq!(composer.textarea.text(), "/compact ");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn slash_tab_then_enter_dispatches_builtin_command() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Type a prefix and complete with Tab, which inserts a trailing space
+        // and moves the cursor beyond the '/name' token (hides the popup).
+        type_chars_humanlike(&mut composer, &['/', 'd', 'i']);
+        let (_res, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "/diff ");
+
+        // Press Enter: should dispatch the command, not submit literal text.
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Command(cmd) => assert_eq!(cmd.command(), "diff"),
+            InputResult::Submitted(text) => {
+                panic!("expected command dispatch after Tab completion, got literal submit: {text}")
+            }
+            InputResult::None => panic!("expected Command result for '/diff'"),
+        }
+        assert!(composer.textarea.is_empty());
     }
 
     #[test]

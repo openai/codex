@@ -2,6 +2,10 @@ pub fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
     imp::terminal_palette()
 }
 
+pub fn requery_default_colors() {
+    imp::requery_default_colors();
+}
+
 #[derive(Clone, Copy)]
 pub struct DefaultColors {
     #[allow(dead_code)]
@@ -9,7 +13,7 @@ pub struct DefaultColors {
     bg: (u8, u8, u8),
 }
 
-pub fn default_colors() -> Option<&'static DefaultColors> {
+pub fn default_colors() -> Option<DefaultColors> {
     imp::default_colors()
 }
 
@@ -27,7 +31,43 @@ mod imp {
     use super::DefaultColors;
     use std::mem::MaybeUninit;
     use std::os::fd::RawFd;
+    use std::sync::Mutex;
     use std::sync::OnceLock;
+
+    struct Cache<T> {
+        attempted: bool,
+        value: Option<T>,
+    }
+
+    impl<T> Default for Cache<T> {
+        fn default() -> Self {
+            Self {
+                attempted: false,
+                value: None,
+            }
+        }
+    }
+
+    impl<T: Copy> Cache<T> {
+        fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+            if !self.attempted {
+                self.value = init();
+                self.attempted = true;
+            }
+            self.value
+        }
+
+        fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+            self.value = init();
+            self.attempted = true;
+            self.value
+        }
+    }
+
+    fn default_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
+        static CACHE: OnceLock<Mutex<Cache<DefaultColors>>> = OnceLock::new();
+        CACHE.get_or_init(|| Mutex::new(Cache::default()))
+    }
 
     pub(super) fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
         static CACHE: OnceLock<Option<[(u8, u8, u8); 256]>> = OnceLock::new();
@@ -37,11 +77,16 @@ mod imp {
         })
     }
 
-    pub(super) fn default_colors() -> Option<&'static DefaultColors> {
-        static CACHE: OnceLock<Option<DefaultColors>> = OnceLock::new();
-        CACHE
-            .get_or_init(|| query_default_colors().unwrap_or_default())
-            .as_ref()
+    pub(super) fn default_colors() -> Option<DefaultColors> {
+        let cache = default_colors_cache();
+        let mut cache = cache.lock().ok()?;
+        cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
+    }
+
+    pub(super) fn requery_default_colors() {
+        if let Ok(mut cache) = default_colors_cache().lock() {
+            cache.refresh_with(|| query_default_colors().unwrap_or_default());
+        }
     }
 
     #[allow(dead_code)]
@@ -392,7 +437,9 @@ mod imp {
         None
     }
 
-    pub(super) fn default_colors() -> Option<&'static DefaultColors> {
+    pub(super) fn default_colors() -> Option<DefaultColors> {
         None
     }
+
+    pub(super) fn requery_default_colors() {}
 }

@@ -477,6 +477,9 @@ pub enum EventMsg {
 
     ExecCommandEnd(ExecCommandEndEvent),
 
+    /// Notification that the agent attached a local image via the view_image tool.
+    ViewImageToolCall(ViewImageToolCallEvent),
+
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
@@ -586,6 +589,31 @@ impl TokenUsageInfo {
     pub fn append_last_usage(&mut self, last: &TokenUsage) {
         self.total_token_usage.add_assign(last);
         self.last_token_usage = last.clone();
+    }
+
+    pub fn fill_to_context_window(&mut self, context_window: u64) {
+        let previous_total = self.total_token_usage.total_tokens;
+        let delta = context_window.saturating_sub(previous_total);
+
+        self.model_context_window = Some(context_window);
+        self.total_token_usage = TokenUsage {
+            total_tokens: context_window,
+            ..TokenUsage::default()
+        };
+        self.last_token_usage = TokenUsage {
+            total_tokens: delta,
+            ..TokenUsage::default()
+        };
+    }
+
+    pub fn full_context_window(context_window: u64) -> Self {
+        let mut info = Self {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(context_window),
+        };
+        info.fill_to_context_window(context_window);
+        info
     }
 }
 
@@ -916,7 +944,20 @@ impl InitialHistory {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Default, Debug, TS)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, TS, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum SessionSource {
+    Cli,
+    #[default]
+    VSCode,
+    Exec,
+    Mcp,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
 pub struct SessionMeta {
     pub id: ConversationId,
     pub timestamp: String,
@@ -924,6 +965,22 @@ pub struct SessionMeta {
     pub originator: String,
     pub cli_version: String,
     pub instructions: Option<String>,
+    #[serde(default)]
+    pub source: SessionSource,
+}
+
+impl Default for SessionMeta {
+    fn default() -> Self {
+        SessionMeta {
+            id: ConversationId::default(),
+            timestamp: String::new(),
+            cwd: PathBuf::new(),
+            originator: String::new(),
+            cli_version: String::new(),
+            instructions: None,
+            source: SessionSource::default(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, TS)]
@@ -1074,6 +1131,14 @@ pub struct ExecCommandEndEvent {
     pub formatted_output: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ViewImageToolCallEvent {
+    /// Identifier for the originating tool call.
+    pub call_id: String,
+    /// Local filesystem path provided to the tool.
+    pub path: PathBuf,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecOutputStream {
@@ -1166,7 +1231,6 @@ pub struct GetHistoryEntryResponseEvent {
     pub entry: Option<HistoryEntry>,
 }
 
-/// Response payload for `Op::ListMcpTools`.
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct McpListToolsResponseEvent {
     /// Fully qualified tool name -> tool definition.
