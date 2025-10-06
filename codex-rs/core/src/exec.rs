@@ -36,6 +36,24 @@ const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124; // conventional timeout exit code
+const EXIT_NOT_EXECUTABLE_CODE: i32 = 126; // "found but not executable"/shebang/perms
+
+// Common Unix signal numbers used below (document for maintainers)
+// Keep these aligned with platform conventions; these are standard on macOS/Linux.
+const SIGINT_CODE: i32 = 2; // Ctrl-C / interrupt
+const SIGABRT_CODE: i32 = 6; // abort
+const SIGBUS_CODE: i32 = 7; // bus error
+const SIGFPE_CODE: i32 = 8; // floating point exception
+const SIGSEGV_CODE: i32 = 11; // segmentation fault
+const SIGPIPE_CODE: i32 = 13; // broken pipe
+const SIGTERM_CODE: i32 = 15; // termination
+
+// Platform-gated SIGSYS signal numbers with no libc dep (Linux & macOS only).
+// Linux SIGSYS is 31; macOS SIGSYS is 12.
+#[cfg(target_os = "linux")]
+const SIGSYS_CODE: i32 = 31;
+#[cfg(target_os = "macos")]
+const SIGSYS_CODE: i32 = 12;
 
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
@@ -70,6 +88,97 @@ pub enum SandboxType {
 
     /// Only available on Linux.
     LinuxSeccomp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SandboxVerdict {
+    LikelySandbox,
+    LikelyNotSandbox,
+    Unknown,
+}
+
+fn stderr_hints_sandbox(stderr: &str) -> bool {
+    // Conservative: require explicit sandbox/seccomp phrasing likely to come from
+    // a kernel/seatbelt/seccomp denial; generic perms errors are too noisy.
+    let s = stderr.to_ascii_lowercase();
+    s.contains("sandbox: deny")
+        || s.contains("not permitted by sandbox")
+        || s.contains("bad system call")
+        || s.contains("seccomp")
+}
+
+fn sandbox_verdict(sandbox_type: SandboxType, status: ExitStatus, stderr: &str) -> SandboxVerdict {
+    if matches!(sandbox_type, SandboxType::None) {
+        return SandboxVerdict::LikelyNotSandbox;
+    }
+
+    // Prefer the signal path when available.
+    #[cfg(unix)]
+    {
+        if let Some(sig) = status.signal() {
+            if sig == SIGSYS_CODE {
+                // SIGSYS under seccomp (Linux) or bad syscall elsewhere is a strong tell.
+                return SandboxVerdict::LikelySandbox;
+            }
+            // Common user/app signals -> not sandbox.
+            match sig {
+                SIGINT_CODE | SIGABRT_CODE | SIGBUS_CODE | SIGFPE_CODE | SIGKILL_CODE
+                | SIGSEGV_CODE | SIGPIPE_CODE | SIGTERM_CODE => {
+                    return SandboxVerdict::LikelyNotSandbox;
+                }
+                _ => { /* fall through */ }
+            }
+        }
+    }
+
+    let code = status.code().unwrap_or(-1);
+
+    // Immediate NotSandbox codes
+    // - 0: success
+    // - 2: common "misuse of shell builtins"
+    // - 124: conventional timeout wrapper exit code
+    // - 127: command not found
+    // - 64..=78: BSD sysexits range
+    // - 128 + {SIGINT, SIGABRT, SIGBUS, SIGFPE, SIGKILL, SIGSEGV, SIGPIPE, SIGTERM}
+    let sig_derived_not_sandbox = [
+        EXIT_CODE_SIGNAL_BASE + SIGINT_CODE,
+        EXIT_CODE_SIGNAL_BASE + SIGABRT_CODE,
+        EXIT_CODE_SIGNAL_BASE + SIGBUS_CODE,
+        EXIT_CODE_SIGNAL_BASE + SIGFPE_CODE,
+        EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE,
+        EXIT_CODE_SIGNAL_BASE + SIGSEGV_CODE,
+        EXIT_CODE_SIGNAL_BASE + SIGPIPE_CODE,
+        EXIT_CODE_SIGNAL_BASE + SIGTERM_CODE,
+    ];
+    if code == 0
+        || code == 2
+        || code == EXEC_TIMEOUT_EXIT_CODE
+        || code == 127
+        || (64..=78).contains(&code)
+        || sig_derived_not_sandbox.contains(&code)
+    {
+        return SandboxVerdict::LikelyNotSandbox;
+    }
+
+    // Shell-style signal encoding for SIGSYS.
+    if code == EXIT_CODE_SIGNAL_BASE + SIGSYS_CODE {
+        return SandboxVerdict::LikelySandbox;
+    }
+
+    // 126 is often perms/shebang; upgrade only with explicit hints.
+    if code == EXIT_NOT_EXECUTABLE_CODE {
+        return if stderr_hints_sandbox(stderr) {
+            SandboxVerdict::LikelySandbox
+        } else {
+            SandboxVerdict::Unknown
+        };
+    }
+
+    if stderr_hints_sandbox(stderr) {
+        return SandboxVerdict::LikelySandbox;
+    }
+
+    SandboxVerdict::Unknown
 }
 
 #[derive(Clone)]
@@ -142,12 +251,17 @@ pub async fn process_exec_tool_call(
         Ok(raw_output) => {
             #[allow(unused_mut)]
             let mut timed_out = raw_output.timed_out;
+            // If the process was killed by a signal, handle timeouts distinctly and
+            // defer SIGSYS (possible sandbox) until after we can examine stderr.
+            let mut pending_signal: Option<i32> = None;
 
             #[cfg(target_family = "unix")]
             {
                 if let Some(signal) = raw_output.exit_status.signal() {
                     if signal == TIMEOUT_CODE {
                         timed_out = true;
+                    } else if signal == SIGSYS_CODE && !matches!(sandbox_type, SandboxType::None) {
+                        pending_signal = Some(signal);
                     } else {
                         return Err(CodexErr::Sandbox(SandboxErr::Signal(signal)));
                     }
@@ -177,10 +291,25 @@ pub async fn process_exec_tool_call(
                 }));
             }
 
-            if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
+            let verdict = sandbox_verdict(
+                sandbox_type,
+                raw_output.exit_status,
+                &exec_output.stderr.text,
+            );
+            tracing::debug!(
+                target: "codex_core::exec",
+                exit_code = exec_output.exit_code,
+                ?pending_signal,
+                verdict = ?verdict,
+                "exec SandboxClassification"
+            );
+            if matches!(verdict, SandboxVerdict::LikelySandbox) {
                 return Err(CodexErr::Sandbox(SandboxErr::Denied {
                     output: Box::new(exec_output),
                 }));
+            }
+            if let Some(sig) = pending_signal {
+                return Err(CodexErr::Sandbox(SandboxErr::Signal(sig)));
             }
 
             Ok(exec_output)
@@ -190,26 +319,6 @@ pub async fn process_exec_tool_call(
             Err(err)
         }
     }
-}
-
-/// We don't have a fully deterministic way to tell if our command failed
-/// because of the sandbox - a command in the user's zshrc file might hit an
-/// error, but the command itself might fail or succeed for other reasons.
-/// For now, we conservatively check for 'command not found' (exit code 127),
-/// and can add additional cases as necessary.
-fn is_likely_sandbox_denied(sandbox_type: SandboxType, exit_code: i32) -> bool {
-    if sandbox_type == SandboxType::None {
-        return false;
-    }
-
-    // Quick rejects: well-known non-sandbox shell exit codes
-    // 127: command not found, 2: misuse of shell builtins
-    if exit_code == 127 {
-        return false;
-    }
-
-    // For all other cases, we assume the sandbox is the cause
-    true
 }
 
 #[derive(Debug)]
@@ -435,4 +544,66 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
     use std::os::windows::process::ExitStatusExt;
     #[expect(clippy::unwrap_used)]
     std::process::ExitStatus::from_raw(code.try_into().unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+
+    #[cfg(unix)]
+    fn status_from_code(c: i32) -> ExitStatus {
+        // Synthesize a normal exit status with the given exit code.
+        ExitStatus::from_raw(c << 8)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn not_sandbox_obvious_codes() {
+        assert!(matches!(
+            sandbox_verdict(SandboxType::MacosSeatbelt, status_from_code(127), ""),
+            SandboxVerdict::LikelyNotSandbox
+        ));
+        assert!(matches!(
+            sandbox_verdict(SandboxType::LinuxSeccomp, status_from_code(124), ""),
+            SandboxVerdict::LikelyNotSandbox
+        ));
+        assert!(matches!(
+            sandbox_verdict(SandboxType::LinuxSeccomp, status_from_code(2), ""),
+            SandboxVerdict::LikelyNotSandbox
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn sandbox_sigsys_codepath() {
+        let code = EXIT_CODE_SIGNAL_BASE + SIGSYS_CODE;
+        assert!(matches!(
+            sandbox_verdict(SandboxType::LinuxSeccomp, status_from_code(code), ""),
+            SandboxVerdict::LikelySandbox
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn sandbox_stderr_hint() {
+        assert!(matches!(
+            sandbox_verdict(
+                SandboxType::MacosSeatbelt,
+                status_from_code(126),
+                "Sandbox: deny file-read-data"
+            ),
+            SandboxVerdict::LikelySandbox
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unknown_generic_failure() {
+        assert!(matches!(
+            sandbox_verdict(SandboxType::MacosSeatbelt, status_from_code(1), ""),
+            SandboxVerdict::Unknown
+        ));
+    }
 }
