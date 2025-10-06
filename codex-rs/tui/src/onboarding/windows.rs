@@ -23,11 +23,9 @@ pub(crate) const WSL_INSTRUCTIONS: &str = r"Install WSL2 by opening PowerShell a
 
     wsl --install
 
-After installation, run Codex from inside of WSL2 with:
+Instructions for how to install and run Codex in WSL:
 
-    wsl -e codex
-      
-More info: https://developers.openai.com/codex/windows";
+    https://developers.openai.com/codex/windows";
 
 pub(crate) struct WindowsSetupWidget {
     pub codex_home: PathBuf,
