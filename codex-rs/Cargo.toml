@@ -83,6 +83,7 @@ ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = "3"
 askama = "0.12"
+assert_matches = "1.5.0"
 assert_cmd = "2"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
@@ -142,7 +143,7 @@ rand = "0.9"
 ratatui = "0.29.0"
 regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.7.0", default-features = false }
+rmcp = { version = "0.8.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 serde = "1"
@@ -243,5 +244,9 @@ strip = "symbols"
 codegen-units = 1
 
 [patch.crates-io]
+# Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
+
+# Uncomment to debug local changes.
+# rmcp = { path = "../../rust-sdk/crates/rmcp" }

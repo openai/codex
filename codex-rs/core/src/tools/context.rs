@@ -14,12 +14,17 @@ use mcp_types::CallToolResult;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-pub struct ToolInvocation<'a> {
-    pub session: &'a Session,
-    pub turn: &'a TurnContext,
-    pub tracker: &'a mut TurnDiffTracker,
-    pub sub_id: &'a str,
+pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
+
+#[derive(Clone)]
+pub struct ToolInvocation {
+    pub session: Arc<Session>,
+    pub turn: Arc<TurnContext>,
+    pub tracker: SharedTurnDiffTracker,
+    pub sub_id: String,
     pub call_id: String,
     pub tool_name: String,
     pub payload: ToolPayload,

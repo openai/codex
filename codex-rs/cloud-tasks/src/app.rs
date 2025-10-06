@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::time::Instant;
 
 // Environment filter data models for the TUI
 #[derive(Clone, Debug, Default)]
@@ -42,15 +43,13 @@ use crate::scrollable_diff::ScrollableDiff;
 use codex_cloud_tasks_client::CloudBackend;
 use codex_cloud_tasks_client::TaskId;
 use codex_cloud_tasks_client::TaskSummary;
-use throbber_widgets_tui::ThrobberState;
-
 #[derive(Default)]
 pub struct App {
     pub tasks: Vec<TaskSummary>,
     pub selected: usize,
     pub status: String,
     pub diff_overlay: Option<DiffOverlay>,
-    pub throbber: ThrobberState,
+    pub spinner_start: Option<Instant>,
     pub refresh_inflight: bool,
     pub details_inflight: bool,
     // Environment filter state
@@ -82,7 +81,7 @@ impl App {
             selected: 0,
             status: "Press r to refresh".to_string(),
             diff_overlay: None,
-            throbber: ThrobberState::default(),
+            spinner_start: None,
             refresh_inflight: false,
             details_inflight: false,
             env_filter: None,

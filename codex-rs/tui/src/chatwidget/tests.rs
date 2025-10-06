@@ -3,11 +3,13 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
+use assert_matches::assert_matches;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -633,7 +635,7 @@ fn streaming_final_answer_keeps_task_running_state() {
         chat.queued_user_messages.front().unwrap().text,
         "queued submission"
     );
-    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     match op_rx.try_recv() {
@@ -1045,7 +1047,7 @@ fn reasoning_popup_escape_returns_to_model_popup() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     let after_escape = render_bottom_popup(&chat, 80);
-    assert!(after_escape.contains("Select Model"));
+    assert!(after_escape.contains("Select Model and Effort"));
     assert!(!after_escape.contains("Select Reasoning Level"));
 }
 
@@ -1101,6 +1103,11 @@ fn disabled_slash_command_while_task_running_snapshot() {
 
 #[tokio::test]
 async fn binary_size_transcript_snapshot() {
+    // the snapshot in this test depends on gpt-5-codex. Skip for now. We will consider
+    // creating snapshots for other models in the future.
+    if OPENAI_DEFAULT_MODEL != "gpt-5-codex" {
+        return;
+    }
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Set up a VT100 test terminal to capture ANSI visual output
@@ -1785,10 +1792,7 @@ fn apply_patch_approval_sends_op_with_submission_id() {
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
             assert_eq!(id, "sub-123");
-            assert!(matches!(
-                decision,
-                codex_core::protocol::ReviewDecision::Approved
-            ));
+            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
             found = true;
             break;
         }
@@ -1835,10 +1839,7 @@ fn apply_patch_full_flow_integration_like() {
     match forwarded {
         Op::PatchApproval { id, decision } => {
             assert_eq!(id, "sub-xyz");
-            assert!(matches!(
-                decision,
-                codex_core::protocol::ReviewDecision::Approved
-            ));
+            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
         }
         other => panic!("unexpected op forwarded: {other:?}"),
     }

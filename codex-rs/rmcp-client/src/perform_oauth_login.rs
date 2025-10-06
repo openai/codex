@@ -47,7 +47,9 @@ pub async fn perform_oauth_login(server_name: &str, server_url: &str) -> Result<
     spawn_callback_server(server, tx);
 
     let mut oauth_state = OAuthState::new(server_url, None).await?;
-    oauth_state.start_authorization(&[], &redirect_uri).await?;
+    oauth_state
+        .start_authorization(&[], &redirect_uri, Some("Codex"))
+        .await?;
     let auth_url = oauth_state.get_authorization_url().await?;
 
     println!("Authorize `{server_name}` by opening this URL in your browser:\n{auth_url}\n");

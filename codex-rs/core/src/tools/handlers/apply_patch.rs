@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::client_common::tools::FreeformTool;
 use crate::client_common::tools::FreeformToolFormat;
@@ -36,10 +37,7 @@ impl ToolHandler for ApplyPatchHandler {
         )
     }
 
-    async fn handle(
-        &self,
-        invocation: ToolInvocation<'_>,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -79,10 +77,10 @@ impl ToolHandler for ApplyPatchHandler {
         let content = handle_container_exec_with_params(
             tool_name.as_str(),
             exec_params,
-            session,
-            turn,
-            tracker,
-            sub_id.to_string(),
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            Arc::clone(&tracker),
+            sub_id.clone(),
             call_id.clone(),
         )
         .await?;
@@ -106,7 +104,7 @@ pub enum ApplyPatchToolType {
 pub(crate) fn create_apply_patch_freeform_tool() -> ToolSpec {
     ToolSpec::Freeform(FreeformTool {
         name: "apply_patch".to_string(),
-        description: "Use the `apply_patch` tool to edit files".to_string(),
+        description: "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.".to_string(),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
