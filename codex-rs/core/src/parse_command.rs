@@ -1,10 +1,9 @@
 use crate::bash::Command;
-use crate::bash::TidiedPathParams;
+use crate::bash::TidiedPartsParam;
 use crate::bash::try_parse_bash;
 use crate::define_bash_commands;
 use serde::Deserialize;
 use serde::Serialize;
-use shlex::split as shlex_split;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ParsedCommand {
@@ -47,9 +46,17 @@ impl From<ParsedCommand> for codex_protocol::parse_command::ParsedCommand {
 /// of what it is doing.
 pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
     // Parse and then collapse consecutive duplicate commands to avoid redundant summaries.
-    let parsed = parse_command_impl(command).unwrap_or(vec![ParsedCommand::Unknown {
-        cmd: format!("parse command unkown: {}", command.join(" ")),
-    }]);
+    let script = if command.len() >= 3 && command[0] == "bash" && command[1] == "-lc" {
+        &command[2]
+    } else if command.len() >= 1 {
+        &Command::shlex_join(&command[0..])
+    } else {
+        return Vec::new();
+    };
+
+    let mut p = BashCommandParser::new();
+    let parsed = p.parse(&script);
+
     let mut deduped: Vec<ParsedCommand> = Vec::with_capacity(parsed.len());
     for cmd in parsed.into_iter() {
         if deduped.last().is_some_and(|prev| prev == &cmd) {
@@ -60,20 +67,8 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
     deduped
 }
 
-fn parse_command_impl(original: &[String]) -> Option<Vec<ParsedCommand>> {
-    let script = if original.len() >= 3 && original[0] == "bash" && original[1] == "-lc" {
-        &original[2]
-    } else if original.len() >= 1 {
-        &Command::shlex_join(&original[0..])
-    } else {
-        return None;
-    };
-    let mut p = BashCommandParser::new();
-    p.parse(&script);
-    Some(p.parsed_commands)
-}
-
-pub fn opt_parse_command(original: &[String]) -> Option<Vec<Vec<String>>> {
+/// Returns flattened string vectors
+pub fn parse_command_as_tokens(original: &[String]) -> Option<Vec<Vec<String>>> {
     let script = if original.len() >= 3 && original[0] == "bash" && original[1] == "-lc" {
         &original[2]
     } else if !original.is_empty() {
@@ -81,21 +76,14 @@ pub fn opt_parse_command(original: &[String]) -> Option<Vec<Vec<String>>> {
     } else {
         return None;
     };
+
     let mut p = BashCommandParser::new();
     p.parse(&script);
-
+    let commands = p.get_origin_commands();
     Some(
-        p.orign_commands
+        commands
             .iter()
-            .map(|c| {
-                c.tidied_parts(TidiedPathParams {
-                    include_name: true,
-                    include_options_key: true,
-                    include_options_val: true,
-                    include_options_assign_key: true,
-                    include_options_assign_value: true,
-                })
-            })
+            .filter_map(|c| shlex::split(&c.original_cmd))
             .collect::<Vec<Vec<String>>>(),
     )
 }
@@ -160,7 +148,7 @@ struct BashCommandParser {
     /// skip the rest command for list and pipeline
     skip_rest: bool,
     parsed_commands: Vec<ParsedCommand>,
-    orign_commands: Vec<Command>,
+    origin_commands: Vec<Command>,
 }
 
 impl BashCommandParser {
@@ -170,16 +158,29 @@ impl BashCommandParser {
             reject_whole: false,
             skip_rest: false,
             parsed_commands: Vec::new(),
-            orign_commands: Vec::new(),
+            origin_commands: Vec::new(),
         }
     }
 
-    pub fn parse(&mut self, src: &str) {
+    pub fn parse(&mut self, src: &str) -> Vec<ParsedCommand> {
         self.src = Some(src.to_owned());
-        let tree = try_parse_bash(src);
+        let tree = try_parse_bash(src, true);
         if let Some(tree) = tree {
             let root = tree.root_node();
             self.visit(root);
+        }
+        if self.reject_whole {
+            Vec::new()
+        } else {
+            self.parsed_commands.clone()
+        }
+    }
+
+    pub fn get_origin_commands(&self) -> Vec<Command> {
+        if self.reject_whole {
+            Vec::new() 
+        } else {
+            self.origin_commands.clone()
         }
     }
 }
@@ -212,7 +213,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             if self.reject_whole || self.skip_rest {
                 return;
             }
-            println!("visit child: {}", self.get_text(child));
+            // println!("visit child: {}", self.get_text(child));
             self.visit(child);
         }
     }
@@ -228,13 +229,13 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             "--color",
             "--quoting-style",
         ]);
-        let non_flags_param = TidiedPathParams {
+        let non_flags_param = TidiedPartsParam {
             include_options_val: true,
-            ..TidiedPathParams::default()
+            ..TidiedPartsParam::default()
         };
         let non_flags = cmd.tidied_parts(non_flags_param.clone());
         let path = non_flags.first().cloned();
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::ListFiles {
             cmd: main_cmd,
             path: cmd.short_display_path(path),
@@ -243,9 +244,9 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
 
     fn visit_command_rg(&mut self, mut cmd: Command) {
         let has_files_flag = cmd.options.contains_key("--files");
-        let non_flags_param = TidiedPathParams {
+        let non_flags_param = TidiedPartsParam {
             include_options_val: true,
-            ..TidiedPathParams::default()
+            ..TidiedPartsParam::default()
         };
         let non_flags = cmd.tidied_parts(non_flags_param.clone());
         let (query, path) = if has_files_flag {
@@ -256,7 +257,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
                 non_flags.get(1).and_then(|p| Some(p.clone())),
             )
         };
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Search {
             cmd: cmd.get_original_cmd(),
             query,
@@ -275,9 +276,9 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             "--exclude",
             "--search-path",
         ]);
-        let non_flags_param = TidiedPathParams {
+        let non_flags_param = TidiedPartsParam {
             include_options_val: true,
-            ..TidiedPathParams::default()
+            ..TidiedPartsParam::default()
         };
         let non_flags = cmd.tidied_parts(non_flags_param.clone());
         fn is_pathish(s: &str) -> bool {
@@ -299,7 +300,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             [q, p, ..] => (Some((*q).clone()), Some(p.clone())),
             _ => (None, None),
         };
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Search {
             cmd: main_cmd,
             query,
@@ -312,7 +313,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         let path = cmd.arguments.first().cloned();
         let query = cmd.find_option_val(&["-name", "-iname", "-path", "-regex"]);
 
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Search {
             cmd: main_cmd,
             query,
@@ -322,14 +323,14 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
 
     fn visit_command_grep(&mut self, mut cmd: Command) {
         let main_cmd = cmd.get_original_cmd();
-        let non_flags_param = TidiedPathParams {
+        let non_flags_param = TidiedPartsParam {
             include_options_val: true,
-            ..TidiedPathParams::default()
+            ..TidiedPartsParam::default()
         };
         let non_flags = cmd.tidied_parts(non_flags_param.clone());
         let query = non_flags.first().cloned().map(String::from);
         let path = non_flags.get(1).map(|s| s.clone());
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Search {
             cmd: main_cmd,
             query,
@@ -339,7 +340,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
 
     fn visit_command_cat(&mut self, mut cmd: Command) {
         let main_cmd = cmd.get_original_cmd();
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         // Support both `cat <file>` and `cat -- <file>` forms.
         if cmd.arguments.len() == 1 {
             let file = cmd.arguments.first().cloned();
@@ -353,7 +354,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
     }
 
     fn visit_command_head(&mut self, mut cmd: Command) {
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         if cmd.len() < 3 {
             return;
         }
@@ -367,9 +368,9 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
         });
 
-        let non_flags_param = TidiedPathParams {
+        let non_flags_param = TidiedPartsParam {
             include_options_val: true,
-            ..TidiedPathParams::default()
+            ..TidiedPartsParam::default()
         };
         let non_flags = cmd.tidied_parts(non_flags_param.clone());
         if valid_n 
@@ -393,12 +394,12 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
 
     fn visit_command_nl(&mut self, mut cmd: Command) {
         let main_cmd = cmd.get_original_cmd();
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
 
         cmd.skip_flag_values(&["-s", "-w", "-v", "-i", "-b"]);
-        let non_flags_param = TidiedPathParams {
+        let non_flags_param = TidiedPartsParam {
             include_options_val: true,
-            ..TidiedPathParams::default()
+            ..TidiedPartsParam::default()
         };
         let non_flags = cmd.tidied_parts(non_flags_param.clone());
         if !non_flags.is_empty() {
@@ -411,7 +412,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
     }
 
     fn visit_command_sed(&mut self, mut cmd: Command) {
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         if cmd.len() < 4 {
             return;
         }
@@ -439,23 +440,23 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
 
     fn visit_command_cd(&mut self, mut cmd: Command) {
         // Ignored
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
     }
 
     fn visit_command_yes(&mut self, mut cmd: Command) {
         // Ignored
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
     }
 
     fn visit_command_echo(&mut self, mut cmd: Command) {
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Unknown {
             cmd: cmd.get_original_cmd(),
         });
     }
 
     fn visit_command_unknown(&mut self, mut cmd: Command) {
-        self.orign_commands.push(cmd.clone());
+        self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Unknown {
             cmd: cmd.get_original_cmd(),
         });
@@ -470,6 +471,7 @@ mod tests {
     use crate::bash::Command;
     use pretty_assertions::assert_eq;
     use std::string::ToString;
+    use shlex::split as shlex_split;
 
     fn shlex_join(tokens: &[String]) -> String {
         Command::shlex_join(tokens)
@@ -732,7 +734,6 @@ mod tests {
 
     #[test]
     fn supports_grep_recursive_current_dir() {
-        println!("AAAAAAAAAAAA");
         assert_parsed(
             &vec_str(&["grep", "-R", "CODEX_SANDBOX_ENV_VAR", "-n", "."]),
             vec![ParsedCommand::Search {
