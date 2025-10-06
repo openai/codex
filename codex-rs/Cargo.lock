@@ -1048,7 +1048,6 @@ dependencies = [
  "libc",
  "maplit",
  "mcp-types",
- "multimap",
  "openssl-sys",
  "os_info",
  "paste",

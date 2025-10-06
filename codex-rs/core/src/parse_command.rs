@@ -45,8 +45,6 @@ impl From<ParsedCommand> for codex_protocol::parse_command::ParsedCommand {
 /// The goal of the parsed metadata is to be able to provide the user with a human readable gis
 /// of what it is doing.
 pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
-    dbg!(command);
-    // Parse and then collapse consecutive duplicate commands to avoid redundant summaries.
     let script = if command.len() >= 3 && command[0] == "bash" && command[1] == "-lc" {
         &command[2]
     } else if !command.is_empty() {
@@ -54,7 +52,6 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
     } else {
         return Vec::new();
     };
-    dbg!(script);
 
     let mut p = BashCommandParser::new();
     if let Some(parsed) = p.parse(script) {
@@ -93,29 +90,6 @@ pub fn parse_command_as_tokens(original: &[String]) -> Option<Vec<Vec<String>>> 
     )
 }
 
-/// Validates that this is a `sed -n 123,123p` command.
-fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
-    let s = match arg {
-        Some(s) => s,
-        None => return false,
-    };
-    let core = match s.strip_suffix('p') {
-        Some(rest) => rest,
-        None => return false,
-    };
-    let parts: Vec<&str> = core.split(',').collect();
-    match parts.as_slice() {
-        [num] => !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()),
-        [a, b] => {
-            !a.is_empty()
-                && !b.is_empty()
-                && a.chars().all(|c| c.is_ascii_digit())
-                && b.chars().all(|c| c.is_ascii_digit())
-        }
-        _ => false,
-    }
-}
-
 #[rustfmt::skip]
 define_bash_commands!(
     Unknown, 
@@ -147,12 +121,15 @@ define_bash_commands!(
 
 #[derive(Debug)]
 struct BashCommandParser {
+    /// The source command text to parse from
     src: Option<String>,
-    /// reject the whole command or script
+    /// Reject the whole command or script
     reject_whole: bool,
-    /// skip the rest command for list and pipeline
+    /// Skip the rest command for list and pipeline
     skip_rest: bool,
+    /// Save the prased command
     parsed_commands: Vec<ParsedCommand>,
+    /// Save the original command
     origin_commands: Vec<Command>,
 }
 
@@ -183,7 +160,7 @@ impl BashCommandParser {
 
     pub fn get_origin_commands(&self) -> Vec<Command> {
         if self.reject_whole {
-            Vec::new() 
+            Vec::new()
         } else {
             self.origin_commands.clone()
         }
@@ -191,8 +168,8 @@ impl BashCommandParser {
 
     fn reject_node(&mut self, node: Node) {
         if self
-        .find_child_by_kind(node, "variable_assignment")
-        .is_some()
+            .find_child_by_kind(node, "variable_assignment")
+            .is_some()
         {
             self.reject_whole = true;
         }
@@ -204,14 +181,10 @@ impl BashCommandParser {
             self.reject_whole = true;
         }
 
-        if self
-            .find_child_by_kind(node, "simple_expansion")
-            .is_some()
-        {
+        if self.find_child_by_kind(node, "simple_expansion").is_some() {
             self.reject_whole = true;
         }
     }
-
 }
 
 #[allow(unused_mut)]
@@ -225,7 +198,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         self.reject_whole = true;
     }
 
-    fn visit_enter_command(&mut self, node:Node<'a>) {
+    fn visit_enter_command(&mut self, node: Node<'a>) {
         self.reject_node(node);
     }
 
@@ -284,7 +257,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         } else {
             (
                 non_flags.first().map(String::from),
-                non_flags.get(1).cloned()
+                non_flags.get(1).cloned(),
             )
         };
         self.origin_commands.push(cmd.clone());
@@ -485,6 +458,29 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
     }
 }
 
+/// Validates that this is a `sed -n 123,123p` command.
+fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
+    let s = match arg {
+        Some(s) => s,
+        None => return false,
+    };
+    let core = match s.strip_suffix('p') {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let parts: Vec<&str> = core.split(',').collect();
+    match parts.as_slice() {
+        [num] => !num.is_empty() && num.chars().all(|c| c.is_ascii_digit()),
+        [a, b] => {
+            !a.is_empty()
+                && !b.is_empty()
+                && a.chars().all(|c| c.is_ascii_digit())
+                && b.chars().all(|c| c.is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 /// Tests are at the top to encourage using TDD + Codex to fix the implementation.
@@ -492,8 +488,8 @@ mod tests {
     use super::*;
     use crate::bash::Command;
     use pretty_assertions::assert_eq;
-    use std::string::ToString;
     use shlex::split as shlex_split;
+    use std::string::ToString;
 
     fn shlex_join(tokens: &[String]) -> String {
         Command::shlex_join(tokens)
@@ -513,9 +509,7 @@ mod tests {
     }
 
     fn assert_parsed_none(args: &[String]) {
-        let cmd = parse_command(args);
-        dbg!(&cmd);
-        assert!(cmd.is_empty())
+        assert!(parse_command(args).is_empty())
     }
 
     #[test]
@@ -1211,6 +1205,16 @@ mod tests {
     }
 
     #[test]
+    fn cd_followed_by_git() {
+        assert_parsed(
+            &shlex_split_safe("cd codex && git rev-parse --show-toplevel"),
+            vec![ParsedCommand::Unknown {
+                cmd: "git rev-parse --show-toplevel".to_string(),
+            }],
+        );
+    }
+
+    #[test]
     fn extracts_double_and_single_quoted_strings() {
         assert_parsed(
             &shlex_split_safe("echo \"hello world\""),
@@ -1229,7 +1233,7 @@ mod tests {
 
     #[test]
     fn rejects_parentheses_and_subshells() {
-        // NOTE: shlex split not work on parenthes (), it can not correctly 
+        // NOTE: shlex split not work on parenthes (), it can not correctly
         // convert to a Vec<string> such that can be converted to AST
         //
         // so this will not work:
@@ -1239,36 +1243,23 @@ mod tests {
         // );
 
         let inner = "ls || (pwd && echo hi)";
-        assert_parsed_none(
-            &vec_str(&["bash", "-lc", inner])
-        );
+        assert_parsed_none(&vec_str(&["bash", "-lc", inner]));
 
         let inner = "(ls)";
-        assert_parsed_none(
-            &vec_str(&["bash", "-lc", inner])
-        );
+        assert_parsed_none(&vec_str(&["bash", "-lc", inner]));
     }
 
     #[test]
     fn rejects_command_and_process_substitutions_and_expansions() {
-        assert_parsed_none(
-            &vec_str(&["bash", "-lc", "echo $(pwd)"])
-        );
+        assert_parsed_none(&vec_str(&["bash", "-lc", "echo $(pwd)"]));
 
-        assert_parsed_none(
-            &vec_str(&["bash", "-lc", "echo `pwd`"])
-        );
-        assert_parsed_none(
-            &vec_str(&["bash", "-lc", "echo $HOME"])
-        );
-        assert_parsed_none(
-            &vec_str(&["bash", "-lc", r#"echo "hi $USER""#])
-        );
+        assert_parsed_none(&vec_str(&["bash", "-lc", "echo `pwd`"]));
+        assert_parsed_none(&vec_str(&["bash", "-lc", "echo $HOME"]));
+        assert_parsed_none(&vec_str(&["bash", "-lc", r#"echo "hi $USER""#]));
     }
 
     #[test]
     fn rejects_variable_assignment_prefix() {
         assert_parsed_none(&vec_str(&["bash", "-lc", "FOO=bar ls"]));
     }
-
 }
