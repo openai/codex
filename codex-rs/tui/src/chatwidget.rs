@@ -83,7 +83,6 @@ use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
-use crate::status::helpers::get_limits_duration;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
