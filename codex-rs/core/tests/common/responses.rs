@@ -34,6 +34,16 @@ pub fn ev_completed(id: &str) -> Value {
     })
 }
 
+/// Convenience: SSE event for a created response with a specific id.
+pub fn ev_response_created(id: &str) -> Value {
+    serde_json::json!({
+        "type": "response.created",
+        "response": {
+            "id": id,
+        }
+    })
+}
+
 pub fn ev_completed_with_tokens(id: &str, total_tokens: u64) -> Value {
     serde_json::json!({
         "type": "response.completed",

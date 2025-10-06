@@ -3,6 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
+use assert_matches::assert_matches;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -634,7 +635,7 @@ fn streaming_final_answer_keeps_task_running_state() {
         chat.queued_user_messages.front().unwrap().text,
         "queued submission"
     );
-    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     match op_rx.try_recv() {
@@ -1791,10 +1792,7 @@ fn apply_patch_approval_sends_op_with_submission_id() {
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::CodexOp(Op::PatchApproval { id, decision }) = app_ev {
             assert_eq!(id, "sub-123");
-            assert!(matches!(
-                decision,
-                codex_core::protocol::ReviewDecision::Approved
-            ));
+            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
             found = true;
             break;
         }
@@ -1841,10 +1839,7 @@ fn apply_patch_full_flow_integration_like() {
     match forwarded {
         Op::PatchApproval { id, decision } => {
             assert_eq!(id, "sub-xyz");
-            assert!(matches!(
-                decision,
-                codex_core::protocol::ReviewDecision::Approved
-            ));
+            assert_matches!(decision, codex_core::protocol::ReviewDecision::Approved);
         }
         other => panic!("unexpected op forwarded: {other:?}"),
     }

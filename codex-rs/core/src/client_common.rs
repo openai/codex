@@ -33,6 +33,9 @@ pub struct Prompt {
     /// external MCP servers.
     pub(crate) tools: Vec<ToolSpec>,
 
+    /// Whether parallel tool calls are permitted for this prompt.
+    pub(crate) parallel_tool_calls: bool,
+
     /// Optional override for the built-in BASE_INSTRUCTIONS.
     pub base_instructions_override: Option<String>,
 
@@ -156,12 +159,16 @@ fn build_structured_output(parsed: &ExecOutputJson) -> String {
         parsed.metadata.duration_seconds
     ));
 
+    let mut output = parsed.output.clone();
     if let Some(total_lines) = extract_total_output_lines(&parsed.output) {
         sections.push(format!("Total output lines: {total_lines}"));
+        if let Some(stripped) = strip_total_output_header(&output) {
+            output = stripped.to_string();
+        }
     }
 
     sections.push("Output:".to_string());
-    sections.push(parsed.output.clone());
+    sections.push(output);
 
     sections.join("\n")
 }
@@ -172,6 +179,13 @@ fn extract_total_output_lines(output: &str) -> Option<u32> {
     let (_, after_of) = marker.split_once(" of ")?;
     let (total_segment, _) = after_of.split_once(' ')?;
     total_segment.parse::<u32>().ok()
+}
+
+fn strip_total_output_header(output: &str) -> Option<&str> {
+    let after_prefix = output.strip_prefix("Total output lines: ")?;
+    let (_, remainder) = after_prefix.split_once('\n')?;
+    let remainder = remainder.strip_prefix('\n').unwrap_or(remainder);
+    Some(remainder)
 }
 
 #[derive(Debug)]
@@ -286,6 +300,17 @@ pub(crate) mod tools {
         WebSearch {},
         #[serde(rename = "custom")]
         Freeform(FreeformTool),
+    }
+
+    impl ToolSpec {
+        pub(crate) fn name(&self) -> &str {
+            match self {
+                ToolSpec::Function(tool) => tool.name.as_str(),
+                ToolSpec::LocalShell {} => "local_shell",
+                ToolSpec::WebSearch {} => "web_search",
+                ToolSpec::Freeform(tool) => tool.name.as_str(),
+            }
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -433,7 +458,7 @@ mod tests {
             input: &input,
             tools: &tools,
             tool_choice: "auto",
-            parallel_tool_calls: false,
+            parallel_tool_calls: true,
             reasoning: None,
             store: false,
             stream: true,
@@ -474,7 +499,7 @@ mod tests {
             input: &input,
             tools: &tools,
             tool_choice: "auto",
-            parallel_tool_calls: false,
+            parallel_tool_calls: true,
             reasoning: None,
             store: false,
             stream: true,
@@ -510,7 +535,7 @@ mod tests {
             input: &input,
             tools: &tools,
             tool_choice: "auto",
-            parallel_tool_calls: false,
+            parallel_tool_calls: true,
             reasoning: None,
             store: false,
             stream: true,

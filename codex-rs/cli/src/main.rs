@@ -90,8 +90,9 @@ enum Subcommand {
     /// Generate shell completion scripts.
     Completion(CompletionCommand),
 
-    /// Internal debugging commands.
-    Debug(DebugArgs),
+    /// Run commands within a Codex-provided sandbox.
+    #[clap(visible_alias = "debug")]
+    Sandbox(SandboxArgs),
 
     /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
@@ -135,18 +136,20 @@ struct ResumeCommand {
 }
 
 #[derive(Debug, Parser)]
-struct DebugArgs {
+struct SandboxArgs {
     #[command(subcommand)]
-    cmd: DebugCommand,
+    cmd: SandboxCommand,
 }
 
 #[derive(Debug, clap::Subcommand)]
-enum DebugCommand {
+enum SandboxCommand {
     /// Run a command under Seatbelt (macOS only).
-    Seatbelt(SeatbeltCommand),
+    #[clap(visible_alias = "seatbelt")]
+    Macos(SeatbeltCommand),
 
     /// Run a command under Landlock+seccomp (Linux only).
-    Landlock(LandlockCommand),
+    #[clap(visible_alias = "landlock")]
+    Linux(LandlockCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -451,8 +454,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
         }
-        Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
-            DebugCommand::Seatbelt(mut seatbelt_cli) => {
+        Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
+            SandboxCommand::Macos(mut seatbelt_cli) => {
                 prepend_config_flags(
                     &mut seatbelt_cli.config_overrides,
                     root_config_overrides.clone(),
@@ -463,7 +466,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )
                 .await?;
             }
-            DebugCommand::Landlock(mut landlock_cli) => {
+            SandboxCommand::Linux(mut landlock_cli) => {
                 prepend_config_flags(
                     &mut landlock_cli.config_overrides,
                     root_config_overrides.clone(),
@@ -582,6 +585,7 @@ fn print_completion(cmd: CompletionCommand) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use codex_core::protocol::TokenUsage;
     use codex_protocol::ConversationId;
 
@@ -748,14 +752,14 @@ mod tests {
         assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
         assert!(interactive.oss);
         assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
-        assert!(matches!(
+        assert_matches!(
             interactive.sandbox_mode,
             Some(codex_common::SandboxModeCliArg::WorkspaceWrite)
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             interactive.approval_policy,
             Some(codex_common::ApprovalModeCliArg::OnRequest)
-        ));
+        );
         assert!(interactive.full_auto);
         assert_eq!(
             interactive.cwd.as_deref(),

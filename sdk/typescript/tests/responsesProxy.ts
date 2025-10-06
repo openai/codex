@@ -46,6 +46,9 @@ export type ResponsesApiRequest = {
     role: string;
     content?: Array<{ type: string; text: string }>;
   }>;
+  text?: {
+    format?: Record<string, unknown>;
+  };
 };
 
 export type RecordedRequest = {
