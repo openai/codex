@@ -4,6 +4,7 @@ use tree_sitter::Node;
 use tree_sitter::Parser;
 use tree_sitter::Tree;
 use tree_sitter_bash::LANGUAGE as BASH;
+use tracing::debug;
 
 
 const PRINT_TREE_DEBUG: bool = true;
@@ -23,25 +24,28 @@ pub fn try_parse_bash(bash_lc_arg: &str) -> Option<Tree> {
     tree
 }
 
-pub(crate) fn print_node(node: Node, source: &str, indent: usize) {
+fn print_node(node: Node, source: &str, indent: usize) {
     let prefix = "  ".repeat(indent);
-    print!("{}{}", prefix, node.kind());
 
-    if node.child_count() == 0 {
+    let suffix = if node.child_count() == 0 {
         if let Ok(text) = node.utf8_text(source.as_bytes()) {
-            println!(": '{}'", text);
+            format!(": '{}'", text.replace('\n', "\\n").replace('\t', "\\t"))
         } else {
-            println!();
+            ": <UTF8 ERROR>".to_string()
         }
     } else {
-        println!();
-    }
+        String::new()
+    };
+
+    debug!("{}{}{}", prefix, node.kind(), suffix);
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         print_node(child, source, indent + 1);
     }
 }
+
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Command {
     pub original_cmd: String,
@@ -65,7 +69,7 @@ impl Command {
             .options
             .iter()
             .map(
-                |(key, vals)| {
+                |(_key, vals)| {
                     if vals.is_empty() { 1 } else { vals.len() * 2 }
                 },
             )
@@ -140,9 +144,8 @@ impl Command {
             } else {
                 for val in vals {
                     if key.starts_with("--") && key.contains('=') {
-                        // Already in --flag=value form
                         if param.include_options_assign_key && param.include_options_assign_value {
-                            parts.push(format!("{}={}", key, val));
+                            parts.push(format!("{key}={val}"));
                         }
                     } else {
                         if param.include_options_key {
@@ -381,10 +384,10 @@ macro_rules! define_bash_commands {
                 }
             }
 
-            fn visit_enter_command(&mut self, node: Node<'tree>) {
+            fn visit_enter_command(&mut self, _node: Node<'tree>) {
             }
 
-            fn visit_leave_command(&mut self, node: Node<'tree>) {
+            fn visit_leave_command(&mut self, _node: Node<'tree>) {
             }
 
             fn visit_redirected_statement(&mut self, node: Node<'tree>) {

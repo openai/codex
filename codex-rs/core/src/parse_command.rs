@@ -49,7 +49,7 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
     // Parse and then collapse consecutive duplicate commands to avoid redundant summaries.
     let script = if command.len() >= 3 && command[0] == "bash" && command[1] == "-lc" {
         &command[2]
-    } else if command.len() >= 1 {
+    } else if !command.is_empty() {
         &Command::shlex_join(&command[0..])
     } else {
         return Vec::new();
@@ -57,7 +57,7 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
     dbg!(script);
 
     let mut p = BashCommandParser::new();
-    if let Some(parsed) = p.parse(&script) {
+    if let Some(parsed) = p.parse(script) {
         let mut deduped: Vec<ParsedCommand> = Vec::with_capacity(parsed.len());
         for cmd in parsed.into_iter() {
             if deduped.last().is_some_and(|prev| prev == &cmd) {
@@ -83,7 +83,7 @@ pub fn parse_command_as_tokens(original: &[String]) -> Option<Vec<Vec<String>>> 
     };
 
     let mut p = BashCommandParser::new();
-    p.parse(&script);
+    p.parse(script);
     let commands = p.get_origin_commands();
     Some(
         commands
@@ -214,9 +214,11 @@ impl BashCommandParser {
 
 }
 
+#[allow(unused_mut)]
 impl<'a> NodeVisitor<'a> for BashCommandParser {
     fn source_code(&self) -> &str {
-        self.src.as_ref().expect("source not set")
+        // SAFE unwrap
+        self.src.as_deref().unwrap_or("")
     }
 
     fn visit_subshell(&mut self, _node: Node<'a>) {
@@ -261,7 +263,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             include_options_val: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param.clone());
+        let non_flags = cmd.tidied_parts(non_flags_param);
         let path = non_flags.first().cloned();
         self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::ListFiles {
@@ -276,13 +278,13 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             include_options_val: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param.clone());
+        let non_flags = cmd.tidied_parts(non_flags_param);
         let (query, path) = if has_files_flag {
-            (None, non_flags.get(0).map(String::from))
+            (None, non_flags.first().map(String::from))
         } else {
             (
-                non_flags.get(0).map(String::from),
-                non_flags.get(1).and_then(|p| Some(p.clone())),
+                non_flags.first().map(String::from),
+                non_flags.get(1).cloned()
             )
         };
         self.origin_commands.push(cmd.clone());
@@ -308,7 +310,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             include_options_val: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param.clone());
+        let non_flags = cmd.tidied_parts(non_flags_param);
         fn is_pathish(s: &str) -> bool {
             s == "."
                 || s == ".."
@@ -355,9 +357,9 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             include_options_val: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param.clone());
-        let query = non_flags.first().cloned().map(String::from);
-        let path = non_flags.get(1).map(|s| s.clone());
+        let non_flags = cmd.tidied_parts(non_flags_param);
+        let query = non_flags.first().cloned();
+        let path = non_flags.get(1).cloned();
         self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Search {
             cmd: main_cmd,
@@ -391,7 +393,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         // Handle both `-n 50`, `-n+50`, `-n50`, and `--lines 50` forms
         let n_value = cmd.find_option_val_strip_key(&["-n", "--lines"]);
 
-        let valid_n = n_value.as_ref().map_or(false, |n| {
+        let valid_n = n_value.as_ref().is_some_and(|n| {
             let s = n.strip_prefix('+').unwrap_or(n);
             !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
         });
@@ -400,7 +402,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             include_options_val: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param.clone());
+        let non_flags = cmd.tidied_parts(non_flags_param);
         if valid_n 
             && let Some(p) = non_flags.last() 
             // assume a file shouldn't be named just with digits
@@ -429,7 +431,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
             include_options_val: true,
             ..TidiedPartsParam::default()
         };
-        let non_flags = cmd.tidied_parts(non_flags_param.clone());
+        let non_flags = cmd.tidied_parts(non_flags_param);
         if !non_flags.is_empty() {
             let name = non_flags.first().cloned();
             self.parsed_commands.push(ParsedCommand::Read {
