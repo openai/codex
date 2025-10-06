@@ -249,4 +249,4 @@ codegen-units = 1
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
 
 # Uncomment to debug local changes.
-rmcp = { path = "../../rust-sdk/crates/rmcp" }
+# rmcp = { path = "../../rust-sdk/crates/rmcp" }
