@@ -29,6 +29,8 @@ pub(crate) struct ToolsConfig {
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
     pub experimental_supported_tools: Vec<String>,
+    pub exclude_builtin_tools: Vec<String>,
+    pub include_builtin_tools: Option<Vec<String>>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -39,6 +41,8 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
+    pub(crate) exclude_builtin_tools: &'a Vec<String>,
+    pub(crate) include_builtin_tools: &'a Option<Vec<String>>,
 }
 
 impl ToolsConfig {
@@ -51,6 +55,8 @@ impl ToolsConfig {
             use_streamable_shell_tool,
             include_view_image_tool,
             experimental_unified_exec_tool,
+            exclude_builtin_tools,
+            include_builtin_tools,
         } = params;
         let shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::Streamable
@@ -80,6 +86,8 @@ impl ToolsConfig {
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
+            exclude_builtin_tools: (*exclude_builtin_tools).clone(),
+            include_builtin_tools: (*include_builtin_tools).clone(),
         }
     }
 }
@@ -554,6 +562,21 @@ fn sanitize_json_schema(value: &mut JsonValue) {
     }
 }
 
+/// Check if a built-in tool should be included based on filtering config
+fn should_include_tool(tool_name: &str, config: &ToolsConfig) -> bool {
+    if let Some(ref include_list) = config.include_builtin_tools {
+        return include_list.contains(&tool_name.to_string());
+    }
+
+    if !config.exclude_builtin_tools.is_empty() {
+        return !config
+            .exclude_builtin_tools
+            .contains(&tool_name.to_string());
+    }
+
+    true // Include by default
+}
+
 /// Builds the tool registry builder while collecting tool specs for later serialization.
 pub(crate) fn build_specs(
     config: &ToolsConfig,
@@ -584,10 +607,10 @@ pub(crate) fn build_specs(
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
 
-    if config.experimental_unified_exec_tool {
+    if config.experimental_unified_exec_tool && should_include_tool("local_shell", config) {
         builder.push_spec(create_unified_exec_tool());
         builder.register_handler("unified_exec", unified_exec_handler);
-    } else {
+    } else if should_include_tool("local_shell", config) {
         match &config.shell_type {
             ConfigShellToolType::Default => {
                 builder.push_spec(create_shell_tool());
@@ -613,27 +636,30 @@ pub(crate) fn build_specs(
     builder.register_handler("container.exec", shell_handler.clone());
     builder.register_handler("local_shell", shell_handler);
 
-    if config.plan_tool {
+    if config.plan_tool && should_include_tool("plan", config) {
         builder.push_spec(PLAN_TOOL.clone());
         builder.register_handler("update_plan", plan_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
-        match apply_patch_tool_type {
-            ApplyPatchToolType::Freeform => {
-                builder.push_spec(create_apply_patch_freeform_tool());
+        if should_include_tool("apply_patch", config) {
+            match apply_patch_tool_type {
+                ApplyPatchToolType::Freeform => {
+                    builder.push_spec(create_apply_patch_freeform_tool());
+                }
+                ApplyPatchToolType::Function => {
+                    builder.push_spec(create_apply_patch_json_tool());
+                }
             }
-            ApplyPatchToolType::Function => {
-                builder.push_spec(create_apply_patch_json_tool());
-            }
+            builder.register_handler("apply_patch", apply_patch_handler);
         }
-        builder.register_handler("apply_patch", apply_patch_handler);
     }
 
     if config
         .experimental_supported_tools
         .iter()
         .any(|tool| tool == "read_file")
+        && should_include_tool("read_file", config)
     {
         let read_file_handler = Arc::new(ReadFileHandler);
         builder.push_spec_with_parallel_support(create_read_file_tool(), true);
@@ -650,11 +676,11 @@ pub(crate) fn build_specs(
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
-    if config.web_search_request {
+    if config.web_search_request && should_include_tool("web_search_request", config) {
         builder.push_spec(ToolSpec::WebSearch {});
     }
 
-    if config.include_view_image_tool {
+    if config.include_view_image_tool && should_include_tool("view_image", config) {
         builder.push_spec_with_parallel_support(create_view_image_tool(), true);
         builder.register_handler("view_image", view_image_handler);
     }
@@ -739,6 +765,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -759,6 +787,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -781,6 +811,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: false,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -800,6 +832,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: false,
             experimental_unified_exec_tool: false,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -826,6 +860,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
         let (tools, _) = build_specs(
             &config,
@@ -931,6 +967,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -1008,6 +1046,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
 
         let (tools, _) = build_specs(
@@ -1077,6 +1117,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
 
         let (tools, _) = build_specs(
@@ -1141,6 +1183,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
 
         let (tools, _) = build_specs(
@@ -1208,6 +1252,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
 
         let (tools, _) = build_specs(
@@ -1287,6 +1333,8 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            exclude_builtin_tools: &vec![],
+            include_builtin_tools: &None,
         });
         let (tools, _) = build_specs(
             &config,

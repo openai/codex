@@ -428,6 +428,53 @@ codex mcp login SERVER_NAME
 codex mcp logout SERVER_NAME
 ```
 
+## builtin_tools
+
+Codex includes several built-in tools (shell, file operations, etc.) that are available to the model by default. You can selectively disable these tools if you want to provide all functionality via MCP servers.
+
+### Exclude specific tools
+
+```toml
+[builtin_tools]
+exclude = ["local_shell", "read_file", "write_file", "list_dir"]
+```
+
+This will prevent Codex from exposing these tools to the model, while keeping other built-in tools like `apply_patch` available.
+
+### Include only specific tools
+
+```toml
+[builtin_tools]
+include = ["apply_patch"]  # Only this tool will be available
+```
+
+Setting `include = []` (empty list) will disable ALL built-in tools.
+
+**Note:** `exclude` and `include` are mutually exclusive. Using both will result in an error.
+
+### Available tool names
+
+- `local_shell` - Execute shell commands
+- `read_file` - Read files from disk
+- `write_file` - Write files to disk (Note: Codex uses this internally for file writes; this name may vary in actual implementation)
+- `list_dir` - List directory contents (Note: Codex uses this internally; this name may vary in actual implementation)
+- `apply_patch` - Apply code patches
+- `view_image` - View images
+- `web_search_request` - Perform web searches
+- `plan` - Planning/task decomposition
+
+### Use case: MCP-only mode
+
+If you want Codex to ONLY use tools from MCP servers:
+
+```toml
+[builtin_tools]
+include = []  # Disable all built-in tools
+
+[mcp_servers.my_tools]
+url = "http://localhost:3000/mcp"
+```
+
 ## Examples of useful MCPs
 
 There is an ever growing list of useful MCP servers that can be helpful while you are working with Codex.
@@ -440,7 +487,6 @@ Some of the most common MCPs we've seen are:
 - [Chrome Developer Tools](https://github.com/ChromeDevTools/chrome-devtools-mcp/) — control and inspect a Chrome browser
 - [Sentry](https://docs.sentry.io/product/sentry-mcp/#codex) — access to your Sentry logs
 - [GitHub](https://github.com/github/github-mcp-server) — Control over your GitHub account beyond what git allows (like controlling PRs, issues, etc.)
-
 ## shell_environment_policy
 
 Codex spawns subprocesses (e.g. when executing a `local_shell` tool-call suggested by the assistant). By default it now passes **your full environment** to those subprocesses. You can tune this behavior via the **`shell_environment_policy`** block in `config.toml`:
