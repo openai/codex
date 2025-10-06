@@ -101,7 +101,13 @@ fi
 
 # Install dependencies
 print_status "Installing dependencies..."
-if pnpm install --no-frozen-lockfile; then
+# Use frozen lockfile in CI/production, allow no-frozen-lockfile in development
+if [[ "${CI:-}" == "true" || "${NODE_ENV:-}" == "production" ]]; then
+    INSTALL_CMD="pnpm install --frozen-lockfile"
+else
+    INSTALL_CMD="pnpm install --no-frozen-lockfile"
+fi
+if $INSTALL_CMD; then
     print_success "Dependencies installed"
 else
     print_warning "Some dependencies failed to install, continuing..."
