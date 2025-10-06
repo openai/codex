@@ -2,5 +2,5 @@
 source: tui/src/chatwidget/tests.rs
 expression: blob1
 ---
-⠋ Exploring
+• Exploring
   └ List ls -la
