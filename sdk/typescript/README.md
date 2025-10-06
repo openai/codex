@@ -60,13 +60,14 @@ plain JavaScript objects.
 const schema = {
   type: "object",
   properties: {
-    status: { type: "string" },
+    summary: { type: "string" },
+    status: { type: "string", enum: ["ok", "action_required"] },
   },
-  required: ["status"],
+  required: ["summary", "status"],
   additionalProperties: false,
 } as const;
 
-const turn = await thread.run("Summarize the status", { outputSchema: schema });
+const turn = await thread.run("Summarize repository status", { outputSchema: schema });
 console.log(turn.finalResponse);
 ```
 
