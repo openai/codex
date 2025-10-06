@@ -54,6 +54,26 @@ pub(crate) struct RateLimitSnapshotDisplay {
     pub secondary: Option<RateLimitWindowDisplay>,
 }
 
+impl RateLimitSnapshotDisplay {
+    pub(crate) fn summary_segments(&self) -> Vec<String> {
+        let mut segments = Vec::new();
+
+        if let Some(primary) = self.primary.as_ref() {
+            let label = limit_label(primary.window_minutes, "5h");
+            let summary = format_status_limit_summary(primary.used_percent);
+            segments.push(format_segment(label, summary, primary.resets_at.as_ref()));
+        }
+
+        if let Some(secondary) = self.secondary.as_ref() {
+            let label = limit_label(secondary.window_minutes, "weekly");
+            let summary = format_status_limit_summary(secondary.used_percent);
+            segments.push(format_segment(label, summary, secondary.resets_at.as_ref()));
+        }
+
+        segments
+    }
+}
+
 pub(crate) fn rate_limit_snapshot_display(
     snapshot: &RateLimitSnapshot,
     captured_at: DateTime<Local>,
@@ -78,11 +98,7 @@ pub(crate) fn compose_rate_limit_data(
             let mut rows = Vec::with_capacity(2);
 
             if let Some(primary) = snapshot.primary.as_ref() {
-                let label: String = primary
-                    .window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string());
-                let label = capitalize_first(&label);
+                let label = limit_label(primary.window_minutes, "5h");
                 rows.push(StatusRateLimitRow {
                     label: format!("{label} limit"),
                     percent_used: primary.used_percent,
@@ -91,11 +107,7 @@ pub(crate) fn compose_rate_limit_data(
             }
 
             if let Some(secondary) = snapshot.secondary.as_ref() {
-                let label: String = secondary
-                    .window_minutes
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string());
-                let label = capitalize_first(&label);
+                let label = limit_label(secondary.window_minutes, "weekly");
                 rows.push(StatusRateLimitRow {
                     label: format!("{label} limit"),
                     percent_used: secondary.used_percent,
@@ -138,5 +150,19 @@ fn capitalize_first(label: &str) -> String {
             capitalized
         }
         None => String::new(),
+    }
+}
+
+fn limit_label(window_minutes: Option<u64>, fallback: &str) -> String {
+    let label = window_minutes
+        .map(get_limits_duration)
+        .unwrap_or_else(|| fallback.to_string());
+    capitalize_first(&label)
+}
+
+fn format_segment(label: String, summary: String, resets_at: Option<&String>) -> String {
+    match resets_at {
+        Some(resets_at) => format!("{label} limit {summary} (resets {resets_at})"),
+        None => format!("{label} limit {summary}"),
     }
 }
