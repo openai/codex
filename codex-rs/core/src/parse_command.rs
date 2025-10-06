@@ -45,6 +45,7 @@ impl From<ParsedCommand> for codex_protocol::parse_command::ParsedCommand {
 /// The goal of the parsed metadata is to be able to provide the user with a human readable gis
 /// of what it is doing.
 pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
+    dbg!(command);
     // Parse and then collapse consecutive duplicate commands to avoid redundant summaries.
     let script = if command.len() >= 3 && command[0] == "bash" && command[1] == "-lc" {
         &command[2]
@@ -53,18 +54,22 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
     } else {
         return Vec::new();
     };
+    dbg!(script);
 
     let mut p = BashCommandParser::new();
-    let parsed = p.parse(&script);
-
-    let mut deduped: Vec<ParsedCommand> = Vec::with_capacity(parsed.len());
-    for cmd in parsed.into_iter() {
-        if deduped.last().is_some_and(|prev| prev == &cmd) {
-            continue;
+    if let Some(parsed) = p.parse(&script) {
+        let mut deduped: Vec<ParsedCommand> = Vec::with_capacity(parsed.len());
+        for cmd in parsed.into_iter() {
+            if deduped.last().is_some_and(|prev| prev == &cmd) {
+                continue;
+            }
+            deduped.push(cmd);
         }
-        deduped.push(cmd);
+        deduped
+    } else {
+        // return empty vec to maintain the interface
+        Vec::new()
     }
-    deduped
 }
 
 /// Returns flattened string vectors
@@ -162,17 +167,17 @@ impl BashCommandParser {
         }
     }
 
-    pub fn parse(&mut self, src: &str) -> Vec<ParsedCommand> {
+    pub fn parse(&mut self, src: &str) -> Option<Vec<ParsedCommand>> {
         self.src = Some(src.to_owned());
-        let tree = try_parse_bash(src, true);
+        let tree = try_parse_bash(src);
         if let Some(tree) = tree {
             let root = tree.root_node();
             self.visit(root);
         }
         if self.reject_whole {
-            Vec::new()
+            None
         } else {
-            self.parsed_commands.clone()
+            Some(self.parsed_commands.clone())
         }
     }
 
@@ -183,6 +188,30 @@ impl BashCommandParser {
             self.origin_commands.clone()
         }
     }
+
+    fn reject_node(&mut self, node: Node) {
+        if self
+        .find_child_by_kind(node, "variable_assignment")
+        .is_some()
+        {
+            self.reject_whole = true;
+        }
+
+        if self
+            .find_child_by_kind(node, "command_substitution")
+            .is_some()
+        {
+            self.reject_whole = true;
+        }
+
+        if self
+            .find_child_by_kind(node, "simple_expansion")
+            .is_some()
+        {
+            self.reject_whole = true;
+        }
+    }
+
 }
 
 impl<'a> NodeVisitor<'a> for BashCommandParser {
@@ -194,6 +223,10 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         self.reject_whole = true;
     }
 
+    fn visit_enter_command(&mut self, node:Node<'a>) {
+        self.reject_node(node);
+    }
+
     fn visit_redirected_statement(&mut self, node: Node<'a>) {
         self.parsed_commands.push(ParsedCommand::Unknown {
             cmd: self.source_code()[node.start_byte()..node.end_byte()].to_owned(),
@@ -201,12 +234,7 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
     }
 
     fn visit_children(&mut self, node: Node<'a>) {
-        if self
-            .find_child_by_kind(node, "variable_assignment")
-            .is_some()
-        {
-            self.reject_whole = true;
-        }
+        self.reject_node(node);
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -438,16 +466,6 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         self.visit_command_unknown(cmd);
     }
 
-    fn visit_command_cd(&mut self, mut cmd: Command) {
-        // Ignored
-        self.origin_commands.push(cmd.clone());
-    }
-
-    fn visit_command_yes(&mut self, mut cmd: Command) {
-        // Ignored
-        self.origin_commands.push(cmd.clone());
-    }
-
     fn visit_command_echo(&mut self, mut cmd: Command) {
         self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Unknown {
@@ -455,6 +473,8 @@ impl<'a> NodeVisitor<'a> for BashCommandParser {
         });
     }
 
+    /// Any known commands(eg. cd) not listed here are ignored by default
+    /// Any unknown command will go to this branch
     fn visit_command_unknown(&mut self, mut cmd: Command) {
         self.origin_commands.push(cmd.clone());
         self.parsed_commands.push(ParsedCommand::Unknown {
@@ -488,6 +508,12 @@ mod tests {
     fn assert_parsed(args: &[String], expected: Vec<ParsedCommand>) {
         let out = parse_command(args);
         assert_eq!(out, expected);
+    }
+
+    fn assert_parsed_none(args: &[String]) {
+        let cmd = parse_command(args);
+        dbg!(&cmd);
+        assert!(cmd.is_empty())
     }
 
     #[test]
@@ -1181,4 +1207,66 @@ mod tests {
             }],
         );
     }
+
+    #[test]
+    fn extracts_double_and_single_quoted_strings() {
+        assert_parsed(
+            &shlex_split_safe("echo \"hello world\""),
+            vec![ParsedCommand::Unknown {
+                cmd: "echo 'hello world'".to_string(),
+            }],
+        );
+
+        assert_parsed(
+            &shlex_split_safe("echo 'hello there'"),
+            vec![ParsedCommand::Unknown {
+                cmd: "echo 'hello there'".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn rejects_parentheses_and_subshells() {
+        // NOTE: shlex split not work on parenthes (), it can not correctly 
+        // convert to a Vec<string> such that can be converted to AST
+        //
+        // so this will not work:
+        // let inner = "ls || (pwd && echo hi)";
+        // assert_parsed_none(
+        //     &&shlex_split_safe(inner)
+        // );
+
+        let inner = "ls || (pwd && echo hi)";
+        assert_parsed_none(
+            &vec_str(&["bash", "-lc", inner])
+        );
+
+        let inner = "(ls)";
+        assert_parsed_none(
+            &vec_str(&["bash", "-lc", inner])
+        );
+    }
+
+    #[test]
+    fn rejects_command_and_process_substitutions_and_expansions() {
+        assert_parsed_none(
+            &vec_str(&["bash", "-lc", "echo $(pwd)"])
+        );
+
+        assert_parsed_none(
+            &vec_str(&["bash", "-lc", "echo `pwd`"])
+        );
+        assert_parsed_none(
+            &vec_str(&["bash", "-lc", "echo $HOME"])
+        );
+        assert_parsed_none(
+            &vec_str(&["bash", "-lc", r#"echo "hi $USER""#])
+        );
+    }
+
+    #[test]
+    fn rejects_variable_assignment_prefix() {
+        assert_parsed_none(&vec_str(&["bash", "-lc", "FOO=bar ls"]));
+    }
+
 }
