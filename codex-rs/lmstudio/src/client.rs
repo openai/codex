@@ -63,14 +63,12 @@ impl LMStudioClient {
 
     // Load a model by sending an empty request with max_tokens 1
     pub async fn load_model(&self, model: &str) -> io::Result<()> {
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
 
         let request_body = serde_json::json!({
             "model": model,
-            "messages": [
-                { "role": "user", "content": "" }
-            ],
-            "max_tokens": 1
+            "input": "",
+            "max_output_tokens": 1
         });
 
         let response = self
