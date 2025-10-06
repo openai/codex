@@ -20,12 +20,10 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-mod codex_message_processor;
 mod codex_tool_config;
 mod codex_tool_runner;
 mod error_code;
 mod exec_approval;
-mod json_to_toml;
 pub(crate) mod message_processor;
 mod outgoing_message;
 mod patch_approval;
@@ -93,6 +91,7 @@ pub async fn run_main(
         )
     })?;
     let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
+        .await
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;

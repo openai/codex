@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
-use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -26,6 +25,7 @@ pub mod custom_prompt_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
+mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod paste_burst;
 pub mod popup_consts;
@@ -68,6 +68,7 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
+    context_window_percent: Option<u8>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -100,7 +101,12 @@ impl BottomPane {
             status: None,
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
+            context_window_percent: None,
         }
+    }
+
+    pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
+        self.status.as_ref()
     }
 
     fn active_view(&self) -> Option<&dyn BottomPaneView> {
@@ -150,7 +156,9 @@ impl BottomPane {
                 let status_height = self
                     .status
                     .as_ref()
-                    .map_or(0, |status| status.desired_height(area.width));
+                    .map_or(0, |status| status.desired_height(area.width))
+                    .min(area.height.saturating_sub(1));
+
                 Layout::vertical([Constraint::Max(status_height), Constraint::Min(1)]).areas(area)
             }
         }
@@ -331,8 +339,25 @@ impl BottomPane {
             self.request_redraw();
         } else {
             // Hide the status indicator when a task completes, but keep other modal views.
-            self.status = None;
+            self.hide_status_indicator();
         }
+    }
+
+    /// Hide the status indicator while leaving task-running state untouched.
+    pub(crate) fn hide_status_indicator(&mut self) {
+        if self.status.take().is_some() {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_context_window_percent(&mut self, percent: Option<u8>) {
+        if self.context_window_percent == percent {
+            return;
+        }
+
+        self.context_window_percent = percent;
+        self.composer.set_context_window_percent(percent);
+        self.request_redraw();
     }
 
     /// Show a generic list selection view with the provided items.
@@ -369,13 +394,6 @@ impl BottomPane {
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
-    }
-
-    /// Update the *context-window remaining* indicator in the composer. This
-    /// is forwarded directly to the underlying `ChatComposer`.
-    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
-        self.composer.set_token_usage(token_info);
-        self.request_redraw();
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
@@ -616,7 +634,7 @@ mod tests {
 
         // Composer placeholder should be visible somewhere below.
         let mut found_composer = false;
-        for y in 1..area.height.saturating_sub(2) {
+        for y in 1..area.height {
             let mut row = String::new();
             for x in 0..area.width {
                 row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
@@ -698,8 +716,8 @@ mod tests {
             top.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            top.trim_start().starts_with("Working"),
-            "expected top row to start with 'Working': {top:?}"
+            top.trim_start().starts_with("• Working"),
+            "expected top row to start with '• Working': {top:?}"
         );
         assert!(
             top.contains("Working"),

@@ -2,11 +2,11 @@
 source: tui/src/diff_render.rs
 expression: terminal.backend()
 ---
-"• Change Approved example.txt (+1 -1)                                           "
-"                                                                                "
-"                                                                                "
-"                                                                                "
-"                                                                                "
+"• Edited example.txt (+1 -1)                                                    "
+"    1      line one                                                             "
+"    2     -line two                                                             "
+"    2     +line two changed                                                     "
+"    3      line three                                                           "
 "                                                                                "
 "                                                                                "
 "                                                                                "

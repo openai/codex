@@ -5,9 +5,11 @@ use std::time::Duration;
 
 use crate::AuthManager;
 use crate::auth::CodexAuth;
+use crate::error::RetryLimitReachedError;
+use crate::error::UnexpectedResponseError;
 use bytes::Bytes;
-use codex_protocol::mcp_protocol::AuthMode;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_app_server_protocol::AuthMode;
+use codex_protocol::ConversationId;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
@@ -47,6 +49,7 @@ use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
+use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
@@ -60,7 +63,6 @@ struct ErrorResponse {
 #[derive(Debug, Deserialize)]
 struct Error {
     r#type: Option<String>,
-    #[allow(dead_code)]
     code: Option<String>,
     message: Option<String>,
 
@@ -73,6 +75,7 @@ struct Error {
 pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
+    otel_event_manager: OtelEventManager,
     client: reqwest::Client,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -84,6 +87,7 @@ impl ModelClient {
     pub fn new(
         config: Arc<Config>,
         auth_manager: Option<Arc<AuthManager>>,
+        otel_event_manager: OtelEventManager,
         provider: ModelProviderInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
@@ -94,6 +98,7 @@ impl ModelClient {
         Self {
             config,
             auth_manager,
+            otel_event_manager,
             client,
             provider,
             conversation_id,
@@ -127,6 +132,7 @@ impl ModelClient {
                     &self.config.model_family,
                     &self.client,
                     &self.provider,
+                    &self.otel_event_manager,
                 )
                 .await?;
 
@@ -163,7 +169,12 @@ impl ModelClient {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");
-            return stream_from_fixture(path, self.provider.clone()).await;
+            return stream_from_fixture(
+                path,
+                self.provider.clone(),
+                self.otel_event_manager.clone(),
+            )
+            .await;
         }
 
         let auth_manager = self.auth_manager.clone();
@@ -216,7 +227,7 @@ impl ModelClient {
             input: &input_with_instructions,
             tools: &tools_json,
             tool_choice: "auto",
-            parallel_tool_calls: false,
+            parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             store: azure_workaround,
             stream: true,
@@ -233,7 +244,7 @@ impl ModelClient {
         let max_attempts = self.provider.request_max_retries();
         for attempt in 0..=max_attempts {
             match self
-                .attempt_stream_responses(&payload_json, &auth_manager)
+                .attempt_stream_responses(attempt, &payload_json, &auth_manager)
                 .await
             {
                 Ok(stream) => {
@@ -258,6 +269,7 @@ impl ModelClient {
     /// Single attempt to start a streaming Responses API call.
     async fn attempt_stream_responses(
         &self,
+        attempt: u64,
         payload_json: &Value,
         auth_manager: &Option<Arc<AuthManager>>,
     ) -> std::result::Result<ResponseStream, StreamAttemptError> {
@@ -291,15 +303,22 @@ impl ModelClient {
             req_builder = req_builder.header("chatgpt-account-id", account_id);
         }
 
-        let res = req_builder.send().await;
+        let res = self
+            .otel_event_manager
+            .log_request(attempt, || req_builder.send())
+            .await;
+
+        let mut request_id = None;
         if let Ok(resp) = &res {
+            request_id = resp
+                .headers()
+                .get("cf-ray")
+                .map(|v| v.to_str().unwrap_or_default().to_string());
+
             trace!(
-                "Response status: {}, cf-ray: {}",
+                "Response status: {}, cf-ray: {:?}",
                 resp.status(),
-                resp.headers()
-                    .get("cf-ray")
-                    .map(|v| v.to_str().unwrap_or_default())
-                    .unwrap_or_default()
+                request_id
             );
         }
 
@@ -322,6 +341,7 @@ impl ModelClient {
                     stream,
                     tx_event,
                     self.provider.stream_idle_timeout(),
+                    self.otel_event_manager.clone(),
                 ));
 
                 Ok(ResponseStream { rx_event })
@@ -358,7 +378,11 @@ impl ModelClient {
                     // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
                     let body = res.text().await.unwrap_or_default();
                     return Err(StreamAttemptError::Fatal(CodexErr::UnexpectedStatus(
-                        status, body,
+                        UnexpectedResponseError {
+                            status,
+                            body,
+                            request_id: None,
+                        },
                     )));
                 }
 
@@ -389,6 +413,7 @@ impl ModelClient {
                 Err(StreamAttemptError::RetryableHttpError {
                     status,
                     retry_after,
+                    request_id,
                 })
             }
             Err(e) => Err(StreamAttemptError::RetryableTransportError(e.into())),
@@ -397,6 +422,10 @@ impl ModelClient {
 
     pub fn get_provider(&self) -> ModelProviderInfo {
         self.provider.clone()
+    }
+
+    pub fn get_otel_event_manager(&self) -> OtelEventManager {
+        self.otel_event_manager.clone()
     }
 
     /// Returns the currently configured model slug.
@@ -428,6 +457,7 @@ enum StreamAttemptError {
     RetryableHttpError {
         status: StatusCode,
         retry_after: Option<Duration>,
+        request_id: Option<String>,
     },
     RetryableTransportError(CodexErr),
     Fatal(CodexErr),
@@ -452,11 +482,13 @@ impl StreamAttemptError {
 
     fn into_error(self) -> CodexErr {
         match self {
-            Self::RetryableHttpError { status, .. } => {
+            Self::RetryableHttpError {
+                status, request_id, ..
+            } => {
                 if status == StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
                 } else {
-                    CodexErr::RetryLimit(status)
+                    CodexErr::RetryLimit(RetryLimitReachedError { status, request_id })
                 }
             }
             Self::RetryableTransportError(error) => error,
@@ -605,6 +637,7 @@ async fn process_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
+    otel_event_manager: OtelEventManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -616,7 +649,10 @@ async fn process_sse<S>(
     let mut response_error: Option<CodexErr> = None;
 
     loop {
-        let sse = match timeout(idle_timeout, stream.next()).await {
+        let sse = match otel_event_manager
+            .log_sse_event(|| timeout(idle_timeout, stream.next()))
+            .await
+        {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");
@@ -630,6 +666,21 @@ async fn process_sse<S>(
                         id: response_id,
                         usage,
                     }) => {
+                        if let Some(token_usage) = &usage {
+                            otel_event_manager.sse_event_completed(
+                                token_usage.input_tokens,
+                                token_usage.output_tokens,
+                                token_usage
+                                    .input_tokens_details
+                                    .as_ref()
+                                    .map(|d| d.cached_tokens),
+                                token_usage
+                                    .output_tokens_details
+                                    .as_ref()
+                                    .map(|d| d.reasoning_tokens),
+                                token_usage.total_tokens,
+                            );
+                        }
                         let event = ResponseEvent::Completed {
                             response_id,
                             token_usage: usage.map(Into::into),
@@ -637,12 +688,13 @@ async fn process_sse<S>(
                         let _ = tx_event.send(Ok(event)).await;
                     }
                     None => {
-                        let _ = tx_event
-                            .send(Err(response_error.unwrap_or(CodexErr::Stream(
-                                "stream closed before response.completed".into(),
-                                None,
-                            ))))
-                            .await;
+                        let error = response_error.unwrap_or(CodexErr::Stream(
+                            "stream closed before response.completed".into(),
+                            None,
+                        ));
+                        otel_event_manager.see_event_completed_failed(&error);
+
+                        let _ = tx_event.send(Err(error)).await;
                     }
                 }
                 return;
@@ -741,12 +793,18 @@ async fn process_sse<S>(
                     if let Some(error) = error {
                         match serde_json::from_value::<Error>(error.clone()) {
                             Ok(error) => {
-                                let delay = try_parse_retry_after(&error);
-                                let message = error.message.unwrap_or_default();
-                                response_error = Some(CodexErr::Stream(message, delay));
+                                if is_context_window_error(&error) {
+                                    response_error = Some(CodexErr::ContextWindowExceeded);
+                                } else {
+                                    let delay = try_parse_retry_after(&error);
+                                    let message = error.message.clone().unwrap_or_default();
+                                    response_error = Some(CodexErr::Stream(message, delay));
+                                }
                             }
                             Err(e) => {
-                                debug!("failed to parse ErrorResponse: {e}");
+                                let error = format!("failed to parse ErrorResponse: {e}");
+                                debug!(error);
+                                response_error = Some(CodexErr::Stream(error, None))
                             }
                         }
                     }
@@ -760,7 +818,9 @@ async fn process_sse<S>(
                             response_completed = Some(r);
                         }
                         Err(e) => {
-                            debug!("failed to parse ResponseCompleted: {e}");
+                            let error = format!("failed to parse ResponseCompleted: {e}");
+                            debug!(error);
+                            response_error = Some(CodexErr::Stream(error, None));
                             continue;
                         }
                     };
@@ -807,6 +867,7 @@ async fn process_sse<S>(
 async fn stream_from_fixture(
     path: impl AsRef<Path>,
     provider: ModelProviderInfo,
+    otel_event_manager: OtelEventManager,
 ) -> Result<ResponseStream> {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let f = std::fs::File::open(path.as_ref())?;
@@ -825,6 +886,7 @@ async fn stream_from_fixture(
         stream,
         tx_event,
         provider.stream_idle_timeout(),
+        otel_event_manager,
     ));
     Ok(ResponseStream { rx_event })
 }
@@ -863,9 +925,14 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
     None
 }
 
+fn is_context_window_error(error: &Error) -> bool {
+    error.code.as_deref() == Some("context_length_exceeded")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use serde_json::json;
     use tokio::sync::mpsc;
     use tokio_test::io::Builder as IoBuilder;
@@ -880,6 +947,7 @@ mod tests {
     async fn collect_events(
         chunks: &[&[u8]],
         provider: ModelProviderInfo,
+        otel_event_manager: OtelEventManager,
     ) -> Vec<Result<ResponseEvent>> {
         let mut builder = IoBuilder::new();
         for chunk in chunks {
@@ -889,7 +957,12 @@ mod tests {
         let reader = builder.build();
         let stream = ReaderStream::new(reader).map_err(CodexErr::Io);
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(16);
-        tokio::spawn(process_sse(stream, tx, provider.stream_idle_timeout()));
+        tokio::spawn(process_sse(
+            stream,
+            tx,
+            provider.stream_idle_timeout(),
+            otel_event_manager,
+        ));
 
         let mut events = Vec::new();
         while let Some(ev) = rx.recv().await {
@@ -903,6 +976,7 @@ mod tests {
     async fn run_sse(
         events: Vec<serde_json::Value>,
         provider: ModelProviderInfo,
+        otel_event_manager: OtelEventManager,
     ) -> Vec<ResponseEvent> {
         let mut body = String::new();
         for e in events {
@@ -919,13 +993,30 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(8);
         let stream = ReaderStream::new(std::io::Cursor::new(body)).map_err(CodexErr::Io);
-        tokio::spawn(process_sse(stream, tx, provider.stream_idle_timeout()));
+        tokio::spawn(process_sse(
+            stream,
+            tx,
+            provider.stream_idle_timeout(),
+            otel_event_manager,
+        ));
 
         let mut out = Vec::new();
         while let Some(ev) = rx.recv().await {
             out.push(ev.expect("channel closed"));
         }
         out
+    }
+
+    fn otel_event_manager() -> OtelEventManager {
+        OtelEventManager::new(
+            ConversationId::new(),
+            "test",
+            "test",
+            None,
+            Some(AuthMode::ChatGPT),
+            false,
+            "test".to_string(),
+        )
     }
 
     // ────────────────────────────
@@ -979,9 +1070,12 @@ mod tests {
             requires_openai_auth: false,
         };
 
+        let otel_event_manager = otel_event_manager();
+
         let events = collect_events(
             &[sse1.as_bytes(), sse2.as_bytes(), sse3.as_bytes()],
             provider,
+            otel_event_manager,
         )
         .await;
 
@@ -1039,7 +1133,9 @@ mod tests {
             requires_openai_auth: false,
         };
 
-        let events = collect_events(&[sse1.as_bytes()], provider).await;
+        let otel_event_manager = otel_event_manager();
+
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
 
         assert_eq!(events.len(), 2);
 
@@ -1073,7 +1169,9 @@ mod tests {
             requires_openai_auth: false,
         };
 
-        let events = collect_events(&[sse1.as_bytes()], provider).await;
+        let otel_event_manager = otel_event_manager();
+
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
 
         assert_eq!(events.len(), 1);
 
@@ -1086,6 +1184,74 @@ mod tests {
                 assert_eq!(*delay, Some(Duration::from_secs_f64(11.054)));
             }
             other => panic!("unexpected second event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn context_window_error_is_fatal() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_5c66275b97b9baef1ed95550adb3b7ec13b17aafd1d2f11b","object":"response","created_at":1759510079,"status":"failed","background":false,"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try again."},"usage":null,"user":null,"metadata":{}}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let otel_event_manager = otel_event_manager();
+
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(err @ CodexErr::ContextWindowExceeded) => {
+                assert_eq!(err.to_string(), CodexErr::ContextWindowExceeded.to_string());
+            }
+            other => panic!("unexpected context window event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn context_window_error_with_newline_is_fatal() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":4,"response":{"id":"resp_fatal_newline","object":"response","created_at":1759510080,"status":"failed","background":false,"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try\nagain."},"usage":null,"user":null,"metadata":{}}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let otel_event_manager = otel_event_manager();
+
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(err @ CodexErr::ContextWindowExceeded) => {
+                assert_eq!(err.to_string(), CodexErr::ContextWindowExceeded.to_string());
+            }
+            other => panic!("unexpected context window event: {other:?}"),
         }
     }
 
@@ -1178,7 +1344,9 @@ mod tests {
                 requires_openai_auth: false,
             };
 
-            let out = run_sse(evs, provider).await;
+            let otel_event_manager = otel_event_manager();
+
+            let out = run_sse(evs, provider, otel_event_manager).await;
             assert_eq!(out.len(), case.expected_len, "case {}", case.name);
             assert!(
                 (case.expect_first)(&out[0]),
@@ -1224,10 +1392,7 @@ mod tests {
         let resp: ErrorResponse =
             serde_json::from_str(json).expect("should deserialize old schema");
 
-        assert!(matches!(
-            resp.error.plan_type,
-            Some(PlanType::Known(KnownPlan::Pro))
-        ));
+        assert_matches!(resp.error.plan_type, Some(PlanType::Known(KnownPlan::Pro)));
 
         let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
         assert_eq!(plan_json, "\"pro\"");
@@ -1242,7 +1407,7 @@ mod tests {
         let resp: ErrorResponse =
             serde_json::from_str(json).expect("should deserialize old schema");
 
-        assert!(matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip"));
+        assert_matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip");
 
         let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
         assert_eq!(plan_json, "\"vip\"");

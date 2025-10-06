@@ -3,6 +3,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
+use crate::render::Insets;
+use crate::render::RectExt;
+
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
@@ -127,6 +130,7 @@ impl WidgetRef for &FileSearchPopup {
                         .as_ref()
                         .map(|v| v.iter().map(|&i| i as usize).collect()),
                     is_current: false,
+                    display_shortcut: None,
                     description: None,
                 })
                 .collect()
@@ -139,12 +143,11 @@ impl WidgetRef for &FileSearchPopup {
         };
 
         render_rows(
-            area,
+            area.inset(Insets::tlbr(0, 2, 0, 0)),
             buf,
             &rows_all,
             &self.state,
             MAX_POPUP_ROWS,
-            false,
             empty_message,
         );
     }

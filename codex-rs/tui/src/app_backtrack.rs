@@ -9,7 +9,7 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationPathResponseEvent;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -447,7 +447,7 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert_eq!(intro_text, "> intro");
+        assert_eq!(intro_text, "• intro");
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert_eq!(intro_text, "> intro");
+        assert_eq!(intro_text, "• intro");
 
         let user_first = cells[1]
             .as_any()

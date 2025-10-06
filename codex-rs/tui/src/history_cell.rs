@@ -1,17 +1,17 @@
 use crate::diff_render::create_diff_summary;
+use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
-use crate::exec_command::strip_bash_lc_and_escape;
+use crate::markdown::MarkdownCitationContext;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
-pub(crate) use crate::status::RateLimitSnapshotDisplay;
-pub(crate) use crate::status::new_status_output;
-pub(crate) use crate::status::rate_limit_snapshot_display;
+use crate::style::user_message_style;
+use crate::terminal_palette::default_bg;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
@@ -19,14 +19,15 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_core::config::Config;
+use codex_core::config_types::McpServerTransportConfig;
 use codex_core::config_types::ReasoningSummaryFormat;
-use codex_core::plan_tool::PlanItemArg;
-use codex_core::plan_tool::StepStatus;
-use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -48,12 +49,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
-
-#[derive(Clone, Debug)]
-pub(crate) enum PatchEventType {
-    ApprovalRequest,
-    ApplyBegin { auto_approved: bool },
-}
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -97,17 +92,24 @@ impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        // Wrap the content first, then prefix each wrapped line with the marker.
+        // Use ratatui-aware word wrapping and prefixing to avoid lifetime issues.
         let wrap_width = width.saturating_sub(LIVE_PREFIX_COLS); // account for the ▌ prefix and trailing space
-        let wrapped = textwrap::wrap(
-            &self.message,
-            textwrap::Options::new(wrap_width as usize)
-                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit), // Match textarea wrap
+
+        let style = user_message_style(default_bg());
+
+        // Use our ratatui wrapping helpers for correct styling and lifetimes.
+        let wrapped = word_wrap_lines(
+            &self
+                .message
+                .lines()
+                .map(|l| Line::from(l).style(style))
+                .collect::<Vec<_>>(),
+            RtOptions::new(wrap_width as usize),
         );
 
-        for line in wrapped {
-            lines.push(vec!["▌ ".cyan().dim(), line.to_string().dim()].into());
-        }
+        lines.push(Line::from("").style(style));
+        lines.extend(prefix_lines(wrapped, "› ".bold().dim(), "  ".into()));
+        lines.push(Line::from("").style(style));
         lines
     }
 
@@ -121,31 +123,51 @@ impl HistoryCell for UserHistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct ReasoningSummaryCell {
-    _header: Vec<Line<'static>>,
-    content: Vec<Line<'static>>,
+    _header: String,
+    content: String,
+    citation_context: MarkdownCitationContext,
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(header: Vec<Line<'static>>, content: Vec<Line<'static>>) -> Self {
+    pub(crate) fn new(
+        header: String,
+        content: String,
+        citation_context: MarkdownCitationContext,
+    ) -> Self {
         Self {
             _header: header,
             content,
+            citation_context,
         }
     }
 }
 
 impl HistoryCell for ReasoningSummaryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let summary_lines = self
-            .content
-            .iter()
-            .map(|l| l.clone().dim().italic())
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        append_markdown(
+            &self.content,
+            Some((width as usize).saturating_sub(2)),
+            &mut lines,
+            self.citation_context.clone(),
+        );
+        let summary_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        let summary_lines = lines
+            .into_iter()
+            .map(|mut line| {
+                line.spans = line
+                    .spans
+                    .into_iter()
+                    .map(|span| span.patch_style(summary_style))
+                    .collect();
+                line
+            })
             .collect::<Vec<_>>();
 
         word_wrap_lines(
             &summary_lines,
             RtOptions::new(width as usize)
-                .initial_indent("• ".into())
+                .initial_indent("• ".dim().into())
                 .subsequent_indent("  ".into()),
         )
     }
@@ -153,7 +175,14 @@ impl HistoryCell for ReasoningSummaryCell {
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push("thinking".magenta().bold().into());
-        out.extend(self.content.clone());
+        let mut lines = Vec::new();
+        append_markdown(
+            &self.content,
+            None,
+            &mut lines,
+            self.citation_context.clone(),
+        );
+        out.extend(lines);
         out
     }
 }
@@ -179,7 +208,7 @@ impl HistoryCell for AgentMessageCell {
             &self.lines,
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
-                    "> ".into()
+                    "• ".dim().into()
                 } else {
                     "  ".into()
                 })
@@ -242,19 +271,13 @@ pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct PatchHistoryCell {
-    event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
 }
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        create_diff_summary(
-            &self.changes,
-            self.event_type.clone(),
-            &self.cwd,
-            width as usize,
-        )
+        create_diff_summary(&self.changes, &self.cwd, width as usize)
     }
 }
 
@@ -392,6 +415,11 @@ pub(crate) fn new_session_info(
                 "  ".into(),
                 "/model".into(),
                 " - choose what model and reasoning effort to use".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/review".into(),
+                " - review any changes and find issues".dim(),
             ]),
         ];
 
@@ -848,10 +876,28 @@ pub(crate) fn new_mcp_tools_output(
 
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
 
-        if !cfg.command.is_empty() {
-            let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
+        match &cfg.transport {
+            McpServerTransportConfig::Stdio { command, args, env } => {
+                let args_suffix = if args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", args.join(" "))
+                };
+                let cmd_display = format!("{command}{args_suffix}");
+                lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
 
-            lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+                if let Some(env) = env.as_ref()
+                    && !env.is_empty()
+                {
+                    let mut env_pairs: Vec<String> =
+                        env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    env_pairs.sort();
+                    lines.push(vec!["    • Env: ".into(), env_pairs.join(" ").into()].into());
+                }
+            }
+            McpServerTransportConfig::StreamableHttp { url, .. } => {
+                lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
+            }
         }
 
         if names.is_empty() {
@@ -866,7 +912,7 @@ pub(crate) fn new_mcp_tools_output(
 }
 
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
-    let mut line = vec!["> ".into(), message.into()];
+    let mut line = vec!["• ".dim(), message.into()];
     if let Some(hint) = hint {
         line.push(" ".into());
         line.push(hint.dark_gray());
@@ -929,7 +975,7 @@ impl HistoryCell for PlanUpdateCell {
         };
 
         let mut lines: Vec<Line<'static>> = vec![];
-        lines.push(vec!["• ".into(), "Updated Plan".bold()].into());
+        lines.push(vec!["• ".dim(), "Updated Plan".bold()].into());
 
         let mut indented_lines = vec![];
         let note = self
@@ -948,7 +994,7 @@ impl HistoryCell for PlanUpdateCell {
                 indented_lines.extend(render_step(status, step));
             }
         }
-        lines.extend(prefix_lines(indented_lines, "  └ ".into(), "    ".into()));
+        lines.extend(prefix_lines(indented_lines, "  └ ".dim(), "    ".into()));
 
         lines
     }
@@ -958,12 +1004,10 @@ impl HistoryCell for PlanUpdateCell {
 /// a proposed patch. The summary lines should already be formatted (e.g.
 /// "A path/to/file.rs").
 pub(crate) fn new_patch_event(
-    event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
     cwd: &Path,
 ) -> PatchHistoryCell {
     PatchHistoryCell {
-        event_type,
         changes,
         cwd: cwd.to_path_buf(),
     }
@@ -994,23 +1038,13 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
-/// Create a new history cell for a proposed command approval.
-/// Renders a header and the command preview similar to how proposed patches
-/// show a header and summary.
-pub(crate) fn new_proposed_command(command: &[String]) -> PlainHistoryCell {
-    let cmd = strip_bash_lc_and_escape(command);
+pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistoryCell {
+    let display_path = display_path_for(&path, cwd);
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(vec!["• ".into(), "Proposed Command".bold()]));
-
-    let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd);
-    let initial_prefix: Span<'static> = "  └ ".dim();
-    let subsequent_prefix: Span<'static> = "    ".into();
-    lines.extend(prefix_lines(
-        highlighted_lines,
-        initial_prefix,
-        subsequent_prefix,
-    ));
+    let lines: Vec<Line<'static>> = vec![
+        vec!["• ".dim(), "Viewed Image".bold()].into(),
+        vec!["  └ ".dim(), display_path.dim()].into(),
+    ];
 
     PlainHistoryCell { lines }
 }
@@ -1021,7 +1055,7 @@ pub(crate) fn new_reasoning_block(
 ) -> TranscriptOnlyHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from("thinking".magenta().italic()));
-    append_markdown(&full_reasoning_buffer, &mut lines, config);
+    append_markdown(&full_reasoning_buffer, None, &mut lines, config);
     TranscriptOnlyHistoryCell { lines }
 }
 
@@ -1045,19 +1079,51 @@ pub(crate) fn new_reasoning_summary_block(
                 // then we don't have a summary to inject into history
                 if after_close_idx < full_reasoning_buffer.len() {
                     let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                    let mut header_lines = Vec::new();
-                    append_markdown(&header_buffer, &mut header_lines, config);
-
                     let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-                    let mut summary_lines = Vec::new();
-                    append_markdown(&summary_buffer, &mut summary_lines, config);
-
-                    return Box::new(ReasoningSummaryCell::new(header_lines, summary_lines));
+                    return Box::new(ReasoningSummaryCell::new(
+                        header_buffer,
+                        summary_buffer,
+                        config.into(),
+                    ));
                 }
             }
         }
     }
     Box::new(new_reasoning_block(full_reasoning_buffer, config))
+}
+
+#[derive(Debug)]
+pub struct FinalMessageSeparator {
+    elapsed_seconds: Option<u64>,
+}
+impl FinalMessageSeparator {
+    pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
+        Self { elapsed_seconds }
+    }
+}
+impl HistoryCell for FinalMessageSeparator {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let elapsed_seconds = self
+            .elapsed_seconds
+            .map(super::status_indicator_widget::fmt_elapsed_compact);
+        if let Some(elapsed_seconds) = elapsed_seconds {
+            let worked_for = format!("─ Worked for {elapsed_seconds} ─");
+            let worked_for_width = worked_for.width();
+            vec![
+                Line::from_iter([
+                    worked_for,
+                    "─".repeat((width as usize).saturating_sub(worked_for_width)),
+                ])
+                .dim(),
+            ]
+        } else {
+            vec![Line::from_iter(["─".repeat(width as usize).dim()])]
+        }
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        vec![]
+    }
 }
 
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
