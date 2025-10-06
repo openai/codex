@@ -34,6 +34,16 @@ pub fn ev_completed(id: &str) -> Value {
     })
 }
 
+/// Convenience: SSE event for a created response with a specific id.
+pub fn ev_response_created(id: &str) -> Value {
+    serde_json::json!({
+        "type": "response.created",
+        "response": {
+            "id": id,
+        }
+    })
+}
+
 pub fn ev_completed_with_tokens(id: &str, total_tokens: u64) -> Value {
     serde_json::json!({
         "type": "response.completed",
@@ -75,6 +85,33 @@ pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
     })
 }
 
+pub fn ev_custom_tool_call(call_id: &str, name: &str, input: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "custom_tool_call",
+            "call_id": call_id,
+            "name": name,
+            "input": input
+        }
+    })
+}
+
+pub fn ev_local_shell_call(call_id: &str, status: &str, command: Vec<&str>) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "local_shell_call",
+            "call_id": call_id,
+            "status": status,
+            "action": {
+                "type": "exec",
+                "command": command,
+            }
+        }
+    })
+}
+
 /// Convenience: SSE event for an `apply_patch` custom tool call with raw patch
 /// text. This mirrors the payload produced by the Responses API when the model
 /// invokes `apply_patch` directly (before we convert it to a function call).
@@ -108,13 +145,23 @@ pub fn ev_apply_patch_function_call(call_id: &str, patch: &str) -> Value {
     })
 }
 
+pub fn sse_failed(id: &str, code: &str, message: &str) -> String {
+    sse(vec![serde_json::json!({
+        "type": "response.failed",
+        "response": {
+            "id": id,
+            "error": {"code": code, "message": message}
+        }
+    })])
+}
+
 pub fn sse_response(body: String) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .set_body_raw(body, "text/event-stream")
 }
 
-pub async fn mount_sse_once<M>(server: &MockServer, matcher: M, body: String)
+pub async fn mount_sse_once_match<M>(server: &MockServer, matcher: M, body: String)
 where
     M: wiremock::Match + Send + Sync + 'static,
 {
@@ -123,6 +170,23 @@ where
         .and(matcher)
         .respond_with(sse_response(body))
         .up_to_n_times(1)
+        .mount(server)
+        .await;
+}
+
+pub async fn mount_sse_once(server: &MockServer, body: String) {
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(sse_response(body))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+pub async fn mount_sse(server: &MockServer, body: String) {
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(sse_response(body))
         .mount(server)
         .await;
 }

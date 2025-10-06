@@ -1,16 +1,15 @@
 ---
 source: tui/src/pager_overlay.rs
-assertion_line: 721
 expression: snapshot
 ---
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
-• Proposed Change foo.txt (+2 -0)
+• Added foo.txt (+2 -0)
     1     +hello
     2     +world
 
-• Change Approved foo.txt (+2 -0)
-
-✓ Patch applied
+• Added foo.txt (+2 -0)
+    1     +hello
+    2     +world
 ─────────────────────────────────────────────────────────────────────────── 0% ─
- ↑/↓ scroll   PgUp/PgDn page   Home/End jump
- q quit   Esc edit prev
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
+ q to quit   esc to edit prev

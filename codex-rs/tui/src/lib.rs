@@ -5,9 +5,11 @@
 #![deny(clippy::disallowed_methods)]
 use app::App;
 pub use app::AppExitInfo;
+use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
+use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -19,7 +21,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::mcp_protocol::AuthMode;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
@@ -54,6 +56,7 @@ mod markdown_render;
 mod markdown_stream;
 pub mod onboarding;
 mod pager_overlay;
+pub mod public_widgets;
 mod render;
 mod resume_picker;
 mod session_log;
@@ -77,10 +80,15 @@ pub mod test_backend;
 mod updates;
 
 use crate::onboarding::TrustDirectorySelection;
+use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
 pub use cli::Cli;
+pub use markdown_render::render_markdown_text;
+pub use public_widgets::composer_input::ComposerAction;
+pub use public_widgets::composer_input::ComposerInput;
+use std::io::Write as _;
 
 // (tests access modules directly within the crate)
 
@@ -156,7 +164,7 @@ pub async fn run_main(
         // Load configuration and support CLI overrides.
 
         #[allow(clippy::print_stderr)]
-        match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides) {
+        match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides).await {
             Ok(config) => config,
             Err(err) => {
                 eprintln!("Error loading configuration: {err}");
@@ -176,7 +184,7 @@ pub async fn run_main(
             }
         };
 
-        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides) {
+        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides).await {
             Ok(config_toml) => config_toml,
             Err(err) => {
                 eprintln!("Error loading config.toml: {err}");
@@ -239,7 +247,29 @@ pub async fn run_main(
             .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
     }
 
-    let _ = tracing_subscriber::registry().with(file_layer).try_init();
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
+
+    #[allow(clippy::print_stderr)]
+    let otel = match otel {
+        Ok(otel) => otel,
+        Err(e) => {
+            eprintln!("Could not create otel exporter: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(provider) = otel.as_ref() {
+        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
+        );
+
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(otel_layer)
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::registry().with(file_layer).try_init();
+    };
 
     run_ratatui_app(cli, config, active_profile, should_show_trust_screen)
         .await
@@ -334,13 +364,20 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&config);
 
-    let auth_manager = AuthManager::shared(config.codex_home.clone());
+    let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
     let login_status = get_login_status(&config);
-    let should_show_onboarding =
-        should_show_onboarding(login_status, &config, should_show_trust_screen);
+    let should_show_windows_wsl_screen =
+        cfg!(target_os = "windows") && !config.windows_wsl_setup_acknowledged;
+    let should_show_onboarding = should_show_onboarding(
+        login_status,
+        &config,
+        should_show_trust_screen,
+        should_show_windows_wsl_screen,
+    );
     if should_show_onboarding {
-        let directory_trust_decision = run_onboarding_app(
+        let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
+                show_windows_wsl_screen: should_show_windows_wsl_screen,
                 show_login_screen: should_show_login_screen(login_status, &config),
                 show_trust_screen: should_show_trust_screen,
                 login_status,
@@ -350,7 +387,22 @@ async fn run_ratatui_app(
             &mut tui,
         )
         .await?;
-        if let Some(TrustDirectorySelection::Trust) = directory_trust_decision {
+        if onboarding_result.windows_install_selected {
+            restore();
+            session_log::log_session_end();
+            let _ = tui.terminal.clear();
+            if let Err(err) = writeln!(std::io::stdout(), "{WSL_INSTRUCTIONS}") {
+                tracing::error!("Failed to write WSL instructions: {err}");
+            }
+            return Ok(AppExitInfo {
+                token_usage: codex_core::protocol::TokenUsage::default(),
+                conversation_id: None,
+            });
+        }
+        if should_show_windows_wsl_screen {
+            config.windows_wsl_setup_acknowledged = true;
+        }
+        if let Some(TrustDirectorySelection::Trust) = onboarding_result.directory_trust_decision {
             config.approval_policy = AskForApproval::OnRequest;
             config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
         }
@@ -366,7 +418,14 @@ async fn run_ratatui_app(
             }
         }
     } else if cli.resume_last {
-        match RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
+        match RolloutRecorder::list_conversations(
+            &config.codex_home,
+            1,
+            None,
+            INTERACTIVE_SESSION_SOURCES,
+        )
+        .await
+        {
             Ok(page) => page
                 .items
                 .first()
@@ -486,7 +545,12 @@ fn should_show_onboarding(
     login_status: LoginStatus,
     config: &Config,
     show_trust_screen: bool,
+    show_windows_wsl_screen: bool,
 ) -> bool {
+    if show_windows_wsl_screen {
+        return true;
+    }
+
     if show_trust_screen {
         return true;
     }

@@ -116,12 +116,10 @@ pub(crate) fn output_lines(
 }
 
 pub(crate) fn spinner(start_time: Option<Instant>) -> Span<'static> {
-    const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let idx = start_time
-        .map(|st| ((st.elapsed().as_millis() / 100) as usize) % FRAMES.len())
-        .unwrap_or(0);
-    let ch = FRAMES[idx];
-    ch.to_string().into()
+    let blink_on = start_time
+        .map(|st| ((st.elapsed().as_millis() / 600) % 2) == 0)
+        .unwrap_or(false);
+    if blink_on { "•".into() } else { "◦".dim() }
 }
 
 impl HistoryCell for ExecCell {
@@ -200,7 +198,7 @@ impl ExecCell {
             if self.is_active() {
                 spinner(self.active_start_time())
             } else {
-                "•".into()
+                "•".dim()
             },
             " ".into(),
             if self.is_active() {
@@ -366,26 +364,35 @@ impl ExecCell {
                     include_prefix: false,
                 },
             );
-            let trimmed_output =
-                Self::truncate_lines_middle(&raw_output_lines, layout.output_max_lines);
 
-            let mut wrapped_output: Vec<Line<'static>> = Vec::new();
-            let output_wrap_width = layout.output_block.wrap_width(width);
-            let output_opts =
-                RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
-            for line in trimmed_output {
-                push_owned_lines(
-                    &word_wrap_line(&line, output_opts.clone()),
-                    &mut wrapped_output,
-                );
-            }
-
-            if !wrapped_output.is_empty() {
+            if raw_output_lines.is_empty() {
                 lines.extend(prefix_lines(
-                    wrapped_output,
+                    vec![Line::from("(no output)".dim())],
                     Span::from(layout.output_block.initial_prefix).dim(),
                     Span::from(layout.output_block.subsequent_prefix),
                 ));
+            } else {
+                let trimmed_output =
+                    Self::truncate_lines_middle(&raw_output_lines, layout.output_max_lines);
+
+                let mut wrapped_output: Vec<Line<'static>> = Vec::new();
+                let output_wrap_width = layout.output_block.wrap_width(width);
+                let output_opts =
+                    RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
+                for line in trimmed_output {
+                    push_owned_lines(
+                        &word_wrap_line(&line, output_opts.clone()),
+                        &mut wrapped_output,
+                    );
+                }
+
+                if !wrapped_output.is_empty() {
+                    lines.extend(prefix_lines(
+                        wrapped_output,
+                        Span::from(layout.output_block.initial_prefix).dim(),
+                        Span::from(layout.output_block.subsequent_prefix),
+                    ));
+                }
             }
         }
 

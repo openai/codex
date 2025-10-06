@@ -3,7 +3,7 @@
 This document describes Codex’s experimental MCP interface: a JSON‑RPC API that runs over the Model Context Protocol (MCP) transport to control a local Codex engine.
 
 - Status: experimental and subject to change without notice
-- Server binary: `codex mcp` (or `codex-mcp-server`)
+- Server binary: `codex mcp-server` (or `codex-mcp-server`)
 - Transport: standard MCP over stdio (JSON‑RPC 2.0, line‑delimited)
 
 ## Overview
@@ -36,14 +36,16 @@ See code for full type definitions and exact shapes: `protocol/src/mcp_protocol.
 Run Codex as an MCP server and connect an MCP client:
 
 ```bash
-codex mcp | your_mcp_client
+codex mcp-server | your_mcp_client
 ```
 
 For a simple inspection UI, you can also try:
 
 ```bash
-npx @modelcontextprotocol/inspector codex mcp
+npx @modelcontextprotocol/inspector codex mcp-server
 ```
+
+Use the separate `codex mcp` subcommand to manage configured MCP server launchers in `config.toml`.
 
 ## Conversations
 
