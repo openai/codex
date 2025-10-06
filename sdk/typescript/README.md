@@ -52,9 +52,7 @@ for await (const event of events) {
 
 ### Structured output
 
-Provide a JSON schema per turn to have Codex respond with structured JSON. Pass schemas as
-plain JavaScript objects.
-
+The Codex agent can produce a JSON response that conforms to a specified schema. The schema can be provided for each turn as a plain JSON object.
 
 ```typescript
 const schema = {
@@ -71,7 +69,7 @@ const turn = await thread.run("Summarize repository status", { outputSchema: sch
 console.log(turn.finalResponse);
 ```
 
-You can also create JSON schemas for Zod types using the `zod-to-json-schema` package and setting the `target` to `"openAi"`.
+You can also create a JSON schema from a [Zod schema](https://github.com/colinhacks/zod) using the [`zod-to-json-schema`](https://www.npmjs.com/package/zod-to-json-schema) package and setting the `target` to `"openAi"`.
 
 ```typescript
 const schema = z.object({
