@@ -70,7 +70,7 @@ const turn = await thread.run("Summarize the status", { outputSchema: schema });
 console.log(turn.finalResponse);
 ```
 
-You can also create JSON schemas for Zod types using the `zod-to-json-schema` package.
+You can also create JSON schemas for Zod types using the `zod-to-json-schema` package and setting the `target` to `"openAi"`.
 
 ```typescript
 const schema = z.object({

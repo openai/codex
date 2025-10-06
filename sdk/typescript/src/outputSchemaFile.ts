@@ -9,7 +9,7 @@ export type OutputSchemaFile = {
 
 export async function createOutputSchemaFile(schema: unknown): Promise<OutputSchemaFile> {
   if (schema === undefined) {
-    return { schemaPath: undefined, cleanup: async () => {} };
+    return { cleanup: async () => {} };
   }
 
   if (!isJsonObject(schema)) {
@@ -19,7 +19,12 @@ export async function createOutputSchemaFile(schema: unknown): Promise<OutputSch
   const schemaDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-output-schema-"));
   const schemaPath = path.join(schemaDir, "schema.json");
   const cleanup = async () => {
-    await fs.rm(schemaDir, { recursive: true, force: true });
+    try {
+      await fs.rm(schemaDir, { recursive: true, force: true });
+    }
+    catch  {
+      // suppress
+    }
   };
 
   try {

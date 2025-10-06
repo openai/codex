@@ -18,13 +18,6 @@ importers:
         version: 3.5.3
 
   sdk/typescript:
-    dependencies:
-      zod:
-        specifier: ^3.24.2
-        version: 3.25.76
-      zod-to-json-schema:
-        specifier: ^3.24.6
-        version: 3.24.6(zod@3.25.76)
     devDependencies:
       '@types/jest':
         specifier: ^29.5.14
@@ -68,6 +61,12 @@ importers:
       typescript-eslint:
         specifier: ^8.45.0
         version: 8.45.0(eslint@9.36.0)(typescript@5.9.2)
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+      zod-to-json-schema:
+        specifier: ^3.24.6
+        version: 3.24.6(zod@3.25.76)
 
 packages:
 
