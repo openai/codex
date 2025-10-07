@@ -4,7 +4,10 @@ Save frequently used prompts as Markdown files and reuse them quickly from the s
 
 - Location: Put files in `$CODEX_HOME/prompts/` (defaults to `~/.codex/prompts/`).
 - File type: Only Markdown files with the `.md` extension are recognized.
-- Name: The filename without the `.md` extension becomes the slash entry. For a file named `my-prompt.md`, type `/my-prompt`.
+- Name: The filename without the `.md` extension becomes the slash entry. Nested directories are joined with `::` in the order they appear in the filesystem.
+- Nested directories:
+  - Every path segment between `prompts/` and the Markdown file is included in the slash command. For example, `~/.codex/prompts/team/review/high-priority.md` shows up as `/prompts:team::review::high-priority`.
+  - You can create deeper hierarchies (such as `~/.codex/prompts/bmad/agents/dev.md`) and access them as `/prompts:bmad::agents::dev`.
 - Content: The file contents are sent as your message when you select the item in the slash popup and press Enter.
 - Arguments: Local prompts support placeholders in their content:
   - `$1..$9` expand to the first nine positional arguments typed after the slash name
