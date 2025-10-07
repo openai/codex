@@ -306,14 +306,14 @@ impl CodexErr {
 pub fn get_error_message_ui(e: &CodexErr) -> String {
     match e {
         CodexErr::Sandbox(SandboxErr::Denied { output }) => {
-            let stderr = output.stderr.text.trim();
-            if !stderr.is_empty() {
-                return output.stderr.text.clone();
-            }
-
             let aggregated = output.aggregated_output.text.trim();
             if !aggregated.is_empty() {
                 return output.aggregated_output.text.clone();
+            }
+
+            let stderr = output.stderr.text.trim();
+            if !stderr.is_empty() {
+                return output.stderr.text.clone();
             }
 
             let stdout = output.stdout.text.trim();
