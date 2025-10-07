@@ -231,14 +231,13 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
         haystack_sections.push(&exec_output.aggregated_output.text);
     }
 
-    if !haystack_sections.is_empty() {
-        let haystack = haystack_sections.join("\n").to_lowercase();
-        if SANDBOX_DENIED_KEYWORDS
+    if haystack_sections.iter().any(|section| {
+        let section = section.to_lowercase();
+        SANDBOX_DENIED_KEYWORDS
             .iter()
-            .any(|needle| haystack.contains(needle))
-        {
-            return true;
-        }
+            .any(|needle| section.contains(needle))
+    }) {
+        return true;
     }
 
     #[cfg(unix)]
