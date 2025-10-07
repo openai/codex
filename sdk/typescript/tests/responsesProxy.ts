@@ -54,6 +54,7 @@ export type ResponsesApiRequest = {
 export type RecordedRequest = {
   body: string;
   json: ResponsesApiRequest;
+  headers: http.IncomingHttpHeaders;
 };
 
 function formatSseEvent(event: SseEvent): string {
@@ -90,7 +91,7 @@ export async function startResponsesTestProxy(
       if (req.method === "POST" && req.url === "/responses") {
         const body = await readRequestBody(req);
         const json = JSON.parse(body);
-        requests.push({ body, json });
+        requests.push({ body, json, headers: { ...req.headers } });
 
         const status = options.statusCode ?? 200;
         res.statusCode = status;

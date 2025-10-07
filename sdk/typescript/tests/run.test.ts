@@ -345,6 +345,30 @@ describe("Codex", () => {
       await close();
     }
   });
+
+  it("sets the codex sdk originator header", async () => {
+    const { url, close, requests } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
+    });
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run("Hello, originator!");
+
+      expect(requests.length).toBeGreaterThan(0);
+      const originatorHeader = requests[0]!.headers["originator"];
+      if (Array.isArray(originatorHeader)) {
+        expect(originatorHeader).toContain("codex_sdk_ts");
+      } else {
+        expect(originatorHeader).toBe("codex_sdk_ts");
+      }
+    } finally {
+      await close();
+    }
+  });
   it("throws ThreadRunError on turn failures", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
