@@ -2117,15 +2117,12 @@ async fn try_run_turn(
         // `response.completed`) bubble up and trigger the caller's retry logic.
         let event = stream.next().await;
         let event = match event {
-            Some(Ok(event)) => event,
+            Some(res) => res?,
             None => {
                 return Err(CodexErr::Stream(
                     "stream closed before response.completed".into(),
                     None,
                 ));
-            }
-            Some(Err(e)) => {
-                return Err(e);
             }
         };
 
@@ -2222,12 +2219,7 @@ async fn try_run_turn(
                 sess.update_token_usage_info(sub_id, turn_context.as_ref(), token_usage.as_ref())
                     .await;
 
-                let processed_items = match output.try_collect().await {
-                    Ok(processed_items) => processed_items,
-                    Err(e) => {
-                        return Err(e);
-                    }
-                };
+                let processed_items = match output.try_collect().await?;
 
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;

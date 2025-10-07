@@ -19,7 +19,7 @@ pub(crate) struct ToolCallRuntime {
     turn_context: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
     sub_id: String,
-    lock: Arc<RwLock<bool>>,
+    parallel_execution: Arc<RwLock<()>>,
 }
 
 impl ToolCallRuntime {
@@ -36,7 +36,7 @@ impl ToolCallRuntime {
             turn_context,
             tracker,
             sub_id,
-            lock: Arc::new(RwLock::new(false)),
+            parallel_execution: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -51,7 +51,7 @@ impl ToolCallRuntime {
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let sub_id = self.sub_id.clone();
-        let lock = Arc::clone(&self.lock);
+        let lock = Arc::clone(&self.parallel_execution);
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
