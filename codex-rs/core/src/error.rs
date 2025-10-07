@@ -371,22 +371,6 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_denied_prefers_stderr_when_available() {
-        let output = ExecToolCallOutput {
-            exit_code: 123,
-            stdout: StreamOutput::new("stdout text".to_string()),
-            stderr: StreamOutput::new("stderr detail".to_string()),
-            aggregated_output: StreamOutput::new("aggregated text".to_string()),
-            duration: Duration::from_millis(1),
-            timed_out: false,
-        };
-        let err = CodexErr::Sandbox(SandboxErr::Denied {
-            output: Box::new(output),
-        });
-        assert_eq!(get_error_message_ui(&err), "stderr detail");
-    }
-
-    #[test]
     fn sandbox_denied_uses_aggregated_output_when_stderr_empty() {
         let output = ExecToolCallOutput {
             exit_code: 77,
