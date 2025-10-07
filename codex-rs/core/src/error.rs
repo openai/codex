@@ -305,7 +305,27 @@ impl CodexErr {
 
 pub fn get_error_message_ui(e: &CodexErr) -> String {
     match e {
-        CodexErr::Sandbox(SandboxErr::Denied { output }) => output.stderr.text.clone(),
+        CodexErr::Sandbox(SandboxErr::Denied { output }) => {
+            let stderr = output.stderr.text.trim();
+            if !stderr.is_empty() {
+                return output.stderr.text.clone();
+            }
+
+            let aggregated = output.aggregated_output.text.trim();
+            if !aggregated.is_empty() {
+                return output.aggregated_output.text.clone();
+            }
+
+            let stdout = output.stdout.text.trim();
+            if !stdout.is_empty() {
+                return output.stdout.text.clone();
+            }
+
+            format!(
+                "command failed inside sandbox with exit code {}",
+                output.exit_code
+            )
+        }
         // Timeouts are not sandbox errors from a UX perspective; present them plainly
         CodexErr::Sandbox(SandboxErr::Timeout { output }) => format!(
             "error: command timed out after {} ms",
@@ -318,7 +338,9 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec::StreamOutput;
     use codex_protocol::protocol::RateLimitWindow;
+    use pretty_assertions::assert_eq;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
         RateLimitSnapshot {
@@ -345,6 +367,57 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again later."
+        );
+    }
+
+    #[test]
+    fn sandbox_denied_prefers_stderr_when_available() {
+        let output = ExecToolCallOutput {
+            exit_code: 123,
+            stdout: StreamOutput::new("stdout text".to_string()),
+            stderr: StreamOutput::new("stderr detail".to_string()),
+            aggregated_output: StreamOutput::new("aggregated text".to_string()),
+            duration: Duration::from_millis(1),
+            timed_out: false,
+        };
+        let err = CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(output),
+        });
+        assert_eq!(get_error_message_ui(&err), "stderr detail");
+    }
+
+    #[test]
+    fn sandbox_denied_uses_aggregated_output_when_stderr_empty() {
+        let output = ExecToolCallOutput {
+            exit_code: 77,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new("aggregate detail".to_string()),
+            duration: Duration::from_millis(10),
+            timed_out: false,
+        };
+        let err = CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(output),
+        });
+        assert_eq!(get_error_message_ui(&err), "aggregate detail");
+    }
+
+    #[test]
+    fn sandbox_denied_reports_exit_code_when_no_output_available() {
+        let output = ExecToolCallOutput {
+            exit_code: 13,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::from_millis(5),
+            timed_out: false,
+        };
+        let err = CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(output),
+        });
+        assert_eq!(
+            get_error_message_ui(&err),
+            "command failed inside sandbox with exit code 13"
         );
     }
 
