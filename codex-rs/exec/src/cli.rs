@@ -77,7 +77,7 @@ pub struct Cli {
 
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
 
     // --- Prehook options (MVP; upstream default is disabled) ---
@@ -136,7 +136,7 @@ pub struct ResumeArgs {
     pub last: bool,
 
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
 }
 
