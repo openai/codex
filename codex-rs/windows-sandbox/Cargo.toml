@@ -1,0 +1,28 @@
+[package]
+edition = "2024"
+name = "codex-windows-sandbox"
+version = { workspace = true }
+
+[[bin]]
+name = "codex-windows-sandbox"
+path = "src/main.rs"
+
+[lib]
+name = "codex_windows_sandbox"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+clap = { workspace = true, features = ["derive"] }
+codex-protocol = { workspace = true }
+tokio = { workspace = true, features = ["process", "rt", "rt-multi-thread"] }
+tracing = { workspace = true }
+windows = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies.serde_json]
+workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies.serde]
+workspace = true

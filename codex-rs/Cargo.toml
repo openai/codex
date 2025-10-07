@@ -19,6 +19,7 @@ members = [
     "keyring-store",
     "file-search",
     "linux-sandbox",
+    "windows-sandbox",
     "login",
     "mcp-server",
     "mcp-types",
@@ -69,6 +70,7 @@ codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
+codex-windows-sandbox = { path = "windows-sandbox" }
 codex-login = { path = "login" }
 codex-mcp-server = { path = "mcp-server" }
 codex-ollama = { path = "ollama" }
@@ -211,6 +213,15 @@ webbrowser = "1.0"
 which = "6"
 wildmatch = "2.5.0"
 wiremock = "0.6"
+windows = { version = "0.61.3", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
 zeroize = "1.8.1"
 
 [workspace.lints]

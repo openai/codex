@@ -1552,6 +1552,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-windows-sandbox"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "codex-protocol",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "windows",
+]
+
+[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
