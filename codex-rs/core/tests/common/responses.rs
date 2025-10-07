@@ -1,11 +1,105 @@
+use std::sync::Arc;
+use std::sync::Mutex;
+
 use serde_json::Value;
 use wiremock::BodyPrintLimit;
+use wiremock::Match;
 use wiremock::Mock;
+use wiremock::MockBuilder;
 use wiremock::MockServer;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
-use wiremock::matchers::path;
+use wiremock::matchers::path_regex;
+
+#[derive(Debug, Clone)]
+pub struct ResponseMock {
+    requests: Arc<Mutex<Vec<ResponsesRequest>>>,
+}
+
+impl ResponseMock {
+    fn new() -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn single_request(&self) -> ResponsesRequest {
+        let requests = self.requests.lock().unwrap();
+        if requests.len() != 1 {
+            panic!("expected 1 request, got {}", requests.len());
+        }
+        requests.first().unwrap().clone()
+    }
+
+    pub fn requests(&self) -> Vec<ResponsesRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResponsesRequest(wiremock::Request);
+
+impl ResponsesRequest {
+    pub fn body_json(&self) -> Value {
+        self.0.body_json().unwrap()
+    }
+
+    pub fn input(&self) -> Vec<Value> {
+        self.0.body_json::<Value>().unwrap()["input"]
+            .as_array()
+            .expect("input array not found in request")
+            .clone()
+    }
+
+    pub fn function_call_output(&self, call_id: &str) -> Value {
+        self.call_output(call_id, "function_call_output")
+    }
+
+    pub fn custom_tool_call_output(&self, call_id: &str) -> Value {
+        self.call_output(call_id, "custom_tool_call_output")
+    }
+
+    pub fn call_output(&self, call_id: &str, call_type: &str) -> Value {
+        self.input()
+            .iter()
+            .find(|item| {
+                item.get("type").unwrap() == call_type && item.get("call_id").unwrap() == call_id
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("function call output {call_id} item not found in request"))
+    }
+
+    pub fn header(&self, name: &str) -> Option<String> {
+        self.0
+            .headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    }
+
+    pub fn path(&self) -> String {
+        self.0.url.path().to_string()
+    }
+
+    pub fn query_param(&self, name: &str) -> Option<String> {
+        self.0
+            .url
+            .query_pairs()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.to_string())
+    }
+}
+
+impl Match for ResponseMock {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(ResponsesRequest(request.clone()));
+        true
+    }
+}
 
 /// Build an SSE stream body from a list of JSON events.
 pub fn sse(events: Vec<Value>) -> String {
@@ -161,34 +255,40 @@ pub fn sse_response(body: String) -> ResponseTemplate {
         .set_body_raw(body, "text/event-stream")
 }
 
-pub async fn mount_sse_once_match<M>(server: &MockServer, matcher: M, body: String)
+fn base_mock() -> (MockBuilder, ResponseMock) {
+    let response_mock = ResponseMock::new();
+    let mock = Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .and(response_mock.clone());
+    (mock, response_mock)
+}
+
+pub async fn mount_sse_once_match<M>(server: &MockServer, matcher: M, body: String) -> ResponseMock
 where
     M: wiremock::Match + Send + Sync + 'static,
 {
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(matcher)
+    let (mock, response_mock) = base_mock();
+    mock.and(matcher)
         .respond_with(sse_response(body))
         .up_to_n_times(1)
         .mount(server)
         .await;
+    response_mock
 }
 
-pub async fn mount_sse_once(server: &MockServer, body: String) {
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(sse_response(body))
-        .expect(1)
+pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {
+    let (mock, response_mock) = base_mock();
+    mock.respond_with(sse_response(body))
+        .up_to_n_times(1)
         .mount(server)
         .await;
+    response_mock
 }
 
-pub async fn mount_sse(server: &MockServer, body: String) {
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(sse_response(body))
-        .mount(server)
-        .await;
+pub async fn mount_sse(server: &MockServer, body: String) -> ResponseMock {
+    let (mock, response_mock) = base_mock();
+    mock.respond_with(sse_response(body)).mount(server).await;
+    response_mock
 }
 
 pub async fn start_mock_server() -> MockServer {
@@ -201,7 +301,7 @@ pub async fn start_mock_server() -> MockServer {
 /// Mounts a sequence of SSE response bodies and serves them in order for each
 /// POST to `/v1/responses`. Panics if more requests are received than bodies
 /// provided. Also asserts the exact number of expected calls.
-pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) {
+pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> ResponseMock {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
@@ -228,10 +328,11 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) {
         responses: bodies,
     };
 
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(responder)
+    let (mock, response_mock) = base_mock();
+    mock.respond_with(responder)
         .expect(num_calls as u64)
         .mount(server)
         .await;
+
+    response_mock
 }
