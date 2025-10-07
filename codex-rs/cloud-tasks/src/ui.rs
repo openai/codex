@@ -16,6 +16,7 @@ use ratatui::widgets::ListState;
 use ratatui::widgets::Padding;
 use ratatui::widgets::Paragraph;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use crate::app::App;
 use crate::app::AttemptView;
@@ -229,7 +230,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &mut App) {
 
     // In-box spinner during initial/refresh loads
     if app.refresh_inflight {
-        draw_centered_spinner(frame, inner, &mut app.throbber, "Loading tasks…");
+        draw_centered_spinner(frame, inner, &mut app.spinner_start, "Loading tasks…");
     }
 }
 
@@ -262,9 +263,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         help.push(": Apply  ".dim());
     }
     help.push("o : Set Env  ".dim());
-    help.push("Ctrl+N".dim());
-    help.push(format!(": Attempts {}x  ", app.best_of_n).dim());
     if app.new_task.is_some() {
+        help.push("Ctrl+N".dim());
+        help.push(format!(": Attempts {}x  ", app.best_of_n).dim());
         help.push("(editing new task)  ".dim());
     } else {
         help.push("n : New Task  ".dim());
@@ -291,7 +292,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
         || app.apply_preflight_inflight
         || app.apply_inflight
     {
-        draw_inline_spinner(frame, top[1], &mut app.throbber, "Loading…");
+        draw_inline_spinner(frame, top[1], &mut app.spinner_start, "Loading…");
     } else {
         frame.render_widget(Clear, top[1]);
     }
@@ -449,7 +450,12 @@ fn draw_diff_overlay(frame: &mut Frame, area: Rect, app: &mut App) {
         .map(|o| o.sd.wrapped_lines().is_empty())
         .unwrap_or(true);
     if app.details_inflight && raw_empty {
-        draw_centered_spinner(frame, content_area, &mut app.throbber, "Loading details…");
+        draw_centered_spinner(
+            frame,
+            content_area,
+            &mut app.spinner_start,
+            "Loading details…",
+        );
     } else {
         let scroll = app
             .diff_overlay
@@ -494,11 +500,11 @@ pub fn draw_apply_modal(frame: &mut Frame, area: Rect, app: &mut App) {
         frame.render_widget(header, rows[0]);
         // Body: spinner while preflight/apply runs; otherwise show result message and path lists
         if app.apply_preflight_inflight {
-            draw_centered_spinner(frame, rows[1], &mut app.throbber, "Checking…");
+            draw_centered_spinner(frame, rows[1], &mut app.spinner_start, "Checking…");
         } else if app.apply_inflight {
-            draw_centered_spinner(frame, rows[1], &mut app.throbber, "Applying…");
+            draw_centered_spinner(frame, rows[1], &mut app.spinner_start, "Applying…");
         } else if m.result_message.is_none() {
-            draw_centered_spinner(frame, rows[1], &mut app.throbber, "Loading…");
+            draw_centered_spinner(frame, rows[1], &mut app.spinner_start, "Loading…");
         } else if let Some(msg) = &m.result_message {
             let mut body_lines: Vec<Line> = Vec::new();
             let first = match m.result_level {
@@ -859,29 +865,29 @@ fn format_relative_time(ts: chrono::DateTime<Utc>) -> String {
 fn draw_inline_spinner(
     frame: &mut Frame,
     area: Rect,
-    state: &mut throbber_widgets_tui::ThrobberState,
+    spinner_start: &mut Option<Instant>,
     label: &str,
 ) {
-    use ratatui::style::Style;
-    use throbber_widgets_tui::BRAILLE_EIGHT;
-    use throbber_widgets_tui::Throbber;
-    use throbber_widgets_tui::WhichUse;
-    let w = Throbber::default()
-        .label(label)
-        .style(Style::default().cyan())
-        .throbber_style(Style::default().magenta().bold())
-        .throbber_set(BRAILLE_EIGHT)
-        .use_type(WhichUse::Spin);
-    frame.render_stateful_widget(w, area, state);
+    use ratatui::widgets::Paragraph;
+    let start = spinner_start.get_or_insert_with(Instant::now);
+    let blink_on = (start.elapsed().as_millis() / 600).is_multiple_of(2);
+    let dot = if blink_on {
+        "• ".into()
+    } else {
+        "◦ ".dim()
+    };
+    let label = label.cyan();
+    let line = Line::from(vec![dot, label]);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_centered_spinner(
     frame: &mut Frame,
     area: Rect,
-    state: &mut throbber_widgets_tui::ThrobberState,
+    spinner_start: &mut Option<Instant>,
     label: &str,
 ) {
-    // Center a 1xN throbber within the given rect
+    // Center a 1xN spinner within the given rect
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -898,7 +904,7 @@ fn draw_centered_spinner(
             Constraint::Percentage(50),
         ])
         .split(rows[1]);
-    draw_inline_spinner(frame, cols[1], state, label);
+    draw_inline_spinner(frame, cols[1], spinner_start, label);
 }
 
 // Styling helpers for diff rendering live inline where used.
@@ -918,7 +924,12 @@ pub fn draw_env_modal(frame: &mut Frame, area: Rect, app: &mut App) {
     let content = overlay_content(inner);
 
     if app.env_loading {
-        draw_centered_spinner(frame, content, &mut app.throbber, "Loading environments…");
+        draw_centered_spinner(
+            frame,
+            content,
+            &mut app.spinner_start,
+            "Loading environments…",
+        );
         return;
     }
 
@@ -1004,32 +1015,40 @@ pub fn draw_best_of_modal(frame: &mut Frame, area: Rect, app: &mut App) {
     use ratatui::widgets::Wrap;
 
     let inner = overlay_outer(area);
+    const MAX_WIDTH: u16 = 40;
+    const MIN_WIDTH: u16 = 20;
+    const MAX_HEIGHT: u16 = 12;
+    const MIN_HEIGHT: u16 = 6;
+    let modal_width = inner.width.min(MAX_WIDTH).max(inner.width.min(MIN_WIDTH));
+    let modal_height = inner
+        .height
+        .min(MAX_HEIGHT)
+        .max(inner.height.min(MIN_HEIGHT));
+    let modal_x = inner.x + (inner.width.saturating_sub(modal_width)) / 2;
+    let modal_y = inner.y + (inner.height.saturating_sub(modal_height)) / 2;
+    let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
     let title = Line::from(vec!["Parallel Attempts".magenta().bold()]);
     let block = overlay_block().title(title);
 
-    frame.render_widget(Clear, inner);
-    frame.render_widget(block.clone(), inner);
-    let content = overlay_content(inner);
+    frame.render_widget(Clear, modal_area);
+    frame.render_widget(block.clone(), modal_area);
+    let content = overlay_content(modal_area);
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
         .split(content);
 
-    let hint = Paragraph::new(Line::from(
-        "Use ↑/↓ to choose, 1-4 jump; Enter confirm, Esc cancel"
-            .cyan()
-            .dim(),
-    ))
-    .wrap(Wrap { trim: true });
+    let hint = Paragraph::new(Line::from("Use ↑/↓ to choose, 1-4 jump".cyan().dim()))
+        .wrap(Wrap { trim: true });
     frame.render_widget(hint, rows[0]);
 
     let selected = app.best_of_modal.as_ref().map(|m| m.selected).unwrap_or(0);
     let options = [1usize, 2, 3, 4];
     let mut items: Vec<ListItem> = Vec::new();
     for &attempts in &options {
-        let mut spans: Vec<ratatui::text::Span> =
-            vec![format!("{attempts} attempt{}", if attempts == 1 { "" } else { "s" }).into()];
+        let noun = if attempts == 1 { "attempt" } else { "attempts" };
+        let mut spans: Vec<ratatui::text::Span> = vec![format!("{attempts} {noun:<8}").into()];
         spans.push("  ".into());
         spans.push(format!("{attempts}x parallel").dim());
         if attempts == app.best_of_n {

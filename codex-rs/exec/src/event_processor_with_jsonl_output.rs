@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU64;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
-use crate::exec_events::AssistantMessageItem;
+use crate::exec_events::AgentMessageItem;
 use crate::exec_events::CommandExecutionItem;
 use crate::exec_events::CommandExecutionStatus;
 use crate::exec_events::FileChangeItem;
@@ -29,9 +29,8 @@ use crate::exec_events::TurnCompletedEvent;
 use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
+use crate::exec_events::WebSearchItem;
 use codex_core::config::Config;
-use codex_core::plan_tool::StepStatus;
-use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::Event;
@@ -46,10 +45,13 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use tracing::error;
 use tracing::warn;
 
-pub struct ExperimentalEventProcessorWithJsonOutput {
+pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_event_id: AtomicU64,
     // Tracks running commands by call_id, including the associated item id.
@@ -81,7 +83,7 @@ struct RunningMcpToolCall {
     item_id: String,
 }
 
-impl ExperimentalEventProcessorWithJsonOutput {
+impl EventProcessorWithJsonOutput {
     pub fn new(last_message_path: Option<PathBuf>) -> Self {
         Self {
             last_message_path,
@@ -106,6 +108,8 @@ impl ExperimentalEventProcessorWithJsonOutput {
             EventMsg::McpToolCallEnd(ev) => self.handle_mcp_tool_call_end(ev),
             EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.handle_patch_apply_end(ev),
+            EventMsg::WebSearchBegin(_) => Vec::new(),
+            EventMsg::WebSearchEnd(ev) => self.handle_web_search_end(ev),
             EventMsg::TokenCount(ev) => {
                 if let Some(info) = &ev.info {
                     self.last_total_token_usage = Some(info.total_token_usage.clone());
@@ -143,11 +147,22 @@ impl ExperimentalEventProcessorWithJsonOutput {
         })]
     }
 
+    fn handle_web_search_end(&self, ev: &WebSearchEndEvent) -> Vec<ThreadEvent> {
+        let item = ThreadItem {
+            id: self.get_next_item_id(),
+            details: ThreadItemDetails::WebSearch(WebSearchItem {
+                query: ev.query.clone(),
+            }),
+        };
+
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
+    }
+
     fn handle_agent_message(&self, payload: &AgentMessageEvent) -> Vec<ThreadEvent> {
         let item = ThreadItem {
             id: self.get_next_item_id(),
 
-            details: ThreadItemDetails::AssistantMessage(AssistantMessageItem {
+            details: ThreadItemDetails::AgentMessage(AgentMessageItem {
                 text: payload.message.clone(),
             }),
         };
@@ -405,7 +420,7 @@ impl ExperimentalEventProcessorWithJsonOutput {
     }
 }
 
-impl EventProcessor for ExperimentalEventProcessorWithJsonOutput {
+impl EventProcessor for EventProcessorWithJsonOutput {
     fn print_config_summary(&mut self, _: &Config, _: &str, ev: &SessionConfiguredEvent) {
         self.process_event(Event {
             id: "".to_string(),
@@ -413,6 +428,7 @@ impl EventProcessor for ExperimentalEventProcessorWithJsonOutput {
         });
     }
 
+    #[allow(clippy::print_stdout)]
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let aggregated = self.collect_thread_events(&event);
         for conv_event in aggregated {

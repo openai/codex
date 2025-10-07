@@ -12,6 +12,8 @@ use codex_core::config::load_global_mcp_servers;
 use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
+use codex_rmcp_client::delete_oauth_tokens;
+use codex_rmcp_client::perform_oauth_login;
 
 /// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
 ///
@@ -43,6 +45,14 @@ pub enum McpSubcommand {
 
     /// [experimental] Remove a global MCP server entry.
     Remove(RemoveArgs),
+
+    /// [experimental] Authenticate with a configured MCP server via OAuth.
+    /// Requires experimental_use_rmcp_client = true in config.toml.
+    Login(LoginArgs),
+
+    /// [experimental] Remove stored OAuth credentials for a server.
+    /// Requires experimental_use_rmcp_client = true in config.toml.
+    Logout(LogoutArgs),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -82,6 +92,18 @@ pub struct RemoveArgs {
     pub name: String,
 }
 
+#[derive(Debug, clap::Parser)]
+pub struct LoginArgs {
+    /// Name of the MCP server to authenticate with oauth.
+    pub name: String,
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct LogoutArgs {
+    /// Name of the MCP server to deauthenticate.
+    pub name: String,
+}
+
 impl McpCli {
     pub async fn run(self) -> Result<()> {
         let McpCli {
@@ -91,16 +113,22 @@ impl McpCli {
 
         match subcommand {
             McpSubcommand::List(args) => {
-                run_list(&config_overrides, args)?;
+                run_list(&config_overrides, args).await?;
             }
             McpSubcommand::Get(args) => {
-                run_get(&config_overrides, args)?;
+                run_get(&config_overrides, args).await?;
             }
             McpSubcommand::Add(args) => {
-                run_add(&config_overrides, args)?;
+                run_add(&config_overrides, args).await?;
             }
             McpSubcommand::Remove(args) => {
-                run_remove(&config_overrides, args)?;
+                run_remove(&config_overrides, args).await?;
+            }
+            McpSubcommand::Login(args) => {
+                run_login(&config_overrides, args).await?;
+            }
+            McpSubcommand::Logout(args) => {
+                run_logout(&config_overrides, args).await?;
             }
         }
 
@@ -108,7 +136,7 @@ impl McpCli {
     }
 }
 
-fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
+async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
     // Validate any provided overrides even though they are not currently applied.
     config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
 
@@ -134,6 +162,7 @@ fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<(
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let mut servers = load_global_mcp_servers(&codex_home)
+        .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
     let new_entry = McpServerConfig {
@@ -156,7 +185,7 @@ fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<(
     Ok(())
 }
 
-fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) -> Result<()> {
+async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) -> Result<()> {
     config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
 
     let RemoveArgs { name } = remove_args;
@@ -165,6 +194,7 @@ fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) ->
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let mut servers = load_global_mcp_servers(&codex_home)
+        .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
     let removed = servers.remove(&name).is_some();
@@ -183,9 +213,65 @@ fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) ->
     Ok(())
 }
 
-fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
+async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs) -> Result<()> {
     let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
+        .context("failed to load configuration")?;
+
+    if !config.use_experimental_use_rmcp_client {
+        bail!(
+            "OAuth login is only supported when experimental_use_rmcp_client is true in config.toml."
+        );
+    }
+
+    let LoginArgs { name } = login_args;
+
+    let Some(server) = config.mcp_servers.get(&name) else {
+        bail!("No MCP server named '{name}' found.");
+    };
+
+    let url = match &server.transport {
+        McpServerTransportConfig::StreamableHttp { url, .. } => url.clone(),
+        _ => bail!("OAuth login is only supported for streamable HTTP servers."),
+    };
+
+    perform_oauth_login(&name, &url).await?;
+    println!("Successfully logged in to MCP server '{name}'.");
+    Ok(())
+}
+
+async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutArgs) -> Result<()> {
+    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
+        .context("failed to load configuration")?;
+
+    let LogoutArgs { name } = logout_args;
+
+    let server = config
+        .mcp_servers
+        .get(&name)
+        .ok_or_else(|| anyhow!("No MCP server named '{name}' found in configuration."))?;
+
+    let url = match &server.transport {
+        McpServerTransportConfig::StreamableHttp { url, .. } => url.clone(),
+        _ => bail!("OAuth logout is only supported for streamable_http transports."),
+    };
+
+    match delete_oauth_tokens(&name, &url) {
+        Ok(true) => println!("Removed OAuth credentials for '{name}'."),
+        Ok(false) => println!("No OAuth credentials stored for '{name}'."),
+        Err(err) => return Err(anyhow!("failed to delete OAuth credentials: {err}")),
+    }
+
+    Ok(())
+}
+
+async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
+    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
         .context("failed to load configuration")?;
 
     let mut entries: Vec<_> = config.mcp_servers.iter().collect();
@@ -343,9 +429,10 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
     Ok(())
 }
 
-fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<()> {
+async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<()> {
     let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
         .context("failed to load configuration")?;
 
     let Some(server) = config.mcp_servers.get(&get_args.name) else {

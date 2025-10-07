@@ -1,76 +1,26 @@
 use std::collections::HashMap;
-use std::fmt::Display;
 use std::path::PathBuf;
 
-use crate::config_types::ReasoningEffort;
-use crate::config_types::ReasoningSummary;
-use crate::config_types::SandboxMode;
-use crate::config_types::Verbosity;
-use crate::protocol::AskForApproval;
-use crate::protocol::EventMsg;
-use crate::protocol::FileChange;
-use crate::protocol::ReviewDecision;
-use crate::protocol::SandboxPolicy;
-use crate::protocol::TurnAbortReason;
-use mcp_types::JSONRPCNotification;
-use mcp_types::RequestId;
+use crate::JSONRPCNotification;
+use crate::JSONRPCRequest;
+use crate::RequestId;
+use codex_protocol::ConversationId;
+use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::Verbosity;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnAbortReason;
+use paste::paste;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, TS, Hash)]
-#[ts(type = "string")]
-pub struct ConversationId {
-    uuid: Uuid,
-}
-
-impl ConversationId {
-    pub fn new() -> Self {
-        Self {
-            uuid: Uuid::now_v7(),
-        }
-    }
-
-    pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
-        Ok(Self {
-            uuid: Uuid::parse_str(s)?,
-        })
-    }
-}
-
-impl Default for ConversationId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Display for ConversationId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.uuid)
-    }
-}
-
-impl Serialize for ConversationId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.collect_str(&self.uuid)
-    }
-}
-
-impl<'de> Deserialize<'de> for ConversationId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        let uuid = Uuid::parse_str(&value).map_err(serde::de::Error::custom)?;
-        Ok(Self { uuid })
-    }
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(type = "string")]
@@ -89,117 +39,137 @@ pub enum AuthMode {
     ChatGPT,
 }
 
-/// Request from the client to the server.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
-#[serde(tag = "method", rename_all = "camelCase")]
-pub enum ClientRequest {
+/// Generates an `enum ClientRequest` where each variant is a request that the
+/// client can send to the server. Each variant has associated `params` and
+/// `response` types. Also generates a `export_client_responses()` function to
+/// export all response types to TypeScript.
+macro_rules! client_request_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident {
+                params: $(#[$params_meta:meta])* $params:ty,
+                response: $response:ty,
+            }
+        ),* $(,)?
+    ) => {
+        /// Request from the client to the server.
+        #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+        #[serde(tag = "method", rename_all = "camelCase")]
+        pub enum ClientRequest {
+            $(
+                $(#[$variant_meta])*
+                $variant {
+                    #[serde(rename = "id")]
+                    request_id: RequestId,
+                    $(#[$params_meta])*
+                    params: $params,
+                },
+            )*
+        }
+
+        pub fn export_client_responses(
+            out_dir: &::std::path::Path,
+        ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
+            $(
+                <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
+            )*
+            Ok(())
+        }
+    };
+}
+
+client_request_definitions! {
     Initialize {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: InitializeParams,
+        response: InitializeResponse,
     },
     NewConversation {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: NewConversationParams,
+        response: NewConversationResponse,
     },
     /// List recorded Codex conversations (rollouts) with optional pagination and search.
     ListConversations {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: ListConversationsParams,
+        response: ListConversationsResponse,
     },
     /// Resume a recorded Codex conversation from a rollout file.
     ResumeConversation {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: ResumeConversationParams,
+        response: ResumeConversationResponse,
     },
     ArchiveConversation {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: ArchiveConversationParams,
+        response: ArchiveConversationResponse,
     },
     SendUserMessage {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: SendUserMessageParams,
+        response: SendUserMessageResponse,
     },
     SendUserTurn {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: SendUserTurnParams,
+        response: SendUserTurnResponse,
     },
     InterruptConversation {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: InterruptConversationParams,
+        response: InterruptConversationResponse,
     },
     AddConversationListener {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: AddConversationListenerParams,
+        response: AddConversationSubscriptionResponse,
     },
     RemoveConversationListener {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: RemoveConversationListenerParams,
+        response: RemoveConversationSubscriptionResponse,
     },
     GitDiffToRemote {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: GitDiffToRemoteParams,
+        response: GitDiffToRemoteResponse,
     },
     LoginApiKey {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: LoginApiKeyParams,
+        response: LoginApiKeyResponse,
     },
     LoginChatGpt {
-        #[serde(rename = "id")]
-        request_id: RequestId,
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: LoginChatGptResponse,
     },
     CancelLoginChatGpt {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: CancelLoginChatGptParams,
+        response: CancelLoginChatGptResponse,
     },
     LogoutChatGpt {
-        #[serde(rename = "id")]
-        request_id: RequestId,
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: LogoutChatGptResponse,
     },
     GetAuthStatus {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: GetAuthStatusParams,
+        response: GetAuthStatusResponse,
     },
     GetUserSavedConfig {
-        #[serde(rename = "id")]
-        request_id: RequestId,
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: GetUserSavedConfigResponse,
     },
     SetDefaultModel {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: SetDefaultModelParams,
+        response: SetDefaultModelResponse,
     },
     GetUserAgent {
-        #[serde(rename = "id")]
-        request_id: RequestId,
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: GetUserAgentResponse,
     },
     UserInfo {
-        #[serde(rename = "id")]
-        request_id: RequestId,
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: UserInfoResponse,
     },
     FuzzyFileSearch {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: FuzzyFileSearchParams,
+        response: FuzzyFileSearchResponse,
     },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
-        #[serde(rename = "id")]
-        request_id: RequestId,
         params: ExecOneOffCommandParams,
+        response: ExecOneOffCommandResponse,
     },
 }
 
@@ -429,7 +399,7 @@ pub struct ExecOneOffCommandParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ExecArbitraryCommandResponse {
+pub struct ExecOneOffCommandResponse {
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
@@ -633,30 +603,74 @@ pub enum InputItem {
     },
 }
 
-// TODO(mbolin): Need test to ensure these constants match the enum variants.
+/// Generates an `enum ServerRequest` where each variant is a request that the
+/// server can send to the client along with the corresponding params and
+/// response types. It also generates helper types used by the app/server
+/// infrastructure (payload enum, request constructor, and export helpers).
+macro_rules! server_request_definitions {
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident
+        ),* $(,)?
+    ) => {
+        paste! {
+            /// Request initiated from the server and sent to the client.
+            #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+            #[serde(tag = "method", rename_all = "camelCase")]
+            pub enum ServerRequest {
+                $(
+                    $(#[$variant_meta])*
+                    $variant {
+                        #[serde(rename = "id")]
+                        request_id: RequestId,
+                        params: [<$variant Params>],
+                    },
+                )*
+            }
 
-pub const APPLY_PATCH_APPROVAL_METHOD: &str = "applyPatchApproval";
-pub const EXEC_COMMAND_APPROVAL_METHOD: &str = "execCommandApproval";
+            #[derive(Debug, Clone, PartialEq)]
+            pub enum ServerRequestPayload {
+                $( $variant([<$variant Params>]), )*
+            }
 
-/// Request initiated from the server and sent to the client.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
-#[serde(tag = "method", rename_all = "camelCase")]
-pub enum ServerRequest {
+            impl ServerRequestPayload {
+                pub fn request_with_id(self, request_id: RequestId) -> ServerRequest {
+                    match self {
+                        $(Self::$variant(params) => ServerRequest::$variant { request_id, params },)*
+                    }
+                }
+            }
+        }
+
+        pub fn export_server_responses(
+            out_dir: &::std::path::Path,
+        ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
+            paste! {
+                $(<[<$variant Response>] as ::ts_rs::TS>::export_all_to(out_dir)?;)*
+            }
+            Ok(())
+        }
+    };
+}
+
+impl TryFrom<JSONRPCRequest> for ServerRequest {
+    type Error = serde_json::Error;
+
+    fn try_from(value: JSONRPCRequest) -> Result<Self, Self::Error> {
+        serde_json::from_value(serde_json::to_value(value)?)
+    }
+}
+
+server_request_definitions! {
     /// Request to approve a patch.
-    ApplyPatchApproval {
-        #[serde(rename = "id")]
-        request_id: RequestId,
-        params: ApplyPatchApprovalParams,
-    },
+    ApplyPatchApproval,
     /// Request to exec a command.
-    ExecCommandApproval {
-        #[serde(rename = "id")]
-        request_id: RequestId,
-        params: ExecCommandApprovalParams,
-    },
+    ExecCommandApproval,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ConversationId,
     /// Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent]
@@ -673,6 +687,7 @@ pub struct ApplyPatchApprovalParams {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ConversationId,
     /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
@@ -710,6 +725,7 @@ pub struct FuzzyFileSearchParams {
 pub struct FuzzyFileSearchResult {
     pub root: String,
     pub path: String,
+    pub file_name: String,
     pub score: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>,
@@ -746,6 +762,7 @@ pub struct SessionConfiguredNotification {
     pub history_log_id: u64,
 
     /// Current number of entries in the history log.
+    #[ts(type = "number")]
     pub history_entry_count: usize,
 
     /// Optional initial messages (as events) for resumed sessions.
@@ -843,12 +860,6 @@ mod tests {
     }
 
     #[test]
-    fn test_conversation_id_default_is_not_zeroes() {
-        let id = ConversationId::default();
-        assert_ne!(id.uuid, Uuid::nil());
-    }
-
-    #[test]
     fn conversation_id_serializes_as_plain_string() -> Result<()> {
         let id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
 
@@ -881,6 +892,41 @@ mod tests {
             }),
             serde_json::to_value(&notification)?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_server_request() -> Result<()> {
+        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let params = ExecCommandApprovalParams {
+            conversation_id,
+            call_id: "call-42".to_string(),
+            command: vec!["echo".to_string(), "hello".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            reason: Some("because tests".to_string()),
+        };
+        let request = ServerRequest::ExecCommandApproval {
+            request_id: RequestId::Integer(7),
+            params: params.clone(),
+        };
+
+        assert_eq!(
+            json!({
+                "method": "execCommandApproval",
+                "id": 7,
+                "params": {
+                    "conversationId": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                    "callId": "call-42",
+                    "command": ["echo", "hello"],
+                    "cwd": "/tmp",
+                    "reason": "because tests",
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+
+        let payload = ServerRequestPayload::ExecCommandApproval(params);
+        assert_eq!(payload.request_with_id(RequestId::Integer(7)), request);
         Ok(())
     }
 }

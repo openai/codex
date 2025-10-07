@@ -4,15 +4,16 @@ expression: sanitized
 ---
 /status
 
-╭──────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                                    │
-│                                                              │
-│  Model:         gpt-5-codex (reasoning none, summaries auto) │
-│  Directory: [[workspace]]                                    │
-│  Approval:      on-request                                   │
-│  Sandbox:       read-only                                    │
-│  Agents.md:     <none>                                       │
-│                                                              │
-│  Token usage:   750 total  (500 input + 250 output)          │
-│  Limits:        data not available yet                       │
-╰──────────────────────────────────────────────────────────────╯
+╭─────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.0.0)                                       │
+│                                                                 │
+│  Model:            gpt-5-codex (reasoning none, summaries auto) │
+│  Directory: [[workspace]]                                       │
+│  Approval:         on-request                                   │
+│  Sandbox:          read-only                                    │
+│  Agents.md:        <none>                                       │
+│                                                                 │
+│  Token usage:      750 total  (500 input + 250 output)          │
+│  Context window:   100% left (750 used / 272K)                  │
+│  Limits:           data not available yet                       │
+╰─────────────────────────────────────────────────────────────────╯

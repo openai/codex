@@ -12,13 +12,14 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::list::ConversationItem;
 use crate::rollout::list::ConversationsPage;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::get_conversation;
 use crate::rollout::list::get_conversations;
 use anyhow::Result;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
@@ -28,13 +29,17 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
+
+const NO_SOURCE_FILTER: &[SessionSource] = &[];
 
 fn write_session_file(
     root: &Path,
     ts_str: &str,
     uuid: Uuid,
     num_records: usize,
+    source: Option<SessionSource>,
 ) -> std::io::Result<(OffsetDateTime, Uuid)> {
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
@@ -52,17 +57,23 @@ fn write_session_file(
     let file_path = dir.join(filename);
     let mut file = File::create(file_path)?;
 
+    let mut payload = serde_json::json!({
+        "id": uuid,
+        "timestamp": ts_str,
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version",
+    });
+
+    if let Some(source) = source {
+        payload["source"] = serde_json::to_value(source).unwrap();
+    }
+
     let meta = serde_json::json!({
         "timestamp": ts_str,
         "type": "session_meta",
-        "payload": {
-            "id": uuid,
-            "timestamp": ts_str,
-            "instructions": null,
-            "cwd": ".",
-            "originator": "test_originator",
-            "cli_version": "test_version"
-        }
+        "payload": payload,
     });
     writeln!(file, "{meta}")?;
 
@@ -99,11 +110,34 @@ async fn test_list_conversations_latest_first() {
     let u3 = Uuid::from_u128(3);
 
     // Create three sessions across three days
-    write_session_file(home, "2025-01-01T12-00-00", u1, 3).unwrap();
-    write_session_file(home, "2025-01-02T12-00-00", u2, 3).unwrap();
-    write_session_file(home, "2025-01-03T12-00-00", u3, 3).unwrap();
+    write_session_file(
+        home,
+        "2025-01-01T12-00-00",
+        u1,
+        3,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-01-02T12-00-00",
+        u2,
+        3,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-01-03T12-00-00",
+        u3,
+        3,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
 
-    let page = get_conversations(home, 10, None).await.unwrap();
+    let page = get_conversations(home, 10, None, INTERACTIVE_SESSION_SOURCES)
+        .await
+        .unwrap();
 
     // Build expected objects
     let p1 = home
@@ -131,7 +165,8 @@ async fn test_list_conversations_latest_first() {
         "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
-        "cli_version": "test_version"
+        "cli_version": "test_version",
+        "source": "vscode",
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -139,7 +174,8 @@ async fn test_list_conversations_latest_first() {
         "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
-        "cli_version": "test_version"
+        "cli_version": "test_version",
+        "source": "vscode",
     })];
     let head_1 = vec![serde_json::json!({
         "id": u1,
@@ -147,7 +183,8 @@ async fn test_list_conversations_latest_first() {
         "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
-        "cli_version": "test_version"
+        "cli_version": "test_version",
+        "source": "vscode",
     })];
 
     let expected_cursor: Cursor =
@@ -159,16 +196,22 @@ async fn test_list_conversations_latest_first() {
                 path: p1,
                 head: head_3,
                 tail: Vec::new(),
+                created_at: Some("2025-01-03T12-00-00".into()),
+                updated_at: Some("2025-01-03T12-00-00".into()),
             },
             ConversationItem {
                 path: p2,
                 head: head_2,
                 tail: Vec::new(),
+                created_at: Some("2025-01-02T12-00-00".into()),
+                updated_at: Some("2025-01-02T12-00-00".into()),
             },
             ConversationItem {
                 path: p3,
                 head: head_1,
                 tail: Vec::new(),
+                created_at: Some("2025-01-01T12-00-00".into()),
+                updated_at: Some("2025-01-01T12-00-00".into()),
             },
         ],
         next_cursor: Some(expected_cursor),
@@ -192,13 +235,50 @@ async fn test_pagination_cursor() {
     let u5 = Uuid::from_u128(55);
 
     // Oldest to newest
-    write_session_file(home, "2025-03-01T09-00-00", u1, 1).unwrap();
-    write_session_file(home, "2025-03-02T09-00-00", u2, 1).unwrap();
-    write_session_file(home, "2025-03-03T09-00-00", u3, 1).unwrap();
-    write_session_file(home, "2025-03-04T09-00-00", u4, 1).unwrap();
-    write_session_file(home, "2025-03-05T09-00-00", u5, 1).unwrap();
+    write_session_file(
+        home,
+        "2025-03-01T09-00-00",
+        u1,
+        1,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-03-02T09-00-00",
+        u2,
+        1,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-03-03T09-00-00",
+        u3,
+        1,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-03-04T09-00-00",
+        u4,
+        1,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-03-05T09-00-00",
+        u5,
+        1,
+        Some(SessionSource::VSCode),
+    )
+    .unwrap();
 
-    let page1 = get_conversations(home, 2, None).await.unwrap();
+    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES)
+        .await
+        .unwrap();
     let p5 = home
         .join("sessions")
         .join("2025")
@@ -217,7 +297,8 @@ async fn test_pagination_cursor() {
         "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
-        "cli_version": "test_version"
+        "cli_version": "test_version",
+        "source": "vscode",
     })];
     let head_4 = vec![serde_json::json!({
         "id": u4,
@@ -225,7 +306,8 @@ async fn test_pagination_cursor() {
         "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
-        "cli_version": "test_version"
+        "cli_version": "test_version",
+        "source": "vscode",
     })];
     let expected_cursor1: Cursor =
         serde_json::from_str(&format!("\"2025-03-04T09-00-00|{u4}\"")).unwrap();
@@ -235,11 +317,15 @@ async fn test_pagination_cursor() {
                 path: p5,
                 head: head_5,
                 tail: Vec::new(),
+                created_at: Some("2025-03-05T09-00-00".into()),
+                updated_at: Some("2025-03-05T09-00-00".into()),
             },
             ConversationItem {
                 path: p4,
                 head: head_4,
                 tail: Vec::new(),
+                created_at: Some("2025-03-04T09-00-00".into()),
+                updated_at: Some("2025-03-04T09-00-00".into()),
             },
         ],
         next_cursor: Some(expected_cursor1.clone()),
@@ -248,9 +334,14 @@ async fn test_pagination_cursor() {
     };
     assert_eq!(page1, expected_page1);
 
-    let page2 = get_conversations(home, 2, page1.next_cursor.as_ref())
-        .await
-        .unwrap();
+    let page2 = get_conversations(
+        home,
+        2,
+        page1.next_cursor.as_ref(),
+        INTERACTIVE_SESSION_SOURCES,
+    )
+    .await
+    .unwrap();
     let p3 = home
         .join("sessions")
         .join("2025")
@@ -269,7 +360,8 @@ async fn test_pagination_cursor() {
         "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
-        "cli_version": "test_version"
+        "cli_version": "test_version",
+        "source": "vscode",
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -277,7 +369,8 @@ async fn test_pagination_cursor() {
         "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
-        "cli_version": "test_version"
+        "cli_version": "test_version",
+        "source": "vscode",
     })];
     let expected_cursor2: Cursor =
         serde_json::from_str(&format!("\"2025-03-02T09-00-00|{u2}\"")).unwrap();
@@ -287,11 +380,15 @@ async fn test_pagination_cursor() {
                 path: p3,
                 head: head_3,
                 tail: Vec::new(),
+                created_at: Some("2025-03-03T09-00-00".into()),
+                updated_at: Some("2025-03-03T09-00-00".into()),
             },
             ConversationItem {
                 path: p2,
                 head: head_2,
                 tail: Vec::new(),
+                created_at: Some("2025-03-02T09-00-00".into()),
+                updated_at: Some("2025-03-02T09-00-00".into()),
             },
         ],
         next_cursor: Some(expected_cursor2.clone()),
@@ -300,9 +397,14 @@ async fn test_pagination_cursor() {
     };
     assert_eq!(page2, expected_page2);
 
-    let page3 = get_conversations(home, 2, page2.next_cursor.as_ref())
-        .await
-        .unwrap();
+    let page3 = get_conversations(
+        home,
+        2,
+        page2.next_cursor.as_ref(),
+        INTERACTIVE_SESSION_SOURCES,
+    )
+    .await
+    .unwrap();
     let p1 = home
         .join("sessions")
         .join("2025")
@@ -315,7 +417,8 @@ async fn test_pagination_cursor() {
         "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
-        "cli_version": "test_version"
+        "cli_version": "test_version",
+        "source": "vscode",
     })];
     let expected_cursor3: Cursor =
         serde_json::from_str(&format!("\"2025-03-01T09-00-00|{u1}\"")).unwrap();
@@ -324,6 +427,8 @@ async fn test_pagination_cursor() {
             path: p1,
             head: head_1,
             tail: Vec::new(),
+            created_at: Some("2025-03-01T09-00-00".into()),
+            updated_at: Some("2025-03-01T09-00-00".into()),
         }],
         next_cursor: Some(expected_cursor3),
         num_scanned_files: 5, // scanned 05, 04 (anchor), 03, 02 (anchor), 01
@@ -339,9 +444,11 @@ async fn test_get_conversation_contents() {
 
     let uuid = Uuid::new_v4();
     let ts = "2025-04-01T10-30-00";
-    write_session_file(home, ts, uuid, 2).unwrap();
+    write_session_file(home, ts, uuid, 2, Some(SessionSource::VSCode)).unwrap();
 
-    let page = get_conversations(home, 1, None).await.unwrap();
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES)
+        .await
+        .unwrap();
     let path = &page.items[0].path;
 
     let content = get_conversation(path).await.unwrap();
@@ -359,7 +466,8 @@ async fn test_get_conversation_contents() {
         "instructions": null,
         "cwd": ".",
         "originator": "test_originator",
-        "cli_version": "test_version"
+        "cli_version": "test_version",
+        "source": "vscode",
     })];
     let expected_cursor: Cursor = serde_json::from_str(&format!("\"{ts}|{uuid}\"")).unwrap();
     let expected_page = ConversationsPage {
@@ -367,6 +475,8 @@ async fn test_get_conversation_contents() {
             path: expected_path,
             head: expected_head,
             tail: Vec::new(),
+            created_at: Some(ts.into()),
+            updated_at: Some(ts.into()),
         }],
         next_cursor: Some(expected_cursor),
         num_scanned_files: 1,
@@ -375,7 +485,19 @@ async fn test_get_conversation_contents() {
     assert_eq!(page, expected_page);
 
     // Entire file contents equality
-    let meta = serde_json::json!({"timestamp": ts, "type": "session_meta", "payload": {"id": uuid, "timestamp": ts, "instructions": null, "cwd": ".", "originator": "test_originator", "cli_version": "test_version"}});
+    let meta = serde_json::json!({
+        "timestamp": ts,
+        "type": "session_meta",
+        "payload": {
+            "id": uuid,
+            "timestamp": ts,
+            "instructions": null,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "vscode",
+        }
+    });
     let user_event = serde_json::json!({
         "timestamp": ts,
         "type": "event_msg",
@@ -410,6 +532,7 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
+                source: SessionSource::VSCode,
             },
             git: None,
         }),
@@ -442,25 +565,30 @@ async fn test_tail_includes_last_response_items() -> Result<()> {
     }
     drop(file);
 
-    let page = get_conversations(home, 1, None).await?;
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
     let item = page.items.first().expect("conversation item");
     let tail_len = item.tail.len();
     assert_eq!(tail_len, 10usize.min(total_messages));
 
     let expected: Vec<serde_json::Value> = (total_messages - tail_len..total_messages)
         .map(|idx| {
-            serde_json::to_value(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("reply-{idx}"),
-                }],
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": format!("reply-{idx}"),
+                    }
+                ],
             })
-            .expect("serialize response item")
         })
         .collect();
 
     assert_eq!(item.tail, expected);
+    assert_eq!(item.created_at.as_deref(), Some(ts));
+    let expected_updated = format!("{ts}-{last:02}", last = total_messages - 1);
+    assert_eq!(item.updated_at.as_deref(), Some(expected_updated.as_str()));
 
     Ok(())
 }
@@ -488,6 +616,7 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
+                source: SessionSource::VSCode,
             },
             git: None,
         }),
@@ -519,25 +648,32 @@ async fn test_tail_handles_short_sessions() -> Result<()> {
     }
     drop(file);
 
-    let page = get_conversations(home, 1, None).await?;
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
     let tail = &page.items.first().expect("conversation item").tail;
 
     assert_eq!(tail.len(), 3);
 
     let expected: Vec<serde_json::Value> = (0..3)
         .map(|idx| {
-            serde_json::to_value(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("short-{idx}"),
-                }],
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": format!("short-{idx}"),
+                    }
+                ],
             })
-            .expect("serialize response item")
         })
         .collect();
 
     assert_eq!(tail, &expected);
+    let expected_updated = format!("{ts}-{last:02}", last = 2);
+    assert_eq!(
+        page.items[0].updated_at.as_deref(),
+        Some(expected_updated.as_str())
+    );
 
     Ok(())
 }
@@ -565,6 +701,7 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
+                source: SessionSource::VSCode,
             },
             git: None,
         }),
@@ -610,23 +747,30 @@ async fn test_tail_skips_trailing_non_responses() -> Result<()> {
     writeln!(file, "{}", serde_json::to_string(&shutdown_event)?)?;
     drop(file);
 
-    let page = get_conversations(home, 1, None).await?;
+    let page = get_conversations(home, 1, None, INTERACTIVE_SESSION_SOURCES).await?;
     let tail = &page.items.first().expect("conversation item").tail;
 
     let expected: Vec<serde_json::Value> = (0..4)
         .map(|idx| {
-            serde_json::to_value(ResponseItem::Message {
-                id: None,
-                role: "assistant".into(),
-                content: vec![ContentItem::OutputText {
-                    text: format!("response-{idx}"),
-                }],
+            serde_json::json!({
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": format!("response-{idx}"),
+                    }
+                ],
             })
-            .expect("serialize response item")
         })
         .collect();
 
     assert_eq!(tail, &expected);
+    let expected_updated = format!("{ts}-{last:02}", last = 3);
+    assert_eq!(
+        page.items[0].updated_at.as_deref(),
+        Some(expected_updated.as_str())
+    );
 
     Ok(())
 }
@@ -641,11 +785,13 @@ async fn test_stable_ordering_same_second_pagination() {
     let u2 = Uuid::from_u128(2);
     let u3 = Uuid::from_u128(3);
 
-    write_session_file(home, ts, u1, 0).unwrap();
-    write_session_file(home, ts, u2, 0).unwrap();
-    write_session_file(home, ts, u3, 0).unwrap();
+    write_session_file(home, ts, u1, 0, Some(SessionSource::VSCode)).unwrap();
+    write_session_file(home, ts, u2, 0, Some(SessionSource::VSCode)).unwrap();
+    write_session_file(home, ts, u3, 0, Some(SessionSource::VSCode)).unwrap();
 
-    let page1 = get_conversations(home, 2, None).await.unwrap();
+    let page1 = get_conversations(home, 2, None, INTERACTIVE_SESSION_SOURCES)
+        .await
+        .unwrap();
 
     let p3 = home
         .join("sessions")
@@ -666,7 +812,8 @@ async fn test_stable_ordering_same_second_pagination() {
             "instructions": null,
             "cwd": ".",
             "originator": "test_originator",
-            "cli_version": "test_version"
+            "cli_version": "test_version",
+            "source": "vscode",
         })]
     };
     let expected_cursor1: Cursor = serde_json::from_str(&format!("\"{ts}|{u2}\"")).unwrap();
@@ -676,11 +823,15 @@ async fn test_stable_ordering_same_second_pagination() {
                 path: p3,
                 head: head(u3),
                 tail: Vec::new(),
+                created_at: Some(ts.to_string()),
+                updated_at: Some(ts.to_string()),
             },
             ConversationItem {
                 path: p2,
                 head: head(u2),
                 tail: Vec::new(),
+                created_at: Some(ts.to_string()),
+                updated_at: Some(ts.to_string()),
             },
         ],
         next_cursor: Some(expected_cursor1.clone()),
@@ -689,9 +840,14 @@ async fn test_stable_ordering_same_second_pagination() {
     };
     assert_eq!(page1, expected_page1);
 
-    let page2 = get_conversations(home, 2, page1.next_cursor.as_ref())
-        .await
-        .unwrap();
+    let page2 = get_conversations(
+        home,
+        2,
+        page1.next_cursor.as_ref(),
+        INTERACTIVE_SESSION_SOURCES,
+    )
+    .await
+    .unwrap();
     let p1 = home
         .join("sessions")
         .join("2025")
@@ -704,10 +860,68 @@ async fn test_stable_ordering_same_second_pagination() {
             path: p1,
             head: head(u1),
             tail: Vec::new(),
+            created_at: Some(ts.to_string()),
+            updated_at: Some(ts.to_string()),
         }],
         next_cursor: Some(expected_cursor2),
         num_scanned_files: 3, // scanned u3, u2 (anchor), u1
         reached_scan_cap: false,
     };
     assert_eq!(page2, expected_page2);
+}
+
+#[tokio::test]
+async fn test_source_filter_excludes_non_matching_sessions() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let interactive_id = Uuid::from_u128(42);
+    let non_interactive_id = Uuid::from_u128(77);
+
+    write_session_file(
+        home,
+        "2025-08-02T10-00-00",
+        interactive_id,
+        2,
+        Some(SessionSource::Cli),
+    )
+    .unwrap();
+    write_session_file(
+        home,
+        "2025-08-01T10-00-00",
+        non_interactive_id,
+        2,
+        Some(SessionSource::Exec),
+    )
+    .unwrap();
+
+    let interactive_only = get_conversations(home, 10, None, INTERACTIVE_SESSION_SOURCES)
+        .await
+        .unwrap();
+    let paths: Vec<_> = interactive_only
+        .items
+        .iter()
+        .map(|item| item.path.as_path())
+        .collect();
+
+    assert_eq!(paths.len(), 1);
+    assert!(paths.iter().all(|path| {
+        path.ends_with("rollout-2025-08-02T10-00-00-00000000-0000-0000-0000-00000000002a.jsonl")
+    }));
+
+    let all_sessions = get_conversations(home, 10, None, NO_SOURCE_FILTER)
+        .await
+        .unwrap();
+    let all_paths: Vec<_> = all_sessions
+        .items
+        .into_iter()
+        .map(|item| item.path)
+        .collect();
+    assert_eq!(all_paths.len(), 2);
+    assert!(all_paths.iter().any(|path| {
+        path.ends_with("rollout-2025-08-02T10-00-00-00000000-0000-0000-0000-00000000002a.jsonl")
+    }));
+    assert!(all_paths.iter().any(|path| {
+        path.ends_with("rollout-2025-08-01T10-00-00-00000000-0000-0000-0000-00000000004d.jsonl")
+    }));
 }
