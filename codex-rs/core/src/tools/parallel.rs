@@ -36,7 +36,7 @@ impl ToolCallRuntime {
             turn_context,
             tracker,
             sub_id,
-            parallel_execution: Arc::new(RwLock::new(false)),
+            parallel_execution: Arc::new(RwLock::new(())),
         }
     }
 

@@ -23,6 +23,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
+use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
@@ -2109,7 +2110,8 @@ async fn try_run_turn(
         Arc::clone(&turn_diff_tracker),
         sub_id.to_string(),
     );
-    let mut output: FuturesOrdered<_> = FuturesOrdered::new();
+    let mut output: FuturesOrdered<BoxFuture<CodexResult<ProcessedResponseItem>>> =
+        FuturesOrdered::new();
 
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
@@ -2219,7 +2221,7 @@ async fn try_run_turn(
                 sess.update_token_usage_info(sub_id, turn_context.as_ref(), token_usage.as_ref())
                     .await;
 
-                let processed_items = match output.try_collect().await?;
+                let processed_items: Vec<ProcessedResponseItem> = output.try_collect().await?;
 
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;
