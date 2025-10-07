@@ -4,9 +4,14 @@ use crate::color::perceptual_distance;
 use crate::terminal_palette::terminal_palette;
 use ratatui::style::Color;
 use ratatui::style::Style;
+use std::env;
 
 /// Returns the style for a user-authored message using the provided terminal background.
 pub fn user_message_style(terminal_bg: Option<(u8, u8, u8)>) -> Style {
+    if env::var_os("TMUX").is_some() {
+        return Style::default();
+    }
+
     match terminal_bg {
         Some(bg) => Style::default().bg(user_message_bg(bg)),
         None => Style::default(),
