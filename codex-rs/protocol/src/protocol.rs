@@ -564,7 +564,7 @@ pub struct TokenUsage {
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
-    #[ts(type = "number")]
+    #[ts(type = "number | null")]
     pub model_context_window: Option<u64>,
 }
 
@@ -640,10 +640,10 @@ pub struct RateLimitWindow {
     /// Percentage (0-100) of the window that has been consumed.
     pub used_percent: f64,
     /// Rolling window duration, in minutes.
-    #[ts(type = "number")]
+    #[ts(type = "number | null")]
     pub window_minutes: Option<u64>,
     /// Seconds until the window resets.
-    #[ts(type = "number")]
+    #[ts(type = "number | null")]
     pub resets_in_seconds: Option<u64>,
 }
 
