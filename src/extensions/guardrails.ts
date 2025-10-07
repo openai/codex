@@ -1,48 +1,28 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
-
-const DEFAULT_GUARDRAILS_DIR = ".guardrails";
+import { execFileSync } from "node:child_process";
 
 /**
- * Load guardrail markdown files from the current project root.
+ * Load guardrails from the GuardLoop bridge.
  *
- * Files are returned in sorted order with a markdown heading for each file.
- *
- * @param {{ cwd?: string }} [options]
+ * @param {{ cwd?: string, prompt?: string }} [options]
  * @returns {Promise<string>} Combined guardrail contents.
  */
-export async function loadGuardrails(options = {}) {
-  const { cwd = process.cwd() } = options;
-  const guardrailsDir = path.join(cwd, DEFAULT_GUARDRAILS_DIR);
+export async function loadGuardrails(options) {
+  const { cwd = process.cwd(), prompt = "" } = options || {};
+  const bridgePath = path.join(cwd, "guardloop_bridge.py");
 
-  let entries;
   try {
-    entries = await fs.readdir(guardrailsDir, { withFileTypes: true });
+    // Execute the python script with the prompt as an argument.
+    const output = execFileSync(bridgePath, [prompt], { encoding: "utf-8" });
+    const result = JSON.parse(output);
+    return result.guardrails.trim();
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return "";
+    // If the script fails, log the error and return no guardrails.
+    if (error instanceof Error) {
+      console.error("Failed to execute GuardLoop bridge:", error.message);
+    } else {
+      console.error("Failed to execute GuardLoop bridge:", String(error));
     }
-    throw error;
-  }
-
-  const markdownFiles = entries
-    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b));
-
-  if (markdownFiles.length === 0) {
     return "";
   }
-
-  const sections = [];
-  for (const fileName of markdownFiles) {
-    const filePath = path.join(guardrailsDir, fileName);
-    const fileContent = await fs.readFile(filePath, "utf8");
-    const heading = path.parse(fileName).name;
-    const normalizedContent = fileContent.replace(/\s+$/u, "");
-    const sectionBody = normalizedContent ? `\n\n${normalizedContent}` : "";
-    sections.push(`## Guardrail: ${heading}${sectionBody}`);
-  }
-
-  return sections.join("\n\n");
 }

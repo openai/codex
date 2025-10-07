@@ -322,6 +322,7 @@ fn make_chatwidget_manual() -> (
         auth_manager,
         session_header: SessionHeader::new(cfg.model),
         initial_user_message: None,
+        last_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
         rate_limit_warnings: RateLimitWarningState::default(),

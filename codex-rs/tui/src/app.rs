@@ -363,6 +363,36 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::LogGuardLoopFailure(prompt) => {
+                let bridge_path = self.config.cwd.join("guardloop_bridge.py");
+                let output = std::process::Command::new(bridge_path)
+                    .arg("--log-failure")
+                    .arg(prompt)
+                    .output();
+
+                match output {
+                    Ok(output) => {
+                        if output.status.success() {
+                            self.chat_widget.add_info_message(
+                                "Feedback logged. Thank you!".to_string(),
+                                None,
+                            );
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to log feedback: {}",
+                                stderr
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to execute GuardLoop bridge: {}",
+                            e
+                        ));
+                    }
+                }
+            }
         }
         Ok(true)
     }

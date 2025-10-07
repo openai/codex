@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, copyFile, chmod } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -7,42 +7,65 @@ import test from "node:test";
 import { buildPromptWithGuardrails } from "../src/cli.ts";
 import { loadGuardrails } from "../src/extensions/guardrails.ts";
 
-async function createTempProject() {
+async function createTempProjectWithBridge() {
   const dir = await mkdtemp(path.join(tmpdir(), "codex-guardrails-"));
-  const guardrailsDir = path.join(dir, ".guardrails");
-  await mkdir(guardrailsDir, { recursive: true });
-  return { dir, guardrailsDir };
+  const bridgeSourcePath = path.resolve("guardloop_bridge.py");
+  const bridgeDestPath = path.join(dir, "guardloop_bridge.py");
+  await copyFile(bridgeSourcePath, bridgeDestPath);
+  await chmod(bridgeDestPath, "755");
+  return { dir };
 }
 
-test("loadGuardrails returns concatenated markdown", async () => {
-  const { dir, guardrailsDir } = await createTempProject();
-  await writeFile(path.join(guardrailsDir, "Test.md"), "Do not touch production.");
+test("loadGuardrails returns code guardrails for a code prompt", async () => {
+  const { dir } = await createTempProjectWithBridge();
+  const codePrompt = "implement a function to sort a list";
+  const guardrails = await loadGuardrails({ cwd: dir, prompt: codePrompt });
 
-  const guardrails = await loadGuardrails({ cwd: dir });
+  const expectedGuardrails = [
+    "## Guardrail: Code Standard",
+    "- All functions must have a docstring.",
+    "- Wrap async database calls in try-catch blocks.",
+  ].join("\n");
 
-  assert.match(guardrails, /## Guardrail: Test/);
-  assert.match(guardrails, /Do not touch production\./);
+  assert.strictEqual(guardrails, expectedGuardrails);
 });
 
-test("buildPromptWithGuardrails prepends guardrails when enabled", async () => {
-  const { dir, guardrailsDir } = await createTempProject();
-  await writeFile(path.join(guardrailsDir, "A.md"), "Guardrail A");
-  await writeFile(path.join(guardrailsDir, "B.md"), "Guardrail B");
+test("loadGuardrails returns no guardrails for a creative prompt", async () => {
+  const { dir } = await createTempProjectWithBridge();
+  const creativePrompt = "write a blog post about AI";
+  const guardrails = await loadGuardrails({ cwd: dir, prompt: creativePrompt });
 
-  const guardrails = await loadGuardrails({ cwd: dir });
-  const userPrompt = "Implement feature X";
+  assert.strictEqual(guardrails, "");
+});
 
-  const withGuardrails = await buildPromptWithGuardrails(userPrompt, {
+test("buildPromptWithGuardrails prepends guardrails correctly for a code prompt", async () => {
+  const { dir } = await createTempProjectWithBridge();
+  const userPrompt = "implement user authentication service";
+
+  // We need to call the function that is actually exported and used.
+  // The options object for buildPromptWithGuardrails needs to be constructed correctly.
+  const result = await buildPromptWithGuardrails(userPrompt, {
+    cwd: dir,
     guardrailsEnabled: true,
-    cwd: dir,
   });
 
-  assert.strictEqual(withGuardrails, `${guardrails}\n\n${userPrompt}`);
+  const expectedGuardrails = [
+    "## Guardrail: Code Standard",
+    "- All functions must have a docstring.",
+    "- Wrap async database calls in try-catch blocks.",
+  ].join("\n");
 
-  const withoutGuardrails = await buildPromptWithGuardrails(userPrompt, {
-    guardrailsEnabled: false,
+  assert.strictEqual(result, `${expectedGuardrails}\n\n${userPrompt}`);
+});
+
+test("buildPromptWithGuardrails returns only the prompt for a creative prompt", async () => {
+  const { dir } = await createTempProjectWithBridge();
+  const userPrompt = "write a poem about the sea";
+
+  const result = await buildPromptWithGuardrails(userPrompt, {
     cwd: dir,
+    guardrailsEnabled: true,
   });
 
-  assert.strictEqual(withoutGuardrails, userPrompt);
+  assert.strictEqual(result, userPrompt);
 });

@@ -65,7 +65,7 @@ export async function buildPromptWithGuardrails(userPrompt, options = {}) {
     return userPrompt;
   }
 
-  const guardrails = await loadGuardrails({ cwd });
+  const guardrails = await loadGuardrails({ cwd, prompt: userPrompt });
   if (!guardrails) {
     return userPrompt;
   }

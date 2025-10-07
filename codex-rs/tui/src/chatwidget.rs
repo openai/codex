@@ -225,6 +225,7 @@ pub(crate) struct ChatWidget {
     auth_manager: Arc<AuthManager>,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
+    last_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
@@ -258,6 +259,7 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 }
 
+#[derive(Clone)]
 struct UserMessage {
     text: String,
     image_paths: Vec<PathBuf>,
@@ -384,6 +386,8 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.request_redraw();
+
+        self.show_feedback_prompt();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
@@ -895,6 +899,7 @@ impl ChatWidget {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
+            last_user_message: None,
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -957,6 +962,7 @@ impl ChatWidget {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
+            last_user_message: None,
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -1220,6 +1226,7 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.last_user_message = Some(user_message.clone());
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
             return;
@@ -1981,6 +1988,48 @@ impl ChatWidget {
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
+    }
+
+    pub(crate) fn show_feedback_prompt(&mut self) {
+        let last_prompt = if let Some(msg) = &self.last_user_message {
+            msg.text.clone()
+        } else {
+            return; // No last prompt, nothing to do.
+        };
+
+        if last_prompt.is_empty() {
+            return; // Don't ask for feedback on empty prompts
+        }
+
+        let mut items = Vec::new();
+
+        // "Yes" item
+        items.push(SelectionItem {
+            name: "Yes".to_string(),
+            description: None,
+            is_current: false,
+            actions: Vec::new(), // No action needed, just dismiss.
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        // "No" item
+        items.push(SelectionItem {
+            name: "No".to_string(),
+            description: Some("Log this interaction as a failure".to_string()),
+            is_current: false,
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::LogGuardLoopFailure(last_prompt.clone()));
+            })],
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: "Was this helpful?".to_string(),
+            items,
+            ..Default::default()
+        });
     }
 }
 
