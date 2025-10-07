@@ -73,3 +73,28 @@ If you don’t have the tool:
 ### Test assertions
 
 - Tests should use pretty_assertions::assert_eq for clearer diffs. Import this at the top of the test module if it isn't already.
+
+### Integration tests (core)
+
+- Prefer the utilities in `core_test_support::responses` when writing end-to-end Codex tests.
+
+- All `mount_sse*` helpers return a `ResponseMock`; hold onto it so you can assert against outbound `/responses` POST bodies.
+- Use `ResponseMock::single_request()` when a test should only issue one POST, or `ResponseMock::requests()` to inspect every captured `ResponsesRequest`.
+- `ResponsesRequest` exposes helpers (`body_json`, `input`, `function_call_output`, `custom_tool_call_output`, `call_output`, `header`, `path`, `query_param`) so assertions can target structured payloads instead of manual JSON digging.
+- Build SSE payloads with the provided `ev_*` constructors and the `sse(...)`.
+
+- Typical pattern:
+
+  ```rust
+  let mock = responses::mount_sse_once(&server, responses::sse(vec![
+      responses::ev_response_created("resp-1"),
+      responses::ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+      responses::ev_completed("resp-1"),
+  ])).await;
+
+  codex.submit(Op::UserTurn { ... }).await?;
+
+  // Assert request body if needed.
+  let request = mock.single_request();
+  // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
+  ```

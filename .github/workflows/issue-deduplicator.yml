@@ -105,6 +105,10 @@ jobs:
 
             const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
             const currentIssueNumber = String(context.payload.issue.number);
+
+            console.log(`Current issue number: ${currentIssueNumber}`);
+            console.log(issues);
+
             const filteredIssues = issues.filter((value) => String(value) !== currentIssueNumber);
 
             if (filteredIssues.length === 0) {
@@ -113,7 +117,8 @@ jobs:
             }
 
             const lines = [
-              'Potential duplicates detected:',
+              'Potential duplicates detected. Please review them and close your issue if it is a duplicate.',
+              '',
               ...filteredIssues.map((value) => `- #${String(value)}`),
               '',
               '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];
