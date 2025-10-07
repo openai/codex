@@ -106,16 +106,12 @@ async fn exec_cli_applies_experimental_instructions_file() {
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
     );
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(sse, "text/event-stream"),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock = core_test_support::responses::mount_sse_once_match(
+        &server,
+        path("/v1/responses"),
+        sse.to_string(),
+    )
+    .await;
 
     // Create a temporary instructions file with a unique marker we can assert
     // appears in the outbound request payload.
@@ -164,8 +160,8 @@ async fn exec_cli_applies_experimental_instructions_file() {
 
     // Inspect the captured request and verify our custom base instructions were
     // included in the `instructions` field.
-    let request = &server.received_requests().await.unwrap()[0];
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let body = request.body_json();
     let instructions = body
         .get("instructions")
         .and_then(|v| v.as_str())

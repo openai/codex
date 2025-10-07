@@ -22,16 +22,6 @@ use core_test_support::wait_for_event;
 use serde_json::Value;
 use wiremock::matchers::any;
 
-fn function_call_output(body: &Value) -> Option<&Value> {
-    body.get("input")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("type").and_then(Value::as_str) == Some("function_call_output")
-            })
-        })
-}
-
 fn find_image_message(body: &Value) -> Option<&Value> {
     body.get("input")
         .and_then(Value::as_array)
@@ -57,12 +47,6 @@ fn extract_output_text(item: &Value) -> Option<&str> {
         Value::Object(obj) => obj.get("content").and_then(Value::as_str),
         _ => None,
     })
-}
-
-fn find_request_with_function_call_output(requests: &[Value]) -> Option<&Value> {
-    requests
-        .iter()
-        .find(|body| function_call_output(body).is_some())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -100,7 +84,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    responses::mount_sse_once_match(&server, any(), second_response).await;
+    let mock = responses::mount_sse_once_match(&server, any(), second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -137,25 +121,14 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     assert_eq!(tool_event.call_id, call_id);
     assert_eq!(tool_event.path, abs_path);
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(
-        requests.len() >= 2,
-        "expected at least two POST requests, got {}",
-        requests.len()
-    );
-    let request_bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+    let body = mock.single_request().body_json();
+    let output_item = mock.single_request().function_call_output(call_id);
 
-    let body_with_tool_output = find_request_with_function_call_output(&request_bodies)
-        .expect("function_call_output item not found in requests");
-    let output_item = function_call_output(body_with_tool_output).expect("tool output item");
-    let output_text = extract_output_text(output_item).expect("output text present");
+    let output_text = extract_output_text(&output_item).expect("output text present");
     assert_eq!(output_text, "attached local image path");
 
-    let image_message = find_image_message(body_with_tool_output)
-        .expect("pending input image message not included in request");
+    let image_message =
+        find_image_message(&body).expect("pending input image message not included in request");
     let image_url = image_message
         .get("content")
         .and_then(Value::as_array)
@@ -210,7 +183,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    responses::mount_sse_once_match(&server, any(), second_response).await;
+    let mock = responses::mount_sse_once_match(&server, any(), second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -231,26 +204,14 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(
-        requests.len() >= 2,
-        "expected at least two POST requests, got {}",
-        requests.len()
-    );
-    let request_bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let body_with_tool_output = find_request_with_function_call_output(&request_bodies)
-        .expect("function_call_output item not found in requests");
-    let output_item = function_call_output(body_with_tool_output).expect("tool output item");
-    let output_text = extract_output_text(output_item).expect("output text present");
+    let body_with_tool_output = mock.single_request().body_json();
+    let output_item = mock.single_request().function_call_output(call_id);
+    let output_text = extract_output_text(&output_item).expect("output text present");
     let expected_message = format!("image path `{}` is not a file", abs_path.display());
     assert_eq!(output_text, expected_message);
 
     assert!(
-        find_image_message(body_with_tool_output).is_none(),
+        find_image_message(&body_with_tool_output).is_none(),
         "directory path should not produce an input_image message"
     );
 
@@ -287,7 +248,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    responses::mount_sse_once_match(&server, any(), second_response).await;
+    let mock = responses::mount_sse_once_match(&server, any(), second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -308,21 +269,9 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(
-        requests.len() >= 2,
-        "expected at least two POST requests, got {}",
-        requests.len()
-    );
-    let request_bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let body_with_tool_output = find_request_with_function_call_output(&request_bodies)
-        .expect("function_call_output item not found in requests");
-    let output_item = function_call_output(body_with_tool_output).expect("tool output item");
-    let output_text = extract_output_text(output_item).expect("output text present");
+    let body_with_tool_output = mock.single_request().body_json();
+    let output_item = mock.single_request().function_call_output(call_id);
+    let output_text = extract_output_text(&output_item).expect("output text present");
     let expected_prefix = format!("unable to locate image at `{}`:", abs_path.display());
     assert!(
         output_text.starts_with(&expected_prefix),
@@ -330,7 +279,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     );
 
     assert!(
-        find_image_message(body_with_tool_output).is_none(),
+        find_image_message(&body_with_tool_output).is_none(),
         "missing file should not produce an input_image message"
     );
 
