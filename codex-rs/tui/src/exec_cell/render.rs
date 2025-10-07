@@ -116,12 +116,10 @@ pub(crate) fn output_lines(
 }
 
 pub(crate) fn spinner(start_time: Option<Instant>) -> Span<'static> {
-    const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let idx = start_time
-        .map(|st| ((st.elapsed().as_millis() / 100) as usize) % FRAMES.len())
-        .unwrap_or(0);
-    let ch = FRAMES[idx];
-    ch.to_string().into()
+    let blink_on = start_time
+        .map(|st| ((st.elapsed().as_millis() / 600) % 2) == 0)
+        .unwrap_or(false);
+    if blink_on { "•".into() } else { "◦".dim() }
 }
 
 impl HistoryCell for ExecCell {

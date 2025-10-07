@@ -72,12 +72,12 @@ pub struct Cli {
     pub include_plan_tool: bool,
 
     /// Specifies file where the last message from the agent should be written.
-    #[arg(long = "output-last-message")]
+    #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
     pub last_message_file: Option<PathBuf>,
 
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
 }
 
@@ -99,7 +99,7 @@ pub struct ResumeArgs {
     pub last: bool,
 
     /// Prompt to send after resuming the session. If `-` is used, read from stdin.
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
 }
 

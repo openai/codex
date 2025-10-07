@@ -24,6 +24,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -260,25 +261,28 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         .unwrap();
 
     // Drain events until TaskComplete; ensure none are AgentMessage.
-    use tokio::time::Duration;
-    use tokio::time::timeout;
     let mut saw_entered = false;
     let mut saw_exited = false;
-    loop {
-        let ev = timeout(Duration::from_secs(5), codex.next_event())
-            .await
-            .expect("timeout waiting for event")
-            .expect("stream ended unexpectedly");
-        match ev.msg {
-            EventMsg::TaskComplete(_) => break,
+    wait_for_event_with_timeout(
+        &codex,
+        |event| match event {
+            EventMsg::TaskComplete(_) => true,
             EventMsg::AgentMessage(_) => {
                 panic!("unexpected AgentMessage during review with structured output")
             }
-            EventMsg::EnteredReviewMode(_) => saw_entered = true,
-            EventMsg::ExitedReviewMode(_) => saw_exited = true,
-            _ => {}
-        }
-    }
+            EventMsg::EnteredReviewMode(_) => {
+                saw_entered = true;
+                false
+            }
+            EventMsg::ExitedReviewMode(_) => {
+                saw_exited = true;
+                false
+            }
+            _ => false,
+        },
+        tokio::time::Duration::from_secs(5),
+    )
+    .await;
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
     server.verify().await;

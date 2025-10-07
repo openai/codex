@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[command(version)]
 pub struct Cli {
     /// Optional user prompt to start the session.
-    #[arg(value_name = "PROMPT")]
+    #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
 
     /// Optional image(s) to attach to the initial prompt.
