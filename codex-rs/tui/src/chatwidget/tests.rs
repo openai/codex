@@ -2344,3 +2344,73 @@ printf 'fenced within fenced\n'
 
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
+
+#[test]
+fn queued_messages_remain_visible_during_streaming() {
+    // Test for GitHub issue #4446: Messages sent while final output text is streamed
+    // should be properly queued and visible, not injected into the streamed text.
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    // Start a task to enable queuing
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    // Start streaming some content
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "This is streaming content".into(),
+        }),
+    });
+
+    // Simulate a user sending a message during streaming
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // The message should be queued, not submitted immediately
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.queued_user_messages.front().unwrap().text, "hello");
+
+    // No operation should have been sent to the backend yet
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    // Continue streaming and commit some content
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "\n".into(),
+        }),
+    });
+
+    // Drive commit ticks to process the streaming content
+    chat.on_commit_tick();
+
+    // The queued message should still be visible and not have been submitted
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(chat.queued_user_messages.front().unwrap().text, "hello");
+
+    // Still no operation should have been sent
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    // Complete the task
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: Some("Task completed".into()),
+        }),
+    });
+
+    // Now the queued message should be submitted
+    assert!(chat.queued_user_messages.is_empty());
+
+    // Drain rx to avoid unused warnings
+    let _ = drain_insert_history(&mut rx);
+}

@@ -632,7 +632,11 @@ impl ChatWidget {
         if let Some(controller) = self.stream_controller.as_mut() {
             let (cell, is_idle) = controller.on_commit_tick();
             if let Some(cell) = cell {
-                self.bottom_pane.hide_status_indicator();
+                // Don't hide the status indicator during streaming if there are queued messages
+                // This ensures queued messages remain visible to the user
+                if self.queued_user_messages.is_empty() {
+                    self.bottom_pane.hide_status_indicator();
+                }
                 self.add_boxed_history(cell);
             }
             if is_idle {
@@ -665,7 +669,11 @@ impl ChatWidget {
 
     fn handle_stream_finished(&mut self) {
         if self.task_complete_pending {
-            self.bottom_pane.hide_status_indicator();
+            // Only hide the status indicator if there are no queued messages
+            // This ensures queued messages remain visible until the task completes
+            if self.queued_user_messages.is_empty() {
+                self.bottom_pane.hide_status_indicator();
+            }
             self.task_complete_pending = false;
         }
         // A completed stream indicates non-exec content was just inserted.
