@@ -315,15 +315,16 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 changes,
             } => {
                 let mut header: Vec<Box<dyn Renderable>> = Vec::new();
-                header.push(DiffSummary::new(changes, cwd).into());
                 if let Some(reason) = reason
                     && !reason.is_empty()
                 {
-                    header.push(Box::new(Line::from("")));
                     header.push(Box::new(
-                        Paragraph::new(reason.italic()).wrap(Wrap { trim: false }),
+                        Paragraph::new(Line::from_iter(["Reason: ".into(), reason.italic()]))
+                            .wrap(Wrap { trim: false }),
                     ));
+                    header.push(Box::new(Line::from("")));
                 }
+                header.push(DiffSummary::new(changes, cwd).into());
                 Self {
                     variant: ApprovalVariant::ApplyPatch { id },
                     header: Box::new(ColumnRenderable::new(header)),

@@ -4,6 +4,9 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
+use crate::render::Insets;
+use crate::render::RectExt as _;
+
 pub trait Renderable {
     fn render(&self, area: Rect, buf: &mut Buffer);
     fn desired_height(&self, width: u16) -> u16;
@@ -98,5 +101,28 @@ impl ColumnRenderable {
         Self {
             children: children.into_iter().collect(),
         }
+    }
+}
+
+pub struct InsetRenderable {
+    child: Box<dyn Renderable>,
+    insets: Insets,
+}
+
+impl Renderable for InsetRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.child.render(area.inset(self.insets), buf);
+    }
+    fn desired_height(&self, width: u16) -> u16 {
+        self.child
+            .desired_height(width - self.insets.left - self.insets.right)
+            + self.insets.top
+            + self.insets.bottom
+    }
+}
+
+impl InsetRenderable {
+    pub fn new(child: Box<dyn Renderable>, insets: Insets) -> Self {
+        Self { child, insets }
     }
 }

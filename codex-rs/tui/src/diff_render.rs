@@ -13,12 +13,13 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::exec_command::relativize_to_home;
+use crate::render::Insets;
+use crate::render::line_utils::prefix_lines;
 use crate::render::renderable::ColumnRenderable;
+use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::FileChange;
-
-const SPACES_AFTER_LINE_NUMBER: usize = 6;
 
 // Internal representation for diff line rendering
 enum DiffLineType {
@@ -65,7 +66,10 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             path.extend(render_line_count_summary(row.added, row.removed));
             rows.push(Box::new(path));
             rows.push(Box::new(RtLine::from("")));
-            rows.push(Box::new(row.change));
+            rows.push(Box::new(InsetRenderable::new(
+                Box::new(row.change),
+                Insets::tlbr(0, 2, 0, 0),
+            )));
         }
 
         Box::new(ColumnRenderable::new(rows))
@@ -181,7 +185,9 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
             out.push(RtLine::from(header));
         }
 
-        render_change(&r.change, &mut out, wrap_cols);
+        let mut lines = vec![];
+        render_change(&r.change, &mut lines, wrap_cols - 4);
+        out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
     }
 
     out
@@ -190,31 +196,60 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
 fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usize) {
     match change {
         FileChange::Add { content } => {
+            let line_number_width = line_number_width(content.lines().count());
             for (i, raw) in content.lines().enumerate() {
                 out.extend(push_wrapped_diff_line(
                     i + 1,
                     DiffLineType::Insert,
                     raw,
                     width,
+                    line_number_width,
                 ));
             }
         }
         FileChange::Delete { content } => {
+            let line_number_width = line_number_width(content.lines().count());
             for (i, raw) in content.lines().enumerate() {
                 out.extend(push_wrapped_diff_line(
                     i + 1,
                     DiffLineType::Delete,
                     raw,
                     width,
+                    line_number_width,
                 ));
             }
         }
         FileChange::Update { unified_diff, .. } => {
             if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
+                let mut max_line_number = 0;
+                for h in patch.hunks() {
+                    let mut old_ln = h.old_range().start();
+                    let mut new_ln = h.new_range().start();
+                    for l in h.lines() {
+                        match l {
+                            diffy::Line::Insert(_) => {
+                                max_line_number = max_line_number.max(new_ln);
+                                new_ln += 1;
+                            }
+                            diffy::Line::Delete(_) => {
+                                max_line_number = max_line_number.max(old_ln);
+                                old_ln += 1;
+                            }
+                            diffy::Line::Context(_) => {
+                                max_line_number = max_line_number.max(new_ln);
+                                old_ln += 1;
+                                new_ln += 1;
+                            }
+                        }
+                    }
+                }
+                let line_number_width = line_number_width(max_line_number);
                 let mut is_first_hunk = true;
                 for h in patch.hunks() {
                     if !is_first_hunk {
-                        out.push(RtLine::from(vec!["    ".into(), "⋮".dim()]));
+                        let spacer = format!("{:width$} ", "", width = line_number_width.max(1));
+                        let spacer_span = RtSpan::styled(spacer, style_gutter());
+                        out.push(RtLine::from(vec![spacer_span, "⋮".dim()]));
                     }
                     is_first_hunk = false;
 
@@ -229,6 +264,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                                     DiffLineType::Insert,
                                     s,
                                     width,
+                                    line_number_width,
                                 ));
                                 new_ln += 1;
                             }
@@ -239,6 +275,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                                     DiffLineType::Delete,
                                     s,
                                     width,
+                                    line_number_width,
                                 ));
                                 old_ln += 1;
                             }
@@ -249,6 +286,7 @@ fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usi
                                     DiffLineType::Context,
                                     s,
                                     width,
+                                    line_number_width,
                                 ));
                                 old_ln += 1;
                                 new_ln += 1;
@@ -298,17 +336,15 @@ fn push_wrapped_diff_line(
     kind: DiffLineType,
     text: &str,
     width: usize,
+    line_number_width: usize,
 ) -> Vec<RtLine<'static>> {
-    let indent = "    ";
     let ln_str = line_number.to_string();
     let mut remaining_text: &str = text;
 
-    // Reserve a fixed number of spaces after the line number so that content starts
-    // at a consistent column. Content includes a 1-character diff sign prefix
-    // ("+"/"-" for inserts/deletes, or a space for context lines) so alignment
-    // stays consistent across all diff lines.
-    let gap_after_ln = SPACES_AFTER_LINE_NUMBER.saturating_sub(ln_str.len());
-    let prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
+    // Reserve a fixed number of spaces (equal to the widest line number plus a
+    // trailing spacer) so the sign column stays aligned across the diff block.
+    let gutter_width = line_number_width.max(1);
+    let prefix_cols = gutter_width + 1;
 
     let mut first = true;
     let (sign_char, line_style) = match kind {
@@ -332,8 +368,8 @@ fn push_wrapped_diff_line(
         remaining_text = rest;
 
         if first {
-            // Build gutter (indent + line number + spacing) as a dimmed span
-            let gutter = format!("{indent}{ln_str}{}", " ".repeat(gap_after_ln));
+            // Build gutter (right-aligned line number plus spacer) as a dimmed span
+            let gutter = format!("{ln_str:>gutter_width$} ");
             // Content with a sign ('+'/'-'/' ') styled per diff kind
             let content = format!("{sign_char}{chunk}");
             lines.push(RtLine::from(vec![
@@ -343,7 +379,7 @@ fn push_wrapped_diff_line(
             first = false;
         } else {
             // Continuation lines keep a space for the sign column so content aligns
-            let gutter = format!("{indent}{} ", " ".repeat(ln_str.len() + gap_after_ln));
+            let gutter = format!("{:gutter_width$}  ", "");
             lines.push(RtLine::from(vec![
                 RtSpan::styled(gutter, style_gutter()),
                 RtSpan::styled(chunk.to_string(), line_style),
@@ -354,6 +390,14 @@ fn push_wrapped_diff_line(
         }
     }
     lines
+}
+
+fn line_number_width(max_line_number: usize) -> usize {
+    if max_line_number == 0 {
+        1
+    } else {
+        max_line_number.to_string().len()
+    }
 }
 
 fn style_gutter() -> Style {
@@ -421,7 +465,8 @@ mod tests {
         let long_line = "this is a very long line that should wrap across multiple terminal columns and continue";
 
         // Call the wrapping function directly so we can precisely control the width
-        let lines = push_wrapped_diff_line(1, DiffLineType::Insert, long_line, 80);
+        let lines =
+            push_wrapped_diff_line(1, DiffLineType::Insert, long_line, 80, line_number_width(1));
 
         // Render into a small terminal to capture the visual layout
         snapshot_lines("wrap_behavior_insert", lines, 90, 8);
@@ -442,11 +487,9 @@ mod tests {
             },
         );
 
-        for name in ["apply_update_block", "apply_update_block_manual"] {
-            let lines = diff_summary_for_tests(&changes);
+        let lines = diff_summary_for_tests(&changes);
 
-            snapshot_lines(name, lines, 80, 12);
-        }
+        snapshot_lines("apply_update_block", lines, 80, 12);
     }
 
     #[test]
@@ -573,12 +616,35 @@ mod tests {
             },
         );
 
-        let mut lines = create_diff_summary(&changes, &PathBuf::from("/"), 28);
-        // Drop the combined header for this text-only snapshot
-        if !lines.is_empty() {
-            lines.remove(0);
-        }
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 28);
         snapshot_lines_text("apply_update_block_wraps_long_lines_text", &lines);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_update_block_line_numbers_three_digits_text() {
+        let original = (1..=110).map(|i| format!("line {i}\n")).collect::<String>();
+        let modified = (1..=110)
+            .map(|i| {
+                if i == 100 {
+                    format!("line {i} changed\n")
+                } else {
+                    format!("line {i}\n")
+                }
+            })
+            .collect::<String>();
+        let patch = diffy::create_patch(&original, &modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("hundreds.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80);
+        snapshot_lines_text("apply_update_block_line_numbers_three_digits_text", &lines);
     }
 
     #[test]
