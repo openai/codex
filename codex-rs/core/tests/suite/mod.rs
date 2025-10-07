@@ -10,6 +10,7 @@ mod exec;
 mod exec_stream_events;
 mod fork_conversation;
 mod json_result;
+mod list_dir;
 mod live_cli;
 mod model_overrides;
 mod model_tools;

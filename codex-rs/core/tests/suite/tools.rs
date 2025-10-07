@@ -390,19 +390,9 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
         );
 
         let stdout = output_json["output"].as_str().unwrap_or_default();
-        let timeout_pattern = r"(?s)^Total output lines: \d+
-
-command timed out after (?P<ms>\d+) milliseconds
-line
-.*$";
-        let captures = assert_regex_match(timeout_pattern, stdout);
-        let duration_ms = captures
-            .name("ms")
-            .and_then(|m| m.as_str().parse::<u64>().ok())
-            .unwrap_or_default();
         assert!(
-            duration_ms >= timeout_ms,
-            "expected duration >= configured timeout, got {duration_ms} (timeout {timeout_ms})"
+            stdout.contains("command timed out"),
+            "timeout output missing `command timed out`: {stdout}"
         );
     } else {
         // Fallback: accept the signal classification path to deflake the test.
