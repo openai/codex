@@ -97,7 +97,7 @@ jobs:
           sudo apt install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy --bin codex-exec
 
       - name: Stage artifacts
         shell: bash
