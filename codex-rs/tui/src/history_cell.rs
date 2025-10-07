@@ -6,7 +6,6 @@ use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
-use crate::markdown::MarkdownCitationContext;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
@@ -126,19 +125,13 @@ impl HistoryCell for UserHistoryCell {
 pub(crate) struct ReasoningSummaryCell {
     _header: String,
     content: String,
-    citation_context: MarkdownCitationContext,
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(
-        header: String,
-        content: String,
-        citation_context: MarkdownCitationContext,
-    ) -> Self {
+    pub(crate) fn new(header: String, content: String) -> Self {
         Self {
             _header: header,
             content,
-            citation_context,
         }
     }
 }
@@ -150,7 +143,6 @@ impl HistoryCell for ReasoningSummaryCell {
             &self.content,
             Some((width as usize).saturating_sub(2)),
             &mut lines,
-            self.citation_context.clone(),
         );
         let summary_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
         let summary_lines = lines
@@ -177,12 +169,7 @@ impl HistoryCell for ReasoningSummaryCell {
         let mut out: Vec<Line<'static>> = Vec::new();
         out.push("thinking".magenta().bold().into());
         let mut lines = Vec::new();
-        append_markdown(
-            &self.content,
-            None,
-            &mut lines,
-            self.citation_context.clone(),
-        );
+        append_markdown(&self.content, None, &mut lines);
         out.extend(lines);
         out
     }
@@ -1050,13 +1037,10 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_reasoning_block(
-    full_reasoning_buffer: String,
-    config: &Config,
-) -> TranscriptOnlyHistoryCell {
+pub(crate) fn new_reasoning_block(full_reasoning_buffer: String) -> TranscriptOnlyHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from("thinking".magenta().italic()));
-    append_markdown(&full_reasoning_buffer, None, &mut lines, config);
+    append_markdown(&full_reasoning_buffer, None, &mut lines);
     TranscriptOnlyHistoryCell { lines }
 }
 
@@ -1081,16 +1065,12 @@ pub(crate) fn new_reasoning_summary_block(
                 if after_close_idx < full_reasoning_buffer.len() {
                     let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
                     let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-                    return Box::new(ReasoningSummaryCell::new(
-                        header_buffer,
-                        summary_buffer,
-                        config.into(),
-                    ));
+                    return Box::new(ReasoningSummaryCell::new(header_buffer, summary_buffer));
                 }
             }
         }
     }
-    Box::new(new_reasoning_block(full_reasoning_buffer, config))
+    Box::new(new_reasoning_block(full_reasoning_buffer))
 }
 
 #[derive(Debug)]

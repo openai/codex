@@ -1404,7 +1404,6 @@ dependencies = [
  "libc",
  "mcp-types",
  "opentelemetry-appender-tracing",
- "path-clean",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
@@ -4113,12 +4112,6 @@ checksum = "e4af381fe79fa195b4909485d99f73a80792331df0625188e707854f0b3383f5"
 dependencies = [
  "path-dedot",
 ]
-
-[[package]]
-name = "path-clean"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
 
 [[package]]
 name = "path-dedot"

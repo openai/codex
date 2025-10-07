@@ -36,7 +36,6 @@ mod app_event_sender;
 mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
-mod citation_regex;
 mod cli;
 mod clipboard_paste;
 mod color;

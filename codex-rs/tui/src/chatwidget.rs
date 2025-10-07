@@ -687,7 +687,6 @@ impl ChatWidget {
                 self.needs_final_message_separator = false;
             }
             self.stream_controller = Some(StreamController::new(
-                self.config.clone(),
                 self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
             ));
         }
@@ -1475,7 +1474,7 @@ impl ChatWidget {
                 } else {
                     // Show explanation when there are no structured findings.
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
-                    append_markdown(&explanation, None, &mut rendered, &self.config);
+                    append_markdown(&explanation, None, &mut rendered);
                     let body_cell = AgentMessageCell::new(rendered, false);
                     self.app_event_tx
                         .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
@@ -1484,7 +1483,7 @@ impl ChatWidget {
                 let message_text =
                     codex_core::review_format::format_review_findings_block(&output.findings, None);
                 let mut message_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-                append_markdown(&message_text, None, &mut message_lines, &self.config);
+                append_markdown(&message_text, None, &mut message_lines);
                 let body_cell = AgentMessageCell::new(message_lines, true);
                 self.app_event_tx
                     .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
