@@ -5,6 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 use std::cell::Ref;
@@ -19,6 +20,18 @@ struct TextElement {
     range: Range<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VisualSelectionMode {
+    Character,
+    Line,
+}
+
+#[derive(Debug, Clone)]
+struct Selection {
+    anchor: usize,
+    mode: VisualSelectionMode,
+}
+
 #[derive(Debug)]
 pub(crate) struct TextArea {
     text: String,
@@ -26,6 +39,7 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
+    selection: Option<Selection>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +62,7 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
+            selection: None,
         }
     }
 
@@ -57,6 +72,7 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.elements.clear();
+        self.selection = None;
     }
 
     pub fn text(&self) -> &str {
@@ -65,6 +81,74 @@ impl TextArea {
 
     pub fn insert_str(&mut self, text: &str) {
         self.insert_str_at(self.cursor_pos, text);
+    }
+
+    pub(crate) fn has_selection(&self) -> bool {
+        self.selection.is_some()
+    }
+
+    pub(crate) fn start_selection(&mut self, mode: VisualSelectionMode) {
+        let anchor = self.cursor_pos;
+        self.selection = Some(Selection { anchor, mode });
+    }
+
+    pub(crate) fn update_selection_mode(&mut self, mode: VisualSelectionMode) {
+        if let Some(selection) = self.selection.as_mut() {
+            selection.mode = mode;
+        } else {
+            self.start_selection(mode);
+        }
+    }
+
+    pub(crate) fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    pub(crate) fn selection_range(&self) -> Option<Range<usize>> {
+        let selection = self.selection.as_ref()?;
+        match selection.mode {
+            VisualSelectionMode::Character => {
+                self.selection_range_character(selection.anchor, self.cursor_pos)
+            }
+            VisualSelectionMode::Line => {
+                Some(self.selection_range_line(selection.anchor, self.cursor_pos))
+            }
+        }
+    }
+
+    pub(crate) fn delete_selection(&mut self) -> Option<String> {
+        let range = self.selection_range()?;
+        let removed = self.text[range.clone()].to_string();
+        self.replace_range_raw(range, "");
+        self.selection = None;
+        Some(removed)
+    }
+
+    fn selection_range_character(&self, anchor: usize, cursor: usize) -> Option<Range<usize>> {
+        if self.text.is_empty() {
+            return None;
+        }
+        let mut start = anchor.min(cursor).min(self.text.len());
+        let mut end = anchor.max(cursor).min(self.text.len());
+        if start == end {
+            end = self.next_atomic_boundary(end);
+            if start == end {
+                start = self.prev_atomic_boundary(start);
+            }
+        } else {
+            end = self.next_atomic_boundary(end);
+        }
+        start = start.min(self.text.len());
+        end = end.min(self.text.len());
+        if start >= end { None } else { Some(start..end) }
+    }
+
+    fn selection_range_line(&self, anchor: usize, cursor: usize) -> Range<usize> {
+        let anchor_range = self.line_range_inclusive(anchor);
+        let cursor_range = self.line_range_inclusive(cursor);
+        let start = anchor_range.start.min(cursor_range.start);
+        let end = anchor_range.end.max(cursor_range.end);
+        start..end
     }
 
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
@@ -114,6 +198,7 @@ impl TextArea {
 
         // Ensure cursor is not inside an element
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
+        self.selection = None;
     }
 
     pub fn cursor(&self) -> usize {
@@ -200,6 +285,27 @@ impl TextArea {
     }
     fn end_of_current_line(&self) -> usize {
         self.end_of_line(self.cursor_pos)
+    }
+
+    pub(crate) fn current_line_start(&self) -> usize {
+        self.beginning_of_current_line()
+    }
+
+    pub(crate) fn current_line_end(&self) -> usize {
+        self.end_of_current_line()
+    }
+
+    fn line_range_inclusive(&self, pos: usize) -> Range<usize> {
+        if self.text.is_empty() {
+            return 0..0;
+        }
+        let clamped = pos.min(self.text.len());
+        let start = self.beginning_of_line(clamped);
+        let mut end = self.end_of_line(clamped);
+        if end < self.text.len() {
+            end += 1;
+        }
+        start..end
     }
 
     pub fn input(&mut self, event: KeyEvent) {
@@ -922,6 +1028,7 @@ impl TextArea {
         lines: &[Range<usize>],
         range: std::ops::Range<usize>,
     ) {
+        let selection = self.selection_range();
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
@@ -941,6 +1048,21 @@ impl TextArea {
                 let x_off = self.text[line_range.start..overlap_start].width() as u16;
                 let style = Style::default().fg(Color::Cyan);
                 buf.set_string(area.x + x_off, y, styled, style);
+            }
+
+            if let Some(selection_range) = &selection {
+                let overlap_start = selection_range.start.max(line_range.start);
+                let overlap_end = selection_range.end.min(line_range.end);
+                if overlap_start < overlap_end {
+                    let x_off = self.text[line_range.start..overlap_start].width() as u16;
+                    let selection_str = &self.text[overlap_start..overlap_end];
+                    buf.set_string(
+                        area.x + x_off,
+                        y,
+                        selection_str,
+                        Style::default().reversed(),
+                    );
+                }
             }
         }
     }

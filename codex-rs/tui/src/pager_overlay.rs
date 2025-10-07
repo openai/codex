@@ -8,8 +8,10 @@ use crate::key_hint::KeyBinding;
 use crate::render::renderable::Renderable;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_core::config_types::KeybindingMode;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
@@ -29,8 +31,11 @@ pub(crate) enum Overlay {
 }
 
 impl Overlay {
-    pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>) -> Self {
-        Self::Transcript(TranscriptOverlay::new(cells))
+    pub(crate) fn new_transcript(
+        cells: Vec<Arc<dyn HistoryCell>>,
+        keybinding_mode: KeybindingMode,
+    ) -> Self {
+        Self::Transcript(TranscriptOverlay::new(cells, keybinding_mode))
     }
 
     pub(crate) fn new_static_with_lines(lines: Vec<Line<'static>>, title: String) -> Self {
@@ -71,12 +76,30 @@ const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
+const KEY_J: KeyBinding = key_hint::plain(KeyCode::Char('j'));
+const KEY_K: KeyBinding = key_hint::plain(KeyCode::Char('k'));
+const KEY_G: KeyBinding = key_hint::plain(KeyCode::Char('g'));
+const KEY_SHIFT_G: KeyBinding = key_hint::shift(KeyCode::Char('g'));
+const KEY_CTRL_F: KeyBinding = key_hint::ctrl(KeyCode::Char('f'));
+const KEY_CTRL_B: KeyBinding = key_hint::ctrl(KeyCode::Char('b'));
+const KEY_CTRL_D: KeyBinding = key_hint::ctrl(KeyCode::Char('d'));
+const KEY_CTRL_U: KeyBinding = key_hint::ctrl(KeyCode::Char('u'));
+const KEY_CTRL_E: KeyBinding = key_hint::ctrl(KeyCode::Char('e'));
+const KEY_CTRL_Y: KeyBinding = key_hint::ctrl(KeyCode::Char('y'));
 
 // Common pager navigation hints rendered on the first line
-const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
+const PAGER_KEY_HINTS_EMACS: &[(&[KeyBinding], &str)] = &[
     (&[KEY_UP, KEY_DOWN], "to scroll"),
     (&[KEY_PAGE_UP, KEY_PAGE_DOWN], "to page"),
     (&[KEY_HOME, KEY_END], "to jump"),
+];
+
+const PAGER_KEY_HINTS_VIM: &[(&[KeyBinding], &str)] = &[
+    (&[KEY_J, KEY_K], "to scroll"),
+    (&[KEY_CTRL_F, KEY_CTRL_B], "to page"),
+    (&[KEY_CTRL_D, KEY_CTRL_U], "half page"),
+    (&[KEY_G, KEY_G], "to top"),
+    (&[KEY_SHIFT_G], "to bottom"),
 ];
 
 // Render a single line of key hints from (key(s), description) pairs.
@@ -109,10 +132,22 @@ struct PagerView {
     last_rendered_height: Option<usize>,
     /// If set, on next render ensure this chunk is visible.
     pending_scroll_chunk: Option<usize>,
+    keybinding_mode: KeybindingMode,
+    vim_prefix: Option<VimPrefix>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimPrefix {
+    G,
 }
 
 impl PagerView {
-    fn new(renderables: Vec<Box<dyn Renderable>>, title: String, scroll_offset: usize) -> Self {
+    fn new(
+        renderables: Vec<Box<dyn Renderable>>,
+        title: String,
+        scroll_offset: usize,
+        keybinding_mode: KeybindingMode,
+    ) -> Self {
         Self {
             renderables,
             scroll_offset,
@@ -120,7 +155,41 @@ impl PagerView {
             last_content_height: None,
             last_rendered_height: None,
             pending_scroll_chunk: None,
+            keybinding_mode,
+            vim_prefix: None,
         }
+    }
+
+    fn keybinding_mode(&self) -> KeybindingMode {
+        self.keybinding_mode
+    }
+
+    fn scroll_lines(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        if delta > 0 {
+            let magnitude = delta as usize;
+            self.scroll_offset = self.scroll_offset.saturating_add(magnitude);
+        } else {
+            let magnitude = (-delta) as usize;
+            self.scroll_offset = self.scroll_offset.saturating_sub(magnitude);
+        }
+    }
+
+    fn request_redraw(tui: &mut tui::Tui) {
+        tui.frame_requester()
+            .schedule_frame_in(Duration::from_millis(16));
+    }
+
+    fn page_step(area: Rect) -> usize {
+        usize::from(area.height.max(1))
+    }
+
+    fn half_page_step(area: Rect) -> usize {
+        let height = area.height.max(1);
+        let half = std::cmp::max(1, height / 2);
+        usize::from(half)
     }
 
     fn content_height(&self, width: u16) -> usize {
@@ -227,7 +296,104 @@ impl PagerView {
             .render_ref(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
     }
 
+    fn handle_vim_key(&mut self, tui: &mut tui::Tui, key_event: &KeyEvent) -> bool {
+        let ctrl = key_event.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key_event.modifiers.contains(KeyModifiers::ALT);
+
+        if ctrl {
+            let mut handled = false;
+            if let KeyCode::Char(ch) = key_event.code {
+                let lower = ch.to_ascii_lowercase();
+                let area = self.content_area(tui.terminal.viewport_area);
+                handled = match lower {
+                    'f' => {
+                        self.scroll_lines(Self::page_step(area) as isize);
+                        true
+                    }
+                    'b' => {
+                        self.scroll_lines(-(Self::page_step(area) as isize));
+                        true
+                    }
+                    'd' => {
+                        self.scroll_lines(Self::half_page_step(area) as isize);
+                        true
+                    }
+                    'u' => {
+                        self.scroll_lines(-(Self::half_page_step(area) as isize));
+                        true
+                    }
+                    'e' => {
+                        self.scroll_lines(1);
+                        true
+                    }
+                    'y' => {
+                        self.scroll_lines(-1);
+                        true
+                    }
+                    _ => false,
+                };
+            }
+            self.vim_prefix = None;
+            if handled {
+                Self::request_redraw(tui);
+            }
+            return handled;
+        }
+
+        if alt {
+            self.vim_prefix = None;
+            return false;
+        }
+
+        if self.vim_prefix.take().is_some() {
+            if let KeyCode::Char(ch) = key_event.code {
+                if ch.to_ascii_lowercase() == 'g' {
+                    self.scroll_offset = 0;
+                    Self::request_redraw(tui);
+                    return true;
+                }
+            }
+        }
+
+        let mut handled = false;
+        match key_event.code {
+            KeyCode::Char(ch) => {
+                let lower = ch.to_ascii_lowercase();
+                let shift = key_event.modifiers.contains(KeyModifiers::SHIFT);
+                handled = match lower {
+                    'j' => {
+                        self.scroll_lines(1);
+                        true
+                    }
+                    'k' => {
+                        self.scroll_lines(-1);
+                        true
+                    }
+                    'g' if shift => {
+                        self.scroll_offset = usize::MAX;
+                        true
+                    }
+                    'g' => {
+                        self.vim_prefix = Some(VimPrefix::G);
+                        true
+                    }
+                    _ => false,
+                };
+            }
+            _ => {}
+        }
+
+        if handled && !matches!(self.vim_prefix, Some(VimPrefix::G)) {
+            Self::request_redraw(tui);
+        }
+
+        handled
+    }
+
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
+        if self.keybinding_mode == KeybindingMode::Vim && self.handle_vim_key(tui, &key_event) {
+            return Ok(());
+        }
         match key_event {
             e if KEY_UP.is_press(e) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
@@ -253,8 +419,7 @@ impl PagerView {
                 return Ok(());
             }
         }
-        tui.frame_requester()
-            .schedule_frame_in(Duration::from_millis(16));
+        Self::request_redraw(tui);
         Ok(())
     }
 
@@ -355,12 +520,16 @@ pub(crate) struct TranscriptOverlay {
 }
 
 impl TranscriptOverlay {
-    pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
+    pub(crate) fn new(
+        transcript_cells: Vec<Arc<dyn HistoryCell>>,
+        keybinding_mode: KeybindingMode,
+    ) -> Self {
         Self {
             view: PagerView::new(
                 Self::render_cells_to_texts(&transcript_cells, None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
+                keybinding_mode,
             ),
             cells: transcript_cells,
             highlight_cell: None,
@@ -424,12 +593,20 @@ impl TranscriptOverlay {
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
-        render_key_hints(line1, buf, PAGER_KEY_HINTS);
+        let top_hints = if self.view.keybinding_mode() == KeybindingMode::Vim {
+            PAGER_KEY_HINTS_VIM
+        } else {
+            PAGER_KEY_HINTS_EMACS
+        };
+        render_key_hints(line1, buf, top_hints);
 
         let mut pairs: Vec<(&[KeyBinding], &str)> =
             vec![(&[KEY_Q], "to quit"), (&[KEY_ESC], "to edit prev")];
         if self.highlight_cell.is_some() {
             pairs.push((&[KEY_ENTER], "to edit message"));
+        }
+        if self.view.keybinding_mode() == KeybindingMode::Vim {
+            pairs.push((&[KEY_CTRL_E, KEY_CTRL_Y], "line scroll"));
         }
         render_key_hints(line2, buf, &pairs);
     }
@@ -484,7 +661,7 @@ impl StaticOverlay {
 
     pub(crate) fn with_renderables(renderables: Vec<Box<dyn Renderable>>, title: String) -> Self {
         Self {
-            view: PagerView::new(renderables, title, 0),
+            view: PagerView::new(renderables, title, 0, KeybindingMode::Emacs),
             is_done: false,
         }
     }
@@ -492,7 +669,7 @@ impl StaticOverlay {
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
-        render_key_hints(line1, buf, PAGER_KEY_HINTS);
+        render_key_hints(line1, buf, PAGER_KEY_HINTS_EMACS);
         let pairs: Vec<(&[KeyBinding], &str)> = vec![(&[KEY_Q], "to quit")];
         render_key_hints(line2, buf, &pairs);
     }
@@ -601,9 +778,12 @@ mod tests {
 
     #[test]
     fn edit_prev_hint_is_visible() {
-        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
-            lines: vec![Line::from("hello")],
-        })]);
+        let mut overlay = TranscriptOverlay::new(
+            vec![Arc::new(TestCell {
+                lines: vec![Line::from("hello")],
+            })],
+            KeybindingMode::Emacs,
+        );
 
         // Render into a small buffer and assert the backtrack hint is present
         let area = Rect::new(0, 0, 40, 10);
@@ -627,17 +807,20 @@ mod tests {
     #[test]
     fn transcript_overlay_snapshot_basic() {
         // Prepare a transcript overlay with a few lines
-        let mut overlay = TranscriptOverlay::new(vec![
-            Arc::new(TestCell {
-                lines: vec![Line::from("alpha")],
-            }),
-            Arc::new(TestCell {
-                lines: vec![Line::from("beta")],
-            }),
-            Arc::new(TestCell {
-                lines: vec![Line::from("gamma")],
-            }),
-        ]);
+        let mut overlay = TranscriptOverlay::new(
+            vec![
+                Arc::new(TestCell {
+                    lines: vec![Line::from("alpha")],
+                }),
+                Arc::new(TestCell {
+                    lines: vec![Line::from("beta")],
+                }),
+                Arc::new(TestCell {
+                    lines: vec![Line::from("gamma")],
+                }),
+            ],
+            KeybindingMode::Emacs,
+        );
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
@@ -714,7 +897,7 @@ mod tests {
         let exec_cell: Arc<dyn HistoryCell> = Arc::new(exec_cell);
         cells.push(exec_cell);
 
-        let mut overlay = TranscriptOverlay::new(cells);
+        let mut overlay = TranscriptOverlay::new(cells, KeybindingMode::Emacs);
         let area = Rect::new(0, 0, 80, 12);
         let mut buf = Buffer::empty(area);
 
@@ -736,6 +919,7 @@ mod tests {
                     }) as Arc<dyn HistoryCell>
                 })
                 .collect(),
+            KeybindingMode::Emacs,
         );
         let mut term = Terminal::new(TestBackend::new(40, 12)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
@@ -763,6 +947,7 @@ mod tests {
                     }) as Arc<dyn HistoryCell>
                 })
                 .collect(),
+            KeybindingMode::Emacs,
         );
         let mut term = Terminal::new(TestBackend::new(40, 12)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
@@ -796,6 +981,7 @@ mod tests {
             vec![paragraph_block("a", 2), paragraph_block("b", 3)],
             "T".to_string(),
             0,
+            KeybindingMode::Emacs,
         );
 
         assert_eq!(pv.content_height(80), 5);
@@ -811,6 +997,7 @@ mod tests {
             ],
             "T".to_string(),
             0,
+            KeybindingMode::Emacs,
         );
         let area = Rect::new(0, 0, 20, 8);
 
@@ -846,6 +1033,7 @@ mod tests {
             ],
             "T".to_string(),
             0,
+            KeybindingMode::Emacs,
         );
         let area = Rect::new(0, 0, 20, 3);
 
@@ -857,7 +1045,12 @@ mod tests {
 
     #[test]
     fn pager_view_is_scrolled_to_bottom_accounts_for_wrapped_height() {
-        let mut pv = PagerView::new(vec![paragraph_block("a", 10)], "T".to_string(), 0);
+        let mut pv = PagerView::new(
+            vec![paragraph_block("a", 10)],
+            "T".to_string(),
+            0,
+            KeybindingMode::Emacs,
+        );
         let area = Rect::new(0, 0, 20, 8);
         let mut buf = Buffer::empty(area);
 

@@ -21,6 +21,7 @@ use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
+use super::footer::VimStatus;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
 use super::footer::render_footer;
@@ -35,10 +36,12 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::prompt_args::prompt_argument_names;
 use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
+use crate::bottom_pane::textarea::VisualSelectionMode;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
 use crate::terminal_palette;
+use codex_core::config_types::KeybindingMode;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -110,6 +113,8 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<u8>,
+    keybinding_mode: KeybindingMode,
+    vim: Option<VimState>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -121,6 +126,50 @@ enum ActivePopup {
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimMode {
+    Insert,
+    Normal,
+    Visual,
+    VisualLine,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimPending {
+    G,
+    Delete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimDeleteMotion {
+    ToNextWord,
+    ToLineStart,
+    ToLineEnd,
+}
+
+#[derive(Debug)]
+struct VimState {
+    mode: VimMode,
+    pending: Option<VimPending>,
+    clipboard: Option<String>,
+}
+
+impl VimState {
+    fn new() -> Self {
+        Self {
+            mode: VimMode::Insert,
+            pending: None,
+            clipboard: None,
+        }
+    }
+}
+
+impl Default for VimState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChatComposer {
     pub fn new(
         has_input_focus: bool,
@@ -128,6 +177,24 @@ impl ChatComposer {
         enhanced_keys_supported: bool,
         placeholder_text: String,
         disable_paste_burst: bool,
+    ) -> Self {
+        Self::new_with_keybinding_mode(
+            has_input_focus,
+            app_event_tx,
+            enhanced_keys_supported,
+            placeholder_text,
+            disable_paste_burst,
+            KeybindingMode::Emacs,
+        )
+    }
+
+    pub fn new_with_keybinding_mode(
+        has_input_focus: bool,
+        app_event_tx: AppEventSender,
+        enhanced_keys_supported: bool,
+        placeholder_text: String,
+        disable_paste_burst: bool,
+        keybinding_mode: KeybindingMode,
     ) -> Self {
         let use_shift_enter_hint = enhanced_keys_supported;
 
@@ -153,6 +220,8 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutPrompt,
             footer_hint_override: None,
             context_window_percent: None,
+            keybinding_mode,
+            vim: (keybinding_mode == KeybindingMode::Vim).then(VimState::new),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -269,6 +338,33 @@ impl ChatComposer {
         true
     }
 
+    fn reconcile_placeholders_and_attachments(&mut self) {
+        let text_after = self.textarea.text();
+        self.pending_pastes
+            .retain(|(placeholder, _)| text_after.contains(placeholder));
+
+        if !self.attached_images.is_empty() {
+            let mut needed: HashMap<String, usize> = HashMap::new();
+            for img in &self.attached_images {
+                needed
+                    .entry(img.placeholder.clone())
+                    .or_insert_with(|| text_after.matches(&img.placeholder).count());
+            }
+
+            let mut used: HashMap<String, usize> = HashMap::new();
+            let mut kept: Vec<AttachedImage> = Vec::with_capacity(self.attached_images.len());
+            for img in self.attached_images.drain(..) {
+                let total_needed = *needed.get(&img.placeholder).unwrap_or(&0);
+                let used_count = used.entry(img.placeholder.clone()).or_insert(0);
+                if *used_count < total_needed {
+                    kept.push(img);
+                    *used_count += 1;
+                }
+            }
+            self.attached_images = kept;
+        }
+    }
+
     pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
         let Some(path_buf) = normalize_pasted_path(&pasted) else {
             return false;
@@ -294,6 +390,228 @@ impl ChatComposer {
         if disabled && !was_disabled {
             self.paste_burst.clear_window_after_non_char();
         }
+    }
+
+    fn vim_enabled(&self) -> bool {
+        self.keybinding_mode == KeybindingMode::Vim
+    }
+
+    fn current_vim_mode(&self) -> Option<VimMode> {
+        self.vim.as_ref().map(|v| v.mode)
+    }
+
+    fn vim_state_mut(&mut self) -> Option<&mut VimState> {
+        self.vim.as_mut()
+    }
+
+    fn vim_pending(&self) -> Option<VimPending> {
+        self.vim.as_ref().and_then(|v| v.pending)
+    }
+
+    fn clear_vim_pending(&mut self) {
+        if let Some(vim) = self.vim_state_mut() {
+            vim.pending = None;
+        }
+    }
+
+    fn set_vim_pending(&mut self, pending: VimPending) {
+        if let Some(vim) = self.vim_state_mut() {
+            vim.pending = Some(pending);
+        }
+    }
+
+    fn take_vim_pending(&mut self) -> Option<VimPending> {
+        self.vim_state_mut()?.pending.take()
+    }
+
+    fn set_vim_clipboard(&mut self, text: String) {
+        if let Some(vim) = self.vim_state_mut() {
+            vim.clipboard = Some(text);
+        }
+    }
+
+    fn vim_clipboard(&self) -> Option<&str> {
+        self.vim.as_ref()?.clipboard.as_deref()
+    }
+
+    fn enter_vim_normal_mode(&mut self) {
+        if let Some(vim) = self.vim_state_mut() {
+            vim.mode = VimMode::Normal;
+            vim.pending = None;
+        }
+        self.textarea.clear_selection();
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+    }
+
+    fn enter_vim_insert_mode(&mut self) {
+        if let Some(vim) = self.vim_state_mut() {
+            vim.mode = VimMode::Insert;
+            vim.pending = None;
+        }
+        self.textarea.clear_selection();
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+    }
+
+    fn enter_visual_mode(&mut self) {
+        if let Some(vim) = self.vim_state_mut() {
+            vim.mode = VimMode::Visual;
+            vim.pending = None;
+        }
+        if !self.textarea.has_selection() {
+            self.textarea
+                .start_selection(VisualSelectionMode::Character);
+        } else {
+            self.textarea
+                .update_selection_mode(VisualSelectionMode::Character);
+        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+    }
+
+    fn enter_visual_line_mode(&mut self) {
+        if let Some(vim) = self.vim_state_mut() {
+            vim.mode = VimMode::VisualLine;
+            vim.pending = None;
+        }
+        if !self.textarea.has_selection() {
+            self.textarea.start_selection(VisualSelectionMode::Line);
+        } else {
+            self.textarea
+                .update_selection_mode(VisualSelectionMode::Line);
+        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+    }
+
+    fn after_vim_cursor_motion(&mut self) {
+        self.clear_vim_pending();
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+    }
+
+    fn after_vim_text_edit(&mut self) {
+        self.clear_vim_pending();
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        self.paste_burst.clear_window_after_non_char();
+        self.reconcile_placeholders_and_attachments();
+    }
+
+    fn delete_char_under_cursor(&mut self) -> bool {
+        if self.textarea.cursor() >= self.textarea.text().len() && !self.textarea.has_selection() {
+            self.clear_vim_pending();
+            return false;
+        }
+        let removed = if self.textarea.has_selection() {
+            self.textarea.delete_selection()
+        } else {
+            self.textarea
+                .start_selection(VisualSelectionMode::Character);
+            self.textarea.move_cursor_right();
+            self.textarea.delete_selection()
+        };
+        if let Some(text) = removed {
+            if !text.is_empty() {
+                self.set_vim_clipboard(text);
+            }
+            self.after_vim_text_edit();
+            true
+        } else {
+            self.textarea.clear_selection();
+            false
+        }
+    }
+
+    fn delete_current_line(&mut self) -> bool {
+        let start = self.textarea.current_line_start();
+        let mut end = self.textarea.current_line_end();
+        if end < self.textarea.text().len() {
+            end += 1;
+        }
+        if start >= end {
+            return false;
+        }
+        let removed = self.textarea.text()[start..end].to_string();
+        self.textarea.replace_range(start..end, "");
+        self.textarea
+            .set_cursor(start.min(self.textarea.text().len()));
+        if !removed.is_empty() {
+            self.set_vim_clipboard(removed);
+        }
+        self.after_vim_text_edit();
+        true
+    }
+
+    fn apply_vim_delete_motion(&mut self, motion: VimDeleteMotion) -> bool {
+        let target = match motion {
+            VimDeleteMotion::ToNextWord => self.textarea.end_of_next_word(),
+            VimDeleteMotion::ToLineStart => self.textarea.current_line_start(),
+            VimDeleteMotion::ToLineEnd => self.textarea.current_line_end(),
+        };
+        self.delete_with_selection(target)
+    }
+
+    fn delete_with_selection(&mut self, target: usize) -> bool {
+        let original_cursor = self.textarea.cursor();
+        if original_cursor == target {
+            return false;
+        }
+
+        self.textarea
+            .start_selection(VisualSelectionMode::Character);
+        self.textarea.set_cursor(target);
+        let removed = self.textarea.delete_selection();
+        let new_cursor = original_cursor.min(target).min(self.textarea.text().len());
+        self.textarea.set_cursor(new_cursor);
+
+        if let Some(text) = removed {
+            if !text.is_empty() {
+                self.set_vim_clipboard(text);
+            }
+            self.after_vim_text_edit();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn open_newline_below(&mut self) {
+        self.textarea.move_cursor_to_end_of_line(false);
+        self.textarea.insert_str("\n");
+        self.after_vim_text_edit();
+        self.enter_vim_insert_mode();
+    }
+
+    fn open_newline_above(&mut self) {
+        self.textarea.move_cursor_to_beginning_of_line(false);
+        let line_start = self.textarea.cursor();
+        self.textarea.insert_str("\n");
+        self.textarea.set_cursor(line_start);
+        self.after_vim_text_edit();
+        self.enter_vim_insert_mode();
+    }
+
+    fn paste_from_clipboard(&mut self, replace_selection: bool) -> bool {
+        let clip = match self.vim_clipboard() {
+            Some(text) => text.to_string(),
+            None => return false,
+        };
+        if clip.is_empty() && !replace_selection {
+            return false;
+        }
+
+        let mut replaced = None;
+        if replace_selection && self.textarea.has_selection() {
+            replaced = self.textarea.delete_selection();
+        }
+
+        if !clip.is_empty() {
+            self.textarea.insert_str(&clip);
+        }
+        self.after_vim_text_edit();
+
+        if let Some(text) = replaced {
+            if !text.is_empty() {
+                self.set_vim_clipboard(text);
+            }
+        }
+        true
     }
 
     /// Override the footer hint items displayed beneath the composer. Passing
@@ -346,6 +664,13 @@ impl ChatComposer {
         PasteBurst::recommended_flush_delay()
     }
 
+    pub(crate) fn allows_backtrack_escape(&self) -> bool {
+        match self.vim.as_ref().map(|v| v.mode) {
+            Some(VimMode::Normal) | None => true,
+            _ => false,
+        }
+    }
+
     /// Integrate results from an asynchronous file search.
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         // Only apply if user is still editing a token starting with `query`.
@@ -384,7 +709,13 @@ impl ChatComposer {
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
-            ActivePopup::None => self.handle_key_event_without_popup(key_event),
+            ActivePopup::None => {
+                if let Some(result) = self.handle_vim_key_event(&key_event) {
+                    result
+                } else {
+                    self.handle_key_event_without_popup(key_event)
+                }
+            }
         };
 
         // Update (or hide/show) popup after processing the key.
@@ -396,6 +727,304 @@ impl ChatComposer {
         }
 
         result
+    }
+
+    fn handle_vim_key_event(&mut self, key_event: &KeyEvent) -> Option<(InputResult, bool)> {
+        if !self.vim_enabled() {
+            return None;
+        }
+        if key_event.kind != KeyEventKind::Press && key_event.kind != KeyEventKind::Repeat {
+            return Some((InputResult::None, false));
+        }
+        let mode = self.current_vim_mode()?;
+        match mode {
+            VimMode::Insert => self.handle_vim_insert_mode(key_event),
+            VimMode::Normal => self.handle_vim_normal_mode(key_event),
+            VimMode::Visual => {
+                self.handle_vim_visual_mode(key_event, VisualSelectionMode::Character)
+            }
+            VimMode::VisualLine => {
+                self.handle_vim_visual_mode(key_event, VisualSelectionMode::Line)
+            }
+        }
+    }
+
+    fn handle_vim_insert_mode(&mut self, key_event: &KeyEvent) -> Option<(InputResult, bool)> {
+        if key_event.code == KeyCode::Esc && key_event.modifiers.is_empty() {
+            self.enter_vim_normal_mode();
+            return Some((InputResult::None, true));
+        }
+        None
+    }
+
+    fn handle_vim_normal_mode(&mut self, key_event: &KeyEvent) -> Option<(InputResult, bool)> {
+        if let Some(VimPending::Delete) = self.vim_pending() {
+            if key_event.modifiers.is_empty() && matches!(key_event.code, KeyCode::Char('d')) {
+                self.clear_vim_pending();
+                let handled = self.delete_current_line();
+                return Some((InputResult::None, handled));
+            }
+            return self.handle_vim_delete_pending(key_event);
+        }
+
+        if key_event.modifiers.contains(KeyModifiers::ALT) {
+            self.clear_vim_pending();
+            return Some((InputResult::None, true));
+        }
+
+        if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+            self.clear_vim_pending();
+            return Some((InputResult::None, true));
+        }
+
+        match key_event.code {
+            KeyCode::Esc => {
+                self.clear_vim_pending();
+                return None;
+            }
+            KeyCode::Char('h') => {
+                self.textarea.move_cursor_left();
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('j') => {
+                self.textarea.move_cursor_down();
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('k') => {
+                self.textarea.move_cursor_up();
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('l') => {
+                self.textarea.move_cursor_right();
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('w') => {
+                let pos = self.textarea.end_of_next_word();
+                self.textarea.set_cursor(pos);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('b') => {
+                let pos = self.textarea.beginning_of_previous_word();
+                self.textarea.set_cursor(pos);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('0') => {
+                self.textarea.move_cursor_to_beginning_of_line(false);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('$') => {
+                self.textarea.move_cursor_to_end_of_line(false);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('g') => {
+                if matches!(self.take_vim_pending(), Some(VimPending::G)) {
+                    self.textarea.set_cursor(0);
+                    self.after_vim_cursor_motion();
+                } else {
+                    self.set_vim_pending(VimPending::G);
+                }
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('d') => {
+                self.set_vim_pending(VimPending::Delete);
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('G') => {
+                self.textarea.set_cursor(self.textarea.text().len());
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('i') => {
+                self.enter_vim_insert_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('a') => {
+                self.textarea.move_cursor_right();
+                self.enter_vim_insert_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('A') => {
+                self.textarea.move_cursor_to_end_of_line(false);
+                self.enter_vim_insert_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('I') => {
+                self.textarea.move_cursor_to_beginning_of_line(false);
+                self.enter_vim_insert_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('o') => {
+                self.open_newline_below();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('O') => {
+                self.open_newline_above();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('x') => {
+                if self.delete_char_under_cursor() {
+                    return Some((InputResult::None, true));
+                }
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('v') => {
+                self.enter_visual_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('V') => {
+                self.enter_visual_line_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('p') => {
+                self.paste_from_clipboard(false);
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('e') => {
+                let pos = self.textarea.end_of_next_word();
+                self.textarea.set_cursor(pos);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            _ => {}
+        }
+
+        self.clear_vim_pending();
+        Some((InputResult::None, true))
+    }
+
+    fn handle_vim_delete_pending(&mut self, key_event: &KeyEvent) -> Option<(InputResult, bool)> {
+        let motion = match key_event.code {
+            KeyCode::Char('w') => Some(VimDeleteMotion::ToNextWord),
+            KeyCode::Char('0') => Some(VimDeleteMotion::ToLineStart),
+            KeyCode::Char('$') => Some(VimDeleteMotion::ToLineEnd),
+            _ => None,
+        };
+
+        let handled = motion
+            .map(|m| self.apply_vim_delete_motion(m))
+            .unwrap_or(false);
+        self.clear_vim_pending();
+        handled
+            .then_some((InputResult::None, true))
+            .or(Some((InputResult::None, true)))
+    }
+
+    fn handle_vim_visual_mode(
+        &mut self,
+        key_event: &KeyEvent,
+        mode: VisualSelectionMode,
+    ) -> Option<(InputResult, bool)> {
+        self.textarea.update_selection_mode(mode);
+
+        if key_event.modifiers.contains(KeyModifiers::ALT) {
+            self.clear_vim_pending();
+            return Some((InputResult::None, true));
+        }
+
+        if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+            self.clear_vim_pending();
+            return Some((InputResult::None, true));
+        }
+
+        match key_event.code {
+            KeyCode::Esc => {
+                self.enter_vim_normal_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('v') => {
+                self.enter_vim_normal_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('V') => {
+                if mode == VisualSelectionMode::Line {
+                    self.enter_vim_normal_mode();
+                } else {
+                    self.enter_visual_line_mode();
+                }
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('h') => {
+                self.textarea.move_cursor_left();
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('j') => {
+                self.textarea.move_cursor_down();
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('k') => {
+                self.textarea.move_cursor_up();
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('l') => {
+                self.textarea.move_cursor_right();
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('0') => {
+                self.textarea.move_cursor_to_beginning_of_line(false);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('$') => {
+                self.textarea.move_cursor_to_end_of_line(false);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('g') => {
+                if matches!(self.take_vim_pending(), Some(VimPending::G)) {
+                    self.textarea.set_cursor(0);
+                    self.after_vim_cursor_motion();
+                } else {
+                    self.set_vim_pending(VimPending::G);
+                }
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('G') => {
+                self.textarea.set_cursor(self.textarea.text().len());
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('d') => {
+                if let Some(removed) = self.textarea.delete_selection() {
+                    if !removed.is_empty() {
+                        self.set_vim_clipboard(removed);
+                    }
+                    self.after_vim_text_edit();
+                }
+                self.enter_vim_normal_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('y') => {
+                if let Some(range) = self.textarea.selection_range() {
+                    let text = self.textarea.text()[range].to_string();
+                    if !text.is_empty() {
+                        self.set_vim_clipboard(text);
+                    }
+                }
+                self.enter_vim_normal_mode();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('p') => {
+                self.paste_from_clipboard(true);
+                self.enter_vim_normal_mode();
+                return Some((InputResult::None, true));
+            }
+            _ => {}
+        }
+
+        self.clear_vim_pending();
+        Some((InputResult::None, true))
     }
 
     /// Return true if either the slash-command popup or the file-search popup is active.
@@ -1112,7 +1741,6 @@ impl ChatComposer {
 
         // Normal input handling
         self.textarea.input(input);
-        let text_after = self.textarea.text();
 
         // Update paste-burst heuristic for plain Char (no Ctrl/Alt) events.
         let crossterm::event::KeyEvent {
@@ -1134,33 +1762,7 @@ impl ChatComposer {
                 self.paste_burst.clear_window_after_non_char();
             }
         }
-
-        // Check if any placeholders were removed and remove their corresponding pending pastes
-        self.pending_pastes
-            .retain(|(placeholder, _)| text_after.contains(placeholder));
-
-        // Keep attached images in proportion to how many matching placeholders exist in the text.
-        // This handles duplicate placeholders that share the same visible label.
-        if !self.attached_images.is_empty() {
-            let mut needed: HashMap<String, usize> = HashMap::new();
-            for img in &self.attached_images {
-                needed
-                    .entry(img.placeholder.clone())
-                    .or_insert_with(|| text_after.matches(&img.placeholder).count());
-            }
-
-            let mut used: HashMap<String, usize> = HashMap::new();
-            let mut kept: Vec<AttachedImage> = Vec::with_capacity(self.attached_images.len());
-            for img in self.attached_images.drain(..) {
-                let total_needed = *needed.get(&img.placeholder).unwrap_or(&0);
-                let used_count = used.entry(img.placeholder.clone()).or_insert(0);
-                if *used_count < total_needed {
-                    kept.push(img);
-                    *used_count += 1;
-                }
-            }
-            self.attached_images = kept;
-        }
+        self.reconcile_placeholders_and_attachments();
 
         (InputResult::None, true)
     }
@@ -1332,12 +1934,23 @@ impl ChatComposer {
     }
 
     fn footer_props(&self) -> FooterProps {
+        let vim_status = if self.vim_enabled() {
+            self.vim.as_ref().map(|state| match state.mode {
+                VimMode::Insert => VimStatus::Insert,
+                VimMode::Normal => VimStatus::Normal,
+                VimMode::Visual => VimStatus::Visual,
+                VimMode::VisualLine => VimStatus::VisualLine,
+            })
+        } else {
+            None
+        };
         FooterProps {
             mode: self.footer_mode(),
             esc_backtrack_hint: self.esc_backtrack_hint,
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
+            vim_status,
         }
     }
 
@@ -1347,7 +1960,9 @@ impl ChatComposer {
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
             FooterMode::CtrlCReminder => FooterMode::CtrlCReminder,
             FooterMode::ShortcutPrompt if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
-            FooterMode::ShortcutPrompt if !self.is_empty() => FooterMode::Empty,
+            FooterMode::ShortcutPrompt if !self.is_empty() && !self.vim_enabled() => {
+                FooterMode::Empty
+            }
             other => other,
         }
     }
@@ -1551,6 +2166,40 @@ impl WidgetRef for ChatComposer {
             let placeholder = Span::from(self.placeholder_text.as_str()).dim();
             Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
         }
+    }
+}
+
+#[cfg(test)]
+mod vim_tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn vim_composer() -> ChatComposer {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx_raw);
+        ChatComposer::new_with_keybinding_mode(
+            true,
+            sender,
+            false,
+            "".to_string(),
+            false,
+            KeybindingMode::Vim,
+        )
+    }
+
+    #[test]
+    fn esc_transitions_to_normal_mode() {
+        let mut composer = vim_composer();
+        composer.insert_str("hello");
+        assert!(!composer.allows_backtrack_escape());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(composer.allows_backtrack_escape());
+
+        let len = composer.textarea.text().len();
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), len.saturating_sub(1));
     }
 }
 

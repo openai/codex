@@ -14,6 +14,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::InputResult;
+use codex_core::config_types::KeybindingMode;
 
 /// Action returned from feeding a key event into the ComposerInput.
 pub enum ComposerAction {
@@ -37,7 +38,14 @@ impl ComposerInput {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = AppEventSender::new(tx.clone());
         // `enhanced_keys_supported=true` enables Shift+Enter newline hint/behavior.
-        let inner = ChatComposer::new(true, sender, true, "Compose new task".to_string(), false);
+        let inner = ChatComposer::new_with_keybinding_mode(
+            true,
+            sender,
+            true,
+            "Compose new task".to_string(),
+            false,
+            KeybindingMode::Emacs,
+        );
         Self { inner, _tx: tx, rx }
     }
 
