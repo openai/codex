@@ -1428,6 +1428,7 @@ dependencies = [
  "unicode-width 0.2.1",
  "url",
  "vt100",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

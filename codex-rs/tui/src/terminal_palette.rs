@@ -2,11 +2,21 @@ pub fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
     imp::terminal_palette()
 }
 
+/// Returns the runtime palette for basic (0-15) color slots when the terminal reports one.
+///
+/// Windows exposes a mutable color table via the console API so callers can render subtle
+/// shading that matches the configured theme. Unix terminals rarely offer similar hooks, so
+/// this returns `None` there and consumers should fall back to well-known ANSI defaults.
+pub fn basic_palette() -> Option<[(u8, u8, u8); 16]> {
+    imp::basic_palette()
+}
+
 pub fn requery_default_colors() {
     imp::requery_default_colors();
 }
 
 #[derive(Clone, Copy)]
+/// Snapshot of the terminal's default foreground and background RGB values.
 pub struct DefaultColors {
     #[allow(dead_code)]
     fg: (u8, u8, u8),
@@ -77,6 +87,10 @@ mod imp {
         })
     }
 
+    pub(super) fn basic_palette() -> Option<[(u8, u8, u8); 16]> {
+        None
+    }
+
     pub(super) fn default_colors() -> Option<DefaultColors> {
         let cache = default_colors_cache();
         let mut cache = cache.lock().ok()?;
@@ -109,6 +123,7 @@ mod imp {
             Err(_) => return Ok(None),
         };
 
+        // Request the RGB value for each extended color slot (OSC 4 ; index ; ? BEL).
         for index in 0..256 {
             write!(tty, "\x1b]4;{index};?\x07")?;
         }
@@ -262,6 +277,8 @@ mod imp {
                     if Instant::now() >= idle_deadline {
                         break;
                     }
+                    // Sleep briefly to avoid spinning while still allowing slow terminals
+                    // to provide more data before the idle timeout expires.
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 Err(err) if err.kind() == ErrorKind::Interrupted => continue,
@@ -429,11 +446,198 @@ mod imp {
     }
 }
 
-#[cfg(not(all(unix, not(test))))]
+#[cfg(all(windows, not(test)))]
+mod imp {
+    use super::DefaultColors;
+    use std::mem::MaybeUninit;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::CONSOLE_SCREEN_BUFFER_INFO;
+    use windows_sys::Win32::System::Console::CONSOLE_SCREEN_BUFFER_INFOEX;
+    use windows_sys::Win32::System::Console::GetConsoleScreenBufferInfo;
+    use windows_sys::Win32::System::Console::GetConsoleScreenBufferInfoEx;
+    use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+
+    /// Matches the historical Windows console palette where indices 0-15 are fixed.
+    const WINDOWS_COLORS: [(u8, u8, u8); 16] = [
+        (0, 0, 0),
+        (0, 0, 128),
+        (0, 128, 0),
+        (0, 128, 128),
+        (128, 0, 0),
+        (128, 0, 128),
+        (128, 128, 0),
+        (192, 192, 192),
+        (128, 128, 128),
+        (0, 0, 255),
+        (0, 255, 0),
+        (0, 255, 255),
+        (255, 0, 0),
+        (255, 0, 255),
+        (255, 255, 0),
+        (255, 255, 255),
+    ];
+
+    /// Captures the console defaults along with the resolved 16-color palette so lookups can
+    /// serve both `default_colors()` and `basic_palette()` without re-querying Win32 APIs.
+    #[derive(Clone, Copy)]
+    struct ConsoleSnapshot {
+        defaults: DefaultColors,
+        palette: [(u8, u8, u8); 16],
+    }
+
+    struct Cache<T> {
+        attempted: bool,
+        value: Option<T>,
+    }
+
+    impl<T> Default for Cache<T> {
+        fn default() -> Self {
+            Self {
+                attempted: false,
+                value: None,
+            }
+        }
+    }
+
+    impl<T: Copy> Cache<T> {
+        fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+            if !self.attempted {
+                self.value = init();
+                self.attempted = true;
+            }
+            self.value
+        }
+
+        fn refresh_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+            self.value = init();
+            self.attempted = true;
+            self.value
+        }
+    }
+
+    fn console_snapshot_cache() -> &'static Mutex<Cache<ConsoleSnapshot>> {
+        static CACHE: OnceLock<Mutex<Cache<ConsoleSnapshot>>> = OnceLock::new();
+        CACHE.get_or_init(|| Mutex::new(Cache::default()))
+    }
+
+    pub(super) fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
+        // Legacy Windows terminals only support the 16 basic colors so there is no
+        // meaningful OSC palette to retrieve.
+        None
+    }
+
+    pub(super) fn basic_palette() -> Option<[(u8, u8, u8); 16]> {
+        let cache = console_snapshot_cache();
+        let mut cache = cache.lock().ok()?;
+        cache
+            .get_or_init_with(query_console_snapshot)
+            .map(|snapshot| snapshot.palette)
+    }
+
+    /// Uses the Win32 console APIs to look up the active color attribute indices and map
+    /// them into RGB triplets using the standard Windows palette table above.
+    pub(super) fn default_colors() -> Option<DefaultColors> {
+        let cache = console_snapshot_cache();
+        let mut cache = cache.lock().ok()?;
+        cache
+            .get_or_init_with(query_console_snapshot)
+            .map(|snapshot| snapshot.defaults)
+    }
+
+    pub(super) fn requery_default_colors() {
+        if let Ok(mut cache) = console_snapshot_cache().lock() {
+            cache.refresh_with(query_console_snapshot);
+        }
+    }
+
+    fn query_console_snapshot() -> Option<ConsoleSnapshot> {
+        unsafe {
+            let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            if handle.is_null() || std::ptr::eq(handle, INVALID_HANDLE_VALUE) {
+                return None;
+            }
+
+            // Prefer the extended console info call so that we can honor custom palettes.
+            if let Some(snapshot) = query_with_ex(handle) {
+                return Some(snapshot);
+            }
+
+            // Fall back to the legacy structure when the extended query is unavailable.
+            query_with_basic_info(handle)
+        }
+    }
+
+    unsafe fn query_with_ex(handle: HANDLE) -> Option<ConsoleSnapshot> {
+        let mut info = MaybeUninit::<CONSOLE_SCREEN_BUFFER_INFOEX>::zeroed();
+        let info_ptr = info.as_mut_ptr();
+        unsafe {
+            (*info_ptr).cbSize = std::mem::size_of::<CONSOLE_SCREEN_BUFFER_INFOEX>() as u32;
+            if GetConsoleScreenBufferInfoEx(handle, info_ptr) == 0 {
+                return None;
+            }
+        }
+        let info = unsafe { info.assume_init() };
+        let attrs = info.wAttributes as usize;
+        let fg_idx = attrs & 0x0f;
+        let bg_idx = (attrs >> 4) & 0x0f;
+        let mut palette = [(0u8, 0u8, 0u8); 16];
+        for (slot, colorref) in palette.iter_mut().zip(info.ColorTable.iter().copied()) {
+            *slot = unpack_colorref(colorref);
+        }
+        Some(ConsoleSnapshot {
+            defaults: DefaultColors {
+                fg: palette.get(fg_idx).copied().unwrap_or((255, 255, 255)),
+                bg: palette.get(bg_idx).copied().unwrap_or((0, 0, 0)),
+            },
+            palette,
+        })
+    }
+
+    unsafe fn query_with_basic_info(handle: HANDLE) -> Option<ConsoleSnapshot> {
+        let mut info = MaybeUninit::<CONSOLE_SCREEN_BUFFER_INFO>::uninit();
+        unsafe {
+            if GetConsoleScreenBufferInfo(handle, info.as_mut_ptr()) == 0 {
+                return None;
+            }
+        }
+        let info = unsafe { info.assume_init() };
+        let attrs = info.wAttributes as usize;
+        let fg_idx = attrs & 0x0f;
+        let bg_idx = (attrs >> 4) & 0x0f;
+        Some(ConsoleSnapshot {
+            defaults: DefaultColors {
+                fg: WINDOWS_COLORS
+                    .get(fg_idx)
+                    .copied()
+                    .unwrap_or((255, 255, 255)),
+                bg: WINDOWS_COLORS.get(bg_idx).copied().unwrap_or((0, 0, 0)),
+            },
+            palette: WINDOWS_COLORS,
+        })
+    }
+
+    /// Unpacks a Windows COLORREF (0x00BBGGRR) triple into conventional RGB ordering.
+    fn unpack_colorref(colorref: u32) -> (u8, u8, u8) {
+        let r = (colorref & 0xff) as u8;
+        let g = ((colorref >> 8) & 0xff) as u8;
+        let b = ((colorref >> 16) & 0xff) as u8;
+        (r, g, b)
+    }
+}
+
+#[cfg(not(any(all(unix, not(test)), all(windows, not(test)))))]
 mod imp {
     use super::DefaultColors;
 
     pub(super) fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
+        None
+    }
+
+    pub(super) fn basic_palette() -> Option<[(u8, u8, u8); 16]> {
         None
     }
 

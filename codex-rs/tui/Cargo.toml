@@ -92,6 +92,12 @@ libc = { workspace = true }
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+
 
 [dev-dependencies]
 assert_matches = { workspace = true }
