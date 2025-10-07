@@ -92,3 +92,99 @@ If you don’t have the tool:
 ### Test assertions
 
 - Tests should use pretty_assertions::assert_eq for clearer diffs. Import this at the top of the test module if it isn't already.
+
+## Upstream Comparison & Integration
+
+Use this repeatable flow whenever you are bringing in new changes or preparing a PR‑sized modification. The goal is to catch style drift, compile‑time issues (lifetimes, ownership, visibility), and snapshot deltas early.
+
+### 1) Prepare remotes and fetch
+
+- Ensure remotes:
+  - `git remote -v` → must show `origin` and `upstream`
+- Fetch and prune:
+  - `git fetch upstream --prune`
+
+### 2) Inspect diffs at commit and file level
+
+- Commits not in upstream:
+  - `git log --oneline upstream/main..main`
+- Commits missing locally:
+  - `git log --oneline main..upstream/main`
+- File status by area (Rust workspace):
+  - `git diff --name-status upstream/main..HEAD -- codex-rs`
+- Deep diff for specific crates:
+  - `git diff upstream/main..HEAD -- codex-rs/{tui,core,protocol}/src`
+
+Focus during review:
+- Public/private boundaries: avoid referring to private submodules across crates; re‑export symbols from `mod.rs` when needed.
+- Lifetimes & ownership: prefer owned strings for cached UI props; pass `&Props` to pure readers; avoid moving out of shared refs.
+- Type inference: do not stack conversions (`.into().into()`); `push_span(Into<Span>)` does not need extra `.into()` on inputs already returning `Span`.
+- ratatui conventions: use `Stylize`, `Line`/`Span`, `prefix_lines`, and existing wrapping helpers; keep helpers small and composable.
+- Error class to scan for: E0521/E0507/E0382/E0603/E0283 (lifetimes, moves, borrow escaping, visibility, trait inference).
+
+### 3) Build, lint, and run scoped tests
+
+- Format + clippy (scoped):
+  - `cd codex-rs && just fmt`
+  - `just fix -p <crate>` (ex.: `codex-tui`, `codex-core`)
+- Run tests for the crate que mudou:
+  - `cargo test -p <crate>`
+- Se tocar `common`, `core` ou `protocol`, valide conjunto:
+  - `cargo test --all-features`
+
+### 4) Snapshot testing (TUI)
+
+- Gerar diferenças:
+  - `cargo test -p codex-tui`
+- List pending:
+  - `cargo insta pending-snapshots -p codex-tui`
+- Inspecionar/aceitar:
+  - `cargo insta show -p codex-tui path/to/file.snap.new` (opcional)
+  - `cargo insta accept -p codex-tui` (somente se a mudança de UI for intencional)
+- Commitar apenas código + arquivos `*.snap` alterados.
+
+### 5) Commit and push hygiene
+
+- Do not commit toolchains/caches.
+  - `.gitignore` already includes: `codex-rs/.cargo/`, `codex-rs/.cargo-home/`, `codex-rs/.rustup/`, common image extensions, and `stash_*.rs`.
+  - If a large artifact was staged by mistake:
+    - `git reset --soft origin/main`
+    - `git restore --staged .`
+    - `git add <code changes> <*.snap> .gitignore`
+    - `git commit -m "..." && git push`
+
+## Change Review Guidelines (genéricas)
+
+- Assinatura de helpers: prefira `fn f(props: &Props)` a `fn f(props: Props)` quando só lê; isso evita cópias/moves acidentais e facilita reuso.
+- Propriedades persistidas de UI: use `String` ou `Cow<'static, str>` quando o valor é cacheado além do escopo atual.
+- Reexports: quando tipos utilitários são usados fora do módulo, reexporte em `mod.rs` (`pub(crate) use ...`) em vez de referenciar submódulo privado.
+- Testes de snapshot: só aceite quando a mudança de UI for intencional; mantenha as strings estáveis e ASCII para minimizar diffs.
+- Visual consistency: reuse existing separators and textual style; avoid hard‑coded white; prefer `.dim()` for metadata.
+## Repo Hygiene (git)
+
+- Do not create new branches unless explicitly instructed by the user. Do all work directly on `main` by default.
+- Never push or open PRs from feature/fix branches without explicit approval.
+- When comparing or integrating remote work, use the steps in “Upstream Comparison & Integration” without creating local branches.
+
+- Do not commit local toolchains or caches. Ensure these are in `.gitignore` (already present):
+  - `codex-rs/.cargo/`, `codex-rs/.cargo-home/`, `codex-rs/.rustup/`
+  - Image assets: `*.png`, `*.jpg`, `*.jpeg`, `*.gif`, `*.bmp`, `*.tiff`, `*.webp`, `*.svg`
+  - Local drafts: `stash_*.rs`
+
+- Seeding a clean commit after an accidental add of caches:
+  - `git reset --soft origin/main`
+  - `git restore --staged .`
+  - `git add <code changes> <updated *.snap> .gitignore`
+  - `git commit -m "..." && git push`
+
+## Quick checklist (footer/status changes)
+
+// Use this generic checklist when integrating UI/status changes:
+- [ ] No private module leaks (re‑export when needed)
+- [ ] No `'static` requirements for cached UI data unless necessary
+- [ ] Helper functions take `&Props` when they only read
+- [ ] Snapshot diffs reviewed and accepted intentionally
+- [ ] Only code + `*.snap` changes committed
+- [ ] Ctrl‑C / Esc: `context left | <hint>`
+- [ ] Separadores ` | ` e ` · ` (antes de `? for shortcuts`)
+- [ ] Atualizar snapshots do TUI (aceitar `*.snap`) 

@@ -417,6 +417,24 @@ impl BottomPane {
         self.push_view(Box::new(view));
     }
 
+    /// If the active view is a ListSelectionView, pass a mutable reference to it to `f`.
+    /// Returns true when the active view was a list and was updated.
+    pub(crate) fn with_active_list_selection_mut<F>(&mut self, f: F) -> bool
+    where
+        F: FnOnce(&mut list_selection_view::ListSelectionView),
+    {
+        if let Some(view) = self.view_stack.last_mut()
+            && let Some(list) = view
+                .as_any_mut()
+                .downcast_mut::<list_selection_view::ListSelectionView>()
+        {
+            f(list);
+            self.request_redraw();
+            return true;
+        }
+        false
+    }
+
     /// Update the queued messages shown under the status header.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages = queued.clone();

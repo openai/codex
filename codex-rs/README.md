@@ -102,19 +102,12 @@ The same setting can be persisted in `~/.codex/config.toml` via the top-level `s
 
 Use `/prune` to manually reduce what goes into the next turn’s context without summarizing anything:
 
-- Basic presets: prune by category (tool output, tool calls, reasoning, assistant messages) across the entire history, or prune the first N turns across all categories.
-- Advanced mode: choose “Open advanced prune…” to list individual context items and toggle whether each is included. This is non‑destructive — items are not deleted; they are simply excluded from the next turn’s context and can be re‑included later.
+- Basic presets: prune by category (tool calls, tool output, user/assistant messages, reasoning) across the entire history, or prune the first N turns (with dynamic 5/10/15… presets and an "X turns" option).
+- Advanced: list individual context items and stage changes for the next turn. Use `space` to toggle inclusion and `del` to mark an item for deletion; `enter` applies staged changes (with an extra confirmation if there are deletions), and `esc` returns to the main prune menu. Type to filter. System items (UserInstructions/EnvironmentContext) are hidden here.
 
 Notes:
-- Advanced mode reopens automatically after each toggle so you can see the updated state immediately. Press Esc to close; Codex will stop reopening automatically.
-- The agent can also use a Smart Prune tool internally to inspect/toggle inclusion when enabled (see `tools.context_prune` below).
-
-To enable/disable the Smart Prune tool exposed to the agent, set in `~/.codex/config.toml`:
-
-```toml
-[tools]
-context_prune = true  # default: true; set to false to disable
-```
+- Advanced applies changes on `enter` (there is no longer an automatic apply on each toggle).
+- The "Fix context" option attempts a smart repair by restoring the most recent missing tool call from the rollout (with confirmation).
 
 ## Code Organization
 

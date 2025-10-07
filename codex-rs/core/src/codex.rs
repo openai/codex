@@ -459,7 +459,6 @@ impl Session {
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 include_view_image_tool: config.include_view_image_tool,
                 experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
-                include_context_prune_tool: config.include_context_prune_tool,
             }),
             user_instructions,
             base_instructions,
@@ -998,20 +997,23 @@ impl Session {
             }
             kept.push(it);
         }
-        let new_len = kept.len();
+        // Recompute turn counts by subtracting removed items from each original turn.
+        let mut new_counts: Vec<usize> = Vec::with_capacity(state.turn_item_counts.len());
+        let mut turn_start = 0usize;
+        for orig in state.turn_item_counts.iter().copied() {
+            let turn_end = turn_start.saturating_add(orig);
+            let removed_in_turn = drop
+                .iter()
+                .filter(|idx| **idx >= turn_start && **idx < turn_end)
+                .count();
+            let kept_in_turn = orig.saturating_sub(removed_in_turn);
+            new_counts.push(kept_in_turn);
+            turn_start = turn_end;
+        }
+
         state.replace_history(kept);
-        state.replace_turn_counts(vec![new_len]);
+        state.replace_turn_counts(new_counts);
         drop.len()
-    }
-
-    pub(crate) async fn set_context_inclusion(&self, indices: &[usize], included: bool) {
-        let mut state = self.state.lock().await;
-        state.set_inclusion(indices, included);
-    }
-
-    pub(crate) async fn set_pinned_tail_turns(&self, turns: usize) {
-        let mut state = self.state.lock().await;
-        state.set_pinned_tail_turns(turns);
     }
 
     /// Record a user input item to conversation history and also persist a
@@ -1416,7 +1418,6 @@ async fn submission_loop(
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
                     experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
-                    include_context_prune_tool: config.include_context_prune_tool,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1521,7 +1522,6 @@ async fn submission_loop(
                             include_view_image_tool: config.include_view_image_tool,
                             experimental_unified_exec_tool: config
                                 .use_experimental_unified_exec_tool,
-                            include_context_prune_tool: config.include_context_prune_tool,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1715,6 +1715,168 @@ async fn submission_loop(
                 };
                 sess.send_event(event).await;
             }
+            Op::RebuildContextFromRollout => {
+                // Attempt to reconstruct the in-memory history from the rollout file
+                // and replace the session history.
+                let (rollout_path, rec_opt) = {
+                    let guard = sess.services.rollout.lock().await;
+                    match guard.as_ref() {
+                        Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
+                        None => {
+                            error!("rollout recorder not found");
+                            (std::path::PathBuf::new(), None)
+                        }
+                    }
+                };
+                if let Some(rec) = rec_opt
+                    && let Err(e) = rec.flush().await
+                {
+                    warn!("failed to flush rollout recorder before rebuild: {e}");
+                }
+                match crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path).await {
+                    Ok(initial) => {
+                        let rollout_items = initial.get_rollout_items();
+                        let reconstructed =
+                            sess.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+                        if reconstructed.is_empty() {
+                            let event = Event {
+                                id: sub.id.clone(),
+                                msg: EventMsg::AgentMessage(AgentMessageEvent {
+                                    message: "No items found in rollout to rebuild context."
+                                        .to_string(),
+                                }),
+                            };
+                            sess.send_event(event).await;
+                        } else {
+                            let new_len = reconstructed.len();
+                            sess.replace_history(reconstructed).await;
+                            let msg =
+                                format!("Context rebuilt from rollout: restored {new_len} items.");
+                            sess.send_event(Event {
+                                id: sub.id.clone(),
+                                msg: EventMsg::AgentMessage(AgentMessageEvent { message: msg }),
+                            })
+                            .await;
+                            // Emit fresh usage and item list so UI can refresh.
+                            let usage = sess.compute_context_usage().await;
+                            sess.send_event(Event {
+                                id: sub.id.clone(),
+                                msg: EventMsg::ConversationUsage(usage),
+                            })
+                            .await;
+                            let items = sess.compute_context_items().await;
+                            sess.send_event(Event {
+                                id: sub.id.clone(),
+                                msg: EventMsg::ContextItems(items),
+                            })
+                            .await;
+                        }
+                    }
+                    Err(e) => {
+                        let event = Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                                message: format!("Failed to rebuild context from rollout: {e}"),
+                            }),
+                        };
+                        sess.send_event(event).await;
+                    }
+                }
+            }
+            Op::FixLastMissingToolCall => {
+                // Smart fix: find last missing ToolCall in rollout (that is not
+                // immediately followed by ToolOutput) and restore just that item.
+                let (rollout_path, rec_opt) = {
+                    let guard = sess.services.rollout.lock().await;
+                    match guard.as_ref() {
+                        Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
+                        None => {
+                            error!("rollout recorder not found");
+                            (std::path::PathBuf::new(), None)
+                        }
+                    }
+                };
+                if let Some(rec) = rec_opt
+                    && let Err(e) = rec.flush().await
+                {
+                    warn!("failed to flush rollout recorder before smart fix: {e}");
+                }
+                let mut fixed = false;
+                match crate::rollout::RolloutRecorder::get_rollout_history(&rollout_path).await {
+                    Ok(initial) => {
+                        let rollout_items = initial.get_rollout_items();
+                        // Capture current tool_call texts for quick membership check
+                        let current_tool_calls: std::collections::HashSet<String> = {
+                            let state = sess.state.lock().await;
+                            state
+                                .history_snapshot()
+                                .into_iter()
+                                .filter_map(|it| {
+                                    let (cat, text) =
+                                        crate::codex::context_item_category_and_text(&it);
+                                    (cat == codex_protocol::protocol::PruneCategory::ToolCall)
+                                        .then(|| text.into_owned())
+                                })
+                                .collect()
+                        };
+                        for i in (0..rollout_items.len()).rev() {
+                            if let codex_protocol::protocol::RolloutItem::ResponseItem(item) =
+                                &rollout_items[i]
+                            {
+                                let (cat, text) =
+                                    crate::codex::context_item_category_and_text(item);
+                                if cat == codex_protocol::protocol::PruneCategory::ToolCall {
+                                    // ensure not immediately followed by ToolOutput in rollout
+                                    let no_immediate_output = rollout_items
+                                        .get(i + 1)
+                                        .map(|next| match next {
+                                            codex_protocol::protocol::RolloutItem::ResponseItem(ri) => {
+                                                let (ncat, _) = crate::codex::context_item_category_and_text(ri);
+                                                ncat != codex_protocol::protocol::PruneCategory::ToolOutput
+                                            }
+                                            _ => true,
+                                        })
+                                        .unwrap_or(true);
+                                    let missing_from_current =
+                                        !current_tool_calls.contains(text.as_ref());
+                                    if missing_from_current && no_immediate_output {
+                                        // Restore just this item by appending to history
+                                        sess.record_into_history(std::slice::from_ref(item)).await;
+                                        fixed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("smart fix: failed to read rollout: {e}");
+                    }
+                }
+                let message = if fixed {
+                    "Smart fix: restored last missing tool call from rollout.".to_string()
+                } else {
+                    "Smart fix: no missing recent tool call found to restore.".to_string()
+                };
+                sess.send_event(Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::AgentMessage(AgentMessageEvent { message }),
+                })
+                .await;
+                // Emit fresh usage and list so UI can refresh.
+                let usage = sess.compute_context_usage().await;
+                sess.send_event(Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::ConversationUsage(usage),
+                })
+                .await;
+                let items = sess.compute_context_items().await;
+                sess.send_event(Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::ContextItems(items),
+                })
+                .await;
+            }
             Op::PruneContextByIndices { indices } => {
                 let removed = sess.prune_context_indices(indices).await;
                 let summary = format!("Pruned context: removed {removed} items by selection.");
@@ -1807,7 +1969,6 @@ async fn spawn_review_thread(
         use_streamable_shell_tool: false,
         include_view_image_tool: false,
         experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
-        include_context_prune_tool: config.include_context_prune_tool,
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -3100,7 +3261,6 @@ mod tests {
             use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
             include_view_image_tool: config.include_view_image_tool,
             experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
-            include_context_prune_tool: config.include_context_prune_tool,
         });
         let turn_context = TurnContext {
             client,
@@ -3174,7 +3334,6 @@ mod tests {
             use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
             include_view_image_tool: config.include_view_image_tool,
             experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
-            include_context_prune_tool: config.include_context_prune_tool,
         });
         let turn_context = Arc::new(TurnContext {
             client,

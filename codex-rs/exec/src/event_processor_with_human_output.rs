@@ -498,6 +498,35 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     view.path.display()
                 );
             }
+            // Prune-related events: print a concise summary (pattern similar to plan update).
+            EventMsg::ConversationUsage(ev) => {
+                let total = ev.total_bytes;
+                // Show top 2 categories by bytes.
+                let mut cats = ev.by_category;
+                cats.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+                let top: Vec<String> = cats
+                    .into_iter()
+                    .take(2)
+                    .map(|c| format!("{:?} {}B", c.category, format_with_separators(c.bytes)))
+                    .collect();
+                ts_msg!(
+                    self,
+                    "{} total={}B{}{}",
+                    "context usage".style(self.magenta),
+                    format_with_separators(total),
+                    if top.is_empty() { "" } else { ", top: " },
+                    top.join(", ")
+                );
+            }
+            EventMsg::ContextItems(ev) => {
+                let total = ev.total;
+                ts_msg!(
+                    self,
+                    "{} {} items",
+                    "context items".style(self.magenta),
+                    total
+                );
+            }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
                 TurnAbortReason::Interrupted => {
                     ts_msg!(self, "task interrupted");

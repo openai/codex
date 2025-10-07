@@ -29,7 +29,7 @@ pub(crate) struct ToolsConfig {
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
     pub experimental_supported_tools: Vec<String>,
-    pub include_context_prune_tool: bool,
+    // prune tool removed; /prune UI remains via Op routes
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -40,7 +40,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
-    pub(crate) include_context_prune_tool: bool,
+    // prune tool removed
 }
 
 impl ToolsConfig {
@@ -53,7 +53,7 @@ impl ToolsConfig {
             use_streamable_shell_tool,
             include_view_image_tool,
             experimental_unified_exec_tool,
-            include_context_prune_tool,
+            // prune tool removed
         } = params;
         let shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::Streamable
@@ -83,7 +83,7 @@ impl ToolsConfig {
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
-            include_context_prune_tool: *include_context_prune_tool,
+            // prune tool removed
         }
     }
 }
@@ -262,57 +262,7 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
-fn create_context_prune_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "action".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "One of: list | usage | set_inclusion | set_pinned_tail_turns".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "indices".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::Number {
-                description: Some("0-based indices of items to toggle".to_string()),
-            }),
-            description: Some(
-                "Indices to include or exclude when action is set_inclusion".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "included".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "Whether specified indices should be included (true) or excluded (false) when action is set_inclusion".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "pinned_tail_turns".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Number of most recent turns to pin when action is set_pinned_tail_turns"
-                    .to_string(),
-            ),
-        },
-    );
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "context_prune".to_string(),
-        description:
-            "Inspect context usage, list items, or adjust inclusion/pinning without deleting history.".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["action".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
+// prune tool removed from model tools
 
 fn create_test_sync_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
@@ -620,7 +570,7 @@ pub(crate) fn build_specs(
     use crate::exec_command::create_exec_command_tool_for_responses_api;
     use crate::exec_command::create_write_stdin_tool_for_responses_api;
     use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::ContextPruneHandler;
+    // prune tool removed
     use crate::tools::handlers::ExecStreamHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::PlanHandler;
@@ -716,10 +666,7 @@ pub(crate) fn build_specs(
         builder.register_handler("view_image", view_image_handler);
     }
 
-    if config.include_context_prune_tool {
-        builder.push_spec(create_context_prune_tool());
-        builder.register_handler("context_prune", Arc::new(ContextPruneHandler));
-    }
+    // prune tool removed from model tools
 
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
@@ -801,7 +748,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -822,7 +768,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -833,25 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_specs_includes_context_prune_when_enabled() {
-        let model_family = find_family_for_model("codex-mini-latest")
-            .expect("codex-mini-latest should be a valid model family");
-        let config = ToolsConfig::new(&ToolsConfigParams {
-            model_family: &model_family,
-            include_plan_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: false,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: false,
-            experimental_unified_exec_tool: true,
-            include_context_prune_tool: true,
-        });
-        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
-
-        find_tool(&tools, "context_prune");
-    }
-
-    #[test]
+    // prune tool test removed
     #[ignore]
     fn test_parallel_support_flags() {
         let model_family = find_family_for_model("gpt-5-codex")
@@ -864,7 +791,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: false,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -884,7 +810,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: false,
             experimental_unified_exec_tool: false,
-            include_context_prune_tool: false,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -911,7 +836,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
         let (tools, _) = build_specs(
             &config,
@@ -1017,7 +941,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -1095,7 +1018,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
 
         let (tools, _) = build_specs(
@@ -1165,7 +1087,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
 
         let (tools, _) = build_specs(
@@ -1230,7 +1151,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
 
         let (tools, _) = build_specs(
@@ -1298,7 +1218,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
 
         let (tools, _) = build_specs(
@@ -1378,7 +1297,6 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
-            include_context_prune_tool: false,
         });
         let (tools, _) = build_specs(
             &config,

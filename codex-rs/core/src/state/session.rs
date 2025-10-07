@@ -193,8 +193,4 @@ impl SessionState {
         };
         Some(start)
     }
-
-    pub(crate) fn set_pinned_tail_turns(&mut self, turns: usize) {
-        self.pinned_tail_turns = turns.max(1);
-    }
 }

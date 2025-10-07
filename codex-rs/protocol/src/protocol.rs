@@ -201,6 +201,16 @@ pub enum Op {
     /// Non-destructive include/exclude of specific items in the in-memory context.
     /// When `included` is false, items are kept in the session but not sent to the model.
     SetContextInclusion { indices: Vec<usize>, included: bool },
+
+    /// Rebuild the in-memory conversation context from the rollout file.
+    /// Useful to recover after an accidental prune.
+    RebuildContextFromRollout,
+
+    /// Attempt a smart fix: from the rollout file, scan backwards to find the
+    /// most recent ToolCall that is missing from the current in-memory
+    /// context and that is not immediately followed by a ToolOutput. Restore
+    /// just that item into the current session.
+    FixLastMissingToolCall,
 }
 
 /// Categories of conversation items that can be pruned from context.

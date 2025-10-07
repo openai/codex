@@ -2,6 +2,7 @@
 edition = "2024"
 name = "codex-core"
 version = { workspace = true }
+build = "build.rs"
 
 [lib]
 doctest = false

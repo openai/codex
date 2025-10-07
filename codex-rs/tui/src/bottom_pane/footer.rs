@@ -11,7 +11,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
@@ -63,20 +63,20 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     }
 }
 
-pub(crate) fn footer_height(props: FooterProps) -> u16 {
+pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     footer_lines(props).len() as u16
 }
 
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     let lines = prefix_lines(
-        footer_lines(props),
+        footer_lines(&props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     );
     Paragraph::new(lines).render(area, buf);
 }
 
-fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+fn footer_lines(props: &FooterProps) -> Vec<Line<'static>> {
     match props.mode {
         // Multi-line overlay suppresses the context indicator.
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
@@ -104,9 +104,9 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
         FooterMode::ShortcutPrompt => {
             if props.is_task_running {
                 vec![info_line(
-                    props.model_label,
-                    props.directory,
-                    props.account_email,
+                    props.model_label.clone(),
+                    props.directory.clone(),
+                    props.account_email.clone(),
                     props.primary_limit_percent,
                     props.weekly_limit_percent,
                     props.context_window_percent,
@@ -114,9 +114,9 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 )]
             } else {
                 vec![info_line(
-                    props.model_label,
-                    props.directory,
-                    props.account_email,
+                    props.model_label.clone(),
+                    props.directory.clone(),
+                    props.account_email.clone(),
                     props.primary_limit_percent,
                     props.weekly_limit_percent,
                     props.context_window_percent,
@@ -126,9 +126,9 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
         }
         // When otherwise empty, still show the context indicator.
         FooterMode::Empty => vec![info_line(
-            props.model_label,
-            props.directory,
-            props.account_email,
+            props.model_label.clone(),
+            props.directory.clone(),
+            props.account_email.clone(),
             props.primary_limit_percent,
             props.weekly_limit_percent,
             props.context_window_percent,
@@ -260,12 +260,6 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn context_window_only_line(percent: Option<u8>) -> Line<'static> {
-    let mut line = Line::from("");
-    append_context_span(&mut line, percent);
-    line
-}
-
 fn append_context_span(line: &mut Line<'static>, percent: Option<u8>) {
     let percent = percent.unwrap_or(100);
     if !line.spans.is_empty() {
@@ -275,13 +269,13 @@ fn append_context_span(line: &mut Line<'static>, percent: Option<u8>) {
 }
 
 fn append_segment<S: Into<String>>(line: &mut Line<'static>, text: Option<S>) {
-    if let Some(text) = text.map(Into::into) {
-        if !text.is_empty() {
-            if !line.spans.is_empty() {
-                line.push_span(Span::from(" | "));
-            }
-            line.push_span(Span::from(text).dim());
+    if let Some(text) = text.map(Into::into)
+        && !text.is_empty()
+    {
+        if !line.spans.is_empty() {
+            line.push_span(Span::from(" | "));
         }
+        line.push_span(Span::from(text).dim());
     }
 }
 
@@ -468,7 +462,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        let height = footer_height(props).max(1);
+        let height = footer_height(&props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
         terminal
             .draw(|f| {
@@ -489,6 +483,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -500,6 +499,11 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -511,6 +515,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -522,6 +531,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -533,6 +547,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -544,6 +563,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -555,6 +579,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: Some(72),
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
     }

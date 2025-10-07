@@ -30,6 +30,7 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
+use std::any::Any;
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
@@ -41,6 +42,8 @@ pub(crate) struct SelectionItem {
     pub description: Option<String>,
     pub is_current: bool,
     pub actions: Vec<SelectionAction>,
+    /// Actions invoked when Delete is pressed on this item. View stays open.
+    pub delete_actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
 }
@@ -54,6 +57,8 @@ pub(crate) struct SelectionViewParams {
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
     pub on_complete_event: Option<AppEvent>,
+    /// Optional event to emit when Enter is pressed (instead of accepting selection).
+    pub on_enter_event: Option<AppEvent>,
 }
 
 impl Default for SelectionViewParams {
@@ -67,6 +72,7 @@ impl Default for SelectionViewParams {
             search_placeholder: None,
             header: Box::new(()),
             on_complete_event: None,
+            on_enter_event: None,
         }
     }
 }
@@ -84,6 +90,7 @@ pub(crate) struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     on_complete_event: Option<AppEvent>,
+    on_enter_event: Option<AppEvent>,
 }
 
 impl ListSelectionView {
@@ -115,6 +122,7 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             header,
             on_complete_event: params.on_complete_event,
+            on_enter_event: params.on_enter_event,
         };
         s.apply_filter();
         s
@@ -211,6 +219,37 @@ impl ListSelectionView {
             .collect()
     }
 
+    /// Update the display name for the item whose `search_value` encodes a given index as
+    /// `IDX:{idx}|...`. Re-applies filtering while attempting to preserve selection.
+    pub(crate) fn update_name_for_idx(&mut self, idx: usize, new_name: String) {
+        for item in &mut self.items {
+            if let Some(sv) = &item.search_value
+                && sv.starts_with(&format!("IDX:{idx}|"))
+            {
+                item.name = new_name;
+                break;
+            }
+        }
+        self.apply_filter();
+    }
+
+    /// Extract the category label encoded in `search_value` for the given index.
+    pub(crate) fn category_label_for_idx(&self, idx: usize) -> Option<String> {
+        for item in &self.items {
+            if let Some(sv) = &item.search_value
+                && sv.starts_with(&format!("IDX:{idx}|"))
+            {
+                if let Some(cat_pos) = sv.find("|CAT:") {
+                    let rest = &sv[cat_pos + 5..];
+                    let end = rest.find('|').unwrap_or(rest.len());
+                    return Some(rest[..end].to_string());
+                }
+                return None;
+            }
+        }
+        None
+    }
+
     fn move_up(&mut self) {
         let len = self.visible_len();
         self.state.move_up_wrap(len);
@@ -254,6 +293,9 @@ impl ListSelectionView {
 }
 
 impl BottomPaneView for ListSelectionView {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -274,6 +316,20 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Esc, ..
             } => {
                 self.on_ctrl_c();
+            }
+            // Space is reserved for toggle even in searchable lists
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                ..
+            } => {
+                if let Some(visible_idx) = self.state.selected_idx
+                    && let Some(actual_idx) = self.filtered_indices.get(visible_idx)
+                    && let Some(item) = self.items.get(*actual_idx)
+                {
+                    for act in &item.actions {
+                        act(&self.app_event_tx);
+                    }
+                }
             }
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -308,7 +364,28 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => self.accept(),
+            } => {
+                if let Some(ev) = self.on_enter_event.take() {
+                    self.app_event_tx.send(ev);
+                    self.complete = true;
+                } else {
+                    self.accept();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Delete,
+                ..
+            } => {
+                if let Some(visible_idx) = self.state.selected_idx
+                    && let Some(actual_idx) = self.filtered_indices.get(visible_idx)
+                    && let Some(item) = self.items.get(*actual_idx)
+                {
+                    for act in &item.delete_actions {
+                        act(&self.app_event_tx);
+                    }
+                    // Keep view open and request a redraw via AppEvent side-effects.
+                }
+            }
             _ => {}
         }
     }

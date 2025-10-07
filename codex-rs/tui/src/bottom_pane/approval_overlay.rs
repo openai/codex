@@ -31,6 +31,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use std::any::Any;
 
 /// Request coming from the agent that needs user approval.
 #[derive(Clone, Debug)]
@@ -219,6 +220,9 @@ impl ApprovalOverlay {
 }
 
 impl BottomPaneView for ApprovalOverlay {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.try_handle_shortcut(&key_event) {
             return;

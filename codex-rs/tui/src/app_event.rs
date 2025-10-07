@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
+use codex_core::protocol::PruneCategory;
 use codex_file_search::FileMatch;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -93,4 +94,33 @@ pub(crate) enum AppEvent {
 
     /// Advanced prune view was dismissed (e.g., via Esc). Used to clear pending flags.
     PruneAdvancedClosed,
+
+    /// Open the manual prune submenu.
+    OpenPruneManual,
+    /// Open the prune-by-turn submenu.
+    OpenPruneByTurn,
+    /// Open prompt to enter number of turns for prune-by-turn.
+    OpenPruneByTurnPrompt,
+    /// Show confirmation for manual prune of a single category.
+    ConfirmPruneManual {
+        category: PruneCategory,
+    },
+    /// Show confirmation for prune-by-turn with the given count.
+    ConfirmPruneByTurn {
+        count: usize,
+    },
+    /// Show confirmation for max prune (all categories).
+    ConfirmPruneMax,
+    /// Show confirmation for smart fix context from rollout.
+
+    /// Advanced prune: toggle keep/unkeep for an index (space key).
+    ToggleKeepIndex {
+        idx: usize,
+    },
+    /// Advanced prune: toggle delete/undelete for an index (delete key).
+    ToggleDeleteIndex {
+        idx: usize,
+    },
+    /// Advanced prune: user pressed Enter to confirm changes.
+    ConfirmAdvancedChanges,
 }

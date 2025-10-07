@@ -53,6 +53,7 @@ pub struct CodexToolCallParam {
     /// Whether to include the plan tool in the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_plan_tool: Option<bool>,
+    // prune tool removed
 }
 
 /// Custom enum mirroring [`AskForApproval`], but has an extra dependency on
@@ -146,6 +147,7 @@ impl CodexToolCallParam {
             config: cli_overrides,
             base_instructions,
             include_plan_tool,
+            // prune tool removed
         } = self;
 
         // Build the `ConfigOverrides` recognized by codex-core.
@@ -162,6 +164,7 @@ impl CodexToolCallParam {
             include_plan_tool,
             include_apply_patch_tool: None,
             include_view_image_tool: None,
+            // prune tool removed
             show_raw_agent_reasoning: None,
             tools_web_search_request: None,
         };
@@ -280,6 +283,7 @@ mod tests {
                 "description": "Whether to include the plan tool in the conversation.",
                 "type": "boolean"
               },
+
               "model": {
                 "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\").",
                 "type": "string"
