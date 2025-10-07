@@ -30,30 +30,31 @@ use crate::spawn::spawn_child_async;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
-// Hardcode these since it does not seem worth including the libc crate just
-// for these.
-const SIGKILL_CODE: i32 = 9;
+// Conventional bases and codes that are platform-agnostic.
 const TIMEOUT_CODE: i32 = 64;
 const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124; // conventional timeout exit code
 const EXIT_NOT_EXECUTABLE_CODE: i32 = 126; // "found but not executable"/shebang/perms
 
-// Common Unix signal numbers used below (document for maintainers)
-// Keep these aligned with platform conventions; these are standard on macOS/Linux.
-const SIGINT_CODE: i32 = 2; // Ctrl-C / interrupt
-const SIGABRT_CODE: i32 = 6; // abort
-const SIGBUS_CODE: i32 = 7; // bus error
-const SIGFPE_CODE: i32 = 8; // floating point exception
-const SIGSEGV_CODE: i32 = 11; // segmentation fault
-const SIGPIPE_CODE: i32 = 13; // broken pipe
-const SIGTERM_CODE: i32 = 15; // termination
+// Unix signal constants via libc (grouped), including SIGSYS. These are only available on Unix.
+#[cfg(target_family = "unix")]
+mod unix_sig {
+    pub const SIGINT_CODE: i32 = libc::SIGINT as i32; // Ctrl-C / interrupt
+    pub const SIGABRT_CODE: i32 = libc::SIGABRT as i32; // abort
+    pub const SIGBUS_CODE: i32 = libc::SIGBUS as i32; // bus error
+    pub const SIGFPE_CODE: i32 = libc::SIGFPE as i32; // floating point exception
+    pub const SIGSEGV_CODE: i32 = libc::SIGSEGV as i32; // segmentation fault
+    pub const SIGPIPE_CODE: i32 = libc::SIGPIPE as i32; // broken pipe
+    pub const SIGTERM_CODE: i32 = libc::SIGTERM as i32; // termination
+    pub const SIGKILL_CODE: i32 = libc::SIGKILL as i32;
+    pub const SIGSYS_CODE: i32 = libc::SIGSYS as i32;
+}
+#[cfg(target_family = "unix")]
+use unix_sig::*;
 
-// Platform-gated SIGSYS signal numbers with no libc dep (Linux & macOS only).
-// Linux SIGSYS is 31; macOS SIGSYS is 12.
-#[cfg(target_os = "linux")]
-const SIGSYS_CODE: i32 = 31;
-#[cfg(target_os = "macos")]
-const SIGSYS_CODE: i32 = 12;
+// On non-Unix (Windows), synthesize a "killed" signal using the conventional 9.
+#[cfg(not(target_family = "unix"))]
+const SIGKILL_CODE: i32 = 9;
 
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
@@ -113,11 +114,11 @@ fn sandbox_verdict(sandbox_type: SandboxType, status: ExitStatus, stderr: &str) 
     }
 
     // Prefer the signal path when available.
-    #[cfg(unix)]
+    #[cfg(target_family = "unix")]
     {
         if let Some(sig) = status.signal() {
             if sig == SIGSYS_CODE {
-                // SIGSYS under seccomp (Linux) or bad syscall elsewhere is a strong tell.
+                // SIGSYS under seccomp/seatbelt or invalid syscall is a strong tell.
                 return SandboxVerdict::LikelySandbox;
             }
             // Common user/app signals -> not sandbox.
@@ -140,29 +141,46 @@ fn sandbox_verdict(sandbox_type: SandboxType, status: ExitStatus, stderr: &str) 
     // - 127: command not found
     // - 64..=78: BSD sysexits range
     // - 128 + {SIGINT, SIGABRT, SIGBUS, SIGFPE, SIGKILL, SIGSEGV, SIGPIPE, SIGTERM}
-    let sig_derived_not_sandbox = [
-        EXIT_CODE_SIGNAL_BASE + SIGINT_CODE,
-        EXIT_CODE_SIGNAL_BASE + SIGABRT_CODE,
-        EXIT_CODE_SIGNAL_BASE + SIGBUS_CODE,
-        EXIT_CODE_SIGNAL_BASE + SIGFPE_CODE,
-        EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE,
-        EXIT_CODE_SIGNAL_BASE + SIGSEGV_CODE,
-        EXIT_CODE_SIGNAL_BASE + SIGPIPE_CODE,
-        EXIT_CODE_SIGNAL_BASE + SIGTERM_CODE,
-    ];
-    if code == 0
-        || code == 2
-        || code == EXEC_TIMEOUT_EXIT_CODE
-        || code == 127
-        || (64..=78).contains(&code)
-        || sig_derived_not_sandbox.contains(&code)
+    #[cfg(target_family = "unix")]
     {
-        return SandboxVerdict::LikelyNotSandbox;
+        let sig_derived_not_sandbox = [
+            EXIT_CODE_SIGNAL_BASE + SIGINT_CODE,
+            EXIT_CODE_SIGNAL_BASE + SIGABRT_CODE,
+            EXIT_CODE_SIGNAL_BASE + SIGBUS_CODE,
+            EXIT_CODE_SIGNAL_BASE + SIGFPE_CODE,
+            EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE,
+            EXIT_CODE_SIGNAL_BASE + SIGSEGV_CODE,
+            EXIT_CODE_SIGNAL_BASE + SIGPIPE_CODE,
+            EXIT_CODE_SIGNAL_BASE + SIGTERM_CODE,
+        ];
+        if code == 0
+            || code == 2
+            || code == EXEC_TIMEOUT_EXIT_CODE
+            || code == 127
+            || (64..=78).contains(&code)
+            || sig_derived_not_sandbox.contains(&code)
+        {
+            return SandboxVerdict::LikelyNotSandbox;
+        }
+    }
+    #[cfg(not(target_family = "unix"))]
+    {
+        if code == 0
+            || code == 2
+            || code == EXEC_TIMEOUT_EXIT_CODE
+            || code == 127
+            || (64..=78).contains(&code)
+        {
+            return SandboxVerdict::LikelyNotSandbox;
+        }
     }
 
-    // Shell-style signal encoding for SIGSYS.
-    if code == EXIT_CODE_SIGNAL_BASE + SIGSYS_CODE {
-        return SandboxVerdict::LikelySandbox;
+    // Shell-style signal encoding for SIGSYS (Unix).
+    #[cfg(target_family = "unix")]
+    {
+        if code == EXIT_CODE_SIGNAL_BASE + SIGSYS_CODE {
+            return SandboxVerdict::LikelySandbox;
+        }
     }
 
     // 126 is often perms/shebang; upgrade only with explicit hints.
@@ -260,10 +278,14 @@ pub async fn process_exec_tool_call(
                 if let Some(signal) = raw_output.exit_status.signal() {
                     if signal == TIMEOUT_CODE {
                         timed_out = true;
-                    } else if signal == SIGSYS_CODE && !matches!(sandbox_type, SandboxType::None) {
-                        pending_signal = Some(signal);
                     } else {
-                        return Err(CodexErr::Sandbox(SandboxErr::Signal(signal)));
+                        // Defer SIGSYS (possible sandbox) only when a sandbox was requested;
+                        // otherwise, treat any non-timeout signal as an immediate error.
+                        if signal == SIGSYS_CODE && !matches!(sandbox_type, SandboxType::None) {
+                            pending_signal = Some(signal);
+                        } else {
+                            return Err(CodexErr::Sandbox(SandboxErr::Signal(signal)));
+                        }
                     }
                 }
             }
@@ -576,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
+    #[cfg(target_family = "unix")]
     fn sandbox_sigsys_codepath() {
         let code = EXIT_CODE_SIGNAL_BASE + SIGSYS_CODE;
         assert!(matches!(
