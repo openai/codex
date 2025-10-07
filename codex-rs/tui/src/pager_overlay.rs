@@ -474,12 +474,8 @@ pub(crate) struct StaticOverlay {
 
 impl StaticOverlay {
     pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
-        Self::with_renderables(
-            vec![Box::new(CachedParagraph::new(Paragraph::new(Text::from(
-                lines,
-            ))))],
-            title,
-        )
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        Self::with_renderables(vec![Box::new(CachedParagraph::new(paragraph))], title)
     }
 
     pub(crate) fn with_renderables(renderables: Vec<Box<dyn Renderable>>, title: String) -> Self {
@@ -785,6 +781,18 @@ mod tests {
             "S T A T I C".to_string(),
         );
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn static_overlay_wraps_long_lines() {
+        let mut overlay = StaticOverlay::with_title(
+            vec!["a very long line that should wrap when rendered within a narrow pager overlay width".into()],
+            "S T A T I C".to_string(),
+        );
+        let mut term = Terminal::new(TestBackend::new(24, 8)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
