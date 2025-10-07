@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -10,6 +12,12 @@ use crate::render::RectExt as _;
 pub trait Renderable {
     fn render(&self, area: Rect, buf: &mut Buffer);
     fn desired_height(&self, width: u16) -> u16;
+}
+
+impl<R: Renderable + 'static> From<R> for Box<dyn Renderable> {
+    fn from(value: R) -> Self {
+        Box::new(value)
+    }
 }
 
 impl Renderable for () {
@@ -71,6 +79,15 @@ impl<R: Renderable> Renderable for Option<R> {
     }
 }
 
+impl<R: Renderable> Renderable for Arc<R> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.as_ref().render(area, buf);
+    }
+    fn desired_height(&self, width: u16) -> u16 {
+        self.as_ref().desired_height(width)
+    }
+}
+
 pub struct ColumnRenderable {
     children: Vec<Box<dyn Renderable>>,
 }
@@ -122,7 +139,10 @@ impl Renderable for InsetRenderable {
 }
 
 impl InsetRenderable {
-    pub fn new(child: Box<dyn Renderable>, insets: Insets) -> Self {
-        Self { child, insets }
+    pub fn new(child: impl Into<Box<dyn Renderable>>, insets: Insets) -> Self {
+        Self {
+            child: child.into(),
+            insets,
+        }
     }
 }
