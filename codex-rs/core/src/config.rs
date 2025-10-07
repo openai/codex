@@ -219,6 +219,12 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config_types::OtelConfig,
+
+    /// Exclude built-in tools from context
+    pub exclude_builtin_tools: Vec<String>,
+
+    /// Include only these built-in tools (mutually exclusive with exclude)
+    pub include_builtin_tools: Option<Vec<String>>,
 }
 
 impl Config {
@@ -767,6 +773,14 @@ pub struct ConfigToml {
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
+
+    /// Exclude built-in tools from context
+    #[serde(default)]
+    pub exclude_builtin_tools: Vec<String>,
+
+    /// Include only these built-in tools (mutually exclusive with exclude)
+    #[serde(default)]
+    pub include_builtin_tools: Option<Vec<String>>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -936,6 +950,14 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
         } = overrides;
+
+        // Validate mutual exclusion of builtin tool filtering options
+        if !cfg.exclude_builtin_tools.is_empty() && cfg.include_builtin_tools.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Cannot use both exclude_builtin_tools and include_builtin_tools",
+            ));
+        }
 
         let active_profile_name = config_profile_key
             .as_ref()
@@ -1145,6 +1167,8 @@ impl Config {
                     exporter,
                 }
             },
+            exclude_builtin_tools: cfg.exclude_builtin_tools,
+            include_builtin_tools: cfg.include_builtin_tools,
         };
         Ok(config)
     }
