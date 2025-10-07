@@ -1,6 +1,8 @@
 # Codex SDK
 
-Bring the power of the best coding agent to your application.
+Embed the Codex agent in your workflows and apps.
+
+The TypeScript SDK wraps the bundled `codex` binary. It spawns the CLI and exchanges JSONL events over stdin/stdout.
 
 ## Installation
 
@@ -8,64 +10,96 @@ Bring the power of the best coding agent to your application.
 npm install @openai/codex-sdk
 ```
 
-## Usage
+Requires Node.js 18+.
 
-Call `startThread()` and `run()` to start a thead with Codex.
+## Quickstart
 
 ```typescript
 import { Codex } from "@openai/codex-sdk";
 
 const codex = new Codex();
 const thread = codex.startThread();
-const result = await thread.run("Diagnose the test failure and propose a fix");
+const turn = await thread.run("Diagnose the test failure and propose a fix");
 
-console.log(result);
+console.log(turn.finalResponse);
+console.log(turn.items);
 ```
 
-You can call `run()` again to continue the same thread.
+Call `run()` repeatedly on the same `Thread` instance to continue that conversation.
 
 ```typescript
-const result = await thread.run("Implement the fix");
-
-console.log(result);
+const nextTurn = await thread.run("Implement the fix");
 ```
 
-### Streaming
+### Streaming responses
 
-The `await run()` method completes when a thread turn is complete and agent is prepared the final response.
-
-You can thread items while they are being produced by calling `await runStreamed()`.
+`run()` buffers events until the turn finishes. To react to intermediate progress—tool calls, streaming responses, and file diffs—use `runStreamed()` instead, which returns an async generator of structured events.
 
 ```typescript
-const result = thread.runStreamed("Diagnose the test failure and propose a fix");
+const { events } = await thread.runStreamed("Diagnose the test failure and propose a fix");
+
+for await (const event of events) {
+  switch (event.type) {
+    case "item.completed":
+      console.log("item", event.item);
+      break;
+    case "turn.completed":
+      console.log("usage", event.usage);
+      break;
+  }
+}
 ```
 
-### Resuming a thread
+### Structured output
 
-If you don't have the original `Thread` instance to continue the thread, you can resume a thread by calling `resumeThread()` and providing the thread.
+The Codex agent can produce a JSON response that conforms to a specified schema. The schema can be provided for each turn as a plain JSON object.
 
 ```typescript
-const threadId = "...";
-const thread = codex.resumeThread(threadId);
-const result = await thread.run("Implement the fix");
+const schema = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    status: { type: "string", enum: ["ok", "action_required"] },
+  },
+  required: ["summary", "status"],
+  additionalProperties: false,
+} as const;
 
-console.log(result);
+const turn = await thread.run("Summarize repository status", { outputSchema: schema });
+console.log(turn.finalResponse);
 ```
 
-### Working directory
-
-By default, Codex will run in the current working directory. You can change the working directory by passing the `workingDirectory` option to the when creating a thread.
+You can also create a JSON schema from a [Zod schema](https://github.com/colinhacks/zod) using the [`zod-to-json-schema`](https://www.npmjs.com/package/zod-to-json-schema) package and setting the `target` to `"openAi"`.
 
 ```typescript
-const thread = codex.startThread({
-  workingDirectory: "/path/to/working/directory",
+const schema = z.object({
+  summary: z.string(),
+  status: z.enum(["ok", "action_required"]),
 });
+
+const turn = await thread.run("Summarize repository status", {
+  outputSchema: zodToJsonSchema(schema, { target: "openAi" }),
+});
+console.log(turn.finalResponse);
 ```
 
-To avoid unrecoverable errors, Codex requires the working directory to be a git repository. You can skip the git repository check by passing the `skipGitRepoCheck` option to the when creating a thread.
+### Resuming an existing thread
+
+Threads are persisted in `~/.codex/sessions`. If you lose the in-memory `Thread` object, reconstruct it with `resumeThread()` and keep going.
+
+```typescript
+const savedThreadId = process.env.CODEX_THREAD_ID!;
+const thread = codex.resumeThread(savedThreadId);
+await thread.run("Implement the fix");
+```
+
+### Working directory controls
+
+Codex runs in the current working directory by default. To avoid unrecoverable errors, Codex requires the working directory to be a Git repository. You can skip the Git repository check by passing the `skipGitRepoCheck` option when creating a thread. 
 
 ```typescript
 const thread = codex.startThread({
+  workingDirectory: "/path/to/project",
   skipGitRepoCheck: true,
 });
 ```

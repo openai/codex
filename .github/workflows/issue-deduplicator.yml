@@ -14,7 +14,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      codex_output: ${{ steps.codex.outputs.final_message }}
+      codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,11 +44,38 @@ jobs:
       - id: codex
         uses: openai/codex-action@main
         with:
-          openai_api_key: ${{ secrets.CODEX_OPENAI_API_KEY }}
-          prompt_file: .github/prompts/issue-deduplicator.txt
-          require_repo_write: false
-          codex_version: 0.43.0-alpha.16
-          codex_args: -m gpt-5
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          allow-users: "*"
+          model: gpt-5
+          prompt: |
+            You are an assistant that triages new GitHub issues by identifying potential duplicates.
+
+            You will receive the following JSON files located in the current working directory:
+            - `codex-current-issue.json`: JSON object describing the newly created issue (fields: number, title, body).
+            - `codex-existing-issues.json`: JSON array of recent issues (each element includes number, title, body, createdAt).
+
+            Instructions:
+            - Compare the current issue against the existing issues to find up to five that appear to describe the same underlying problem or request.
+            - Focus on the underlying intent and context of each issue—such as reported symptoms, feature requests, reproduction steps, or error messages—rather than relying solely on string similarity or synthetic metrics.
+            - After your analysis, validate your results in 1-2 lines explaining your decision to return the selected matches.
+            - When unsure, prefer returning fewer matches.
+            - Include at most five numbers.
+
+          output-schema: |
+            {
+              "type": "object",
+              "properties": {
+                "issues": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "reason": { "type": "string" }
+              },
+              "required": ["issues", "reason"],
+              "additionalProperties": false
+            }
 
   comment-on-issue:
     name: Comment with potential duplicates
@@ -66,22 +93,33 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            let numbers;
+            const raw = process.env.CODEX_OUTPUT ?? '';
+            let parsed;
             try {
-              numbers = JSON.parse(process.env.CODEX_OUTPUT);
+              parsed = JSON.parse(raw);
             } catch (error) {
               core.info(`Codex output was not valid JSON. Raw output: ${raw}`);
+              core.info(`Parse error: ${error.message}`);
               return;
             }
 
-            if (numbers.length === 0) {
+            const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
+            const currentIssueNumber = String(context.payload.issue.number);
+
+            console.log(`Current issue number: ${currentIssueNumber}`);
+            console.log(issues);
+
+            const filteredIssues = issues.filter((value) => String(value) !== currentIssueNumber);
+
+            if (filteredIssues.length === 0) {
               core.info('Codex reported no potential duplicates.');
               return;
             }
 
             const lines = [
-              'Potential duplicates detected:'
-              ...numbers.map((value) => `- #${value}`),
+              'Potential duplicates detected. Please review them and close your issue if it is a duplicate.',
+              '',
+              ...filteredIssues.map((value) => `- #${String(value)}`),
               '',
               '*Powered by [Codex Action](https://github.com/openai/codex-action)*'];
 

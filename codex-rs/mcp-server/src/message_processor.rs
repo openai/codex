@@ -342,7 +342,10 @@ impl MessageProcessor {
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
         let (initial_prompt, config): (String, Config) = match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
-                Ok(tool_cfg) => match tool_cfg.into_config(self.codex_linux_sandbox_exe.clone()) {
+                Ok(tool_cfg) => match tool_cfg
+                    .into_config(self.codex_linux_sandbox_exe.clone())
+                    .await
+                {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         let result = CallToolResult {

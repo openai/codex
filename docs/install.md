@@ -37,4 +37,4 @@ cargo clippy --tests
 
 # Run the tests.
 cargo test
-``` 
+```

@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 1548
 expression: terminal.backend()
 ---
 "                                                                                "
@@ -16,4 +17,3 @@ expression: terminal.backend()
 "  3. No, and tell Codex what to do differently esc                              "
 "                                                                                "
 "  Press enter to confirm or esc to cancel                                       "
-"                                                                                "
