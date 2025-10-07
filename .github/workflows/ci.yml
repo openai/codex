@@ -60,3 +60,6 @@ jobs:
         run: ./scripts/asciicheck.py codex-cli/README.md
       - name: Check codex-cli/README ToC
         run: python3 scripts/readme_toc.py codex-cli/README.md
+
+      - name: Prettier (run `pnpm run format:fix` to fix)
+        run: pnpm run format

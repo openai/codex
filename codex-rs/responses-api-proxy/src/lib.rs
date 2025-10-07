@@ -49,6 +49,7 @@ pub struct Args {
 #[derive(Serialize)]
 struct ServerInfo {
     port: u16,
+    pid: u32,
 }
 
 /// Entry point for the library main, for parity with other crates.
@@ -100,15 +101,17 @@ fn write_server_info(path: &Path, port: u16) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        let parent_display = parent.display();
-        fs::create_dir_all(parent).with_context(|| format!("create_dir_all {parent_display}"))?;
+        fs::create_dir_all(parent)?;
     }
-    let info = ServerInfo { port };
-    let data = serde_json::to_vec(&info).context("serialize startup info")?;
-    let p = path.display();
-    let mut f = File::create(path).with_context(|| format!("create {p}"))?;
-    f.write_all(&data).with_context(|| format!("write {p}"))?;
-    f.write_all(b"\n").with_context(|| format!("newline {p}"))?;
+
+    let info = ServerInfo {
+        port,
+        pid: std::process::id(),
+    };
+    let mut data = serde_json::to_string(&info)?;
+    data.push('\n');
+    let mut f = File::create(path)?;
+    f.write_all(data.as_bytes())?;
     Ok(())
 }
 

@@ -229,14 +229,14 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
 
     assert!(output.status.success(), "resume run failed: {output:?}");
 
-    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
     assert!(
-        stdout.contains("model: gpt-5-high"),
-        "stdout missing model override: {stdout}"
+        stderr.contains("model: gpt-5-high"),
+        "stderr missing model override: {stderr}"
     );
     assert!(
-        stdout.contains("sandbox: workspace-write"),
-        "stdout missing sandbox override: {stdout}"
+        stderr.contains("sandbox: workspace-write"),
+        "stderr missing sandbox override: {stderr}"
     );
 
     let resumed_path = find_session_file_containing_marker(&sessions_dir, &marker2)
