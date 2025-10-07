@@ -39,15 +39,15 @@ const EXIT_NOT_EXECUTABLE_CODE: i32 = 126; // "found but not executable"/shebang
 // Unix signal constants via libc (grouped), including SIGSYS. These are only available on Unix.
 #[cfg(target_family = "unix")]
 mod unix_sig {
-    pub const SIGINT_CODE: i32 = libc::SIGINT as i32; // Ctrl-C / interrupt
-    pub const SIGABRT_CODE: i32 = libc::SIGABRT as i32; // abort
-    pub const SIGBUS_CODE: i32 = libc::SIGBUS as i32; // bus error
-    pub const SIGFPE_CODE: i32 = libc::SIGFPE as i32; // floating point exception
-    pub const SIGSEGV_CODE: i32 = libc::SIGSEGV as i32; // segmentation fault
-    pub const SIGPIPE_CODE: i32 = libc::SIGPIPE as i32; // broken pipe
-    pub const SIGTERM_CODE: i32 = libc::SIGTERM as i32; // termination
-    pub const SIGKILL_CODE: i32 = libc::SIGKILL as i32;
-    pub const SIGSYS_CODE: i32 = libc::SIGSYS as i32;
+    pub const SIGINT_CODE: i32 = libc::SIGINT; // Ctrl-C / interrupt
+    pub const SIGABRT_CODE: i32 = libc::SIGABRT; // abort
+    pub const SIGBUS_CODE: i32 = libc::SIGBUS; // bus error
+    pub const SIGFPE_CODE: i32 = libc::SIGFPE; // floating point exception
+    pub const SIGSEGV_CODE: i32 = libc::SIGSEGV; // segmentation fault
+    pub const SIGPIPE_CODE: i32 = libc::SIGPIPE; // broken pipe
+    pub const SIGTERM_CODE: i32 = libc::SIGTERM; // termination
+    pub const SIGKILL_CODE: i32 = libc::SIGKILL;
+    pub const SIGSYS_CODE: i32 = libc::SIGSYS;
 }
 #[cfg(target_family = "unix")]
 use unix_sig::*;
@@ -106,6 +106,11 @@ fn stderr_hints_sandbox(stderr: &str) -> bool {
         || s.contains("not permitted by sandbox")
         || s.contains("bad system call")
         || s.contains("seccomp")
+        // Less explicit, but commonly emitted by shells and tools when a seatbelt
+        // or seccomp policy blocks a write/open. Tests rely on these.
+        || s.contains("operation not permitted")
+        || s.contains("permission denied")
+        || s.contains("read-only file system")
 }
 
 fn sandbox_verdict(sandbox_type: SandboxType, status: ExitStatus, stderr: &str) -> SandboxVerdict {
@@ -133,6 +138,13 @@ fn sandbox_verdict(sandbox_type: SandboxType, status: ExitStatus, stderr: &str) 
     }
 
     let code = status.code().unwrap_or(-1);
+
+    // If stderr strongly hints at sandbox denial, prefer that classification even
+    // when the exit code is within generic BSD sysexits. This handles cases like
+    // macOS seatbelt failing early with "Operation not permitted".
+    if stderr_hints_sandbox(stderr) {
+        return SandboxVerdict::LikelySandbox;
+    }
 
     // Immediate NotSandbox codes
     // - 0: success
