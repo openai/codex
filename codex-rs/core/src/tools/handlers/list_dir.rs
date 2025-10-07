@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs::FileType;
 use std::path::Path;
@@ -119,8 +120,6 @@ async fn list_dir_slice(
     let mut entries = Vec::new();
     collect_entries(path, Path::new(""), depth, &mut entries).await?;
 
-    entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-
     if entries.is_empty() {
         return Ok(Vec::new());
     }
@@ -135,9 +134,11 @@ async fn list_dir_slice(
     let remaining_entries = entries.len() - start_index;
     let capped_limit = limit.min(remaining_entries);
     let end_index = start_index + capped_limit;
-    let mut formatted = Vec::with_capacity(end_index - start_index);
+    let mut selected_entries = entries[start_index..end_index].to_vec();
+    selected_entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+    let mut formatted = Vec::with_capacity(selected_entries.len());
 
-    for entry in &entries[start_index..end_index] {
+    for entry in &selected_entries {
         formatted.push(format_entry_line(entry));
     }
 
@@ -154,12 +155,15 @@ async fn collect_entries(
     depth: usize,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
-    let mut stack = vec![(dir_path.to_path_buf(), relative_prefix.to_path_buf(), depth)];
+    let mut queue = VecDeque::new();
+    queue.push_back((dir_path.to_path_buf(), relative_prefix.to_path_buf(), depth));
 
-    while let Some((current_dir, prefix, remaining_depth)) = stack.pop() {
+    while let Some((current_dir, prefix, remaining_depth)) = queue.pop_front() {
         let mut read_dir = fs::read_dir(&current_dir).await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
         })?;
+
+        let mut dir_entries = Vec::new();
 
         while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
@@ -179,16 +183,26 @@ async fn collect_entries(
             let display_depth = prefix.components().count();
             let sort_key = format_entry_name(&relative_path);
             let kind = DirEntryKind::from(&file_type);
-            entries.push(DirEntry {
-                name: sort_key,
-                display_name,
-                depth: display_depth,
+            dir_entries.push((
+                entry.path(),
+                relative_path,
                 kind,
-            });
+                DirEntry {
+                    name: sort_key,
+                    display_name,
+                    depth: display_depth,
+                    kind,
+                },
+            ));
+        }
 
+        dir_entries.sort_unstable_by(|a, b| a.3.name.cmp(&b.3.name));
+
+        for (entry_path, relative_path, kind, dir_entry) in dir_entries {
             if kind == DirEntryKind::Directory && remaining_depth > 1 {
-                stack.push((entry.path(), relative_path, remaining_depth - 1));
+                queue.push_back((entry_path, relative_path, remaining_depth - 1));
             }
+            entries.push(dir_entry);
         }
     }
 
@@ -432,5 +446,31 @@ mod tests {
             entries.last(),
             Some(&"More than 25 entries found".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn bfs_truncation() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let dir_path = temp.path();
+        let nested = dir_path.join("nested");
+        let deeper = nested.join("deeper");
+        tokio::fs::create_dir(&nested).await?;
+        tokio::fs::create_dir(&deeper).await?;
+        tokio::fs::write(dir_path.join("root.txt"), b"root").await?;
+        tokio::fs::write(nested.join("child.txt"), b"child").await?;
+        tokio::fs::write(deeper.join("grandchild.txt"), b"deep").await?;
+
+        let entries_depth_three = list_dir_slice(dir_path, 1, 3, 3).await?;
+        assert_eq!(
+            entries_depth_three,
+            vec![
+                "nested/".to_string(),
+                "  child.txt".to_string(),
+                "root.txt".to_string(),
+                "More than 3 entries found".to_string()
+            ]
+        );
+
+        Ok(())
     }
 }
