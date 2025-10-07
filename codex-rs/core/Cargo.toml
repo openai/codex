@@ -89,6 +89,7 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
+assert_matches = { workspace = true }
 core_test_support = { workspace = true }
 escargot = { workspace = true }
 maplit = { workspace = true }

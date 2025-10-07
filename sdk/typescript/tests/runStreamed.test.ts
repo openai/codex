@@ -157,6 +157,50 @@ describe("Codex", () => {
       await close();
     }
   });
+
+  it("applies output schema turn options when streaming", async () => {
+    const { url, close, requests } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Structured response", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const schema = {
+      type: "object",
+      properties: {
+        answer: { type: "string" },
+      },
+      required: ["answer"],
+      additionalProperties: false,
+    } as const;
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      const streamed = await thread.runStreamed("structured", { outputSchema: schema });
+      await drainEvents(streamed.events);
+
+      expect(requests.length).toBeGreaterThanOrEqual(1);
+      const payload = requests[0];
+      expect(payload).toBeDefined();
+      const text = payload!.json.text;
+      expect(text).toBeDefined();
+      expect(text?.format).toEqual({
+        name: "codex_output_schema",
+        type: "json_schema",
+        strict: true,
+        schema,
+      });
+    } finally {
+      await close();
+    }
+  });
 });
 
 async function drainEvents(events: AsyncGenerator<ThreadEvent>): Promise<void> {

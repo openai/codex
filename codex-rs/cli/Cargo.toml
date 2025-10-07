@@ -47,6 +47,7 @@ tokio = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+assert_matches = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -5,13 +5,9 @@ import { stdin as input, stdout as output } from "node:process";
 
 import { Codex } from "@openai/codex-sdk";
 import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
-import path from "node:path";
+import { codexPathOverride } from "./helpers.ts";
 
-const codexPathOverride =
-  process.env.CODEX_EXECUTABLE ??
-  path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
-
-const codex = new Codex({ codexPathOverride });
+const codex = new Codex({ codexPathOverride: codexPathOverride() });
 const thread = codex.startThread();
 const rl = createInterface({ input, output });
 
