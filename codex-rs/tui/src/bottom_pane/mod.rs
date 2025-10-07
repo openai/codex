@@ -81,7 +81,7 @@ pub(crate) struct BottomPaneParams {
 }
 
 impl BottomPane {
-    const BOTTOM_PAD_LINES: u16 = 1;
+    const BOTTOM_PAD_LINES: u16 = 0;
     pub fn new(params: BottomPaneParams) -> Self {
         let enhanced_keys_supported = params.enhanced_keys_supported;
         Self {
@@ -522,9 +522,28 @@ impl WidgetRef for &BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn snapshot_buffer(buf: &Buffer) -> String {
+        let mut lines = Vec::new();
+        for y in 0..buf.area().height {
+            let mut row = String::new();
+            for x in 0..buf.area().width {
+                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            lines.push(row);
+        }
+        lines.join("\n")
+    }
+
+    fn render_snapshot(pane: &BottomPane, area: Rect) -> String {
+        let mut buf = Buffer::empty(area);
+        (&pane).render_ref(area, &mut buf);
+        snapshot_buffer(&buf)
+    }
 
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
@@ -685,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn bottom_padding_present_with_status_above_composer() {
+    fn status_and_composer_fill_height_without_bottom_padding() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -700,43 +719,21 @@ mod tests {
         // Activate spinner (status view replaces composer) with no live ring.
         pane.set_task_running(true);
 
-        // Use height == desired_height; expect 1 status row at top and 2 bottom padding rows.
+        // Use height == desired_height; expect spacer + status + composer rows without trailing padding.
         let height = pane.desired_height(30);
         assert!(
             height >= 3,
-            "expected at least 3 rows with bottom padding; got {height}"
+            "expected at least 3 rows to render spacer, status, and composer; got {height}"
         );
         let area = Rect::new(0, 0, 30, height);
-        let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
-
-        // Row 1 contains the status header (row 0 is the spacer)
-        let mut top = String::new();
-        for x in 0..area.width {
-            top.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(
-            top.trim_start().starts_with("• Working"),
-            "expected top row to start with '• Working': {top:?}"
-        );
-        assert!(
-            top.contains("Working"),
-            "expected Working header on top row: {top:?}"
-        );
-
-        // Last row should be blank padding; the row above should generally contain composer content.
-        let mut r_last = String::new();
-        for x in 0..area.width {
-            r_last.push(buf[(x, height - 1)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(
-            r_last.trim().is_empty(),
-            "expected last row blank: {r_last:?}"
+        assert_snapshot!(
+            "status_and_composer_fill_height_without_bottom_padding",
+            render_snapshot(&pane, area)
         );
     }
 
     #[test]
-    fn bottom_padding_shrinks_when_tiny() {
+    fn status_hidden_when_height_too_small() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -750,37 +747,18 @@ mod tests {
 
         pane.set_task_running(true);
 
-        // Height=2 → status on one row, composer on the other.
+        // Height=2 → composer takes the full space; status collapses when there is no room.
         let area2 = Rect::new(0, 0, 20, 2);
-        let mut buf2 = Buffer::empty(area2);
-        (&pane).render_ref(area2, &mut buf2);
-        let mut row0 = String::new();
-        let mut row1 = String::new();
-        for x in 0..area2.width {
-            row0.push(buf2[(x, 0)].symbol().chars().next().unwrap_or(' '));
-            row1.push(buf2[(x, 1)].symbol().chars().next().unwrap_or(' '));
-        }
-        let has_composer = row0.contains("Ask Codex") || row1.contains("Ask Codex");
-        assert!(
-            has_composer,
-            "expected composer to be visible on one of the rows: row0={row0:?}, row1={row1:?}"
-        );
-        assert!(
-            row0.contains("Working") || row1.contains("Working"),
-            "expected status header to be visible at height=2: row0={row0:?}, row1={row1:?}"
+        assert_snapshot!(
+            "status_hidden_when_height_too_small_height_2",
+            render_snapshot(&pane, area2)
         );
 
         // Height=1 → no padding; single row is the composer (status hidden).
         let area1 = Rect::new(0, 0, 20, 1);
-        let mut buf1 = Buffer::empty(area1);
-        (&pane).render_ref(area1, &mut buf1);
-        let mut only = String::new();
-        for x in 0..area1.width {
-            only.push(buf1[(x, 0)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(
-            only.contains("Ask Codex"),
-            "expected composer with no padding: {only:?}"
+        assert_snapshot!(
+            "status_hidden_when_height_too_small_height_1",
+            render_snapshot(&pane, area1)
         );
     }
 }
