@@ -217,6 +217,15 @@ model_provider = "openai"
 approval_policy = "on-failure"
 ```
 
+Profiles can also include MCP servers that are merged into the global list
+when the profile is active:
+
+```toml
+[profiles.zdr.mcp_servers.echo]
+command = "node"
+args = ["echo-mcp.js"]
+```
+
 Users can specify config values at multiple levels. Order of precedence is as follows:
 
 1. custom command-line argument, e.g., `--model o3`
@@ -427,6 +436,31 @@ codex mcp login SERVER_NAME
 # Log out from a streamable HTTP server that supports oauth
 codex mcp logout SERVER_NAME
 ```
+
+### Per-profile MCP servers
+
+You can also declare MCP servers inside a profile. Profile-scoped servers are
+merged into the top-level `mcp_servers` when that profile is active. If a
+server key exists in both places, the profile definition wins.
+
+Example:
+
+```toml
+[mcp_servers.global-tools]
+command = "npx"
+args = ["-y", "global-mcp"]
+
+[profiles.o3]
+model = "o3"
+
+[profiles.o3.mcp_servers.project-tools]
+command = "npx"
+args = ["-y", "project-mcp"]
+```
+
+Running with `--profile o3` will make both `global-tools` and `project-tools`
+available; if `project-tools` also appeared at the top level, the profile
+definition would take precedence.
 
 ## Examples of useful MCPs
 
