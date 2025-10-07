@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
@@ -90,6 +91,110 @@ async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
     assert_eq!(env.len(), 2);
     assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
     assert_eq!(env.get("ALPHA"), Some(&"beta".to_string()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn add_streamable_http_with_bearer_token_env_var() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let dotenv_path = codex_home.path().join(".env");
+
+    let mut add_cmd = codex_command(codex_home.path())?;
+    add_cmd
+        .write_stdin("super-secret-token")
+        .args([
+            "mcp",
+            "add",
+            "github",
+            "--url",
+            "https://example.com/mcp",
+            "--with-bearer-token",
+        ])
+        .assert()
+        .success();
+
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let github = servers.get("github").expect("github server should exist");
+    match &github.transport {
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+        } => {
+            assert_eq!(url, "https://example.com/mcp");
+            assert_eq!(
+                bearer_token_env_var.as_deref(),
+                Some("CODEX_MCP_GITHUB_BEARER_TOKEN")
+            );
+        }
+        other => panic!("unexpected transport: {other:?}"),
+    }
+
+    let dotenv_contents = fs::read_to_string(&dotenv_path)?;
+    assert!(dotenv_contents.contains("CODEX_MCP_GITHUB_BEARER_TOKEN=super-secret-token"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn add_streamable_http_with_custom_env_var() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_cmd = codex_command(codex_home.path())?;
+    add_cmd
+        .write_stdin("another-secret")
+        .args([
+            "mcp",
+            "add",
+            "issues",
+            "--url",
+            "https://example.com/issues",
+            "--bearer-token-env-var",
+            "GITHUB_TOKEN",
+            "--with-bearer-token",
+        ])
+        .assert()
+        .success();
+
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    let issues = servers.get("issues").expect("issues server should exist");
+    match &issues.transport {
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+        } => {
+            assert_eq!(url, "https://example.com/issues");
+            assert_eq!(bearer_token_env_var.as_deref(), Some("GITHUB_TOKEN"));
+        }
+        other => panic!("unexpected transport: {other:?}"),
+    }
+
+    let dotenv_contents = fs::read_to_string(codex_home.path().join(".env"))?;
+    assert!(dotenv_contents.contains("GITHUB_TOKEN=another-secret"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn add_streamable_http_with_bearer_token_requires_stdin() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_cmd = codex_command(codex_home.path())?;
+    add_cmd
+        .args([
+            "mcp",
+            "add",
+            "github",
+            "--url",
+            "https://example.com/mcp",
+            "--with-bearer-token",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("No bearer token provided via stdin."));
+
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    assert!(servers.is_empty());
 
     Ok(())
 }

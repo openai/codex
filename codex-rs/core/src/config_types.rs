@@ -48,6 +48,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
 
             url: Option<String>,
             bearer_token: Option<String>,
+            bearer_token_env_var: Option<String>,
 
             #[serde(default)]
             startup_timeout_sec: Option<f64>,
@@ -80,6 +81,19 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             )))
         }
 
+        fn throw_if_bearer_token_set<E>(transport: &str, value: Option<&String>) -> Result<(), E>
+        where
+            E: SerdeError,
+        {
+            if value.is_none() {
+                return Ok(());
+            }
+
+            Err(E::custom(format!(
+                "bearer_token is not supported for {transport}; set bearer_token_env_var or use `codex mcp add <name> --url <url> --with-bearer-token`",
+            )))
+        }
+
         let transport = match raw {
             RawMcpServerConfig {
                 command: Some(command),
@@ -87,10 +101,16 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 env,
                 url,
                 bearer_token,
+                bearer_token_env_var,
                 ..
             } => {
                 throw_if_set("stdio", "url", url.as_ref())?;
-                throw_if_set("stdio", "bearer_token", bearer_token.as_ref())?;
+                throw_if_bearer_token_set("stdio", bearer_token.as_ref())?;
+                throw_if_set(
+                    "stdio",
+                    "bearer_token_env_var",
+                    bearer_token_env_var.as_ref(),
+                )?;
                 McpServerTransportConfig::Stdio {
                     command,
                     args: args.unwrap_or_default(),
@@ -100,6 +120,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             RawMcpServerConfig {
                 url: Some(url),
                 bearer_token,
+                bearer_token_env_var,
                 command,
                 args,
                 env,
@@ -108,7 +129,11 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 throw_if_set("streamable_http", "command", command.as_ref())?;
                 throw_if_set("streamable_http", "args", args.as_ref())?;
                 throw_if_set("streamable_http", "env", env.as_ref())?;
-                McpServerTransportConfig::StreamableHttp { url, bearer_token }
+                throw_if_bearer_token_set("streamable_http", bearer_token.as_ref())?;
+                McpServerTransportConfig::StreamableHttp {
+                    url,
+                    bearer_token_env_var,
+                }
             }
             _ => return Err(SerdeError::custom("invalid transport")),
         };
@@ -135,11 +160,11 @@ pub enum McpServerTransportConfig {
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
         url: String,
-        /// A plain text bearer token to use for authentication.
-        /// This bearer token will be included in the HTTP request header as an `Authorization: Bearer <token>` header.
-        /// This should be used with caution because it lives on disk in clear text.
+        /// Name of the environment variable to read for an HTTP bearer token.
+        /// When set, requests will include the token via `Authorization: Bearer <token>`.
+        /// The actual secret value must be provided via the environment.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        bearer_token: Option<String>,
+        bearer_token_env_var: Option<String>,
     },
 }
 
@@ -506,17 +531,17 @@ mod tests {
             cfg.transport,
             McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
-                bearer_token: None
+                bearer_token_env_var: None
             }
         );
     }
 
     #[test]
-    fn deserialize_streamable_http_server_config_with_bearer_token() {
+    fn deserialize_streamable_http_server_config_with_env_var() {
         let cfg: McpServerConfig = toml::from_str(
             r#"
             url = "https://example.com/mcp"
-            bearer_token = "secret"
+            bearer_token_env_var = "GITHUB_TOKEN"
         "#,
         )
         .expect("should deserialize http config");
@@ -525,7 +550,7 @@ mod tests {
             cfg.transport,
             McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
-                bearer_token: Some("secret".to_string())
+                bearer_token_env_var: Some("GITHUB_TOKEN".to_string())
             }
         );
     }
@@ -553,13 +578,18 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_rejects_bearer_token_for_stdio_transport() {
-        toml::from_str::<McpServerConfig>(
+    fn deserialize_rejects_inline_bearer_token_field() {
+        let err = toml::from_str::<McpServerConfig>(
             r#"
-            command = "echo"
+            url = "https://example.com"
             bearer_token = "secret"
         "#,
         )
-        .expect_err("should reject bearer token for stdio transport");
+        .expect_err("should reject bearer_token field");
+
+        assert!(
+            err.to_string().contains("bearer_token is not supported"),
+            "unexpected error: {err}"
+        );
     }
 }
