@@ -792,7 +792,7 @@ mod tests {
         use std::io::Write as _;
         writeln!(temp, "#include <vector>")?;
         writeln!(temp, "#include <string>")?;
-        writeln!(temp, "")?;
+        writeln!(temp)?;
         writeln!(temp, "namespace sample {{")?;
         writeln!(temp, "class Runner {{")?;
         writeln!(temp, "public:")?;
@@ -801,7 +801,7 @@ mod tests {
         writeln!(temp, "            init();")?;
         writeln!(temp, "        }}")?;
         writeln!(temp, "    }}")?;
-        writeln!(temp, "")?;
+        writeln!(temp)?;
         writeln!(temp, "    // Run the code")?;
         writeln!(temp, "    int run() const {{")?;
         writeln!(temp, "        switch (mode_) {{")?;
@@ -813,11 +813,11 @@ mod tests {
         writeln!(temp, "                return fallback();")?;
         writeln!(temp, "        }}")?;
         writeln!(temp, "    }}")?;
-        writeln!(temp, "")?;
+        writeln!(temp)?;
         writeln!(temp, "private:")?;
         writeln!(temp, "    bool enabled_ = false;")?;
         writeln!(temp, "    Mode mode_ = Mode::Fast;")?;
-        writeln!(temp, "")?;
+        writeln!(temp)?;
         writeln!(temp, "    int fast() const {{")?;
         writeln!(temp, "        return 1;")?;
         writeln!(temp, "    }}")?;
