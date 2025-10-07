@@ -335,18 +335,20 @@ Codex provides three main Approval Presets:
 
 You can further customize how Codex runs at the command line using the `--ask-for-approval` and `--sandbox` options.
 
-## MCP Servers
+## Connecting to MCP servers
 
-You can configure Codex to use [MCP servers](https://modelcontextprotocol.io/about) to give Codex access to external applications, resources, or services such as [Playwright](https://github.com/microsoft/playwright-mcp), [Figma](https://www.figma.com/blog/design-context-everywhere-you-build/), [documentation](https://context7.com/), and [more](https://github.com/mcp?utm_source=blog-source&utm_campaign=mcp-registry-server-launch-2025).
+You can configure Codex to use [MCP servers](https://modelcontextprotocol.io/about) to give Codex access to external applications, resources, or services.
 
-### Server transport configuration
+### Server configuration
 
 #### STDIO
+
+[STDIO servers](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio) are MCP servers that you can launch directly via commands on your computer.
 
 ```toml
 # The top-level table name must be `mcp_servers`
 # The sub-table name (`server-name` in this example) can be anything you would like.
-[mcp_servers.server-name]
+[mcp_servers.server_name]
 command = "npx"
 # Optional
 args = ["-y", "mcp-server"]
@@ -354,21 +356,26 @@ args = ["-y", "mcp-server"]
 # A default whitelist of env vars will be propagated to the MCP server.
 # https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/utils.rs#L82
 env = { "API_KEY" = "value" }
+# or
+[mcp_servers.server_name.env]
+API_KEY = "value"
 ```
 
 #### Streamable HTTP
+
+[Streamable HTTP servers](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http) enable Codex to talk to resources that are accessed via a http url (either on localhost or another domain).
 
 ```toml
 # Streamable HTTP requires the experimental rmcp client
 experimental_use_rmcp_client = true
 [mcp_servers.figma]
-url = "http://127.0.0.1:3845/mcp"
+url = "https://mcp.linear.app/mcp"
 # Optional bearer token to be passed into an `Authorization: Bearer <token>` header
-# Use this with caution because the token is in plaintext.
+# Use this with caution because the token is in plaintext and can be read by Codex itself.
 bearer_token = "<token>"
 ```
 
-Refer to the MCP CLI commands for oauth login
+For oauth login, you must enable `experimental_use_rmcp_client = true` and then run `codex mcp login server_name`
 
 ### Other configuration options
 
@@ -381,17 +388,25 @@ tool_timeout_sec = 30
 
 ### Experimental RMCP client
 
-Codex is transitioning to the [official Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk) and new functionality such as streamable http servers will only work with the new client.
+Codex is transitioning to the [official Rust MCP SDK](https://github.com/modelcontextprotocol/rust-sdk).
+
+The flag enabled OAuth support for streamable HTTP servers and uses a new STDIO client implementation.
 
 Please try and report issues with the new client. To enable it, add this to the top level of your `config.toml`
 
 ```toml
 experimental_use_rmcp_client = true
+
+[mcp_servers.server_name]
+…
 ```
 
 ### MCP CLI commands
 
 ```shell
+# List all available commands
+codex mcp --help
+
 # Add a server (env can be repeated; `--` separates the launcher command)
 codex mcp add docs -- docs-server --port 4000
 
@@ -412,6 +427,19 @@ codex mcp login SERVER_NAME
 # Log out from a streamable HTTP server that supports oauth
 codex mcp logout SERVER_NAME
 ```
+
+## Examples of useful MCPs
+
+There is an ever growing list of useful MCP servers that can be helpful while you are working with Codex.
+
+Some of the most common MCPs we've seen are:
+
+- [Context7](https://github.com/upstash/context7) — connect to a wide range of up-to-date developer documentation
+- Figma [Local](https://developers.figma.com/docs/figma-mcp-server/local-server-installation/) and [Remote](https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/) - access to your Figma designs
+- [Playwright](https://www.npmjs.com/package/@playwright/mcp) - control and inspect a browser using Playwright
+- [Chrome Developer Tools](https://github.com/ChromeDevTools/chrome-devtools-mcp/) — control and inspect a Chrome browser
+- [Sentry](https://docs.sentry.io/product/sentry-mcp/#codex) — access to your Sentry logs
+- [GitHub](https://github.com/github/github-mcp-server) — Control over your GitHub account beyond what git allows (like controlling PRs, issues, etc.)
 
 ## shell_environment_policy
 
