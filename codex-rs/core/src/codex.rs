@@ -1586,7 +1586,7 @@ async fn spawn_review_thread(
 
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<InputItem> = vec![InputItem::Text {
-        text: format!("{base_instructions}\n\n---\n\nNow, here's your task: {review_prompt}"),
+        text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
 
