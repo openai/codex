@@ -7,9 +7,10 @@ use ratatui::style::Style;
 
 /// Returns the style for a user-authored message using the provided terminal background.
 pub fn user_message_style(terminal_bg: Option<(u8, u8, u8)>) -> Style {
+    let style = Style::default().fg(Color::Cyan);
     match terminal_bg {
-        Some(bg) => Style::default().bg(user_message_bg(bg)),
-        None => Style::default(),
+        Some(bg) => style.bg(user_message_bg(bg)),
+        None => style,
     }
 }
 
