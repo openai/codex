@@ -1,13 +1,10 @@
 use std::collections::HashMap;
-use std::fs;
-use std::io::IsTerminal;
-use std::io::Read;
-use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use clap::ArgGroup;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -82,64 +79,60 @@ pub struct AddArgs {
     pub name: String,
 
     #[command(flatten)]
-    pub server_args: AddMcpServerArgs,
+    pub transport_args: AddMcpTransportArgs,
 }
 
 #[derive(Debug, clap::Args)]
-pub struct AddMcpServerArgs {
-    #[command(flatten)]
-    pub transport: AddMcpTransportArgs,
-}
-
-#[derive(Debug, clap::Args)]
+#[command(
+    group(
+        ArgGroup::new("transport")
+            .args(["command", "url"])
+            .required(true)
+            .multiple(false)
+    )
+)]
 pub struct AddMcpTransportArgs {
     #[command(flatten)]
-    pub stdio: AddMcpStdioArgs,
+    pub stdio: Option<AddMcpStdioArgs>,
 
     #[command(flatten)]
-    pub streamable_http: AddMcpStreamableHttpArgs,
+    pub streamable_http: Option<AddMcpStreamableHttpArgs>,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct AddMcpStdioArgs {
-    /// Environment variables to set when launching the server.
-    #[arg(long, value_parser = parse_env_pair, value_name = "KEY=VALUE")]
-    pub env: Vec<(String, String)>,
-
     /// Command to launch the MCP server.
-    #[arg(trailing_var_arg = true, num_args = 0..)]
+    /// Use --url for a streamable HTTP server.
+    #[arg(
+            trailing_var_arg = true,
+            num_args = 0..,
+        )]
     pub command: Vec<String>,
+
+    /// Environment variables to set when launching the server.
+    /// Only valid with stdio servers.
+    #[arg(
+        long,
+        value_parser = parse_env_pair,
+        value_name = "KEY=VALUE",
+    )]
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct AddMcpStreamableHttpArgs {
     /// URL for a streamable HTTP MCP server.
-    #[arg(long, value_name = "URL")]
-    pub url: Option<String>,
+    #[arg(long)]
+    pub url: String,
 
-    #[command(flatten)]
-    pub http_auth: StreamableHttpAuthArgs,
-}
-
-#[derive(Debug, clap::Args)]
-pub struct StreamableHttpAuthArgs {
     /// Optional environment variable to read for a bearer token.
+    /// Only valid with streamable HTTP servers.
     #[arg(
         long = "bearer-token-env-var",
         value_name = "ENV_VAR",
-        requires = "url",
-        conflicts_with = "bearer_token_stdin"
+        requires = "url"
     )]
     pub bearer_token_env_var: Option<String>,
-
-    /// Read a bearer token for the HTTP server from stdin and persist it to ~/.codex/.env.
-    #[arg(
-        long = "with-bearer-token",
-        requires = "url",
-        help = "Read the MCP bearer token from stdin (e.g. `printenv GITHUB_API_KEY | codex mcp add github --url <URL> --with-bearer-token`)",
-        conflicts_with = "bearer_token_env_var"
-    )]
-    pub bearer_token_stdin: bool,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -192,20 +185,14 @@ impl McpCli {
     }
 }
 
-const DEFAULT_BEARER_TOKEN_ENV_PREFIX: &str = "CODEX_MCP";
-
 async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
     // Validate any provided overrides even though they are not currently applied.
     config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
 
-    let AddArgs { name, server_args } = add_args;
-    let AddMcpServerArgs { transport } = server_args;
-    let AddMcpTransportArgs {
-        stdio,
-        streamable_http,
-    } = transport;
-    let AddMcpStdioArgs { env, command } = stdio;
-    let AddMcpStreamableHttpArgs { url, http_auth } = streamable_http;
+    let AddArgs {
+        name,
+        transport_args,
+    } = add_args;
 
     validate_server_name(&name)?;
 
@@ -214,73 +201,45 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
-    let new_entry = if let Some(url) = url {
-        if !env.is_empty() {
-            bail!("--env is not supported when adding a streamable HTTP server");
-        }
-        if !command.is_empty() {
-            bail!("command arguments are not supported when --url is provided");
-        }
+    let transport = match transport_args {
+        AddMcpTransportArgs {
+            stdio: Some(stdio), ..
+        } => {
+            let mut command_parts = stdio.command.into_iter();
+            let command_bin = command_parts
+                .next()
+                .ok_or_else(|| anyhow!("command is required"))?;
+            let command_args: Vec<String> = command_parts.collect();
 
-        let (mut env_var_name, should_read_stdin) = match auth_kind {
-            Some(StreamableHttpAuthKind::EnvVar(var)) => (Some(var), false),
-            Some(StreamableHttpAuthKind::Stdin) => (None, true),
-            None => (None, false),
-        };
-        if http_auth.bearer_token_stdin {
-            let token = read_bearer_token_from_stdin()?;
-            let key = env_var_name
-                .take()
-                .unwrap_or_else(|| derive_bearer_token_env_var(&name));
-            persist_env_var(&codex_home, &key, &token)?;
-            env_var_name = Some(key);
-        }
-
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
-                url,
-                bearer_token_env_var: env_var_name,
-            },
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-        }
-    } else {
-        if let Some(choice) = auth_kind {
-            match choice {
-                StreamableHttpAuthKind::EnvVar(_) => {
-                    bail!("--bearer-token-env-var can only be used with --url");
+            let env_map = if stdio.env.is_empty() {
+                None
+            } else {
+                let mut map = HashMap::new();
+                for (key, value) in stdio.env {
+                    map.insert(key, value);
                 }
-                StreamableHttpAuthKind::Stdin => {
-                    bail!("--with-bearer-token can only be used with --url");
-                }
-            }
-        }
-
-        let mut command_parts = command.into_iter();
-        let command_bin = command_parts
-            .next()
-            .ok_or_else(|| anyhow!("command is required"))?;
-        let command_args: Vec<String> = command_parts.collect();
-
-        let env_map = if env.is_empty() {
-            None
-        } else {
-            let mut map = HashMap::new();
-            for (key, value) in env {
-                map.insert(key, value);
-            }
-            Some(map)
-        };
-
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+                Some(map)
+            };
+            McpServerTransportConfig::Stdio {
                 command: command_bin,
                 args: command_args,
                 env: env_map,
-            },
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
+            }
         }
+        AddMcpTransportArgs {
+            streamable_http: Some(streamable_http),
+            ..
+        } => McpServerTransportConfig::StreamableHttp {
+            url: streamable_http.url,
+            bearer_token_env_var: streamable_http.bearer_token_env_var,
+        },
+        AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
+    };
+
+    let new_entry = McpServerConfig {
+        transport,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
     };
 
     servers.insert(name.clone(), new_entry);
@@ -656,88 +615,4 @@ fn validate_server_name(name: &str) -> Result<()> {
     } else {
         bail!("invalid server name '{name}' (use letters, numbers, '-', '_')");
     }
-}
-
-fn read_bearer_token_from_stdin() -> Result<String> {
-    let mut stdin = std::io::stdin();
-    if stdin.is_terminal() {
-        bail!(
-            "--with-bearer-token expects the bearer token on stdin. Try piping it, e.g. `printenv GITHUB_API_KEY | codex mcp add <name> --url <url> --with-bearer-token`."
-        );
-    }
-
-    eprintln!("Reading MCP bearer token from stdin...");
-    let mut buffer = String::new();
-    stdin
-        .read_to_string(&mut buffer)
-        .context("failed to read bearer token from stdin")?;
-    let token = buffer.trim().to_string();
-    if token.is_empty() {
-        bail!("No bearer token provided via stdin.");
-    }
-
-    Ok(token)
-}
-
-fn derive_bearer_token_env_var(server_name: &str) -> String {
-    let mut normalized = String::new();
-    for ch in server_name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            normalized.push(ch.to_ascii_uppercase());
-        } else {
-            normalized.push('_');
-        }
-    }
-    format!("{DEFAULT_BEARER_TOKEN_ENV_PREFIX}_{normalized}_BEARER_TOKEN")
-}
-
-fn persist_env_var(codex_home: &Path, key: &str, value: &str) -> Result<()> {
-    let dotenv_path = codex_home.join(".env");
-    if let Some(parent) = dotenv_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
-    }
-
-    let mut lines = Vec::new();
-    let mut replaced = false;
-    if let Ok(existing) = fs::read_to_string(&dotenv_path) {
-        for raw_line in existing.lines() {
-            if let Some((existing_key, had_export)) = parse_env_key(raw_line)
-                && existing_key == key
-            {
-                let prefix = if had_export { "export " } else { "" };
-                lines.push(format!("{prefix}{key}={value}"));
-                replaced = true;
-                continue;
-            }
-            lines.push(raw_line.to_string());
-        }
-    }
-
-    if !replaced {
-        lines.push(format!("{key}={value}"));
-    }
-
-    let mut contents = lines.join("\n");
-    if !contents.ends_with('\n') {
-        contents.push('\n');
-    }
-
-    fs::write(&dotenv_path, contents)
-        .with_context(|| format!("failed to update {}", dotenv_path.display()))?;
-    Ok(())
-}
-
-fn parse_env_key(line: &str) -> Option<(String, bool)> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
-        return None;
-    }
-    let (trimmed, had_export) = if let Some(stripped) = trimmed.strip_prefix("export ") {
-        (stripped, true)
-    } else {
-        (trimmed, false)
-    };
-    let (key, _) = trimmed.split_once('=')?;
-    Some((key.trim().to_string(), had_export))
 }

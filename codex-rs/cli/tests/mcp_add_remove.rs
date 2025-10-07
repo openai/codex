@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
@@ -96,21 +95,12 @@ async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
 }
 
 #[tokio::test]
-async fn add_streamable_http_with_bearer_token_env_var() -> Result<()> {
+async fn add_streamable_http_without_manual_token() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let dotenv_path = codex_home.path().join(".env");
 
     let mut add_cmd = codex_command(codex_home.path())?;
     add_cmd
-        .write_stdin("super-secret-token")
-        .args([
-            "mcp",
-            "add",
-            "github",
-            "--url",
-            "https://example.com/mcp",
-            "--with-bearer-token",
-        ])
+        .args(["mcp", "add", "github", "--url", "https://example.com/mcp"])
         .assert()
         .success();
 
@@ -122,16 +112,13 @@ async fn add_streamable_http_with_bearer_token_env_var() -> Result<()> {
             bearer_token_env_var,
         } => {
             assert_eq!(url, "https://example.com/mcp");
-            assert_eq!(
-                bearer_token_env_var.as_deref(),
-                Some("CODEX_MCP_GITHUB_BEARER_TOKEN")
-            );
+            assert!(bearer_token_env_var.is_none());
         }
         other => panic!("unexpected transport: {other:?}"),
     }
 
-    let dotenv_contents = fs::read_to_string(&dotenv_path)?;
-    assert!(dotenv_contents.contains("CODEX_MCP_GITHUB_BEARER_TOKEN=super-secret-token"));
+    assert!(!codex_home.path().join(".credentials.json").exists());
+    assert!(!codex_home.path().join(".env").exists());
 
     Ok(())
 }
@@ -142,7 +129,6 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
 
     let mut add_cmd = codex_command(codex_home.path())?;
     add_cmd
-        .write_stdin("another-secret")
         .args([
             "mcp",
             "add",
@@ -151,7 +137,6 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
             "https://example.com/issues",
             "--bearer-token-env-var",
             "GITHUB_TOKEN",
-            "--with-bearer-token",
         ])
         .assert()
         .success();
@@ -168,15 +153,11 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
         }
         other => panic!("unexpected transport: {other:?}"),
     }
-
-    let dotenv_contents = fs::read_to_string(codex_home.path().join(".env"))?;
-    assert!(dotenv_contents.contains("GITHUB_TOKEN=another-secret"));
-
     Ok(())
 }
 
 #[tokio::test]
-async fn add_streamable_http_with_bearer_token_requires_stdin() -> Result<()> {
+async fn add_streamable_http_rejects_removed_flag() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     let mut add_cmd = codex_command(codex_home.path())?;
@@ -191,7 +172,34 @@ async fn add_streamable_http_with_bearer_token_requires_stdin() -> Result<()> {
         ])
         .assert()
         .failure()
-        .stderr(contains("No bearer token provided via stdin."));
+        .stderr(contains("--with-bearer-token"));
+
+    let servers = load_global_mcp_servers(codex_home.path()).await?;
+    assert!(servers.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn add_cant_add_command_and_url() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut add_cmd = codex_command(codex_home.path())?;
+    add_cmd
+        .args([
+            "mcp",
+            "add",
+            "github",
+            "--url",
+            "https://example.com/mcp",
+            "--command",
+            "--",
+            "echo",
+            "hello",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("unexpected argument '--command' found"));
 
     let servers = load_global_mcp_servers(codex_home.path()).await?;
     assert!(servers.is_empty());

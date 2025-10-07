@@ -81,31 +81,16 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             )))
         }
 
-        fn throw_if_bearer_token_set<E>(transport: &str, value: Option<&String>) -> Result<(), E>
-        where
-            E: SerdeError,
-        {
-            if value.is_none() {
-                return Ok(());
-            }
-
-            Err(E::custom(format!(
-                "bearer_token is not supported for {transport}; set bearer_token_env_var or use `codex mcp add <name> --url <url> --with-bearer-token`",
-            )))
-        }
-
         let transport = match raw {
             RawMcpServerConfig {
                 command: Some(command),
                 args,
                 env,
                 url,
-                bearer_token,
                 bearer_token_env_var,
                 ..
             } => {
                 throw_if_set("stdio", "url", url.as_ref())?;
-                throw_if_bearer_token_set("stdio", bearer_token.as_ref())?;
                 throw_if_set(
                     "stdio",
                     "bearer_token_env_var",
@@ -129,7 +114,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 throw_if_set("streamable_http", "command", command.as_ref())?;
                 throw_if_set("streamable_http", "args", args.as_ref())?;
                 throw_if_set("streamable_http", "env", env.as_ref())?;
-                throw_if_bearer_token_set("streamable_http", bearer_token.as_ref())?;
+                throw_if_set("streamable_http", "bearer_token", bearer_token.as_ref())?;
                 McpServerTransportConfig::StreamableHttp {
                     url,
                     bearer_token_env_var,

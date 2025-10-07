@@ -333,7 +333,7 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
             && server_table.contains_key("bearer_token")
         {
             let message = format!(
-                "mcp_servers.{server_name} uses unsupported `bearer_token`; set `bearer_token_env_var` or rerun `codex mcp add {server_name} --with-bearer-token`."
+                "mcp_servers.{server_name} uses unsupported `bearer_token`; set `bearer_token_env_var`."
             );
             return Err(std::io::Error::new(ErrorKind::InvalidData, message));
         }
