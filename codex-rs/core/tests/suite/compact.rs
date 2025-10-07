@@ -12,6 +12,7 @@ use codex_core::protocol::RolloutLine;
 use codex_protocol::config_types::AutoCompactMode;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 
@@ -413,7 +414,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_respects_config_toggle() {
-    non_sandbox_test!();
+    skip_if_sandbox!();
 
     let server = start_mock_server().await;
 
@@ -460,7 +461,7 @@ async fn auto_compact_respects_config_toggle() {
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     config.model_auto_compact_token_limit = Some(200_000);
-    config.auto_compact_mode = AutoCompactMode::Off;
+    config.auto_compact_mode = AutoCompactMode::Manual;
     let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
     let codex = conversation_manager
         .new_conversation(config)
@@ -507,7 +508,7 @@ async fn auto_compact_respects_config_toggle() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_override_disables_inline_compaction() {
-    non_sandbox_test!();
+    skip_if_sandbox!();
 
     let server = start_mock_server().await;
 
@@ -580,7 +581,7 @@ async fn auto_compact_override_disables_inline_compaction() {
             model: None,
             effort: None,
             summary: None,
-            auto_compact: Some(AutoCompactMode::Off),
+            auto_compact: Some(AutoCompactMode::Manual),
             auto_compact_limit: None,
         })
         .await
@@ -614,7 +615,7 @@ async fn auto_compact_override_disables_inline_compaction() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_manual_mode_emits_warning_without_compaction() {
-    non_sandbox_test!();
+    skip_if_sandbox!();
 
     let server = start_mock_server().await;
 

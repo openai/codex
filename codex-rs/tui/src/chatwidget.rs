@@ -1890,16 +1890,6 @@ impl ChatWidget {
                 "Manual",
                 "Warn when the limit is reached but wait for you to run /compact.",
             ),
-            (
-                AutoCompactMode::Off,
-                "Off",
-                "Never summarize automatically; rely on /compact or new sessions.",
-            ),
-            (
-                AutoCompactMode::SmartAuto,
-                "Smart auto",
-                "Reserved for future adaptive compaction behaviour (acts like auto).",
-            ),
         ];
 
         for (mode, label, description) in options {

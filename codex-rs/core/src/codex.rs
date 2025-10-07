@@ -1859,7 +1859,7 @@ pub(crate) async fn run_task(
                         .map(|tokens| tokens.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
                     match turn_context.client.get_auto_compact_mode() {
-                        AutoCompactMode::Auto | AutoCompactMode::SmartAuto => {
+                        AutoCompactMode::Auto => {
                             if auto_retry_in_progress {
                                 let event = Event {
                                     id: sub_id.clone(),
@@ -1892,18 +1892,6 @@ pub(crate) async fn run_task(
                             sess.send_event(event).await;
                             break;
                         }
-                        AutoCompactMode::Off => {
-                            let event = Event {
-                                id: sub_id.clone(),
-                                msg: EventMsg::Error(ErrorEvent {
-                                    message: format!(
-                                        "Conversation reached the token limit (limit {limit_str}, current {current_tokens}). Auto-compaction is disabled; please run /compact manually or start a new session."
-                                    ),
-                                }),
-                            };
-                            sess.send_event(event).await;
-                            break;
-                        }
                     }
                 }
 
@@ -1930,7 +1918,7 @@ pub(crate) async fn run_task(
                 if let CodexErr::Stream(message, _) = &e {
                     if is_context_window_error(message) {
                         match turn_context.client.get_auto_compact_mode() {
-                            AutoCompactMode::Auto | AutoCompactMode::SmartAuto => {
+                            AutoCompactMode::Auto => {
                                 if auto_retry_in_progress {
                                     auto_retry_in_progress = false;
                                     error_message = format!(
@@ -1950,12 +1938,6 @@ pub(crate) async fn run_task(
                             AutoCompactMode::Manual => {
                                 error_message = format!(
                                     "{} Auto-compaction is set to manual; run /compact (or set a custom limit under /auto-compact) before retrying.",
-                                    message
-                                );
-                            }
-                            AutoCompactMode::Off => {
-                                error_message = format!(
-                                    "{} Auto-compaction is disabled; enable it via /auto-compact or run /compact to summarize before retrying.",
                                     message
                                 );
                             }

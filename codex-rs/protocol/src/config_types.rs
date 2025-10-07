@@ -53,10 +53,7 @@ pub enum Verbosity {
 pub enum AutoCompactMode {
     #[default]
     Auto,
-    Off,
     Manual,
-    #[serde(rename = "smart-auto")]
-    SmartAuto,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display, TS)]
