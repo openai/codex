@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
-
+import path from "node:path";
 import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 
 import { SandboxMode } from "./threadOptions";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 export type CodexExecArgs = {
   input: string;
@@ -20,6 +19,8 @@ export type CodexExecArgs = {
   workingDirectory?: string;
   // --skip-git-repo-check
   skipGitRepoCheck?: boolean;
+  // --output-schema
+  outputSchemaFile?: string;
 };
 
 export class CodexExec {
@@ -45,6 +46,10 @@ export class CodexExec {
 
     if (args.skipGitRepoCheck) {
       commandArgs.push("--skip-git-repo-check");
+    }
+
+    if (args.outputSchemaFile) {
+      commandArgs.push("--output-schema", args.outputSchemaFile);
     }
 
     if (args.threadId) {

@@ -1,5 +1,6 @@
 use std::num::NonZero;
 use std::num::NonZeroUsize;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -56,9 +57,16 @@ pub(crate) async fn run_fuzzy_file_search(
         match res {
             Ok(Ok((root, res))) => {
                 for m in res.matches {
+                    let path = m.path;
+                    //TODO(shijie): Move file name generation to file_search lib.
+                    let file_name = Path::new(&path)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.clone());
                     let result = FuzzyFileSearchResult {
                         root: root.clone(),
-                        path: m.path,
+                        path,
+                        file_name,
                         score: m.score,
                         indices: m.indices,
                     };

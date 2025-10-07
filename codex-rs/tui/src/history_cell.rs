@@ -20,13 +20,13 @@ use base64::Engine;
 use codex_core::config::Config;
 use codex_core::config_types::McpServerTransportConfig;
 use codex_core::config_types::ReasoningSummaryFormat;
-use codex_core::plan_tool::PlanItemArg;
-use codex_core::plan_tool::StepStatus;
-use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -120,7 +120,8 @@ impl HistoryCell for UserHistoryCell {
                 .lines()
                 .map(|l| Line::from(l).style(style))
                 .collect::<Vec<_>>(),
-            RtOptions::new(wrap_width as usize),
+            // Wrap algorithm matches textarea.rs.
+            RtOptions::new(wrap_width as usize).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
         );
 
         lines.push(Line::from("").style(style));
@@ -992,7 +993,7 @@ impl HistoryCell for PlanUpdateCell {
                 indented_lines.extend(render_step(status, step));
             }
         }
-        lines.extend(prefix_lines(indented_lines, "  └ ".into(), "    ".into()));
+        lines.extend(prefix_lines(indented_lines, "  └ ".dim(), "    ".into()));
 
         lines
     }

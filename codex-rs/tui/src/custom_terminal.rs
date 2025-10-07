@@ -425,8 +425,8 @@ fn diff_buffers<'a>(a: &'a Buffer, b: &'a Buffer) -> Vec<DrawCommand<'a>> {
             })
             .unwrap_or(0);
         last_nonblank_column[y as usize] = x as u16;
-        let (x_abs, y_abs) = a.pos_of(row_start + x + 1);
         if x < (a.area.width as usize).saturating_sub(1) {
+            let (x_abs, y_abs) = a.pos_of(row_start + x + 1);
             updates.push(DrawCommand::ClearToEnd {
                 x: x_abs,
                 y: y_abs,

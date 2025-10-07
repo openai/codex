@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -112,6 +111,7 @@ use codex_git_tooling::GhostCommit;
 use codex_git_tooling::GitToolingError;
 use codex_git_tooling::create_ghost_commit;
 use codex_git_tooling::restore_ghost_commit;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
 const MAX_TRACKED_GHOST_COMMITS: usize = 20;
@@ -509,7 +509,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
+    fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -1598,9 +1598,14 @@ impl ChatWidget {
         let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
         let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
-        let mut grouped: BTreeMap<&str, Vec<ModelPreset>> = BTreeMap::new();
+        let mut grouped: Vec<(&str, Vec<ModelPreset>)> = Vec::new();
         for preset in presets.into_iter() {
-            grouped.entry(preset.model).or_default().push(preset);
+            if let Some((_, entries)) = grouped.iter_mut().find(|(model, _)| *model == preset.model)
+            {
+                entries.push(preset);
+            } else {
+                grouped.push((preset.model, vec![preset]));
+            }
         }
 
         let mut items: Vec<SelectionItem> = Vec::new();
@@ -1629,15 +1634,15 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
-                dismiss_on_select: true,
+                dismiss_on_select: false,
                 ..Default::default()
             });
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Model".to_string()),
+            title: Some("Select Model and Effort".to_string()),
             subtitle: Some("Switch the model for this and future Codex CLI sessions".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
+            footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
             items,
             ..Default::default()
         });

@@ -222,7 +222,7 @@ fn context_window_line(percent: Option<u8>) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     match percent {
         Some(percent) => {
-            spans.push(format!("{percent}%").bold());
+            spans.push(format!("{percent}%").dim());
             spans.push(" context left".dim());
         }
         None => {

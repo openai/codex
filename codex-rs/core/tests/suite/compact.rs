@@ -13,12 +13,6 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
-use wiremock::Mock;
-use wiremock::Request;
-use wiremock::Respond;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use core_test_support::responses::ev_assistant_message;
@@ -26,14 +20,10 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
-use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
@@ -295,12 +285,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
             && !body.contains(SECOND_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(first_matcher)
-        .respond_with(sse_response(sse1))
-        .mount(&server)
-        .await;
+    mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
@@ -308,23 +293,13 @@ async fn auto_compact_runs_after_token_limit_hit() {
             && body.contains(FIRST_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(second_matcher)
-        .respond_with(sse_response(sse2))
-        .mount(&server)
-        .await;
+    mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(third_matcher)
-        .respond_with(sse_response(sse3))
-        .mount(&server)
-        .await;
+    mount_sse_once_match(&server, third_matcher, sse3).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -455,12 +430,7 @@ async fn auto_compact_persists_rollout_entries() {
             && !body.contains(SECOND_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(first_matcher)
-        .respond_with(sse_response(sse1))
-        .mount(&server)
-        .await;
+    mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
@@ -468,23 +438,13 @@ async fn auto_compact_persists_rollout_entries() {
             && body.contains(FIRST_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(second_matcher)
-        .respond_with(sse_response(sse2))
-        .mount(&server)
-        .await;
+    mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(third_matcher)
-        .respond_with(sse_response(sse3))
-        .mount(&server)
-        .await;
+    mount_sse_once_match(&server, third_matcher, sse3).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -582,35 +542,20 @@ async fn auto_compact_stops_after_failed_attempt() {
         body.contains(FIRST_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(first_matcher)
-        .respond_with(sse_response(sse1.clone()))
-        .mount(&server)
-        .await;
+    mount_sse_once_match(&server, first_matcher, sse1.clone()).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(second_matcher)
-        .respond_with(sse_response(sse2.clone()))
-        .mount(&server)
-        .await;
+    mount_sse_once_match(&server, second_matcher, sse2.clone()).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         !body.contains("You have exceeded the maximum number of tokens")
             && body.contains(SUMMARY_TEXT)
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(third_matcher)
-        .respond_with(sse_response(sse3.clone()))
-        .mount(&server)
-        .await;
+    mount_sse_once_match(&server, third_matcher, sse3.clone()).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -708,49 +653,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         ev_completed_with_tokens("r6", 120),
     ]);
 
-    #[derive(Clone)]
-    struct SeqResponder {
-        bodies: Arc<Vec<String>>,
-        calls: Arc<AtomicUsize>,
-        requests: Arc<Mutex<Vec<Vec<u8>>>>,
-    }
-
-    impl SeqResponder {
-        fn new(bodies: Vec<String>) -> Self {
-            Self {
-                bodies: Arc::new(bodies),
-                calls: Arc::new(AtomicUsize::new(0)),
-                requests: Arc::new(Mutex::new(Vec::new())),
-            }
-        }
-
-        fn recorded_requests(&self) -> Vec<Vec<u8>> {
-            self.requests.lock().unwrap().clone()
-        }
-    }
-
-    impl Respond for SeqResponder {
-        fn respond(&self, req: &Request) -> ResponseTemplate {
-            let idx = self.calls.fetch_add(1, Ordering::SeqCst);
-            self.requests.lock().unwrap().push(req.body.clone());
-            let body = self
-                .bodies
-                .get(idx)
-                .unwrap_or_else(|| panic!("unexpected request index {idx}"))
-                .clone();
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(body, "text/event-stream")
-        }
-    }
-
-    let responder = SeqResponder::new(vec![sse1, sse2, sse3, sse4, sse5, sse6]);
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(responder.clone())
-        .expect(6)
-        .mount(&server)
-        .await;
+    mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4, sse5, sse6]).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -801,10 +704,12 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         "auto compact should not emit task lifecycle events"
     );
 
-    let request_bodies: Vec<String> = responder
-        .recorded_requests()
+    let request_bodies: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
         .into_iter()
-        .map(|body| String::from_utf8(body).unwrap_or_default())
+        .map(|request| String::from_utf8(request.body).unwrap_or_default())
         .collect();
     assert_eq!(
         request_bodies.len(),
