@@ -203,10 +203,7 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
     }
 
     const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
-    if QUICK_REJECT_EXIT_CODES
-        .iter()
-        .any(|code| *code == exec_output.exit_code)
-    {
+    if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
         return false;
     }
 
