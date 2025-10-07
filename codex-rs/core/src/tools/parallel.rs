@@ -76,6 +76,16 @@ impl ToolCallRuntime {
         &mut self,
         output: &mut [ProcessedResponseItem],
     ) -> Result<(), CodexErr> {
+        if !self.pending_calls.is_empty() {
+            tracing::info!(
+                "Resolving {} tool calls: {:?}",
+                self.pending_calls.len(),
+                self.pending_calls
+                    .iter()
+                    .map(|call| call.index)
+                    .collect::<Vec<_>>()
+            );
+        }
         while let Some(PendingToolCall { index, handle }) = self.pending_calls.pop() {
             match handle.await {
                 Ok(Ok(response)) => {

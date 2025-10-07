@@ -51,6 +51,8 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         return;
     }
 
+    let is_windows = cfg!(target_os = "windows");
+
     // 1. Arrange mocked SSE responses for the initial compact/resume/fork flow.
     let server = MockServer::start().await;
     mount_initial_flow(&server).await;
@@ -171,7 +173,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       ],
       "tools": tool_calls,
       "tool_choice": "auto",
-      "parallel_tool_calls": false,
+      "parallel_tool_calls": !is_windows,
       "reasoning": {
         "summary": "auto"
       },
@@ -305,7 +307,7 @@ SUMMARY_ONLY_CONTEXT"
       ],
       "tools": tool_calls,
       "tool_choice": "auto",
-      "parallel_tool_calls": false,
+      "parallel_tool_calls": !is_windows,
       "reasoning": {
         "summary": "auto"
       },
@@ -390,7 +392,7 @@ SUMMARY_ONLY_CONTEXT"
       ],
       "tools": tool_calls,
       "tool_choice": "auto",
-      "parallel_tool_calls": false,
+      "parallel_tool_calls": !is_windows,
       "reasoning": {
         "summary": "auto"
       },
@@ -475,7 +477,7 @@ SUMMARY_ONLY_CONTEXT"
       ],
       "tools": tool_calls,
       "tool_choice": "auto",
-      "parallel_tool_calls": false,
+      "parallel_tool_calls": !is_windows,
       "reasoning": {
         "summary": "auto"
       },

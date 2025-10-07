@@ -1039,6 +1039,7 @@ mod tests {
             &[
                 "unified_exec",
                 "apply_patch",
+                "read_file",
                 "web_search",
                 "view_image",
                 "dash/search",
@@ -1046,7 +1047,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[4].spec,
+            tools[5].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -1106,13 +1107,14 @@ mod tests {
             &[
                 "unified_exec",
                 "apply_patch",
+                "read_file",
                 "web_search",
                 "view_image",
                 "dash/paginate",
             ],
         );
         assert_eq!(
-            tools[4].spec,
+            tools[5].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -1170,13 +1172,14 @@ mod tests {
             &[
                 "unified_exec",
                 "apply_patch",
+                "read_file",
                 "web_search",
                 "view_image",
                 "dash/tags",
             ],
         );
         assert_eq!(
-            tools[4].spec,
+            tools[5].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -1237,13 +1240,14 @@ mod tests {
             &[
                 "unified_exec",
                 "apply_patch",
+                "read_file",
                 "web_search",
                 "view_image",
                 "dash/value",
             ],
         );
         assert_eq!(
-            tools[4].spec,
+            tools[5].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {
@@ -1341,6 +1345,7 @@ mod tests {
             &[
                 "unified_exec",
                 "apply_patch",
+                "read_file",
                 "web_search",
                 "view_image",
                 "test_server/do_something_cool",
@@ -1348,7 +1353,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[4].spec,
+            tools[5].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
