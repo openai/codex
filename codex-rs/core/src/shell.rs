@@ -90,6 +90,13 @@ impl Shell {
                 if let Some(command_index) = command.iter().position(|arg| arg == "-Command") {
                     let mut modified_command = command.clone();
                     if let Some(cmd_arg) = modified_command.get_mut(command_index + 1) {
+                        // Special case: preserve stdin sentinel "-" 
+                        if cmd_arg == "-" {
+                            // For stdin input, we can't prepend to the argument itself.
+                            // Instead, we need to handle UTF-8 encoding differently or skip it.
+                            // For now, preserve the original behavior for stdin.
+                            return Some(command);
+                        }
                         // Prepend UTF-8 encoding setup to the command
                         *cmd_arg = format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}", cmd_arg);
                     }
@@ -628,5 +635,18 @@ mod tests_windows {
         assert!(actual.is_some());
         let cmd = actual.unwrap();
         assert_eq!(cmd, input); // Should be unchanged
+
+        // Test 4: PowerShell command with stdin sentinel "-" should preserve original behavior
+        let input = vec![
+            "pwsh.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "-".to_string(),
+        ];
+        let actual = shell.format_default_shell_invocation(input);
+        
+        assert!(actual.is_some());
+        let cmd = actual.unwrap();
+        assert_eq!(cmd, input); // Should be unchanged to preserve stdin functionality
     }
 }
