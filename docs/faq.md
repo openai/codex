@@ -21,3 +21,11 @@ By default, Codex can modify files in your current working directory (Auto mode)
 ### Does it work on Windows?
 
 Running Codex directly on Windows may work, but is not officially supported. We recommend using [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install).
+
+### Why does `/status` show 272k context window when the platform docs say 400k?
+
+The `/status` command shows the **input** context window (272,000 tokens for GPT-5-Codex), which is the maximum size for your prompts, conversation history, and context.
+
+GPT-5-Codex has a separate **output** token limit of 128,000 tokens for responses. The total token budget is 400,000 tokens (272k input + 128k output), which is what the [platform documentation](https://platform.openai.com/docs/models/gpt-5-codex) refers to.
+
+See [`model_context_window`](./config.md#model_context_window) and [`model_max_output_tokens`](./config.md#model_max_output_tokens) in the configuration docs for more details.

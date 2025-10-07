@@ -728,13 +728,17 @@ show_raw_agent_reasoning = true  # defaults to false
 
 ## model_context_window
 
-The size of the context window for the model, in tokens.
+The size of the context window for the model, in tokens. This represents the maximum **input** tokens (your prompts, conversation history, and context).
 
 In general, Codex knows the context window for the most common OpenAI models, but if you are using a new model with an old version of the Codex CLI, then you can use `model_context_window` to tell Codex what value to use to determine how much context is left during a conversation.
 
+> **Note:** For GPT-5-Codex, the input context window is 272,000 tokens, and the maximum output tokens is 128,000, for a total token budget of 400,000 tokens. When you run `/status`, the "Context window" field shows your **input** token limit (272k), not the total budget.
+
 ## model_max_output_tokens
 
-This is analogous to `model_context_window`, but for the maximum number of output tokens for the model.
+The maximum number of output tokens the model can generate in a single response. This is separate from the input context window.
+
+For example, GPT-5-Codex has a 272,000 token input context window and a 128,000 token output limit, giving it a combined token budget of 400,000 tokens total.
 
 ## project_doc_max_bytes
 
