@@ -83,6 +83,16 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let test = build_codex_with_test_tool(&server).await?;
 
+    let warmup_args = json!({
+        "sleep_after_ms": 10,
+        "barrier": {
+            "id": "parallel-test-sync-warmup",
+            "participants": 2,
+            "timeout_ms": 1_000,
+        }
+    })
+    .to_string();
+
     let parallel_args = json!({
         "sleep_after_ms": 300,
         "barrier": {
@@ -92,6 +102,17 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
         }
     })
     .to_string();
+
+    let warmup_first = sse(vec![
+        json!({"type": "response.created", "response": {"id": "resp-warm-1"}}),
+        ev_function_call("warm-call-1", "test_sync_tool", &warmup_args),
+        ev_function_call("warm-call-2", "test_sync_tool", &warmup_args),
+        ev_completed("resp-warm-1"),
+    ]);
+    let warmup_second = sse(vec![
+        ev_assistant_message("warm-msg-1", "warmup complete"),
+        ev_completed("resp-warm-2"),
+    ]);
 
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
@@ -103,7 +124,13 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    mount_sse_sequence(
+        &server,
+        vec![warmup_first, warmup_second, first_response, second_response],
+    )
+    .await;
+
+    run_turn(&test, "warm up parallel tool").await?;
 
     let duration = run_turn_and_measure(&test, "exercise sync tool").await?;
     assert_parallel_duration(duration);
