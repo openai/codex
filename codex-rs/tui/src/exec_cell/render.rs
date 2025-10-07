@@ -8,6 +8,7 @@ use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
+use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use codex_ansi_escape::ansi_escape_line;
@@ -116,10 +117,16 @@ pub(crate) fn output_lines(
 }
 
 pub(crate) fn spinner(start_time: Option<Instant>) -> Span<'static> {
-    let blink_on = start_time
-        .map(|st| ((st.elapsed().as_millis() / 600) % 2) == 0)
-        .unwrap_or(false);
-    if blink_on { "•".into() } else { "◦".dim() }
+    let elapsed = start_time.map(|st| st.elapsed()).unwrap_or_default();
+    if supports_color::on_cached(supports_color::Stream::Stdout)
+        .map(|level| level.has_16m)
+        .unwrap_or(false)
+    {
+        shimmer_spans("•")[0].clone()
+    } else {
+        let blink_on = (elapsed.as_millis() / 600).is_multiple_of(2);
+        if blink_on { "•".into() } else { "◦".dim() }
+    }
 }
 
 impl HistoryCell for ExecCell {
