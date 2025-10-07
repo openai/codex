@@ -590,10 +590,12 @@ mod tests {
         writeln!(temp, "    tail();")?;
         writeln!(temp, "}}")?;
 
-        let mut options = IndentationArgs::default();
-        options.anchor_line = Some(3);
-        options.include_siblings = false;
-        options.max_levels = 1;
+        let options = IndentationArgs {
+            anchor_line: Some(3),
+            include_siblings: false,
+            max_levels: 1,
+            ..Default::default()
+        };
 
         let lines = read_block(temp.path(), 3, 10, options).await?;
 
@@ -620,9 +622,11 @@ mod tests {
         writeln!(temp, "    }}")?;
         writeln!(temp, "}}")?;
 
-        let mut options = IndentationArgs::default();
-        options.anchor_line = Some(4);
-        options.max_levels = 2;
+        let mut options = IndentationArgs {
+            anchor_line: Some(4),
+            max_levels: 2,
+            ..Default::default()
+        };
 
         let lines = read_block(temp.path(), 4, 50, options.clone()).await?;
         assert_eq!(
@@ -666,10 +670,12 @@ mod tests {
         writeln!(temp, "    }}")?;
         writeln!(temp, "}}")?;
 
-        let mut options = IndentationArgs::default();
-        options.anchor_line = Some(3);
-        options.include_siblings = false;
-        options.max_levels = 1;
+        let mut options = IndentationArgs {
+            anchor_line: Some(3),
+            include_siblings: false,
+            max_levels: 1,
+            ..Default::default()
+        };
 
         let lines = read_block(temp.path(), 3, 50, options.clone()).await?;
         assert_eq!(
@@ -714,10 +720,12 @@ mod tests {
         writeln!(temp, "        helper = Foo(2)")?;
         writeln!(temp, "        return helper.double(5)")?;
 
-        let mut options = IndentationArgs::default();
-        options.anchor_line = Some(7);
-        options.include_siblings = true;
-        options.max_levels = 1;
+        let options = IndentationArgs {
+            anchor_line: Some(7),
+            include_siblings: true,
+            max_levels: 1,
+            ..Default::default()
+        };
 
         let lines = read_block(temp.path(), 1, 200, options).await?;
         assert_eq!(
@@ -765,9 +773,11 @@ mod tests {
         writeln!(temp, "    return makeThing();")?;
         writeln!(temp, "}}")?;
 
-        let mut options = IndentationArgs::default();
-        options.anchor_line = Some(15);
-        options.max_levels = 1;
+        let options = IndentationArgs {
+            anchor_line: Some(15),
+            max_levels: 1,
+            ..Default::default()
+        };
 
         let lines = read_block(temp.path(), 15, 200, options).await?;
         assert_eq!(
@@ -830,10 +840,12 @@ mod tests {
     async fn indentation_mode_handles_cpp_sample_shallow() -> anyhow::Result<()> {
         let temp = write_cpp_sample()?;
 
-        let mut options = IndentationArgs::default();
-        options.include_siblings = false;
-        options.anchor_line = Some(18);
-        options.max_levels = 1;
+        let options = IndentationArgs {
+            include_siblings: false,
+            anchor_line: Some(18),
+            max_levels: 1,
+            ..Default::default()
+        };
 
         let lines = read_block(temp.path(), 18, 200, options).await?;
         assert_eq!(
@@ -856,10 +868,12 @@ mod tests {
     async fn indentation_mode_handles_cpp_sample() -> anyhow::Result<()> {
         let temp = write_cpp_sample()?;
 
-        let mut options = IndentationArgs::default();
-        options.include_siblings = false;
-        options.anchor_line = Some(18);
-        options.max_levels = 2;
+        let options = IndentationArgs {
+            include_siblings: false,
+            anchor_line: Some(18),
+            max_levels: 2,
+            ..Default::default()
+        };
 
         let lines = read_block(temp.path(), 18, 200, options).await?;
         assert_eq!(
@@ -885,11 +899,13 @@ mod tests {
     async fn indentation_mode_handles_cpp_sample_no_headers() -> anyhow::Result<()> {
         let temp = write_cpp_sample()?;
 
-        let mut options = IndentationArgs::default();
-        options.include_siblings = false;
-        options.include_header = false;
-        options.anchor_line = Some(18);
-        options.max_levels = 2;
+        let options = IndentationArgs {
+            include_siblings: false,
+            include_header: false,
+            anchor_line: Some(18),
+            max_levels: 2,
+            ..Default::default()
+        };
 
         let lines = read_block(temp.path(), 18, 200, options).await?;
         assert_eq!(
@@ -914,11 +930,13 @@ mod tests {
     async fn indentation_mode_handles_cpp_sample_siblings() -> anyhow::Result<()> {
         let temp = write_cpp_sample()?;
 
-        let mut options = IndentationArgs::default();
-        options.include_siblings = true;
-        options.include_header = false;
-        options.anchor_line = Some(18);
-        options.max_levels = 2;
+        let options = IndentationArgs {
+            include_siblings: true,
+            include_header: false,
+            anchor_line: Some(18),
+            max_levels: 2,
+            ..Default::default()
+        };
 
         let lines = read_block(temp.path(), 18, 200, options).await?;
         assert_eq!(
