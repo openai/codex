@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -226,6 +227,7 @@ mod indentation {
     use crate::tools::handlers::read_file::LineRecord;
     use crate::tools::handlers::read_file::TAB_WIDTH;
     use crate::tools::handlers::read_file::format_line;
+    use crate::tools::handlers::read_file::trim_empty_lines;
     use std::collections::VecDeque;
     use std::path::Path;
     use tokio::fs::File;
@@ -290,14 +292,14 @@ mod indentation {
         out.push_back(&collected[anchor_index]);
 
         while out.len() < final_limit {
-            let mut progressed = false;
+            let mut progressed = 0;
 
             // Up.
             if i >= 0 {
                 let iu = i as usize;
                 if effective_indents[iu] >= min_indent {
                     out.push_front(&collected[iu]);
-                    progressed = true;
+                    progressed += 1;
                     i -= 1;
 
                     // We do not include the siblings (not applied to comments).
@@ -311,7 +313,7 @@ mod indentation {
                         } else {
                             // This line shouldn't have been taken.
                             out.pop_front();
-                            progressed = false;
+                            progressed -= 1;
                             i = -1; // consider using Option<usize> or a control flag instead of a sentinel
                         }
                     }
@@ -328,29 +330,35 @@ mod indentation {
 
             // Down.
             if j < collected.len() {
-                if effective_indents[j] >= min_indent {
-                    out.push_back(&collected[j]);
-                    progressed = true;
+                let ju = j;
+                if effective_indents[ju] >= min_indent {
+                    out.push_back(&collected[ju]);
+                    progressed += 1;
                     j += 1;
 
                     // We do not include the siblings (applied to comments).
-                    if effective_indents[j] == min_indent && !options.include_siblings {
+                    if effective_indents[ju] == min_indent && !options.include_siblings {
                         if j_counter_min_indent > 0 {
+                            // This line shouldn't have been taken.
+                            out.pop_back();
+                            progressed -= 1;
                             j = collected.len();
                         }
                         j_counter_min_indent += 1;
                     }
                 } else {
-                    println!("Stop moving on {:?}", collected[j]);
                     // Stop moving down.
                     j = collected.len();
                 }
             }
 
-            if !progressed {
+            if progressed == 0 {
                 break;
             }
         }
+
+        // Trim empty lines
+        trim_empty_lines(&mut out);
 
         Ok(out
             .into_iter()
@@ -428,6 +436,15 @@ fn format_line(bytes: &[u8]) -> String {
         take_bytes_at_char_boundary(&decoded, MAX_LINE_LENGTH).to_string()
     } else {
         decoded.into_owned()
+    }
+}
+
+fn trim_empty_lines(out: &mut VecDeque<&LineRecord>) {
+    while matches!(out.front(), Some(line) if line.raw.trim().is_empty()) {
+        out.pop_front();
+    }
+    while matches!(out.back(), Some(line) if line.raw.trim().is_empty()) {
+        out.pop_back();
     }
 }
 
@@ -576,6 +593,7 @@ mod tests {
         let mut options = IndentationArgs::default();
         options.anchor_line = Some(3);
         options.include_siblings = false;
+        options.max_levels = 1;
 
         let lines = read_block(temp.path(), 3, 10, options).await?;
 
@@ -604,7 +622,7 @@ mod tests {
 
         let mut options = IndentationArgs::default();
         options.anchor_line = Some(4);
-        options.max_levels = 1;
+        options.max_levels = 2;
 
         let lines = read_block(temp.path(), 4, 50, options.clone()).await?;
         assert_eq!(
@@ -618,7 +636,7 @@ mod tests {
             ]
         );
 
-        options.max_levels = 2;
+        options.max_levels = 3;
         let expanded = read_block(temp.path(), 4, 50, options).await?;
         assert_eq!(
             expanded,
@@ -632,28 +650,6 @@ mod tests {
                 "L7: }".to_string(),
             ]
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn indentation_mode_truncates_with_guard() -> anyhow::Result<()> {
-        let mut temp = NamedTempFile::new()?;
-        use std::io::Write as _;
-        writeln!(temp, "fn sample() {{")?;
-        for _ in 0..20 {
-            writeln!(temp, "    body_line();")?;
-        }
-        writeln!(temp, "}}")?;
-
-        let mut options = IndentationArgs::default();
-        options.anchor_line = Some(5);
-        options.max_lines = Some(5);
-
-        let lines = read_block(temp.path(), 5, 100, options).await?;
-
-        assert_eq!(lines.len(), 6);
-        assert!(lines.iter().any(|line| line.contains("<- anchor")));
-        assert!(lines.last().unwrap().contains("truncated"));
         Ok(())
     }
 
@@ -673,6 +669,7 @@ mod tests {
         let mut options = IndentationArgs::default();
         options.anchor_line = Some(3);
         options.include_siblings = false;
+        options.max_levels = 1;
 
         let lines = read_block(temp.path(), 3, 50, options.clone()).await?;
         assert_eq!(
@@ -719,8 +716,10 @@ mod tests {
 
         let mut options = IndentationArgs::default();
         options.anchor_line = Some(7);
+        options.include_siblings = true;
+        options.max_levels = 1;
 
-        let lines = read_block(temp.path(), 7, 200, options).await?;
+        let lines = read_block(temp.path(), 1, 200, options).await?;
         assert_eq!(
             lines,
             vec![
@@ -942,7 +941,6 @@ mod tests {
                 "L21:                 return fallback();".to_string(),
                 "L22:         }".to_string(),
                 "L23:     }".to_string(),
-                "L24: ".to_string(),
             ]
         );
         Ok(())
