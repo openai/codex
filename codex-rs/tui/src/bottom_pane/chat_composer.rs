@@ -149,7 +149,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
-            footer_mode: FooterMode::ShortcutPrompt,
+            footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             context_window_percent: None,
         };
@@ -1345,8 +1345,8 @@ impl ChatComposer {
             FooterMode::EscHint => FooterMode::EscHint,
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
             FooterMode::CtrlCReminder => FooterMode::CtrlCReminder,
-            FooterMode::ShortcutPrompt if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
-            FooterMode::ShortcutPrompt if !self.is_empty() => FooterMode::Empty,
+            FooterMode::ShortcutSummary if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
+            FooterMode::ShortcutSummary if !self.is_empty() => FooterMode::ContextOnly,
             other => other,
         }
     }
@@ -1779,11 +1779,11 @@ mod tests {
 
         // Toggle back to prompt mode so subsequent typing captures characters.
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutPrompt);
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
 
         type_chars_humanlike(&mut composer, &['h']);
         assert_eq!(composer.textarea.text(), "h");
-        assert_eq!(composer.footer_mode(), FooterMode::Empty);
+        assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
@@ -1792,8 +1792,8 @@ mod tests {
         std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
         let _ = composer.flush_paste_burst_if_due();
         assert_eq!(composer.textarea.text(), "h?");
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutPrompt);
-        assert_eq!(composer.footer_mode(), FooterMode::Empty);
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
     }
 
     #[test]
