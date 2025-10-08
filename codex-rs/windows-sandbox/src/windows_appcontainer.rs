@@ -588,7 +588,7 @@ mod imp {
     // ---------- NtCreateLowBoxToken via direct FFI (no LibraryLoader feature) ----------
 
     #[link(name = "ntdll")]
-    extern "system" {
+    unsafe extern "system" {
         fn NtCreateLowBoxToken(
             token_handle: *mut HANDLE,
             existing_token_handle: HANDLE,
