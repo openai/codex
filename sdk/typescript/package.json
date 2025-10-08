@@ -58,6 +58,8 @@
     "ts-node": "^10.9.2",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.45.0"
+    "typescript-eslint": "^8.45.0",
+    "zod": "^3.24.2",
+    "zod-to-json-schema": "^3.24.6"
   }
 }

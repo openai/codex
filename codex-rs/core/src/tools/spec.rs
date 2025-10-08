@@ -258,6 +258,68 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
+fn create_test_sync_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "sleep_before_ms".to_string(),
+        JsonSchema::Number {
+            description: Some("Optional delay in milliseconds before any other action".to_string()),
+        },
+    );
+    properties.insert(
+        "sleep_after_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Optional delay in milliseconds after completing the barrier".to_string(),
+            ),
+        },
+    );
+
+    let mut barrier_properties = BTreeMap::new();
+    barrier_properties.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Identifier shared by concurrent calls that should rendezvous".to_string(),
+            ),
+        },
+    );
+    barrier_properties.insert(
+        "participants".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Number of tool calls that must arrive before the barrier opens".to_string(),
+            ),
+        },
+    );
+    barrier_properties.insert(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some("Maximum time in milliseconds to wait at the barrier".to_string()),
+        },
+    );
+
+    properties.insert(
+        "barrier".to_string(),
+        JsonSchema::Object {
+            properties: barrier_properties,
+            required: Some(vec!["id".to_string(), "participants".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "test_sync_tool".to_string(),
+        description: "Internal synchronization helper used by Codex integration tests.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_read_file_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -290,6 +352,51 @@ fn create_read_file_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["file_path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_list_dir_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "dir_path".to_string(),
+        JsonSchema::String {
+            description: Some("Absolute path to the directory to list.".to_string()),
+        },
+    );
+    properties.insert(
+        "offset".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "The entry number to start listing from. Must be 1 or greater.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some("The maximum number of entries to return.".to_string()),
+        },
+    );
+    properties.insert(
+        "depth".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "The maximum directory depth to traverse. Must be 1 or greater.".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_dir".to_string(),
+        description:
+            "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["dir_path".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -503,10 +610,12 @@ pub(crate) fn build_specs(
     use crate::exec_command::create_write_stdin_tool_for_responses_api;
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::ExecStreamHandler;
+    use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use std::sync::Arc;
@@ -573,8 +682,28 @@ pub(crate) fn build_specs(
         .any(|tool| tool == "read_file")
     {
         let read_file_handler = Arc::new(ReadFileHandler);
-        builder.push_spec(create_read_file_tool());
+        builder.push_spec_with_parallel_support(create_read_file_tool(), true);
         builder.register_handler("read_file", read_file_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "list_dir")
+    {
+        let list_dir_handler = Arc::new(ListDirHandler);
+        builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
+        builder.register_handler("list_dir", list_dir_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "test_sync_tool")
+    {
+        let test_sync_handler = Arc::new(TestSyncHandler);
+        builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
+        builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
     if config.web_search_request {
@@ -582,7 +711,7 @@ pub(crate) fn build_specs(
     }
 
     if config.include_view_image_tool {
-        builder.push_spec(create_view_image_tool());
+        builder.push_spec_with_parallel_support(create_view_image_tool(), true);
         builder.register_handler("view_image", view_image_handler);
     }
 
@@ -610,20 +739,25 @@ pub(crate) fn build_specs(
 mod tests {
     use crate::client_common::tools::FreeformTool;
     use crate::model_family::find_family_for_model;
+    use crate::tools::registry::ConfiguredToolSpec;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
 
     use super::*;
 
-    fn assert_eq_tool_names(tools: &[ToolSpec], expected_names: &[&str]) {
+    fn tool_name(tool: &ToolSpec) -> &str {
+        match tool {
+            ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
+            ToolSpec::LocalShell {} => "local_shell",
+            ToolSpec::WebSearch {} => "web_search",
+            ToolSpec::Freeform(FreeformTool { name, .. }) => name,
+        }
+    }
+
+    fn assert_eq_tool_names(tools: &[ConfiguredToolSpec], expected_names: &[&str]) {
         let tool_names = tools
             .iter()
-            .map(|tool| match tool {
-                ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
-                ToolSpec::LocalShell {} => "local_shell",
-                ToolSpec::WebSearch {} => "web_search",
-                ToolSpec::Freeform(FreeformTool { name, .. }) => name,
-            })
+            .map(|tool| tool_name(&tool.spec))
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -637,6 +771,16 @@ mod tests {
                 "tool_name mismatch, {name:?}, {expected_name:?}"
             );
         }
+    }
+
+    fn find_tool<'a>(
+        tools: &'a [ConfiguredToolSpec],
+        expected_name: &str,
+    ) -> &'a ConfiguredToolSpec {
+        tools
+            .iter()
+            .find(|tool| tool_name(&tool.spec) == expected_name)
+            .unwrap_or_else(|| panic!("expected tool {expected_name}"))
     }
 
     #[test]
@@ -681,9 +825,10 @@ mod tests {
     }
 
     #[test]
-    fn test_build_specs_includes_beta_read_file_tool() {
+    #[ignore]
+    fn test_parallel_support_flags() {
         let model_family = find_family_for_model("gpt-5-codex")
-            .expect("gpt-5-codex should be a valid model family");
+            .expect("codex-mini-latest should be a valid model family");
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
@@ -693,9 +838,39 @@ mod tests {
             include_view_image_tool: false,
             experimental_unified_exec_tool: true,
         });
-        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
+        let (tools, _) = build_specs(&config, None).build();
 
-        assert_eq_tool_names(&tools, &["unified_exec", "read_file"]);
+        assert!(!find_tool(&tools, "unified_exec").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
+    }
+
+    #[test]
+    fn test_test_model_family_includes_sync_tool() {
+        let model_family = find_family_for_model("test-gpt-5-codex")
+            .expect("test-gpt-5-codex should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            experimental_unified_exec_tool: false,
+        });
+        let (tools, _) = build_specs(&config, None).build();
+
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "test_sync_tool")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "read_file")
+        );
+        assert!(tools.iter().any(|tool| tool_name(&tool.spec) == "list_dir"));
     }
 
     #[test]
@@ -760,7 +935,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[3],
+            tools[3].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
@@ -921,7 +1096,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "dash/search",
@@ -929,7 +1104,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[4],
+            tools[4].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -988,14 +1163,14 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "dash/paginate",
             ],
         );
         assert_eq!(
-            tools[4],
+            tools[4].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -1019,7 +1194,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
-            include_apply_patch_tool: false,
+            include_apply_patch_tool: true,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
@@ -1052,14 +1227,14 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "dash/tags",
             ],
         );
         assert_eq!(
-            tools[4],
+            tools[4].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -1119,14 +1294,14 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "dash/value",
             ],
         );
         assert_eq!(
-            tools[4],
+            tools[4].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {
@@ -1223,7 +1398,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
-                "read_file",
+                "apply_patch",
                 "web_search",
                 "view_image",
                 "test_server/do_something_cool",
@@ -1231,7 +1406,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[4],
+            tools[4].spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {

@@ -55,6 +55,11 @@ pub enum CodexErr {
     #[error("stream disconnected before completion: {0}")]
     Stream(String, Option<Duration>),
 
+    #[error(
+        "Codex ran out of room in the model's context window. Start a new conversation or clear earlier history before retrying."
+    )]
+    ContextWindowExceeded,
+
     #[error("no conversation with id: {0}")]
     ConversationNotFound(ConversationId),
 

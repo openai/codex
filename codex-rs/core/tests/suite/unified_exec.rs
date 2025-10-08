@@ -12,6 +12,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -19,6 +20,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use serde_json::Value;
 
 fn extract_output_text(item: &Value) -> Option<&str> {
@@ -81,7 +83,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            serde_json::json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(
                 first_call_id,
                 "unified_exec",
@@ -90,7 +92,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             ev_completed("resp-1"),
         ]),
         sse(vec![
-            serde_json::json!({"type": "response.created", "response": {"id": "resp-2"}}),
+            ev_response_created("resp-2"),
             ev_function_call(
                 second_call_id,
                 "unified_exec",
@@ -122,12 +124,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
         })
         .await?;
 
-    loop {
-        let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.expect("recorded requests");
     assert!(!requests.is_empty(), "expected at least one POST request");
@@ -202,7 +199,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            serde_json::json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(
                 first_call_id,
                 "unified_exec",
@@ -211,7 +208,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             ev_completed("resp-1"),
         ]),
         sse(vec![
-            serde_json::json!({"type": "response.created", "response": {"id": "resp-2"}}),
+            ev_response_created("resp-2"),
             ev_function_call(
                 second_call_id,
                 "unified_exec",

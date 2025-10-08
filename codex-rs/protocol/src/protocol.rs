@@ -548,10 +548,15 @@ pub struct TaskStartedEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, TS)]
 pub struct TokenUsage {
+    #[ts(type = "number")]
     pub input_tokens: u64,
+    #[ts(type = "number")]
     pub cached_input_tokens: u64,
+    #[ts(type = "number")]
     pub output_tokens: u64,
+    #[ts(type = "number")]
     pub reasoning_output_tokens: u64,
+    #[ts(type = "number")]
     pub total_tokens: u64,
 }
 
@@ -559,6 +564,7 @@ pub struct TokenUsage {
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    #[ts(type = "number | null")]
     pub model_context_window: Option<u64>,
 }
 
@@ -590,6 +596,31 @@ impl TokenUsageInfo {
         self.total_token_usage.add_assign(last);
         self.last_token_usage = last.clone();
     }
+
+    pub fn fill_to_context_window(&mut self, context_window: u64) {
+        let previous_total = self.total_token_usage.total_tokens;
+        let delta = context_window.saturating_sub(previous_total);
+
+        self.model_context_window = Some(context_window);
+        self.total_token_usage = TokenUsage {
+            total_tokens: context_window,
+            ..TokenUsage::default()
+        };
+        self.last_token_usage = TokenUsage {
+            total_tokens: delta,
+            ..TokenUsage::default()
+        };
+    }
+
+    pub fn full_context_window(context_window: u64) -> Self {
+        let mut info = Self {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(context_window),
+        };
+        info.fill_to_context_window(context_window);
+        info
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -609,8 +640,10 @@ pub struct RateLimitWindow {
     /// Percentage (0-100) of the window that has been consumed.
     pub used_percent: f64,
     /// Rolling window duration, in minutes.
+    #[ts(type = "number | null")]
     pub window_minutes: Option<u64>,
     /// Seconds until the window resets.
+    #[ts(type = "number | null")]
     pub resets_in_seconds: Option<u64>,
 }
 

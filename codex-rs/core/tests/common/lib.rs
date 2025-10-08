@@ -6,6 +6,7 @@ use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use regex_lite::Regex;
 
 #[cfg(target_os = "linux")]
 use assert_cmd::cargo::cargo_bin;
@@ -13,6 +14,16 @@ use assert_cmd::cargo::cargo_bin;
 pub mod responses;
 pub mod test_codex;
 pub mod test_codex_exec;
+
+#[track_caller]
+pub fn assert_regex_match<'s>(pattern: &str, actual: &'s str) -> regex_lite::Captures<'s> {
+    let regex = Regex::new(pattern).unwrap_or_else(|err| {
+        panic!("failed to compile regex {pattern:?}: {err}");
+    });
+    regex
+        .captures(actual)
+        .unwrap_or_else(|| panic!("regex {pattern:?} did not match {actual:?}"))
+}
 
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
