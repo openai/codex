@@ -585,6 +585,14 @@ mod imp {
         }
     }
 
+    unsafe fn ensure_valid_handle(handle: HANDLE) -> io::Result<HANDLE> {
+        if handle == INVALID_HANDLE_VALUE || handle.is_invalid() {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(handle)
+        }
+    }
+
     // ---------- helpers for command line & environment ----------
 
     fn build_command_line(command: &[String]) -> Vec<u16> {
