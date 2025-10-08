@@ -75,7 +75,6 @@ mod imp {
     use super::SandboxPolicy;
     use super::StdioPolicy;
     use super::trace;
-    use std::cmp::Ordering;
     use std::collections::HashMap;
     use std::ffi::OsStr;
     use std::ffi::c_void;
@@ -89,19 +88,16 @@ mod imp {
     use std::process::ExitStatus;
     use std::ptr::null;
     use std::ptr::null_mut;
-    use std::sync::OnceLock;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
     use windows::Win32::Foundation::GetLastError;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Foundation::HLOCAL;
-    use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Foundation::LocalFree;
     use windows::Win32::Foundation::NTSTATUS;
     use windows::Win32::Foundation::WAIT_OBJECT_0;
     use windows::Win32::Foundation::WIN32_ERROR;
     use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
-    use windows::Win32::Security::Authorization::DACL_SECURITY_INFORMATION;
     use windows::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
     use windows::Win32::Security::Authorization::GetNamedSecurityInfoW;
     use windows::Win32::Security::Authorization::SE_FILE_OBJECT;
@@ -111,16 +107,15 @@ mod imp {
     use windows::Win32::Security::Authorization::TRUSTEE_IS_SID;
     use windows::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
     use windows::Win32::Security::Authorization::TRUSTEE_W;
+    use windows::Win32::Security::DACL_SECURITY_INFORMATION;
     use windows::Win32::Security::FreeSid;
     use windows::Win32::Security::Isolation::CreateAppContainerProfile;
     use windows::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
-    use windows::Win32::Security::Isolation::IIsolatedAppLauncher;
-    use windows::Win32::Security::Isolation::IIsolatedProcessLauncher;
-    use windows::Win32::Security::Isolation::IIsolatedProcessLauncher2;
     use windows::Win32::Security::OBJECT_INHERIT_ACE;
     use windows::Win32::Security::PSECURITY_DESCRIPTOR;
     use windows::Win32::Security::PSID;
     use windows::Win32::Security::SID_AND_ATTRIBUTES;
+    use windows::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT;
     use windows::Win32::Security::TOKEN_ACCESS_MASK;
     use windows::Win32::Security::TOKEN_ADJUST_DEFAULT;
     use windows::Win32::Security::TOKEN_ADJUST_SESSIONID;
@@ -130,9 +125,6 @@ mod imp {
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
-    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::System::LibraryLoader::GetProcAddress;
-    use windows::Win32::System::LibraryLoader::LoadLibraryW;
     use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows::Win32::System::Threading::CreateProcessAsUserW;
     use windows::Win32::System::Threading::GetCurrentProcess;
@@ -142,10 +134,8 @@ mod imp {
     use windows::Win32::System::Threading::PROCESS_INFORMATION;
     use windows::Win32::System::Threading::STARTUPINFOW;
     use windows::Win32::System::Threading::WaitForSingleObject;
-    use windows::core::PCSTR;
     use windows::core::PCWSTR;
     use windows::core::PWSTR;
-    use windows::core::w;
 
     const WINDOWS_APPCONTAINER_PROFILE_NAME: &str = "codex_appcontainer";
     const WINDOWS_APPCONTAINER_PROFILE_DESC: &str = "Codex Windows AppContainer profile";
@@ -176,10 +166,10 @@ mod imp {
         configure_writable_roots(sandbox_policy, sandbox_policy_cwd, sid.sid())?;
         configure_writable_roots_for_command_cwd(&command_cwd, sid.sid())?;
 
-        // Create an AppContainer token via NtCreateLowBoxToken (dynamically loaded)
+        // Create an AppContainer (low-box) primary token via NtCreateLowBoxToken.
         let token = create_lowbox_token(sid.sid(), &capability_sids)?;
 
-        // Startup info (no console handle massaging; avoids Win32_System_Console)
+        // Basic STARTUPINFOW (no console handle tweaking, so no Console feature needed).
         let mut startup_info = STARTUPINFOW::default();
         startup_info.cb = size_of::<STARTUPINFOW>() as u32;
         apply_stdio_policy(&mut startup_info, stdio_policy)?;
@@ -223,7 +213,7 @@ mod imp {
         wait_for_process(process_info.info())
     }
 
-    // No-op: we avoid Win32_System_Console to keep your Cargo.toml unchanged.
+    // No-op: keeps features minimal (no Win32_System_Console).
     fn apply_stdio_policy(
         _startup_info: &mut STARTUPINFOW,
         _policy: StdioPolicy,
@@ -393,8 +383,7 @@ mod imp {
             let explicit = EXPLICIT_ACCESS_W {
                 grfAccessPermissions: permissions,
                 grfAccessMode: SET_ACCESS,
-                grfInheritance: windows::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT
-                    | OBJECT_INHERIT_ACE,
+                grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT | OBJECT_INHERIT_ACE,
                 Trustee: TRUSTEE_W {
                     TrusteeForm: TRUSTEE_IS_SID,
                     TrusteeType: TRUSTEE_IS_UNKNOWN,
@@ -517,19 +506,101 @@ mod imp {
         }
     }
 
-    // -------- Low-box token creation via NtCreateLowBoxToken --------
+    // ---------- helpers for command line & environment ----------
 
-    type NtCreateLowBoxTokenFn = unsafe extern "system" fn(
-        token_handle: *mut HANDLE,
-        existing_token_handle: HANDLE,
-        desired_access: u32,
-        object_attributes: *const c_void,
-        package_sid: PSID,
-        capability_count: u32,
-        capabilities: *const SID_AND_ATTRIBUTES,
-        handle_count: u32,
-        handles: *const HANDLE,
-    ) -> NTSTATUS;
+    fn build_command_line(command: &[String]) -> Vec<u16> {
+        let mut combined = String::new();
+        for (idx, arg) in command.iter().enumerate() {
+            if idx != 0 {
+                combined.push(' ');
+            }
+            combined.push_str(&quote_windows_argument(arg));
+        }
+        let mut wide: Vec<u16> = combined.encode_utf16().collect();
+        wide.push(0);
+        wide
+    }
+
+    fn quote_windows_argument(arg: &str) -> String {
+        if !needs_quotes(arg) {
+            return arg.to_string();
+        }
+        let mut result = String::with_capacity(arg.len() + 2);
+        result.push('"');
+        let mut backslashes = 0;
+        for ch in arg.chars() {
+            match ch {
+                '\\' => backslashes += 1,
+                '"' => {
+                    result.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+                    result.push('"');
+                    backslashes = 0;
+                }
+                _ => {
+                    if backslashes > 0 {
+                        result.extend(std::iter::repeat('\\').take(backslashes));
+                        backslashes = 0;
+                    }
+                    result.push(ch);
+                }
+            }
+        }
+        if backslashes > 0 {
+            result.extend(std::iter::repeat('\\').take(backslashes * 2));
+        }
+        result.push('"');
+        result
+    }
+
+    fn needs_quotes(arg: &str) -> bool {
+        arg.is_empty()
+            || arg
+                .chars()
+                .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{0b}' | '"'))
+    }
+
+    fn build_environment_block(env: &HashMap<String, String>) -> Vec<u16> {
+        if env.is_empty() {
+            return Vec::new();
+        }
+        // Windows expects a double-NUL-terminated sequence of UTF-16 "key=value\0... \0"
+        let mut pairs: Vec<(String, String)> =
+            env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        // Preserve original implementation’s sort (case-insensitive, then by original)
+        pairs.sort_by(|(a_key, _), (b_key, _)| {
+            let a_upper = a_key.to_ascii_uppercase();
+            let b_upper = b_key.to_ascii_uppercase();
+            match a_upper.cmp(&b_upper) {
+                std::cmp::Ordering::Equal => a_key.cmp(b_key),
+                other => other,
+            }
+        });
+        let mut block = Vec::new();
+        for (key, value) in pairs {
+            let entry = format!("{key}={value}");
+            block.extend(entry.encode_utf16());
+            block.push(0);
+        }
+        block.push(0);
+        block
+    }
+
+    // ---------- NtCreateLowBoxToken via direct FFI (no LibraryLoader feature) ----------
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn NtCreateLowBoxToken(
+            token_handle: *mut HANDLE,
+            existing_token_handle: HANDLE,
+            desired_access: u32,
+            object_attributes: *const c_void,
+            package_sid: PSID,
+            capability_count: u32,
+            capabilities: *const SID_AND_ATTRIBUTES,
+            handle_count: u32,
+            handles: *const HANDLE,
+        ) -> NTSTATUS;
+    }
 
     fn nt_success(status: NTSTATUS) -> bool {
         status.0 >= 0
@@ -537,28 +608,6 @@ mod imp {
 
     fn nt_to_io(status: NTSTATUS) -> io::Error {
         io::Error::from_raw_os_error(status.0)
-    }
-
-    fn windows_error_to_io(err: windows::core::Error) -> io::Error {
-        io::Error::from_raw_os_error(err.code().0)
-    }
-
-    fn get_nt_create_low_box_token() -> io::Result<NtCreateLowBoxTokenFn> {
-        static CACHE: OnceLock<Result<NtCreateLowBoxTokenFn, io::Error>> = OnceLock::new();
-        match CACHE.get_or_init(|| unsafe {
-            let module_name = w!("ntdll.dll");
-            let module = match GetModuleHandleW(module_name) {
-                Ok(h) => h,
-                Err(_) => LoadLibraryW(module_name).map_err(windows_error_to_io)?,
-            };
-            let name = PCSTR(b"NtCreateLowBoxToken\0".as_ptr());
-            let raw = GetProcAddress(module, name)
-                .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "NtCreateLowBoxToken"))?;
-            Ok(std::mem::transmute::<_, NtCreateLowBoxTokenFn>(raw))
-        }) {
-            Ok(f) => Ok(*f),
-            Err(e) => Err(io::Error::new(e.kind(), e.to_string())),
-        }
     }
 
     fn create_lowbox_token(
@@ -576,7 +625,7 @@ mod imp {
                     | TOKEN_ADJUST_SESSIONID.0,
             );
             OpenProcessToken(GetCurrentProcess(), desired, &mut process_token)
-                .map_err(windows_error_to_io)?;
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
             let process_guard = HandleGuard::new(process_token);
 
             let mut sid_and_attrs: Vec<SID_AND_ATTRIBUTES> =
@@ -587,9 +636,8 @@ mod imp {
                 sid_and_attrs.as_mut_ptr()
             };
 
-            let creator = get_nt_create_low_box_token()?;
             let mut new_token = HANDLE::default();
-            let status = creator(
+            let status = NtCreateLowBoxToken(
                 &mut new_token,
                 process_guard.handle(),
                 desired.0,
