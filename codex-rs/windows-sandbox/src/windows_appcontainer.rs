@@ -99,10 +99,13 @@ mod imp {
     use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
     use windows::Win32::Foundation::GetLastError;
     use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Foundation::HANDLE_FLAG_INHERIT;
+    use windows::Win32::Foundation::HANDLE_FLAGS;
     use windows::Win32::Foundation::HLOCAL;
     use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Foundation::LocalFree;
     use windows::Win32::Foundation::NTSTATUS;
+    use windows::Win32::Foundation::SetHandleInformation;
     use windows::Win32::Foundation::WAIT_OBJECT_0;
     use windows::Win32::Foundation::WIN32_ERROR;
     use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
@@ -268,40 +271,37 @@ mod imp {
     fn apply_stdio_policy(startup_info: &mut STARTUPINFOW, policy: StdioPolicy) -> io::Result<()> {
         match policy {
             StdioPolicy::Inherit => unsafe {
-                let stdin_handle = ensure_valid_handle(GetStdHandle(STD_INPUT_HANDLE))?;
-                let stdout_handle = ensure_valid_handle(GetStdHandle(STD_OUTPUT_HANDLE))?;
-                let stderr_handle = ensure_valid_handle(GetStdHandle(STD_ERROR_HANDLE))?;
+                // GetStdHandle in windows-rs returns Result<HANDLE, Error>
+                let stdin_handle = ensure_valid_handle(GetStdHandle(STD_INPUT_HANDLE)?)?;
+                let stdout_handle = ensure_valid_handle(GetStdHandle(STD_OUTPUT_HANDLE)?)?;
+                let stderr_handle = ensure_valid_handle(GetStdHandle(STD_ERROR_HANDLE)?)?;
 
-                // Duplicate as inheritable so CreateProcessAsUserW(TRUE) can pass them through
-                let inh_in = dup_inheritable(stdin_handle)?;
-                let inh_out = dup_inheritable(stdout_handle)?;
-                let inh_err = dup_inheritable(stderr_handle)?;
+                // Ensure they are inheritable for CreateProcessAsUserW(bInheritHandles = TRUE)
+                SetHandleInformation(
+                    stdin_handle,
+                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
+                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
+                )
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+                SetHandleInformation(
+                    stdout_handle,
+                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
+                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
+                )
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+                SetHandleInformation(
+                    stderr_handle,
+                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
+                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
+                )
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
 
                 startup_info.dwFlags |= STARTF_USESTDHANDLES;
-                startup_info.hStdInput = inh_in;
-                startup_info.hStdOutput = inh_out;
-                startup_info.hStdError = inh_err;
+                startup_info.hStdInput = stdin_handle;
+                startup_info.hStdOutput = stdout_handle;
+                startup_info.hStdError = stderr_handle;
                 Ok(())
             },
-        }
-    }
-
-    unsafe fn dup_inheritable(h: HANDLE) -> io::Result<HANDLE> {
-        let mut out = HANDLE::default();
-        let ok = DuplicateHandle(
-            GetCurrentProcess(),
-            h,
-            GetCurrentProcess(),
-            &mut out,
-            0,
-            true, // make inheritable
-            DUPLICATE_HANDLE_OPTIONS(DUPLICATE_SAME_ACCESS.0),
-        )
-        .as_bool();
-        if ok {
-            Ok(out)
-        } else {
-            Err(io::Error::last_os_error())
         }
     }
 
