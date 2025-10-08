@@ -364,6 +364,7 @@ impl Session {
         let mcp_fut = McpConnectionManager::new(
             config.mcp_servers.clone(),
             config.use_experimental_use_rmcp_client,
+            config.mcp_oauth_credentials_store_mode,
         );
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
@@ -1586,7 +1587,7 @@ async fn spawn_review_thread(
 
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<InputItem> = vec![InputItem::Text {
-        text: format!("{base_instructions}\n\n---\n\nNow, here's your task: {review_prompt}"),
+        text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
 

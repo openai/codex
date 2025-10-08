@@ -119,9 +119,10 @@ pub fn find_family_for_model(mut slug: &str) -> Option<ModelFamily> {
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             experimental_supported_tools: vec![
-                "read_file".to_string(),
+                "grep_files".to_string(),
                 "list_dir".to_string(),
-                "test_sync_tool".to_string()
+                "read_file".to_string(),
+                "test_sync_tool".to_string(),
             ],
             supports_parallel_tool_calls: true,
         )
@@ -134,7 +135,11 @@ pub fn find_family_for_model(mut slug: &str) -> Option<ModelFamily> {
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
-            experimental_supported_tools: vec!["read_file".to_string(), "list_dir".to_string()],
+            experimental_supported_tools: vec![
+                "grep_files".to_string(),
+                "list_dir".to_string(),
+                "read_file".to_string(),
+            ],
             supports_parallel_tool_calls: true,
         )
 
