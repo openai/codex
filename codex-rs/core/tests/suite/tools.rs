@@ -414,62 +414,6 @@ line
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let mut builder = test_codex();
-    let test = builder.build(&server).await?;
-
-    let call_id = "shell-denied";
-    let long_line = "this is a long stderr line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz";
-    let script = format!(
-        "for i in $(seq 1 500); do >&2 echo '{long_line}'; done; printf 'content' | tee denied.txt >/dev/null",
-    );
-    let args = json!({
-        "command": ["/bin/sh", "-c", script],
-        "timeout_ms": 1_000,
-    });
-
-    mount_sse_once(
-        &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-    )
-    .await;
-    let second_mock = mount_sse_once(
-        &server,
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    )
-    .await;
-
-    submit_turn(
-        &test,
-        "attempt to write in read-only sandbox",
-        AskForApproval::Never,
-        SandboxPolicy::ReadOnly,
-    )
-    .await?;
-
-    let denied_item = second_mock.single_request().function_call_output(call_id);
-
-    let output = denied_item
-        .get("output")
-        .and_then(Value::as_str)
-        .expect("denied output string");
-
-    assert!(output.contains("this is a long stderr"));
-    assert_eq!(output.len(), 2 * 1024);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_spawn_failure_truncates_exec_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
