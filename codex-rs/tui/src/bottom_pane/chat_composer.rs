@@ -922,9 +922,17 @@ impl ChatComposer {
                         .next()
                         .unwrap_or("")
                         .starts_with('/');
-                if self.paste_burst.is_active() && !in_slash_context {
+                if !in_slash_context {
                     let now = Instant::now();
                     if self.paste_burst.append_newline_if_active(now) {
+                        return (InputResult::None, true);
+                    }
+                    if self
+                        .paste_burst
+                        .newline_should_insert_instead_of_submit(now)
+                    {
+                        self.textarea.insert_str("\n");
+                        self.paste_burst.extend_window(now);
                         return (InputResult::None, true);
                     }
                 }
@@ -945,17 +953,6 @@ impl ChatComposer {
                     return (InputResult::Submitted(text), true);
                 }
 
-                // During a paste-like burst, treat Enter as a newline instead of submit.
-                let now = Instant::now();
-                if self
-                    .paste_burst
-                    .newline_should_insert_instead_of_submit(now)
-                    && !in_slash_context
-                {
-                    self.textarea.insert_str("\n");
-                    self.paste_burst.extend_window(now);
-                    return (InputResult::None, true);
-                }
                 let mut text = self.textarea.text().to_string();
                 let original_input = text.clone();
                 self.textarea.set_text("");
@@ -1002,6 +999,7 @@ impl ChatComposer {
         match self.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
                 self.handle_paste(pasted);
+                self.paste_burst.extend_window(now);
                 true
             }
             FlushResult::Typed(ch) => {
@@ -3209,6 +3207,113 @@ mod tests {
         assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
         assert_eq!(composer.pending_pastes[0].1.len(), count);
         assert!(composer.pending_pastes[0].1.chars().all(|c| c == 'x'));
+    }
+
+    fn test_composer() -> ChatComposer {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        )
+    }
+
+    fn seed_large_paste(composer: &mut ChatComposer) -> String {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let count = LARGE_PASTE_CHAR_THRESHOLD + 25;
+        for _ in 0..count {
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        }
+
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        assert!(
+            composer.flush_paste_burst_if_due(),
+            "expected buffered paste to flush"
+        );
+        assert_eq!(1, composer.pending_pastes.len());
+        composer.pending_pastes[0].0.clone()
+    }
+
+    #[test]
+    fn burst_paste_large_newline_does_not_submit() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let mut composer = test_composer();
+        let placeholder = seed_large_paste(&mut composer);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(1, composer.pending_pastes.len());
+        let text_after = composer.textarea.text().to_string();
+        assert!(
+            text_after.contains(&placeholder),
+            "placeholder should remain after newline: {text_after:?}"
+        );
+        assert!(
+            text_after.ends_with('\n'),
+            "newline from paste should be preserved: {text_after:?}"
+        );
+    }
+
+    #[test]
+    fn burst_paste_large_shift_enter_does_not_submit() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let mut composer = test_composer();
+        let placeholder = seed_large_paste(&mut composer);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(1, composer.pending_pastes.len());
+        let text_after = composer.textarea.text().to_string();
+        assert!(
+            text_after.contains(&placeholder),
+            "placeholder should remain after Shift+Enter: {text_after:?}"
+        );
+        assert!(
+            text_after.ends_with('\n'),
+            "Shift+Enter should insert newline: {text_after:?}"
+        );
+    }
+
+    #[test]
+    fn burst_paste_large_ctrl_enter_does_not_submit() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let mut composer = test_composer();
+        let placeholder = seed_large_paste(&mut composer);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!(1, composer.pending_pastes.len());
+        let text_after = composer.textarea.text().to_string();
+        assert!(
+            text_after.contains(&placeholder),
+            "placeholder should remain after Ctrl+Enter: {text_after:?}"
+        );
+        assert!(
+            text_after.ends_with('\n'),
+            "Ctrl+Enter should insert newline: {text_after:?}"
+        );
     }
 
     #[test]
