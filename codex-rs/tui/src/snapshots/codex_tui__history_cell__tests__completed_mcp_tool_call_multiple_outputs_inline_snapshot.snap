@@ -1,6 +1,5 @@
 ---
 source: tui/src/history_cell.rs
-assertion_line: 1934
 expression: rendered
 ---
 • Called metrics.summary({"metric":"trace.latency","window":"15m"})
