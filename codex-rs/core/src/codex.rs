@@ -110,6 +110,11 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+// Prune (experimental)
+use crate::protocol::ContextItemsEvent;
+use crate::protocol::ConversationUsageByCategory;
+use crate::protocol::ConversationUsageEvent;
+use crate::protocol::PruneCategory;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -1118,6 +1123,163 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.interrupt_task_sync();
+    }
+}
+
+// --- Context prune helpers (experimental) ---
+impl Session {
+    pub(crate) async fn compute_context_usage(&self) -> ConversationUsageEvent {
+        let state = self.state.lock().await;
+        let items = state.history_snapshot();
+        let mut totals: std::collections::HashMap<PruneCategory, (u64, u64)> =
+            std::collections::HashMap::new();
+
+        for item in &items {
+            let (category, text) = Self::context_item_category_and_text(item);
+            let bytes = text.len() as u64;
+            let entry = totals.entry(category).or_insert((0, 0));
+            entry.0 = entry.0.saturating_add(bytes);
+            entry.1 = entry.1.saturating_add(1);
+        }
+
+        let order = [
+            PruneCategory::ToolOutput,
+            PruneCategory::ToolCall,
+            PruneCategory::Reasoning,
+            PruneCategory::AssistantMessage,
+            PruneCategory::UserMessage,
+            PruneCategory::UserInstructions,
+            PruneCategory::EnvironmentContext,
+        ];
+
+        let mut total_bytes: u64 = 0;
+        let mut by_category = Vec::with_capacity(order.len());
+        for category in order {
+            let (bytes, count) = totals.get(&category).copied().unwrap_or((0, 0));
+            total_bytes = total_bytes.saturating_add(bytes);
+            by_category.push(ConversationUsageByCategory {
+                category,
+                bytes,
+                count: Some(count),
+            });
+        }
+
+        ConversationUsageEvent {
+            total_bytes,
+            by_category,
+        }
+    }
+
+    pub(crate) async fn compute_context_items(&self) -> ContextItemsEvent {
+        let state = self.state.lock().await;
+        let items = state.history_snapshot();
+        let mut out: Vec<crate::protocol::ContextItemSummary> = Vec::with_capacity(items.len());
+
+        for (idx, it) in items.iter().enumerate() {
+            let (category, text) = Self::context_item_category_and_text(it);
+            let text_len = text.len();
+            const CONTEXT_ITEM_PREVIEW_MAX_BYTES: usize = 200;
+            fn take_bytes_at_char_boundary(s: &str, max: usize) -> &str {
+                if s.len() <= max {
+                    return s;
+                }
+                let mut end = max;
+                while !s.is_char_boundary(end) && end > 0 {
+                    end -= 1;
+                }
+                &s[..end]
+            }
+            let safe = take_bytes_at_char_boundary(text.as_ref(), CONTEXT_ITEM_PREVIEW_MAX_BYTES);
+            let preview = if safe.len() < text_len {
+                format!("{safe}…")
+            } else {
+                text.into_owned()
+            };
+            out.push(crate::protocol::ContextItemSummary {
+                index: idx,
+                category,
+                preview,
+                included: true,
+            });
+        }
+
+        ContextItemsEvent {
+            total: out.len(),
+            items: out,
+        }
+    }
+
+    pub(crate) fn context_item_category_and_text(
+        item: &ResponseItem,
+    ) -> (PruneCategory, std::borrow::Cow<'_, str>) {
+        match item {
+            ResponseItem::Message { role, content, .. } => {
+                let text = content
+                    .iter()
+                    .find_map(|c| match c {
+                        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or("");
+                let category = if text.starts_with(crate::protocol::USER_INSTRUCTIONS_OPEN_TAG) {
+                    PruneCategory::UserInstructions
+                } else if text.starts_with(crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG) {
+                    PruneCategory::EnvironmentContext
+                } else if role == "assistant" {
+                    PruneCategory::AssistantMessage
+                } else {
+                    PruneCategory::UserMessage
+                };
+                (category, std::borrow::Cow::Borrowed(text))
+            }
+            ResponseItem::Reasoning { summary, .. } => {
+                let text = summary
+                    .iter()
+                    .map(|s| match s {
+                        codex_protocol::models::ReasoningItemReasoningSummary::SummaryText {
+                            text,
+                        } => text.as_str(),
+                    })
+                    .next()
+                    .unwrap_or("");
+                (PruneCategory::Reasoning, std::borrow::Cow::Borrowed(text))
+            }
+            ResponseItem::FunctionCall {
+                name, arguments, ..
+            } => (
+                PruneCategory::ToolCall,
+                std::borrow::Cow::Owned(format!("{name} {arguments}")),
+            ),
+            ResponseItem::CustomToolCall { name, input, .. } => (
+                PruneCategory::ToolCall,
+                std::borrow::Cow::Owned(format!("{name} {input}")),
+            ),
+            ResponseItem::LocalShellCall { action, .. } => (
+                PruneCategory::ToolCall,
+                std::borrow::Cow::Owned(format!("{action:?}")),
+            ),
+            ResponseItem::FunctionCallOutput { output, .. } => (
+                PruneCategory::ToolOutput,
+                std::borrow::Cow::Borrowed(&output.content),
+            ),
+            ResponseItem::CustomToolCallOutput { output, .. } => (
+                PruneCategory::ToolOutput,
+                std::borrow::Cow::Borrowed(output),
+            ),
+            ResponseItem::WebSearchCall { action, .. } => {
+                let query = match action {
+                    codex_protocol::models::WebSearchAction::Search { query } => query.as_str(),
+                    _ => "",
+                };
+                (PruneCategory::ToolCall, std::borrow::Cow::Borrowed(query))
+            }
+            ResponseItem::Other => (
+                PruneCategory::AssistantMessage,
+                std::borrow::Cow::Borrowed(""),
+            ),
+        }
     }
 }
 

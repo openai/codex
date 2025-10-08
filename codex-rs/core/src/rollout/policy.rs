@@ -71,6 +71,9 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::PlanUpdate(_)
         | EventMsg::ShutdownComplete
         | EventMsg::ViewImageToolCall(_)
-        | EventMsg::ConversationPath(_) => false,
+        | EventMsg::ConversationPath(_)
+        // Prune-related informational events should not be persisted to rollout
+        | EventMsg::ConversationUsage(_)
+        | EventMsg::ContextItems(_) => false,
     }
 }

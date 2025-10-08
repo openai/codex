@@ -1447,6 +1447,13 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            // New prune-related events (upstream-ignored by default)
+            codex_core::protocol::EventMsg::ConversationUsage(_) => {
+                // No-op in upstream baseline; advanced footer can request this explicitly
+            }
+            codex_core::protocol::EventMsg::ContextItems(_) => {
+                // No-op in upstream baseline; advanced prune UI not wired here
+            }
         }
     }
 
