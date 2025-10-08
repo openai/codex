@@ -216,12 +216,19 @@ impl TextArea {
             }
             KeyEvent {
                 code: KeyCode::Char(c),
-                // Insert plain characters (and Shift-modified). Do NOT insert when ALT is held,
-                // because many terminals map Option/Meta combos to ALT+<char> (e.g. ESC f/ESC b)
-                // for word navigation. Those are handled explicitly below.
-                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                // Insert plain characters (and Shift-modified). Do NOT insert when ALT is held
+                // for letter keys used as word navigation (Alt+f/Alt+b), which are handled below.
+                // However, allow AltGr and Alt-modified punctuation to insert (common on Windows
+                // international layouts where characters like '/' may require AltGr).
+                modifiers,
                 ..
-            } => self.insert_str(&c.to_string()),
+            } if matches!(modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT)
+                // Allow Alt/AltGr modified punctuation to insert, but do not insert
+                // Alt/AltGr letters so we preserve editor/navigation chords such as
+                // Ctrl+Alt+H (delete word) and Alt+F/Alt+B (word navigation).
+                || (modifiers.contains(KeyModifiers::ALT) && !c.is_alphanumeric()) => {
+                self.insert_str(&c.to_string())
+            },
             KeyEvent {
                 code: KeyCode::Char('j' | 'm'),
                 modifiers: KeyModifiers::CONTROL,
