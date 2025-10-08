@@ -9,6 +9,7 @@ mod compact_resume_fork;
 mod exec;
 mod exec_stream_events;
 mod fork_conversation;
+mod grep_files;
 mod json_result;
 mod list_dir;
 mod live_cli;
