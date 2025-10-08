@@ -167,7 +167,6 @@ struct PickerState {
     next_search_token: usize,
     page_loader: PageLoader,
     view_rows: Option<usize>,
-    // No additional per-path state; names are embedded in rollouts.
 }
 
 struct PaginationState {
@@ -587,14 +586,9 @@ fn head_to_row(item: &ConversationItem) -> Row {
         .and_then(parse_timestamp_str)
         .or(created_at);
 
-    let preview = item
-        .name
-        .clone()
-        .or_else(|| {
-            preview_from_head(&item.head)
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
+    let preview = preview_from_head(&item.head)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| String::from("(no message yet)"));
 
     Row {
@@ -964,7 +958,6 @@ mod tests {
             path: PathBuf::from(path),
             head: head_with_ts_and_user_text(ts, &[preview]),
             tail: Vec::new(),
-            name: None,
             created_at: Some(ts.to_string()),
             updated_at: Some(ts.to_string()),
         }
@@ -1027,7 +1020,6 @@ mod tests {
             path: PathBuf::from("/tmp/a.jsonl"),
             head: head_with_ts_and_user_text("2025-01-01T00:00:00Z", &["A"]),
             tail: Vec::new(),
-            name: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T00:00:00Z".into()),
         };
@@ -1035,7 +1027,6 @@ mod tests {
             path: PathBuf::from("/tmp/b.jsonl"),
             head: head_with_ts_and_user_text("2025-01-02T00:00:00Z", &["B"]),
             tail: Vec::new(),
-            name: None,
             created_at: Some("2025-01-02T00:00:00Z".into()),
             updated_at: Some("2025-01-02T00:00:00Z".into()),
         };
@@ -1064,7 +1055,6 @@ mod tests {
             path: PathBuf::from("/tmp/a.jsonl"),
             head,
             tail,
-            name: None,
             created_at: Some("2025-01-01T00:00:00Z".into()),
             updated_at: Some("2025-01-01T01:00:00Z".into()),
         };

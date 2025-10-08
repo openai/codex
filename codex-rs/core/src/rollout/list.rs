@@ -17,7 +17,6 @@ use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SessionRenamedEvent;
 use codex_protocol::protocol::SessionSource;
 
 /// Returned page of conversation summaries.
@@ -42,8 +41,6 @@ pub struct ConversationItem {
     pub head: Vec<serde_json::Value>,
     /// Last up to `TAIL_RECORD_LIMIT` JSONL response records parsed as JSON.
     pub tail: Vec<serde_json::Value>,
-    /// Latest human-friendly session name, if any.
-    pub name: Option<String>,
     /// RFC3339 timestamp string for when the session was created, if available.
     pub created_at: Option<String>,
     /// RFC3339 timestamp string for the most recent response in the tail, if available.
@@ -59,7 +56,6 @@ struct HeadTailSummary {
     source: Option<SessionSource>,
     created_at: Option<String>,
     updated_at: Option<String>,
-    name: Option<String>,
 }
 
 /// Hard cap to bound worst‑case work per request.
@@ -226,7 +222,6 @@ async fn traverse_directories_for_paths(
                             path,
                             head,
                             tail,
-                            name: summary.name,
                             created_at,
                             updated_at,
                         });
@@ -387,21 +382,14 @@ async fn read_head_and_tail(
                 if matches!(ev, EventMsg::UserMessage(_)) {
                     summary.saw_user_event = true;
                 }
-                if let EventMsg::SessionRenamed(SessionRenamedEvent { name }) = ev {
-                    summary.name = Some(name);
-                }
             }
         }
     }
 
     if tail_limit != 0 {
-        let (tail, updated_at, latest_name) = read_tail_records(path, tail_limit).await?;
+        let (tail, updated_at) = read_tail_records(path, tail_limit).await?;
         summary.tail = tail;
         summary.updated_at = updated_at;
-        // Prefer the most recent rename event discovered from the tail scan; fallback to any name seen in head.
-        if latest_name.is_some() {
-            summary.name = latest_name;
-        }
     }
     Ok(summary)
 }
@@ -409,13 +397,13 @@ async fn read_head_and_tail(
 async fn read_tail_records(
     path: &Path,
     max_records: usize,
-) -> io::Result<(Vec<serde_json::Value>, Option<String>, Option<String>)> {
+) -> io::Result<(Vec<serde_json::Value>, Option<String>)> {
     use std::io::SeekFrom;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncSeekExt;
 
     if max_records == 0 {
-        return Ok((Vec::new(), None, None));
+        return Ok((Vec::new(), None));
     }
 
     const CHUNK_SIZE: usize = 8192;
@@ -423,33 +411,28 @@ async fn read_tail_records(
     let mut file = tokio::fs::File::open(path).await?;
     let mut pos = file.seek(SeekFrom::End(0)).await?;
     if pos == 0 {
-        return Ok((Vec::new(), None, None));
+        return Ok((Vec::new(), None));
     }
 
     let mut buffer: Vec<u8> = Vec::new();
     let mut latest_timestamp: Option<String> = None;
-    let mut latest_name: Option<String> = None;
 
     loop {
         let slice_start = match (pos > 0, buffer.iter().position(|&b| b == b'\n')) {
             (true, Some(idx)) => idx + 1,
             _ => 0,
         };
-        let (tail, newest_ts, name_opt) =
-            collect_last_response_values(&buffer[slice_start..], max_records);
+        let (tail, newest_ts) = collect_last_response_values(&buffer[slice_start..], max_records);
         if latest_timestamp.is_none() {
             latest_timestamp = newest_ts.clone();
         }
-        if latest_name.is_none() {
-            latest_name = name_opt.clone();
-        }
         if tail.len() >= max_records || pos == 0 {
-            return Ok((tail, latest_timestamp.or(newest_ts), latest_name));
+            return Ok((tail, latest_timestamp.or(newest_ts)));
         }
 
         let read_size = CHUNK_SIZE.min(pos as usize);
         if read_size == 0 {
-            return Ok((tail, latest_timestamp.or(newest_ts), latest_name));
+            return Ok((tail, latest_timestamp.or(newest_ts)));
         }
         pos -= read_size as u64;
         file.seek(SeekFrom::Start(pos)).await?;
@@ -463,17 +446,16 @@ async fn read_tail_records(
 fn collect_last_response_values(
     buffer: &[u8],
     max_records: usize,
-) -> (Vec<serde_json::Value>, Option<String>, Option<String>) {
+) -> (Vec<serde_json::Value>, Option<String>) {
     use std::borrow::Cow;
 
     if buffer.is_empty() || max_records == 0 {
-        return (Vec::new(), None, None);
+        return (Vec::new(), None);
     }
 
     let text: Cow<'_, str> = String::from_utf8_lossy(buffer);
     let mut collected_rev: Vec<serde_json::Value> = Vec::new();
     let mut latest_timestamp: Option<String> = None;
-    let mut latest_name: Option<String> = None;
     for line in text.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -482,30 +464,20 @@ fn collect_last_response_values(
         let parsed: serde_json::Result<RolloutLine> = serde_json::from_str(trimmed);
         let Ok(rollout_line) = parsed else { continue };
         let RolloutLine { timestamp, item } = rollout_line;
-        match item {
-            RolloutItem::ResponseItem(item) => {
-                if let Ok(val) = serde_json::to_value(&item) {
-                    if latest_timestamp.is_none() {
-                        latest_timestamp = Some(timestamp.clone());
-                    }
-                    collected_rev.push(val);
-                    if collected_rev.len() == max_records {
-                        break;
-                    }
-                }
+        if let RolloutItem::ResponseItem(item) = item
+            && let Ok(val) = serde_json::to_value(&item)
+        {
+            if latest_timestamp.is_none() {
+                latest_timestamp = Some(timestamp.clone());
             }
-            RolloutItem::EventMsg(ev) => {
-                if latest_name.is_none()
-                    && let EventMsg::SessionRenamed(SessionRenamedEvent { name }) = ev
-                {
-                    latest_name = Some(name);
-                }
+            collected_rev.push(val);
+            if collected_rev.len() == max_records {
+                break;
             }
-            _ => {}
         }
     }
     collected_rev.reverse();
-    (collected_rev, latest_timestamp, latest_name)
+    (collected_rev, latest_timestamp)
 }
 
 /// Locate a recorded conversation rollout file by its UUID string using the existing
