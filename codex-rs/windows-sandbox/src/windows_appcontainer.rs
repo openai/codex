@@ -40,7 +40,13 @@ pub fn run_main() -> ! {
         panic!("No command specified to execute.");
     }
 
-    let current_dir = env::current_dir().expect("current dir should exist");
+    let current_dir = match env::current_dir() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("failed to get current dir: {e}");
+            std::process::exit(1);
+        }
+    };
     let sandbox_policy_cwd = sandbox_policy_cwd.unwrap_or_else(|| current_dir.clone());
     let env_map: HashMap<String, String> = env::vars().collect();
 
@@ -170,8 +176,11 @@ mod imp {
         let token = create_lowbox_token(sid.sid(), &capability_sids)?;
 
         // Basic STARTUPINFOW (no console handle tweaking, so no Console feature needed).
-        let mut startup_info = STARTUPINFOW::default();
-        startup_info.cb = size_of::<STARTUPINFOW>() as u32;
+        let mut startup_info = STARTUPINFOW {
+            cb: size_of::<STARTUPINFOW>() as u32,
+            ..Default::default()
+        };
+
         apply_stdio_policy(&mut startup_info, stdio_policy)?;
 
         let mut command_line = build_command_line(&command);
@@ -241,7 +250,7 @@ mod imp {
                     }
                 }
                 Err(error) => {
-                    let already_exists = WIN32_ERROR::from(ERROR_ALREADY_EXISTS);
+                    let already_exists = ERROR_ALREADY_EXISTS;
                     if GetLastError() != already_exists {
                         return Err(io::Error::from_raw_os_error(error.code().0));
                     }
@@ -532,13 +541,13 @@ mod imp {
             match ch {
                 '\\' => backslashes += 1,
                 '"' => {
-                    result.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+                    result.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
                     result.push('"');
                     backslashes = 0;
                 }
                 _ => {
                     if backslashes > 0 {
-                        result.extend(std::iter::repeat('\\').take(backslashes));
+                        result.extend(std::iter::repeat_n('\\', backslashes * 2));
                         backslashes = 0;
                     }
                     result.push(ch);
