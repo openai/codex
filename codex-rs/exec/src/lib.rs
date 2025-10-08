@@ -48,7 +48,7 @@ use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
-    if let Err(err) = set_default_originator("codex_exec") {
+    if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
 

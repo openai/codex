@@ -50,6 +50,39 @@ for await (const event of events) {
 }
 ```
 
+### Structured output
+
+The Codex agent can produce a JSON response that conforms to a specified schema. The schema can be provided for each turn as a plain JSON object.
+
+```typescript
+const schema = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    status: { type: "string", enum: ["ok", "action_required"] },
+  },
+  required: ["summary", "status"],
+  additionalProperties: false,
+} as const;
+
+const turn = await thread.run("Summarize repository status", { outputSchema: schema });
+console.log(turn.finalResponse);
+```
+
+You can also create a JSON schema from a [Zod schema](https://github.com/colinhacks/zod) using the [`zod-to-json-schema`](https://www.npmjs.com/package/zod-to-json-schema) package and setting the `target` to `"openAi"`.
+
+```typescript
+const schema = z.object({
+  summary: z.string(),
+  status: z.enum(["ok", "action_required"]),
+});
+
+const turn = await thread.run("Summarize repository status", {
+  outputSchema: zodToJsonSchema(schema, { target: "openAi" }),
+});
+console.log(turn.finalResponse);
+```
+
 ### Resuming an existing thread
 
 Threads are persisted in `~/.codex/sessions`. If you lose the in-memory `Thread` object, reconstruct it with `resumeThread()` and keep going.
@@ -70,4 +103,3 @@ const thread = codex.startThread({
   skipGitRepoCheck: true,
 });
 ```
-
