@@ -311,12 +311,22 @@ impl TextArea {
                 code: KeyCode::Left,
                 modifiers: KeyModifiers::NONE,
                 ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
             } => {
                 self.move_cursor_left();
             }
             KeyEvent {
                 code: KeyCode::Right,
                 modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
                 self.move_cursor_right();
@@ -1197,6 +1207,7 @@ mod tests {
         let mut t = ta_with("a👍b");
         t.set_cursor(t.text().len());
 
+        // Test moving left
         t.move_cursor_left(); // before 'b'
         let after_first_left = t.cursor();
         t.move_cursor_left(); // before '👍'
@@ -1208,11 +1219,31 @@ mod tests {
         assert!(after_second_left < after_first_left);
         assert!(after_third_left < after_second_left);
 
-        // Move right back to end safely
+        // Test moving right back to end safely
         t.move_cursor_right();
         t.move_cursor_right();
         t.move_cursor_right();
         assert_eq!(t.cursor(), t.text().len());
+
+        // Test using ctrl-f and ctrl-b for graphemes (byte indices)
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        let mut t = ta_with("a👍b");
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)); // after 'a'
+        assert_eq!(t.cursor(), 1);
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)); // after '👍' (4-byte emoji)
+        assert_eq!(t.cursor(), 5);
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)); // after 'b' (end)
+        assert_eq!(t.cursor(), 6);
+
+        t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)); // back to after '👍'
+        assert_eq!(t.cursor(), 5);
+        t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)); // back to after 'a'
+        assert_eq!(t.cursor(), 1);
+        t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL)); // back to start
+        assert_eq!(t.cursor(), 0);
     }
 
     #[test]
