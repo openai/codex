@@ -496,9 +496,10 @@ fn collect_last_response_values(
             }
             RolloutItem::EventMsg(ev) => {
                 if latest_name.is_none()
-                    && let EventMsg::SessionRenamed(SessionRenamedEvent { name }) = ev {
-                        latest_name = Some(name);
-                    }
+                    && let EventMsg::SessionRenamed(SessionRenamedEvent { name }) = ev
+                {
+                    latest_name = Some(name);
+                }
             }
             _ => {}
         }
