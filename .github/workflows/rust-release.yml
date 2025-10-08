@@ -178,13 +178,12 @@ jobs:
           fi
 
           APPLE_CODESIGN_IDENTITY="${codesign_hashes[0]}"
-          # export APPLE_CODESIGN_IDENTITY
-          # echo "Resolved codesign identity: $APPLE_CODESIGN_IDENTITY"
 
           rm -f "$cert_path"
 
           echo "APPLE_CODESIGN_IDENTITY=$APPLE_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
           echo "APPLE_CODESIGN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+          echo "::add-mask::$APPLE_CODESIGN_IDENTITY"
 
       - if: ${{ matrix.runner == 'macos-14' }}
         name: Sign macOS binaries
