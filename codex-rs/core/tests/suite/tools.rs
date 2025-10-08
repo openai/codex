@@ -464,7 +464,8 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
         .and_then(Value::as_str)
         .expect("denied output string");
 
-    assert!(output.contains("Exit code:"));
+    assert!(output.contains("this is a long stderr"));
+    assert_eq!(output.len(), 2 * 1024);
     Ok(())
 }
 

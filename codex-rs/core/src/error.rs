@@ -1,6 +1,7 @@
 use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
+use crate::truncate::truncate_middle;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
@@ -11,6 +12,9 @@ use thiserror::Error;
 use tokio::task::JoinError;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
+
+/// Limit UI error messages to a reasonable size while keeping useful context.
+const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 4 KiB
 
 #[derive(Error, Debug)]
 pub enum SandboxErr {
@@ -304,35 +308,39 @@ impl CodexErr {
 }
 
 pub fn get_error_message_ui(e: &CodexErr) -> String {
-    match e {
+    let message = match e {
         CodexErr::Sandbox(SandboxErr::Denied { output }) => {
             let aggregated = output.aggregated_output.text.trim();
             if !aggregated.is_empty() {
-                return output.aggregated_output.text.clone();
+                output.aggregated_output.text.clone()
+            } else {
+                let stderr = output.stderr.text.trim();
+                if !stderr.is_empty() {
+                    output.stderr.text.clone()
+                } else {
+                    let stdout = output.stdout.text.trim();
+                    if !stdout.is_empty() {
+                        output.stdout.text.clone()
+                    } else {
+                        format!(
+                            "command failed inside sandbox with exit code {}",
+                            output.exit_code
+                        )
+                    }
+                }
             }
-
-            let stderr = output.stderr.text.trim();
-            if !stderr.is_empty() {
-                return output.stderr.text.clone();
-            }
-
-            let stdout = output.stdout.text.trim();
-            if !stdout.is_empty() {
-                return output.stdout.text.clone();
-            }
-
-            format!(
-                "command failed inside sandbox with exit code {}",
-                output.exit_code
-            )
         }
         // Timeouts are not sandbox errors from a UX perspective; present them plainly
-        CodexErr::Sandbox(SandboxErr::Timeout { output }) => format!(
-            "error: command timed out after {} ms",
-            output.duration.as_millis()
-        ),
+        CodexErr::Sandbox(SandboxErr::Timeout { output }) => {
+            format!(
+                "error: command timed out after {} ms",
+                output.duration.as_millis()
+            )
+        }
         _ => e.to_string(),
-    }
+    };
+
+    truncate_middle(&message, ERROR_MESSAGE_UI_MAX_BYTES).0
 }
 
 #[cfg(test)]
