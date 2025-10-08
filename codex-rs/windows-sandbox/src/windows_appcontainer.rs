@@ -82,6 +82,7 @@ mod imp {
     use super::StdioPolicy;
     use super::trace;
     use std::collections::HashMap;
+    use std::env;
     use std::ffi::OsStr;
     use std::ffi::c_void;
     use std::io::ErrorKind;
