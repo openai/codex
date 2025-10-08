@@ -224,7 +224,7 @@ mod imp {
                 PWSTR(command_line.as_mut_ptr()),
                 None,
                 None,
-                BOOL(1),
+                BOOL(0), // bInheritHandles = FALSE for sandbox hardening
                 creation_flags,
                 env_ptr,
                 cwd_ptr,
@@ -549,7 +549,6 @@ mod imp {
                 TOKEN_DUPLICATE.0
                     | TOKEN_QUERY.0
                     | TOKEN_ASSIGN_PRIMARY.0
-                    | TOKEN_ADJUST_DEFAULT.0
                     | TOKEN_ADJUST_SESSIONID.0,
             );
             if OpenProcessToken(GetCurrentProcess(), desired_access, &mut token).as_bool() {
