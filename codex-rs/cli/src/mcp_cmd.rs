@@ -236,7 +236,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         _ => bail!("OAuth login is only supported for streamable HTTP servers."),
     };
 
-    perform_oauth_login(&name, &url).await?;
+    perform_oauth_login(&name, &url, config.mcp_oauth_credentials_store_mode).await?;
     println!("Successfully logged in to MCP server '{name}'.");
     Ok(())
 }
@@ -259,7 +259,7 @@ async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutAr
         _ => bail!("OAuth logout is only supported for streamable_http transports."),
     };
 
-    match delete_oauth_tokens(&name, &url) {
+    match delete_oauth_tokens(&name, &url, config.mcp_oauth_credentials_store_mode) {
         Ok(true) => println!("Removed OAuth credentials for '{name}'."),
         Ok(false) => println!("No OAuth credentials stored for '{name}'."),
         Err(err) => return Err(anyhow!("failed to delete OAuth credentials: {err}")),
