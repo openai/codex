@@ -4,6 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use clap::ArgGroup;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -77,13 +78,61 @@ pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
 
-    /// Environment variables to set when launching the server.
-    #[arg(long, value_parser = parse_env_pair, value_name = "KEY=VALUE")]
-    pub env: Vec<(String, String)>,
+    #[command(flatten)]
+    pub transport_args: AddMcpTransportArgs,
+}
 
+#[derive(Debug, clap::Args)]
+#[command(
+    group(
+        ArgGroup::new("transport")
+            .args(["command", "url"])
+            .required(true)
+            .multiple(false)
+    )
+)]
+pub struct AddMcpTransportArgs {
+    #[command(flatten)]
+    pub stdio: Option<AddMcpStdioArgs>,
+
+    #[command(flatten)]
+    pub streamable_http: Option<AddMcpStreamableHttpArgs>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AddMcpStdioArgs {
     /// Command to launch the MCP server.
-    #[arg(trailing_var_arg = true, num_args = 1..)]
+    /// Use --url for a streamable HTTP server.
+    #[arg(
+            trailing_var_arg = true,
+            num_args = 0..,
+        )]
     pub command: Vec<String>,
+
+    /// Environment variables to set when launching the server.
+    /// Only valid with stdio servers.
+    #[arg(
+        long,
+        value_parser = parse_env_pair,
+        value_name = "KEY=VALUE",
+    )]
+    pub env: Vec<(String, String)>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct AddMcpStreamableHttpArgs {
+    /// URL for a streamable HTTP MCP server.
+    #[arg(long)]
+    pub url: String,
+
+    /// Optional environment variable to read for a bearer token.
+    /// Only valid with streamable HTTP servers.
+    #[arg(
+        long = "bearer-token-env-var",
+        value_name = "ENV_VAR",
+        requires = "url"
+    )]
+    pub bearer_token_env_var: Option<String>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -140,37 +189,51 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     // Validate any provided overrides even though they are not currently applied.
     config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
 
-    let AddArgs { name, env, command } = add_args;
+    let AddArgs {
+        name,
+        transport_args,
+    } = add_args;
 
     validate_server_name(&name)?;
-
-    let mut command_parts = command.into_iter();
-    let command_bin = command_parts
-        .next()
-        .ok_or_else(|| anyhow!("command is required"))?;
-    let command_args: Vec<String> = command_parts.collect();
-
-    let env_map = if env.is_empty() {
-        None
-    } else {
-        let mut map = HashMap::new();
-        for (key, value) in env {
-            map.insert(key, value);
-        }
-        Some(map)
-    };
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let mut servers = load_global_mcp_servers(&codex_home)
         .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
-    let new_entry = McpServerConfig {
-        transport: McpServerTransportConfig::Stdio {
-            command: command_bin,
-            args: command_args,
-            env: env_map,
+    let transport = match transport_args {
+        AddMcpTransportArgs {
+            stdio: Some(stdio), ..
+        } => {
+            let mut command_parts = stdio.command.into_iter();
+            let command_bin = command_parts
+                .next()
+                .ok_or_else(|| anyhow!("command is required"))?;
+            let command_args: Vec<String> = command_parts.collect();
+
+            let env_map = if stdio.env.is_empty() {
+                None
+            } else {
+                Some(stdio.env.into_iter().collect::<HashMap<_, _>>())
+            };
+            McpServerTransportConfig::Stdio {
+                command: command_bin,
+                args: command_args,
+                env: env_map,
+            }
+        }
+        AddMcpTransportArgs {
+            streamable_http: Some(streamable_http),
+            ..
+        } => McpServerTransportConfig::StreamableHttp {
+            url: streamable_http.url,
+            bearer_token_env_var: streamable_http.bearer_token_env_var,
         },
+        AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
+    };
+
+    let new_entry = McpServerConfig {
+        transport,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
     };
@@ -236,7 +299,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         _ => bail!("OAuth login is only supported for streamable HTTP servers."),
     };
 
-    perform_oauth_login(&name, &url).await?;
+    perform_oauth_login(&name, &url, config.mcp_oauth_credentials_store_mode).await?;
     println!("Successfully logged in to MCP server '{name}'.");
     Ok(())
 }
@@ -259,7 +322,7 @@ async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutAr
         _ => bail!("OAuth logout is only supported for streamable_http transports."),
     };
 
-    match delete_oauth_tokens(&name, &url) {
+    match delete_oauth_tokens(&name, &url, config.mcp_oauth_credentials_store_mode) {
         Ok(true) => println!("Removed OAuth credentials for '{name}'."),
         Ok(false) => println!("No OAuth credentials stored for '{name}'."),
         Err(err) => return Err(anyhow!("failed to delete OAuth credentials: {err}")),
@@ -288,11 +351,14 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                         "args": args,
                         "env": env,
                     }),
-                    McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                    McpServerTransportConfig::StreamableHttp {
+                        url,
+                        bearer_token_env_var,
+                    } => {
                         serde_json::json!({
                             "type": "streamable_http",
                             "url": url,
-                            "bearer_token": bearer_token,
+                            "bearer_token_env_var": bearer_token_env_var,
                         })
                     }
                 };
@@ -345,13 +411,15 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 };
                 stdio_rows.push([name.clone(), command.clone(), args_display, env_display]);
             }
-            McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
-                let has_bearer = if bearer_token.is_some() {
-                    "True"
-                } else {
-                    "False"
-                };
-                http_rows.push([name.clone(), url.clone(), has_bearer.into()]);
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+            } => {
+                http_rows.push([
+                    name.clone(),
+                    url.clone(),
+                    bearer_token_env_var.clone().unwrap_or("-".to_string()),
+                ]);
             }
         }
     }
@@ -396,7 +464,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     if !http_rows.is_empty() {
-        let mut widths = ["Name".len(), "Url".len(), "Has Bearer Token".len()];
+        let mut widths = ["Name".len(), "Url".len(), "Bearer Token Env Var".len()];
         for row in &http_rows {
             for (i, cell) in row.iter().enumerate() {
                 widths[i] = widths[i].max(cell.len());
@@ -407,7 +475,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             "{:<name_w$}  {:<url_w$}  {:<token_w$}",
             "Name",
             "Url",
-            "Has Bearer Token",
+            "Bearer Token Env Var",
             name_w = widths[0],
             url_w = widths[1],
             token_w = widths[2],
@@ -447,10 +515,13 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                 "args": args,
                 "env": env,
             }),
-            McpServerTransportConfig::StreamableHttp { url, bearer_token } => serde_json::json!({
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+            } => serde_json::json!({
                 "type": "streamable_http",
                 "url": url,
-                "bearer_token": bearer_token,
+                "bearer_token_env_var": bearer_token_env_var,
             }),
         };
         let output = serde_json::to_string_pretty(&serde_json::json!({
@@ -493,11 +564,14 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             };
             println!("  env: {env_display}");
         }
-        McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+        } => {
             println!("  transport: streamable_http");
             println!("  url: {url}");
-            let bearer = bearer_token.as_deref().unwrap_or("-");
-            println!("  bearer_token: {bearer}");
+            let env_var = bearer_token_env_var.as_deref().unwrap_or("-");
+            println!("  bearer_token_env_var: {env_var}");
         }
     }
     if let Some(timeout) = server.startup_timeout_sec {

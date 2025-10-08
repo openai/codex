@@ -35,6 +35,7 @@ use tracing::warn;
 
 use crate::load_oauth_tokens;
 use crate::logging_client_handler::LoggingClientHandler;
+use crate::oauth::OAuthCredentialsStoreMode;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
 use crate::utils::convert_call_tool_result;
@@ -119,10 +120,11 @@ impl RmcpClient {
         server_name: &str,
         url: &str,
         bearer_token: Option<String>,
+        store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
         let initial_oauth_tokens = match bearer_token {
             Some(_) => None,
-            None => match load_oauth_tokens(server_name, url) {
+            None => match load_oauth_tokens(server_name, url, store_mode) {
                 Ok(tokens) => tokens,
                 Err(err) => {
                     warn!("failed to read tokens for server `{server_name}`: {err}");
@@ -132,7 +134,8 @@ impl RmcpClient {
         };
         let transport = if let Some(initial_tokens) = initial_oauth_tokens.clone() {
             let (transport, oauth_persistor) =
-                create_oauth_transport_and_runtime(server_name, url, initial_tokens).await?;
+                create_oauth_transport_and_runtime(server_name, url, initial_tokens, store_mode)
+                    .await?;
             PendingTransport::StreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
@@ -286,6 +289,7 @@ async fn create_oauth_transport_and_runtime(
     server_name: &str,
     url: &str,
     initial_tokens: StoredOAuthTokens,
+    credentials_store: OAuthCredentialsStoreMode,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<reqwest::Client>>,
     OAuthPersistor,
@@ -320,6 +324,7 @@ async fn create_oauth_transport_and_runtime(
         server_name.to_string(),
         url.to_string(),
         auth_manager,
+        credentials_store,
         Some(initial_tokens),
     );
 
