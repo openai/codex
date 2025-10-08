@@ -1,7 +1,6 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
 
-#[allow(clippy::disallowed_methods)]
 /// Returns the closest color to the target color that the terminal can display.
 pub fn best_color(target: (u8, u8, u8)) -> Color {
     let Some(color_level) = supports_color::on_cached(supports_color::Stream::Stdout) else {
@@ -9,6 +8,7 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
     };
     if color_level.has_16m {
         let (r, g, b) = target;
+        #[allow(clippy::disallowed_methods)]
         Color::Rgb(r, g, b)
     } else if color_level.has_256
         && let Some((i, _)) =
@@ -22,8 +22,10 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
     {
+        #[allow(clippy::disallowed_methods)]
         Color::Indexed(i as u8)
     } else {
+        #[allow(clippy::disallowed_methods)]
         Color::default()
     }
 }
