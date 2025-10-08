@@ -356,6 +356,51 @@ fn create_read_file_tool() -> ToolSpec {
         },
     })
 }
+
+fn create_list_dir_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "dir_path".to_string(),
+        JsonSchema::String {
+            description: Some("Absolute path to the directory to list.".to_string()),
+        },
+    );
+    properties.insert(
+        "offset".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "The entry number to start listing from. Must be 1 or greater.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some("The maximum number of entries to return.".to_string()),
+        },
+    );
+    properties.insert(
+        "depth".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "The maximum directory depth to traverse. Must be 1 or greater.".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_dir".to_string(),
+        description:
+            "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["dir_path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
@@ -565,6 +610,7 @@ pub(crate) fn build_specs(
     use crate::exec_command::create_write_stdin_tool_for_responses_api;
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::ExecStreamHandler;
+    use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
@@ -638,6 +684,16 @@ pub(crate) fn build_specs(
         let read_file_handler = Arc::new(ReadFileHandler);
         builder.push_spec_with_parallel_support(create_read_file_tool(), true);
         builder.register_handler("read_file", read_file_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "list_dir")
+    {
+        let list_dir_handler = Arc::new(ListDirHandler);
+        builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
+        builder.register_handler("list_dir", list_dir_handler);
     }
 
     if config
@@ -786,6 +842,7 @@ mod tests {
 
         assert!(!find_tool(&tools, "unified_exec").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
     }
 
     #[test]
@@ -813,6 +870,7 @@ mod tests {
                 .iter()
                 .any(|tool| tool_name(&tool.spec) == "read_file")
         );
+        assert!(tools.iter().any(|tool| tool_name(&tool.spec) == "list_dir"));
     }
 
     #[test]
