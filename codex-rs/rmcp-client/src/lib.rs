@@ -5,6 +5,7 @@ mod perform_oauth_login;
 mod rmcp_client;
 mod utils;
 
+pub use oauth::OAuthCredentialsStoreMode;
 pub use oauth::StoredOAuthTokens;
 pub use oauth::WrappedOAuthTokenResponse;
 pub use oauth::delete_oauth_tokens;
