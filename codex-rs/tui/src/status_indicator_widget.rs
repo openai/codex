@@ -15,6 +15,7 @@ use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
@@ -163,15 +164,11 @@ impl WidgetRef for StatusIndicatorWidget {
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
-        let blink_on = (elapsed_duration.as_millis() / 600).is_multiple_of(2);
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let mut spans = Vec::with_capacity(5);
-        if blink_on {
-            spans.push("• ".into());
-        } else {
-            spans.push("◦ ".dim());
-        }
+        spans.push(spinner(Some(self.last_resume_at)));
+        spans.push(" ".into());
         spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),
