@@ -15,7 +15,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git",
+    "url": "git+https://github.com/meta-introspector/codex.git",
     "directory": "codex-cli"
   }
 }
