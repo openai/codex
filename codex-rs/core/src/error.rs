@@ -315,18 +315,15 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
                 output.aggregated_output.text.clone()
             } else {
                 let stderr = output.stderr.text.trim();
-                if !stderr.is_empty() {
-                    output.stderr.text.clone()
-                } else {
-                    let stdout = output.stdout.text.trim();
-                    if !stdout.is_empty() {
-                        output.stdout.text.clone()
-                    } else {
-                        format!(
-                            "command failed inside sandbox with exit code {}",
-                            output.exit_code
-                        )
-                    }
+                let stdout = output.stdout.text.trim();
+                match (stderr.is_empty(), stdout.is_empty()) {
+                    (false, false) => format!("{stderr}\n{stdout}"),
+                    (false, true) => output.stderr.text.clone(),
+                    (true, false) => output.stdout.text.clone(),
+                    (true, true) => format!(
+                        "command failed inside sandbox with exit code {}",
+                        output.exit_code
+                    ),
                 }
             }
         }
@@ -392,6 +389,38 @@ mod tests {
             output: Box::new(output),
         });
         assert_eq!(get_error_message_ui(&err), "aggregate detail");
+    }
+
+    #[test]
+    fn sandbox_denied_reports_both_streams_when_available() {
+        let output = ExecToolCallOutput {
+            exit_code: 9,
+            stdout: StreamOutput::new("stdout detail".to_string()),
+            stderr: StreamOutput::new("stderr detail".to_string()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::from_millis(10),
+            timed_out: false,
+        };
+        let err = CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(output),
+        });
+        assert_eq!(get_error_message_ui(&err), "stderr detail\nstdout detail");
+    }
+
+    #[test]
+    fn sandbox_denied_reports_stdout_when_no_stderr() {
+        let output = ExecToolCallOutput {
+            exit_code: 11,
+            stdout: StreamOutput::new("stdout only".to_string()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::from_millis(8),
+            timed_out: false,
+        };
+        let err = CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(output),
+        });
+        assert_eq!(get_error_message_ui(&err), "stdout only");
     }
 
     #[test]
