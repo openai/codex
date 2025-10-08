@@ -51,8 +51,7 @@ pub fn run_main() -> ! {
         sandbox_policy_cwd.as_path(),
         StdioPolicy::Inherit,
         env_map,
-    )
-    .and_then(|mut child| child.wait());
+    );
 
     match status {
         Ok(exit_status) => {
@@ -76,21 +75,26 @@ mod imp {
     use super::SandboxPolicy;
     use super::StdioPolicy;
     use super::trace;
+    use std::cmp::Ordering;
     use std::collections::HashMap;
     use std::ffi::OsStr;
-    use std::io;
+    use std::ffi::c_void;
+    use std::io::ErrorKind;
+    use std::io::{self};
+    use std::mem::size_of;
     use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::process::CommandExt;
-    use std::os::windows::process::ProcThreadAttributeList;
+    use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
     use std::path::PathBuf;
-    use std::process::Child;
-    use std::process::Command;
+    use std::process::ExitStatus;
     use std::ptr::null_mut;
+    use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::Foundation::GetLastError;
+    use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Foundation::HLOCAL;
+    use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Foundation::LocalFree;
     use windows::Win32::Foundation::WIN32_ERROR;
     use windows::Win32::Security::ACL;
@@ -117,8 +121,28 @@ mod imp {
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+    use windows::Win32::System::Console::GetStdHandle;
+    use windows::Win32::System::Console::STD_ERROR_HANDLE;
+    use windows::Win32::System::Console::STD_INPUT_HANDLE;
+    use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
+    use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
+    use windows::Win32::System::Threading::CreateProcessW;
+    use windows::Win32::System::Threading::DeleteProcThreadAttributeList;
     use windows::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
+    use windows::Win32::System::Threading::GetExitCodeProcess;
+    use windows::Win32::System::Threading::INFINITE;
+    use windows::Win32::System::Threading::InitializeProcThreadAttributeList;
+    use windows::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST;
     use windows::Win32::System::Threading::PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES;
+    use windows::Win32::System::Threading::PROCESS_CREATION_FLAGS;
+    use windows::Win32::System::Threading::PROCESS_INFORMATION;
+    use windows::Win32::System::Threading::STARTF_USESTDHANDLES;
+    use windows::Win32::System::Threading::STARTUPINFOEXW;
+    use windows::Win32::System::Threading::STARTUPINFOW;
+    use windows::Win32::System::Threading::UpdateProcThreadAttribute;
+    use windows::Win32::System::Threading::WAIT_OBJECT_0;
+    use windows::Win32::System::Threading::WaitForSingleObject;
+    use windows::core::BOOL;
     use windows::core::PCWSTR;
     use windows::core::PWSTR;
 
@@ -134,12 +158,15 @@ mod imp {
         sandbox_policy_cwd: &Path,
         stdio_policy: StdioPolicy,
         env: HashMap<String, String>,
-    ) -> io::Result<Child> {
+    ) -> io::Result<ExitStatus> {
         trace!("windows appcontainer sandbox command = {:?}", command);
 
-        let (program, rest) = command
-            .split_first()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "command args are empty"))?;
+        if command.is_empty() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "command args are empty",
+            ));
+        }
 
         ensure_appcontainer_profile()?;
         let mut sid = derive_appcontainer_sid()?;
@@ -149,26 +176,66 @@ mod imp {
         configure_writable_roots(sandbox_policy, sandbox_policy_cwd, sid.sid())?;
         configure_writable_roots_for_command_cwd(&command_cwd, sid.sid())?;
 
-        let mut cmd = Command::new(program);
-        cmd.args(rest);
-        cmd.current_dir(command_cwd);
-        cmd.env_clear();
-        cmd.envs(env);
-        apply_stdio_policy(&mut cmd, stdio_policy);
-        cmd.creation_flags(EXTENDED_STARTUPINFO_PRESENT.0);
+        let mut startup_info = StartupInfo::new();
+        apply_stdio_policy(&mut startup_info, stdio_policy)?;
+        startup_info.set_attribute_list(attribute_list.as_mut_ptr());
 
-        let child = cmd.spawn_with_attributes(attribute_list.as_proc_thread_attribute_list());
+        let mut command_line = build_command_line(&command);
+        let mut environment_block = build_environment_block(&env);
+        let mut cwd = to_wide(&command_cwd);
+
+        let mut process_info = ProcessInfoGuard::new();
+        let creation_flags =
+            PROCESS_CREATION_FLAGS(EXTENDED_STARTUPINFO_PRESENT.0 | CREATE_UNICODE_ENVIRONMENT.0);
+
+        let env_ptr = if environment_block.is_empty() {
+            null_mut()
+        } else {
+            environment_block.as_mut_ptr().cast::<c_void>()
+        };
+        let cwd_ptr = if cwd.is_empty() {
+            PCWSTR::null()
+        } else {
+            PCWSTR(cwd.as_mut_ptr())
+        };
+
+        let success = unsafe {
+            CreateProcessW(
+                PCWSTR::null(),
+                PWSTR(command_line.as_mut_ptr()),
+                None,
+                None,
+                BOOL(1),
+                creation_flags,
+                env_ptr,
+                cwd_ptr,
+                startup_info.startup_info_mut(),
+                process_info.as_mut_ptr(),
+            )
+        };
+
         drop(attribute_list);
-        child
+
+        if success == BOOL(0) {
+            return Err(io::Error::last_os_error());
+        }
+
+        wait_for_process(process_info.info())
     }
 
-    fn apply_stdio_policy(cmd: &mut Command, policy: StdioPolicy) {
+    fn apply_stdio_policy(startup_info: &mut StartupInfo, policy: StdioPolicy) -> io::Result<()> {
         match policy {
-            StdioPolicy::Inherit => {
-                cmd.stdin(std::process::Stdio::inherit());
-                cmd.stdout(std::process::Stdio::inherit());
-                cmd.stderr(std::process::Stdio::inherit());
-            }
+            StdioPolicy::Inherit => unsafe {
+                let stdin_handle = ensure_valid_handle(GetStdHandle(STD_INPUT_HANDLE))?;
+                let stdout_handle = ensure_valid_handle(GetStdHandle(STD_OUTPUT_HANDLE))?;
+                let stderr_handle = ensure_valid_handle(GetStdHandle(STD_ERROR_HANDLE))?;
+                let info = startup_info.startup_info_mut();
+                info.dwFlags |= STARTF_USESTDHANDLES;
+                info.hStdInput = stdin_handle;
+                info.hStdOutput = stdout_handle;
+                info.hStdError = stderr_handle;
+                Ok(())
+            },
         }
     }
 
@@ -276,7 +343,8 @@ mod imp {
     }
 
     struct AttributeList<'a> {
-        list: ProcThreadAttributeList<'a>,
+        buffer: Vec<u8>,
+        list: LPPROC_THREAD_ATTRIBUTE_LIST,
         sec_caps: Box<SECURITY_CAPABILITIES>,
         sid_and_attributes: Vec<SID_AND_ATTRIBUTES>,
         #[allow(dead_code)]
@@ -303,14 +371,47 @@ mod imp {
                 Reserved: 0,
             });
 
-            let list = ProcThreadAttributeList::build()
-                .attribute(
+            let mut required_size = 0;
+            unsafe {
+                InitializeProcThreadAttributeList(
+                    LPPROC_THREAD_ATTRIBUTE_LIST::default(),
+                    1,
+                    0,
+                    &mut required_size,
+                );
+            }
+
+            let mut buffer = vec![0u8; required_size];
+            let list = buffer.as_mut_ptr().cast();
+
+            let init_result =
+                unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut required_size) };
+
+            if init_result == BOOL(0) {
+                return Err(io::Error::last_os_error());
+            }
+
+            let update_result = unsafe {
+                UpdateProcThreadAttribute(
+                    list,
+                    0,
                     PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
-                    sec_caps.as_ref(),
+                    sec_caps.as_ref() as *const _ as *mut c_void,
+                    size_of::<SECURITY_CAPABILITIES>(),
+                    null_mut(),
+                    null_mut(),
                 )
-                .finish()?;
+            };
+
+            if update_result == BOOL(0) {
+                unsafe {
+                    DeleteProcThreadAttributeList(list);
+                }
+                return Err(io::Error::last_os_error());
+            }
 
             Ok(Self {
+                buffer,
                 list,
                 sec_caps,
                 sid_and_attributes,
@@ -319,8 +420,18 @@ mod imp {
             })
         }
 
-        fn as_proc_thread_attribute_list(&self) -> &ProcThreadAttributeList<'a> {
-            &self.list
+        fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+            self.list
+        }
+    }
+
+    impl<'a> Drop for AttributeList<'a> {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.list.is_null() {
+                    DeleteProcThreadAttributeList(self.list);
+                }
+            }
         }
     }
 
@@ -435,6 +546,159 @@ mod imp {
 
         Ok(())
     }
+
+    struct StartupInfo {
+        inner: STARTUPINFOEXW,
+    }
+
+    impl StartupInfo {
+        fn new() -> Self {
+            let mut inner = STARTUPINFOEXW::default();
+            inner.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+            Self { inner }
+        }
+
+        fn set_attribute_list(&mut self, list: LPPROC_THREAD_ATTRIBUTE_LIST) {
+            self.inner.lpAttributeList = list;
+        }
+
+        fn startup_info_mut(&mut self) -> &mut STARTUPINFOW {
+            &mut self.inner.StartupInfo
+        }
+    }
+
+    struct ProcessInfoGuard {
+        info: PROCESS_INFORMATION,
+    }
+
+    impl ProcessInfoGuard {
+        fn new() -> Self {
+            Self {
+                info: PROCESS_INFORMATION::default(),
+            }
+        }
+
+        fn as_mut_ptr(&mut self) -> *mut PROCESS_INFORMATION {
+            &mut self.info
+        }
+
+        fn info(&self) -> &PROCESS_INFORMATION {
+            &self.info
+        }
+    }
+
+    impl Drop for ProcessInfoGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.info.hThread.is_invalid() {
+                    let _ = CloseHandle(self.info.hThread);
+                }
+                if !self.info.hProcess.is_invalid() {
+                    let _ = CloseHandle(self.info.hProcess);
+                }
+            }
+        }
+    }
+
+    fn wait_for_process(info: &PROCESS_INFORMATION) -> io::Result<ExitStatus> {
+        unsafe {
+            let wait_result = WaitForSingleObject(info.hProcess, INFINITE);
+            if wait_result != WAIT_OBJECT_0 {
+                return Err(io::Error::last_os_error());
+            }
+            let mut exit_code = 0u32;
+            if GetExitCodeProcess(info.hProcess, &mut exit_code).as_bool() {
+                Ok(ExitStatus::from_raw(exit_code))
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+    }
+
+    unsafe fn ensure_valid_handle(handle: HANDLE) -> io::Result<HANDLE> {
+        if handle == INVALID_HANDLE_VALUE || handle.is_invalid() {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(handle)
+        }
+    }
+
+    fn build_command_line(command: &[String]) -> Vec<u16> {
+        let mut combined = String::new();
+        for (idx, arg) in command.iter().enumerate() {
+            if idx != 0 {
+                combined.push(' ');
+            }
+            combined.push_str(&quote_windows_argument(arg));
+        }
+        let mut wide: Vec<u16> = combined.encode_utf16().collect();
+        wide.push(0);
+        wide
+    }
+
+    fn quote_windows_argument(arg: &str) -> String {
+        if !needs_quotes(arg) {
+            return arg.to_string();
+        }
+        let mut result = String::with_capacity(arg.len() + 2);
+        result.push('"');
+        let mut backslashes = 0;
+        for ch in arg.chars() {
+            match ch {
+                '\\' => {
+                    backslashes += 1;
+                }
+                '"' => {
+                    result.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+                    result.push('"');
+                    backslashes = 0;
+                }
+                _ => {
+                    if backslashes > 0 {
+                        result.extend(std::iter::repeat('\\').take(backslashes));
+                        backslashes = 0;
+                    }
+                    result.push(ch);
+                }
+            }
+        }
+        if backslashes > 0 {
+            result.extend(std::iter::repeat('\\').take(backslashes * 2));
+        }
+        result.push('"');
+        result
+    }
+
+    fn needs_quotes(arg: &str) -> bool {
+        arg.is_empty()
+            || arg
+                .chars()
+                .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{0b}' | '"'))
+    }
+
+    fn build_environment_block(env: &HashMap<String, String>) -> Vec<u16> {
+        if env.is_empty() {
+            return Vec::new();
+        }
+        let mut pairs: Vec<(String, String)> =
+            env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        pairs.sort_by(|(a_key, _), (b_key, _)| {
+            let a_upper = a_key.to_ascii_uppercase();
+            let b_upper = b_key.to_ascii_uppercase();
+            match a_upper.cmp(&b_upper) {
+                Ordering::Equal => a_key.cmp(b_key),
+                other => other,
+            }
+        });
+        let mut block = Vec::new();
+        for (key, value) in pairs {
+            let entry = format!("{key}={value}");
+            block.extend(entry.encode_utf16());
+            block.push(0);
+        }
+        block.push(0);
+        block
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -448,7 +712,7 @@ fn spawn_command_under_windows_appcontainer(
     _sandbox_policy_cwd: &Path,
     _stdio_policy: StdioPolicy,
     _env: HashMap<String, String>,
-) -> std::io::Result<std::process::Child> {
+) -> std::io::Result<std::process::ExitStatus> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "Windows AppContainer sandboxing is only available on Windows",
