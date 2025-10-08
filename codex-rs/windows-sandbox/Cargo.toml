@@ -16,15 +16,10 @@ workspace = true
 
 [features]
 default = []
-windows_appcontainer_command_ext = []
-windows_appcontainer_command_ext_raw_attribute = [
-    "windows_appcontainer_command_ext",
-]
 
 [target.'cfg(target_os = "windows")'.dependencies]
 clap = { workspace = true, features = ["derive"] }
 codex-protocol = { workspace = true }
-tokio = { workspace = true, features = ["process", "rt", "rt-multi-thread"] }
 tracing = { workspace = true }
 windows = { workspace = true }
 

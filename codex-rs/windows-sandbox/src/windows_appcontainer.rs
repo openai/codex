@@ -3,7 +3,6 @@ use codex_protocol::protocol::SandboxPolicy;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
-use tokio::runtime::Builder;
 use tracing::trace;
 
 #[derive(Debug, Parser)]
@@ -45,23 +44,15 @@ pub fn run_main() -> ! {
     let sandbox_policy_cwd = sandbox_policy_cwd.unwrap_or_else(|| current_dir.clone());
     let env_map: HashMap<String, String> = env::vars().collect();
 
-    let runtime = Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build Tokio runtime");
-
-    let status = runtime.block_on(async {
-        let mut child = spawn_command_under_windows_appcontainer(
-            command,
-            current_dir,
-            &sandbox_policy,
-            sandbox_policy_cwd.as_path(),
-            StdioPolicy::Inherit,
-            env_map,
-        )
-        .await?;
-        child.wait().await
-    });
+    let status = spawn_command_under_windows_appcontainer(
+        command,
+        current_dir,
+        &sandbox_policy,
+        sandbox_policy_cwd.as_path(),
+        StdioPolicy::Inherit,
+        env_map,
+    )
+    .and_then(|mut child| child.wait());
 
     match status {
         Ok(exit_status) => {
@@ -87,19 +78,18 @@ mod imp {
     use super::trace;
     use std::collections::HashMap;
     use std::ffi::OsStr;
-    use std::ffi::c_void;
     use std::io;
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::process::CommandExt;
+    use std::os::windows::process::ProcThreadAttributeList;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::process::Child;
+    use std::process::Command;
     use std::ptr::null_mut;
-    use tokio::process::Child;
-    use tokio::process::Command;
     use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::Foundation::GetLastError;
-    use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Foundation::HLOCAL;
     use windows::Win32::Foundation::LocalFree;
     use windows::Win32::Foundation::WIN32_ERROR;
@@ -127,17 +117,8 @@ mod imp {
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
-    use windows::Win32::System::Memory::GetProcessHeap;
-    use windows::Win32::System::Memory::HEAP_FLAGS;
-    use windows::Win32::System::Memory::HEAP_ZERO_MEMORY;
-    use windows::Win32::System::Memory::HeapAlloc;
-    use windows::Win32::System::Memory::HeapFree;
-    use windows::Win32::System::Threading::DeleteProcThreadAttributeList;
     use windows::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
-    use windows::Win32::System::Threading::InitializeProcThreadAttributeList;
-    use windows::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST;
     use windows::Win32::System::Threading::PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES;
-    use windows::Win32::System::Threading::UpdateProcThreadAttribute;
     use windows::core::PCWSTR;
     use windows::core::PWSTR;
 
@@ -146,7 +127,7 @@ mod imp {
     const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
     const PRIVATE_NETWORK_CLIENT_SID: &str = "S-1-15-3-3";
 
-    pub(super) async fn spawn_command_under_windows_appcontainer(
+    pub(super) fn spawn_command_under_windows_appcontainer(
         command: Vec<String>,
         command_cwd: PathBuf,
         sandbox_policy: &SandboxPolicy,
@@ -174,15 +155,9 @@ mod imp {
         cmd.env_clear();
         cmd.envs(env);
         apply_stdio_policy(&mut cmd, stdio_policy);
-        cmd.kill_on_drop(true);
+        cmd.creation_flags(EXTENDED_STARTUPINFO_PRESENT.0);
 
-        unsafe {
-            let std_cmd = cmd.as_std_mut();
-            std_cmd.creation_flags(EXTENDED_STARTUPINFO_PRESENT.0);
-            std_cmd.raw_attribute_list(attribute_list.as_mut_ptr().0.cast());
-        }
-
-        let child = cmd.spawn();
+        let child = cmd.spawn_with_attributes(attribute_list.as_proc_thread_attribute_list());
         drop(attribute_list);
         child
     }
@@ -301,10 +276,8 @@ mod imp {
     }
 
     struct AttributeList<'a> {
-        heap: HANDLE,
-        buffer: *mut c_void,
-        list: LPPROC_THREAD_ATTRIBUTE_LIST,
-        sec_caps: SECURITY_CAPABILITIES,
+        list: ProcThreadAttributeList<'a>,
+        sec_caps: Box<SECURITY_CAPABILITIES>,
         sid_and_attributes: Vec<SID_AND_ATTRIBUTES>,
         #[allow(dead_code)]
         sid: &'a mut SidHandle,
@@ -314,76 +287,40 @@ mod imp {
 
     impl<'a> AttributeList<'a> {
         fn new(sid: &'a mut SidHandle, caps: &'a mut Vec<CapabilitySid>) -> io::Result<Self> {
-            unsafe {
-                let mut list_size = 0usize;
-                let _ = InitializeProcThreadAttributeList(
-                    Some(LPPROC_THREAD_ATTRIBUTE_LIST::default()),
-                    1,
-                    Some(0),
-                    &mut list_size,
-                );
-                let heap =
-                    GetProcessHeap().map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
-                let buffer = HeapAlloc(heap, HEAP_ZERO_MEMORY, list_size);
-                if buffer.is_null() {
-                    return Err(io::Error::last_os_error());
-                }
-                let list = LPPROC_THREAD_ATTRIBUTE_LIST(buffer);
-                InitializeProcThreadAttributeList(Some(list), 1, Some(0), &mut list_size)
-                    .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            let mut sid_and_attributes: Vec<SID_AND_ATTRIBUTES> =
+                caps.iter().map(CapabilitySid::sid_and_attributes).collect();
 
-                let mut sid_and_attributes: Vec<SID_AND_ATTRIBUTES> =
-                    caps.iter().map(CapabilitySid::sid_and_attributes).collect();
+            let capabilities_ptr = if sid_and_attributes.is_empty() {
+                null_mut()
+            } else {
+                sid_and_attributes.as_mut_ptr()
+            };
 
-                let mut sec_caps = SECURITY_CAPABILITIES {
-                    AppContainerSid: sid.sid(),
-                    Capabilities: if sid_and_attributes.is_empty() {
-                        null_mut()
-                    } else {
-                        sid_and_attributes.as_mut_ptr()
-                    },
-                    CapabilityCount: sid_and_attributes.len() as u32,
-                    Reserved: 0,
-                };
+            let sec_caps = Box::new(SECURITY_CAPABILITIES {
+                AppContainerSid: sid.sid(),
+                Capabilities: capabilities_ptr,
+                CapabilityCount: sid_and_attributes.len() as u32,
+                Reserved: 0,
+            });
 
-                UpdateProcThreadAttribute(
-                    list,
-                    0,
+            let list = ProcThreadAttributeList::build()
+                .attribute(
                     PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
-                    Some(&mut sec_caps as *mut _ as *const std::ffi::c_void),
-                    std::mem::size_of::<SECURITY_CAPABILITIES>(),
-                    None,
-                    None,
+                    sec_caps.as_ref(),
                 )
-                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+                .finish()?;
 
-                Ok(Self {
-                    heap,
-                    buffer,
-                    list,
-                    sec_caps,
-                    sid_and_attributes,
-                    sid,
-                    capabilities: caps,
-                })
-            }
+            Ok(Self {
+                list,
+                sec_caps,
+                sid_and_attributes,
+                sid,
+                capabilities: caps,
+            })
         }
 
-        fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
-            self.list
-        }
-    }
-
-    impl Drop for AttributeList<'_> {
-        fn drop(&mut self) {
-            unsafe {
-                if !self.list.is_invalid() {
-                    DeleteProcThreadAttributeList(self.list);
-                }
-                if !self.heap.is_invalid() && !self.buffer.is_null() {
-                    let _ = HeapFree(self.heap, HEAP_FLAGS(0), Some(self.buffer));
-                }
-            }
+        fn as_proc_thread_attribute_list(&self) -> &ProcThreadAttributeList<'a> {
+            &self.list
         }
     }
 
@@ -504,14 +441,14 @@ mod imp {
 use imp::spawn_command_under_windows_appcontainer;
 
 #[cfg(not(target_os = "windows"))]
-async fn spawn_command_under_windows_appcontainer(
+fn spawn_command_under_windows_appcontainer(
     _command: Vec<String>,
     _command_cwd: PathBuf,
     _sandbox_policy: &SandboxPolicy,
     _sandbox_policy_cwd: &Path,
     _stdio_policy: StdioPolicy,
     _env: HashMap<String, String>,
-) -> std::io::Result<tokio::process::Child> {
+) -> std::io::Result<std::process::Child> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "Windows AppContainer sandboxing is only available on Windows",

@@ -1559,7 +1559,6 @@ dependencies = [
  "codex-protocol",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
  "windows",
 ]
