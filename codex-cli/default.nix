@@ -1,20 +1,33 @@
 { pkgs, monorepo-deps ? [], ... }:
 
 let
-  codex-cli-package = pkgs.buildNpmPackage {
+  codex-cli-src = pkgs.lib.cleanSource ./.;
+  root-pnpm-lock = ../pnpm-lock.yaml;
+
+  codex-cli-package = pkgs.stdenv.mkDerivation {
     pname = "codex-cli";
     version = "0.0.0-dev";
-    src = ./.;
-    npmDepsHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; # Placeholder, will be updated by nix build
+    src = codex-cli-src;
+
+    nativeBuildInputs = [
+      pkgs.nodejs
+      pkgs.pnpm
+    ];
+
     installPhase = ''
-      pnpm install --frozen-lockfile --ignore-scripts
       mkdir -p $out/bin
+      cp -r $src/* .
+      cp ${root-pnpm-lock} pnpm-lock.yaml
+      export PNPM_HOME=$(pwd)/.pnpm-store
+      pnpm install --frozen-lockfile --ignore-scripts --store-dir $PNPM_HOME
       cp bin/codex.js $out/bin/
       chmod +x $out/bin/codex.js
       ln -s $out/bin/codex.js $out/bin/codex
     '';
+
     buildPhase = "true"; # No build step needed for a CLI
   };
+
 
 in
 rec {
