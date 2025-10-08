@@ -111,13 +111,20 @@ mod imp {
     use windows::Win32::Security::DACL_SECURITY_INFORMATION;
     use windows::Win32::Security::FreeSid;
     use windows::Win32::Security::Isolation::CreateAppContainerProfile;
+    use windows::Win32::Security::Isolation::CreateAppContainerToken;
     use windows::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
     use windows::Win32::Security::OBJECT_INHERIT_ACE;
+    use windows::Win32::Security::OpenProcessToken;
     use windows::Win32::Security::PSECURITY_DESCRIPTOR;
     use windows::Win32::Security::PSID;
-    use windows::Win32::Security::SECURITY_CAPABILITIES;
     use windows::Win32::Security::SID_AND_ATTRIBUTES;
     use windows::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+    use windows::Win32::Security::TOKEN_ACCESS_MASK;
+    use windows::Win32::Security::TOKEN_ADJUST_DEFAULT;
+    use windows::Win32::Security::TOKEN_ADJUST_SESSIONID;
+    use windows::Win32::Security::TOKEN_ASSIGN_PRIMARY;
+    use windows::Win32::Security::TOKEN_DUPLICATE;
+    use windows::Win32::Security::TOKEN_QUERY;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
@@ -126,20 +133,14 @@ mod imp {
     use windows::Win32::System::Console::STD_INPUT_HANDLE;
     use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
     use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
-    use windows::Win32::System::Threading::CreateProcessW;
-    use windows::Win32::System::Threading::DeleteProcThreadAttributeList;
-    use windows::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
+    use windows::Win32::System::Threading::CreateProcessAsUserW;
+    use windows::Win32::System::Threading::GetCurrentProcess;
     use windows::Win32::System::Threading::GetExitCodeProcess;
     use windows::Win32::System::Threading::INFINITE;
-    use windows::Win32::System::Threading::InitializeProcThreadAttributeList;
-    use windows::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST;
-    use windows::Win32::System::Threading::PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES;
     use windows::Win32::System::Threading::PROCESS_CREATION_FLAGS;
     use windows::Win32::System::Threading::PROCESS_INFORMATION;
     use windows::Win32::System::Threading::STARTF_USESTDHANDLES;
-    use windows::Win32::System::Threading::STARTUPINFOEXW;
     use windows::Win32::System::Threading::STARTUPINFOW;
-    use windows::Win32::System::Threading::UpdateProcThreadAttribute;
     use windows::Win32::System::Threading::WAIT_OBJECT_0;
     use windows::Win32::System::Threading::WaitForSingleObject;
     use windows::core::BOOL;
@@ -169,24 +170,41 @@ mod imp {
         }
 
         ensure_appcontainer_profile()?;
-        let mut sid = derive_appcontainer_sid()?;
-        let mut capability_sids = build_capabilities(sandbox_policy)?;
-        let mut attribute_list = AttributeList::new(&mut sid, &mut capability_sids)?;
+        let sid = derive_appcontainer_sid()?;
+        let capability_sids = build_capabilities(sandbox_policy)?;
 
         configure_writable_roots(sandbox_policy, sandbox_policy_cwd, sid.sid())?;
         configure_writable_roots_for_command_cwd(&command_cwd, sid.sid())?;
 
-        let mut startup_info = StartupInfo::new();
+        let mut startup_info = STARTUPINFOW::default();
+        startup_info.cb = size_of::<STARTUPINFOW>() as u32;
         apply_stdio_policy(&mut startup_info, stdio_policy)?;
-        startup_info.set_attribute_list(attribute_list.as_mut_ptr());
 
         let mut command_line = build_command_line(&command);
         let mut environment_block = build_environment_block(&env);
         let mut cwd = to_wide(&command_cwd);
 
         let mut process_info = ProcessInfoGuard::new();
-        let creation_flags =
-            PROCESS_CREATION_FLAGS(EXTENDED_STARTUPINFO_PRESENT.0 | CREATE_UNICODE_ENVIRONMENT.0);
+        let creation_flags = PROCESS_CREATION_FLAGS(CREATE_UNICODE_ENVIRONMENT.0);
+
+        let mut sid_and_attributes: Vec<SID_AND_ATTRIBUTES> = capability_sids
+            .iter()
+            .map(CapabilitySid::sid_and_attributes)
+            .collect();
+
+        let capabilities_ptr = if sid_and_attributes.is_empty() {
+            null_mut()
+        } else {
+            sid_and_attributes.as_mut_ptr()
+        };
+
+        let process_token = open_current_process_token()?;
+        let appcontainer_token = create_appcontainer_token(
+            process_token.handle(),
+            sid.sid(),
+            capabilities_ptr,
+            sid_and_attributes.len(),
+        )?;
 
         let env_ptr = if environment_block.is_empty() {
             null_mut()
@@ -200,7 +218,8 @@ mod imp {
         };
 
         let success = unsafe {
-            CreateProcessW(
+            CreateProcessAsUserW(
+                appcontainer_token.handle(),
                 PCWSTR::null(),
                 PWSTR(command_line.as_mut_ptr()),
                 None,
@@ -209,12 +228,10 @@ mod imp {
                 creation_flags,
                 env_ptr,
                 cwd_ptr,
-                startup_info.startup_info_mut(),
+                &mut startup_info,
                 process_info.as_mut_ptr(),
             )
         };
-
-        drop(attribute_list);
 
         if success == BOOL(0) {
             return Err(io::Error::last_os_error());
@@ -223,17 +240,16 @@ mod imp {
         wait_for_process(process_info.info())
     }
 
-    fn apply_stdio_policy(startup_info: &mut StartupInfo, policy: StdioPolicy) -> io::Result<()> {
+    fn apply_stdio_policy(startup_info: &mut STARTUPINFOW, policy: StdioPolicy) -> io::Result<()> {
         match policy {
             StdioPolicy::Inherit => unsafe {
                 let stdin_handle = ensure_valid_handle(GetStdHandle(STD_INPUT_HANDLE))?;
                 let stdout_handle = ensure_valid_handle(GetStdHandle(STD_OUTPUT_HANDLE))?;
                 let stderr_handle = ensure_valid_handle(GetStdHandle(STD_ERROR_HANDLE))?;
-                let info = startup_info.startup_info_mut();
-                info.dwFlags |= STARTF_USESTDHANDLES;
-                info.hStdInput = stdin_handle;
-                info.hStdOutput = stdout_handle;
-                info.hStdError = stderr_handle;
+                startup_info.dwFlags |= STARTF_USESTDHANDLES;
+                startup_info.hStdInput = stdin_handle;
+                startup_info.hStdOutput = stdout_handle;
+                startup_info.hStdError = stderr_handle;
                 Ok(())
             },
         }
@@ -339,99 +355,6 @@ mod imp {
             ])
         } else {
             Ok(Vec::new())
-        }
-    }
-
-    struct AttributeList<'a> {
-        buffer: Vec<u8>,
-        list: LPPROC_THREAD_ATTRIBUTE_LIST,
-        sec_caps: Box<SECURITY_CAPABILITIES>,
-        sid_and_attributes: Vec<SID_AND_ATTRIBUTES>,
-        #[allow(dead_code)]
-        sid: &'a mut SidHandle,
-        #[allow(dead_code)]
-        capabilities: &'a mut Vec<CapabilitySid>,
-    }
-
-    impl<'a> AttributeList<'a> {
-        fn new(sid: &'a mut SidHandle, caps: &'a mut Vec<CapabilitySid>) -> io::Result<Self> {
-            let mut sid_and_attributes: Vec<SID_AND_ATTRIBUTES> =
-                caps.iter().map(CapabilitySid::sid_and_attributes).collect();
-
-            let capabilities_ptr = if sid_and_attributes.is_empty() {
-                null_mut()
-            } else {
-                sid_and_attributes.as_mut_ptr()
-            };
-
-            let sec_caps = Box::new(SECURITY_CAPABILITIES {
-                AppContainerSid: sid.sid(),
-                Capabilities: capabilities_ptr,
-                CapabilityCount: sid_and_attributes.len() as u32,
-                Reserved: 0,
-            });
-
-            let mut required_size = 0;
-            unsafe {
-                InitializeProcThreadAttributeList(
-                    LPPROC_THREAD_ATTRIBUTE_LIST::default(),
-                    1,
-                    0,
-                    &mut required_size,
-                );
-            }
-
-            let mut buffer = vec![0u8; required_size];
-            let list = buffer.as_mut_ptr().cast();
-
-            let init_result =
-                unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut required_size) };
-
-            if init_result == BOOL(0) {
-                return Err(io::Error::last_os_error());
-            }
-
-            let update_result = unsafe {
-                UpdateProcThreadAttribute(
-                    list,
-                    0,
-                    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
-                    sec_caps.as_ref() as *const _ as *mut c_void,
-                    size_of::<SECURITY_CAPABILITIES>(),
-                    null_mut(),
-                    null_mut(),
-                )
-            };
-
-            if update_result == BOOL(0) {
-                unsafe {
-                    DeleteProcThreadAttributeList(list);
-                }
-                return Err(io::Error::last_os_error());
-            }
-
-            Ok(Self {
-                buffer,
-                list,
-                sec_caps,
-                sid_and_attributes,
-                sid,
-                capabilities: caps,
-            })
-        }
-
-        fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
-            self.list
-        }
-    }
-
-    impl<'a> Drop for AttributeList<'a> {
-        fn drop(&mut self) {
-            unsafe {
-                if !self.list.is_null() {
-                    DeleteProcThreadAttributeList(self.list);
-                }
-            }
         }
     }
 
@@ -547,26 +470,6 @@ mod imp {
         Ok(())
     }
 
-    struct StartupInfo {
-        inner: STARTUPINFOEXW,
-    }
-
-    impl StartupInfo {
-        fn new() -> Self {
-            let mut inner = STARTUPINFOEXW::default();
-            inner.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-            Self { inner }
-        }
-
-        fn set_attribute_list(&mut self, list: LPPROC_THREAD_ATTRIBUTE_LIST) {
-            self.inner.lpAttributeList = list;
-        }
-
-        fn startup_info_mut(&mut self) -> &mut STARTUPINFOW {
-            &mut self.inner.StartupInfo
-        }
-    }
-
     struct ProcessInfoGuard {
         info: PROCESS_INFORMATION,
     }
@@ -600,6 +503,30 @@ mod imp {
         }
     }
 
+    struct HandleGuard {
+        handle: HANDLE,
+    }
+
+    impl HandleGuard {
+        fn new(handle: HANDLE) -> Self {
+            Self { handle }
+        }
+
+        fn handle(&self) -> HANDLE {
+            self.handle
+        }
+    }
+
+    impl Drop for HandleGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.handle.is_invalid() {
+                    let _ = CloseHandle(self.handle);
+                }
+            }
+        }
+    }
+
     fn wait_for_process(info: &PROCESS_INFORMATION) -> io::Result<ExitStatus> {
         unsafe {
             let wait_result = WaitForSingleObject(info.hProcess, INFINITE);
@@ -612,6 +539,42 @@ mod imp {
             } else {
                 Err(io::Error::last_os_error())
             }
+        }
+    }
+
+    fn open_current_process_token() -> io::Result<HandleGuard> {
+        unsafe {
+            let mut token = HANDLE::default();
+            let desired_access = TOKEN_ACCESS_MASK(
+                TOKEN_DUPLICATE.0
+                    | TOKEN_QUERY.0
+                    | TOKEN_ASSIGN_PRIMARY.0
+                    | TOKEN_ADJUST_DEFAULT.0
+                    | TOKEN_ADJUST_SESSIONID.0,
+            );
+            if OpenProcessToken(GetCurrentProcess(), desired_access, &mut token).as_bool() {
+                Ok(HandleGuard::new(token))
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+    }
+
+    fn create_appcontainer_token(
+        process_token: HANDLE,
+        appcontainer_sid: PSID,
+        capabilities: *mut SID_AND_ATTRIBUTES,
+        capability_count: usize,
+    ) -> io::Result<HandleGuard> {
+        unsafe {
+            let token = CreateAppContainerToken(
+                process_token,
+                appcontainer_sid,
+                capabilities,
+                capability_count as u32,
+            )
+            .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            Ok(HandleGuard::new(token))
         }
     }
 
