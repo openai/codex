@@ -87,20 +87,21 @@ mod imp {
     use std::path::Path;
     use std::path::PathBuf;
     use std::process::ExitStatus;
+    use std::ptr::null;
     use std::ptr::null_mut;
-
+    use std::sync::OnceLock;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
-    use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::Foundation::GetLastError;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Foundation::HLOCAL;
     use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Foundation::LocalFree;
+    use windows::Win32::Foundation::NTSTATUS;
     use windows::Win32::Foundation::WAIT_OBJECT_0;
     use windows::Win32::Foundation::WIN32_ERROR;
-    use windows::Win32::Security::ACL;
     use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
+    use windows::Win32::Security::Authorization::DACL_SECURITY_INFORMATION;
     use windows::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
     use windows::Win32::Security::Authorization::GetNamedSecurityInfoW;
     use windows::Win32::Security::Authorization::SE_FILE_OBJECT;
@@ -110,17 +111,18 @@ mod imp {
     use windows::Win32::Security::Authorization::TRUSTEE_IS_SID;
     use windows::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
     use windows::Win32::Security::Authorization::TRUSTEE_W;
-    use windows::Win32::Security::DACL_SECURITY_INFORMATION;
     use windows::Win32::Security::FreeSid;
     use windows::Win32::Security::Isolation::CreateAppContainerProfile;
-    use windows::Win32::Security::Isolation::CreateAppContainerToken;
     use windows::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
+    use windows::Win32::Security::Isolation::IIsolatedAppLauncher;
+    use windows::Win32::Security::Isolation::IIsolatedProcessLauncher;
+    use windows::Win32::Security::Isolation::IIsolatedProcessLauncher2;
     use windows::Win32::Security::OBJECT_INHERIT_ACE;
     use windows::Win32::Security::PSECURITY_DESCRIPTOR;
     use windows::Win32::Security::PSID;
     use windows::Win32::Security::SID_AND_ATTRIBUTES;
-    use windows::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT;
     use windows::Win32::Security::TOKEN_ACCESS_MASK;
+    use windows::Win32::Security::TOKEN_ADJUST_DEFAULT;
     use windows::Win32::Security::TOKEN_ADJUST_SESSIONID;
     use windows::Win32::Security::TOKEN_ASSIGN_PRIMARY;
     use windows::Win32::Security::TOKEN_DUPLICATE;
@@ -128,23 +130,22 @@ mod imp {
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
-    use windows::Win32::System::Console::GetStdHandle;
-    use windows::Win32::System::Console::STD_ERROR_HANDLE;
-    use windows::Win32::System::Console::STD_INPUT_HANDLE;
-    use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::System::LibraryLoader::GetProcAddress;
+    use windows::Win32::System::LibraryLoader::LoadLibraryW;
     use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows::Win32::System::Threading::CreateProcessAsUserW;
     use windows::Win32::System::Threading::GetCurrentProcess;
     use windows::Win32::System::Threading::GetExitCodeProcess;
-    use windows::Win32::System::Threading::INFINITE;
     use windows::Win32::System::Threading::OpenProcessToken;
     use windows::Win32::System::Threading::PROCESS_CREATION_FLAGS;
     use windows::Win32::System::Threading::PROCESS_INFORMATION;
-    use windows::Win32::System::Threading::STARTF_USESTDHANDLES;
     use windows::Win32::System::Threading::STARTUPINFOW;
     use windows::Win32::System::Threading::WaitForSingleObject;
+    use windows::core::PCSTR;
     use windows::core::PCWSTR;
     use windows::core::PWSTR;
+    use windows::core::w;
 
     const WINDOWS_APPCONTAINER_PROFILE_NAME: &str = "codex_appcontainer";
     const WINDOWS_APPCONTAINER_PROFILE_DESC: &str = "Codex Windows AppContainer profile";
@@ -175,8 +176,10 @@ mod imp {
         configure_writable_roots(sandbox_policy, sandbox_policy_cwd, sid.sid())?;
         configure_writable_roots_for_command_cwd(&command_cwd, sid.sid())?;
 
-        let token = create_appcontainer_token(sid.sid(), &capability_sids)?;
+        // Create an AppContainer token via NtCreateLowBoxToken (dynamically loaded)
+        let token = create_lowbox_token(sid.sid(), &capability_sids)?;
 
+        // Startup info (no console handle massaging; avoids Win32_System_Console)
         let mut startup_info = STARTUPINFOW::default();
         startup_info.cb = size_of::<STARTUPINFOW>() as u32;
         apply_stdio_policy(&mut startup_info, stdio_policy)?;
@@ -184,8 +187,21 @@ mod imp {
         let mut command_line = build_command_line(&command);
         let mut environment_block = build_environment_block(&env);
         let mut cwd = to_wide(&command_cwd);
+
         let mut process_info = ProcessInfoGuard::new();
         let creation_flags = PROCESS_CREATION_FLAGS(CREATE_UNICODE_ENVIRONMENT.0);
+
+        let env_ptr: Option<*const c_void> = if environment_block.is_empty() {
+            None
+        } else {
+            Some(environment_block.as_mut_ptr().cast::<c_void>() as *const c_void)
+        };
+
+        let current_dir = if cwd.is_empty() {
+            PCWSTR::null()
+        } else {
+            PCWSTR(cwd.as_mut_ptr())
+        };
 
         unsafe {
             CreateProcessAsUserW(
@@ -194,19 +210,11 @@ mod imp {
                 Some(PWSTR(command_line.as_mut_ptr())),
                 None,
                 None,
-                false, // bInheritHandles = FALSE
+                false, // do not inherit handles
                 creation_flags,
-                if environment_block.is_empty() {
-                    None
-                } else {
-                    Some(environment_block.as_mut_ptr().cast::<c_void>())
-                },
-                if cwd.is_empty() {
-                    None
-                } else {
-                    Some(PCWSTR(cwd.as_mut_ptr()))
-                },
-                &mut startup_info,
+                env_ptr,
+                current_dir,
+                &startup_info,
                 process_info.as_mut_ptr(),
             )
             .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
@@ -215,26 +223,12 @@ mod imp {
         wait_for_process(process_info.info())
     }
 
-    fn apply_stdio_policy(startup_info: &mut STARTUPINFOW, policy: StdioPolicy) -> io::Result<()> {
-        match policy {
-            StdioPolicy::Inherit => unsafe {
-                let stdin_handle =
-                    ensure_valid_handle(GetStdHandle(STD_INPUT_HANDLE).map_err(os_err)?)?;
-                let stdout_handle =
-                    ensure_valid_handle(GetStdHandle(STD_OUTPUT_HANDLE).map_err(os_err)?)?;
-                let stderr_handle =
-                    ensure_valid_handle(GetStdHandle(STD_ERROR_HANDLE).map_err(os_err)?)?;
-                startup_info.dwFlags |= STARTF_USESTDHANDLES;
-                startup_info.hStdInput = stdin_handle;
-                startup_info.hStdOutput = stdout_handle;
-                startup_info.hStdError = stderr_handle;
-                Ok(())
-            },
-        }
-    }
-
-    fn os_err(e: windows::core::Error) -> io::Error {
-        io::Error::from_raw_os_error(e.code().0)
+    // No-op: we avoid Win32_System_Console to keep your Cargo.toml unchanged.
+    fn apply_stdio_policy(
+        _startup_info: &mut STARTUPINFOW,
+        _policy: StdioPolicy,
+    ) -> io::Result<()> {
+        Ok(())
     }
 
     fn to_wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {
@@ -257,7 +251,8 @@ mod imp {
                     }
                 }
                 Err(error) => {
-                    if GetLastError() != WIN32_ERROR::from(ERROR_ALREADY_EXISTS) {
+                    let already_exists = WIN32_ERROR::from(ERROR_ALREADY_EXISTS);
+                    if GetLastError() != already_exists {
                         return Err(io::Error::from_raw_os_error(error.code().0));
                     }
                 }
@@ -289,8 +284,8 @@ mod imp {
     fn derive_appcontainer_sid() -> io::Result<SidHandle> {
         unsafe {
             let name = to_wide(WINDOWS_APPCONTAINER_PROFILE_NAME);
-            let sid =
-                DeriveAppContainerSidFromAppContainerName(PCWSTR(name.as_ptr())).map_err(os_err)?;
+            let sid = DeriveAppContainerSidFromAppContainerName(PCWSTR(name.as_ptr()))
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
             Ok(SidHandle { ptr: sid })
         }
     }
@@ -304,7 +299,8 @@ mod imp {
             unsafe {
                 let mut sid_ptr = PSID::default();
                 let wide = to_wide(value);
-                ConvertStringSidToSidW(PCWSTR(wide.as_ptr()), &mut sid_ptr).map_err(os_err)?;
+                ConvertStringSidToSidW(PCWSTR(wide.as_ptr()), &mut sid_ptr)
+                    .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
                 Ok(Self { sid: sid_ptr })
             }
         }
@@ -338,6 +334,152 @@ mod imp {
         }
     }
 
+    fn configure_writable_roots(
+        policy: &SandboxPolicy,
+        sandbox_policy_cwd: &Path,
+        sid: PSID,
+    ) -> io::Result<()> {
+        match policy {
+            SandboxPolicy::DangerFullAccess => Ok(()),
+            SandboxPolicy::ReadOnly => grant_path_with_flags(sandbox_policy_cwd, sid, false),
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                let roots = policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+                for writable in roots {
+                    grant_path_with_flags(&writable.root, sid, true)?;
+                    for ro in writable.read_only_subpaths {
+                        grant_path_with_flags(&ro, sid, false)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn configure_writable_roots_for_command_cwd(command_cwd: &Path, sid: PSID) -> io::Result<()> {
+        grant_path_with_flags(command_cwd, sid, true)
+    }
+
+    fn grant_path_with_flags(path: &Path, sid: PSID, write: bool) -> io::Result<()> {
+        if !path.exists() {
+            return Ok(());
+        }
+
+        let wide = to_wide(path.as_os_str());
+        unsafe {
+            let mut existing_dacl: *mut windows::Win32::Security::ACL = null_mut();
+            let mut security_descriptor = PSECURITY_DESCRIPTOR::default();
+            let status = GetNamedSecurityInfoW(
+                PCWSTR(wide.as_ptr()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                Some(&mut existing_dacl),
+                None,
+                &mut security_descriptor,
+            );
+            if status != WIN32_ERROR(0) {
+                if !security_descriptor.is_invalid() {
+                    let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
+                }
+                return Err(io::Error::from_raw_os_error(status.0 as i32));
+            }
+
+            let permissions = if write {
+                (FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE).0
+            } else {
+                (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE).0
+            };
+            let explicit = EXPLICIT_ACCESS_W {
+                grfAccessPermissions: permissions,
+                grfAccessMode: SET_ACCESS,
+                grfInheritance: windows::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT
+                    | OBJECT_INHERIT_ACE,
+                Trustee: TRUSTEE_W {
+                    TrusteeForm: TRUSTEE_IS_SID,
+                    TrusteeType: TRUSTEE_IS_UNKNOWN,
+                    ptstrName: PWSTR(sid.0.cast()),
+                    ..Default::default()
+                },
+            };
+
+            let explicit_entries = [explicit];
+            let mut new_dacl: *mut windows::Win32::Security::ACL = null_mut();
+            let add_result =
+                SetEntriesInAclW(Some(&explicit_entries), Some(existing_dacl), &mut new_dacl);
+            if add_result != WIN32_ERROR(0) {
+                if !new_dacl.is_null() {
+                    let _ = LocalFree(Some(HLOCAL(new_dacl.cast())));
+                }
+                if !security_descriptor.is_invalid() {
+                    let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
+                }
+                return Err(io::Error::from_raw_os_error(add_result.0 as i32));
+            }
+
+            let set_result = SetNamedSecurityInfoW(
+                PCWSTR(wide.as_ptr()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                Some(new_dacl),
+                None,
+            );
+            if set_result != WIN32_ERROR(0) {
+                if !new_dacl.is_null() {
+                    let _ = LocalFree(Some(HLOCAL(new_dacl.cast())));
+                }
+                if !security_descriptor.is_invalid() {
+                    let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
+                }
+                return Err(io::Error::from_raw_os_error(set_result.0 as i32));
+            }
+
+            if !new_dacl.is_null() {
+                let _ = LocalFree(Some(HLOCAL(new_dacl.cast())));
+            }
+            if !security_descriptor.is_invalid() {
+                let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
+            }
+        }
+
+        Ok(())
+    }
+
+    struct ProcessInfoGuard {
+        info: PROCESS_INFORMATION,
+    }
+
+    impl ProcessInfoGuard {
+        fn new() -> Self {
+            Self {
+                info: PROCESS_INFORMATION::default(),
+            }
+        }
+
+        fn as_mut_ptr(&mut self) -> *mut PROCESS_INFORMATION {
+            &mut self.info
+        }
+
+        fn info(&self) -> &PROCESS_INFORMATION {
+            &self.info
+        }
+    }
+
+    impl Drop for ProcessInfoGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.info.hThread.is_invalid() {
+                    let _ = CloseHandle(self.info.hThread);
+                }
+                if !self.info.hProcess.is_invalid() {
+                    let _ = CloseHandle(self.info.hProcess);
+                }
+            }
+        }
+    }
+
     struct HandleGuard {
         handle: HANDLE,
     }
@@ -362,165 +504,108 @@ mod imp {
         }
     }
 
-    fn create_appcontainer_token(
-        appcontainer_sid: PSID,
-        capabilities: &[CapabilitySid],
-    ) -> io::Result<HandleGuard> {
-        unsafe {
-            let mut base_token = HANDLE::default();
-            OpenProcessToken(
-                GetCurrentProcess(),
-                TOKEN_ACCESS_MASK(
-                    TOKEN_DUPLICATE.0
-                        | TOKEN_QUERY.0
-                        | TOKEN_ASSIGN_PRIMARY.0
-                        | TOKEN_ADJUST_SESSIONID.0,
-                ),
-                &mut base_token,
-            )
-            .map_err(os_err)?;
-            let base = HandleGuard::new(base_token);
-
-            let mut sid_and_attributes: Vec<SID_AND_ATTRIBUTES> = capabilities
-                .iter()
-                .map(CapabilitySid::sid_and_attributes)
-                .collect();
-            let cap_ptr = if sid_and_attributes.is_empty() {
-                null_mut()
-            } else {
-                sid_and_attributes.as_mut_ptr()
-            };
-
-            let mut new_token = HANDLE::default();
-            CreateAppContainerToken(
-                base.handle(),
-                appcontainer_sid,
-                sid_and_attributes.len() as u32,
-                cap_ptr,
-                &mut new_token,
-            )
-            .map_err(os_err)?;
-            Ok(HandleGuard::new(new_token))
-        }
-    }
-
-    struct ProcessInfoGuard {
-        info: PROCESS_INFORMATION,
-    }
-
-    impl ProcessInfoGuard {
-        fn new() -> Self {
-            Self {
-                info: PROCESS_INFORMATION::default(),
-            }
-        }
-        fn as_mut_ptr(&mut self) -> *mut PROCESS_INFORMATION {
-            &mut self.info
-        }
-        fn info(&self) -> &PROCESS_INFORMATION {
-            &self.info
-        }
-    }
-
-    impl Drop for ProcessInfoGuard {
-        fn drop(&mut self) {
-            unsafe {
-                if !self.info.hThread.is_invalid() {
-                    let _ = CloseHandle(self.info.hThread);
-                }
-                if !self.info.hProcess.is_invalid() {
-                    let _ = CloseHandle(self.info.hProcess);
-                }
-            }
-        }
-    }
-
     fn wait_for_process(info: &PROCESS_INFORMATION) -> io::Result<ExitStatus> {
         unsafe {
-            let wait_result = WaitForSingleObject(info.hProcess, INFINITE);
+            let wait_result = WaitForSingleObject(info.hProcess, u32::MAX);
             if wait_result != WAIT_OBJECT_0 {
                 return Err(io::Error::last_os_error());
             }
             let mut exit_code = 0u32;
-            GetExitCodeProcess(info.hProcess, &mut exit_code).map_err(os_err)?;
+            GetExitCodeProcess(info.hProcess, &mut exit_code)
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
             Ok(ExitStatus::from_raw(exit_code))
         }
     }
 
-    unsafe fn ensure_valid_handle(handle: HANDLE) -> io::Result<HANDLE> {
-        if handle == INVALID_HANDLE_VALUE || handle.is_invalid() {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(handle)
+    // -------- Low-box token creation via NtCreateLowBoxToken --------
+
+    type NtCreateLowBoxTokenFn = unsafe extern "system" fn(
+        token_handle: *mut HANDLE,
+        existing_token_handle: HANDLE,
+        desired_access: u32,
+        object_attributes: *const c_void,
+        package_sid: PSID,
+        capability_count: u32,
+        capabilities: *const SID_AND_ATTRIBUTES,
+        handle_count: u32,
+        handles: *const HANDLE,
+    ) -> NTSTATUS;
+
+    fn nt_success(status: NTSTATUS) -> bool {
+        status.0 >= 0
+    }
+
+    fn nt_to_io(status: NTSTATUS) -> io::Error {
+        io::Error::from_raw_os_error(status.0)
+    }
+
+    fn windows_error_to_io(err: windows::core::Error) -> io::Error {
+        io::Error::from_raw_os_error(err.code().0)
+    }
+
+    fn get_nt_create_low_box_token() -> io::Result<NtCreateLowBoxTokenFn> {
+        static CACHE: OnceLock<Result<NtCreateLowBoxTokenFn, io::Error>> = OnceLock::new();
+        match CACHE.get_or_init(|| unsafe {
+            let module_name = w!("ntdll.dll");
+            let module = match GetModuleHandleW(module_name) {
+                Ok(h) => h,
+                Err(_) => LoadLibraryW(module_name).map_err(windows_error_to_io)?,
+            };
+            let name = PCSTR(b"NtCreateLowBoxToken\0".as_ptr());
+            let raw = GetProcAddress(module, name)
+                .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "NtCreateLowBoxToken"))?;
+            Ok(std::mem::transmute::<_, NtCreateLowBoxTokenFn>(raw))
+        }) {
+            Ok(f) => Ok(*f),
+            Err(e) => Err(io::Error::new(e.kind(), e.to_string())),
         }
     }
 
-    fn build_command_line(command: &[String]) -> Vec<u16> {
-        let mut combined = String::new();
-        for (idx, arg) in command.iter().enumerate() {
-            if idx != 0 {
-                combined.push(' ');
+    fn create_lowbox_token(
+        appcontainer_sid: PSID,
+        caps: &[CapabilitySid],
+    ) -> io::Result<HandleGuard> {
+        unsafe {
+            // open current process token with enough rights to duplicate/assign
+            let mut process_token = HANDLE::default();
+            let desired = TOKEN_ACCESS_MASK(
+                TOKEN_DUPLICATE.0
+                    | TOKEN_QUERY.0
+                    | TOKEN_ASSIGN_PRIMARY.0
+                    | TOKEN_ADJUST_DEFAULT.0
+                    | TOKEN_ADJUST_SESSIONID.0,
+            );
+            OpenProcessToken(GetCurrentProcess(), desired, &mut process_token)
+                .map_err(windows_error_to_io)?;
+            let process_guard = HandleGuard::new(process_token);
+
+            let mut sid_and_attrs: Vec<SID_AND_ATTRIBUTES> =
+                caps.iter().map(CapabilitySid::sid_and_attributes).collect();
+            let caps_ptr = if sid_and_attrs.is_empty() {
+                null()
+            } else {
+                sid_and_attrs.as_mut_ptr()
+            };
+
+            let creator = get_nt_create_low_box_token()?;
+            let mut new_token = HANDLE::default();
+            let status = creator(
+                &mut new_token,
+                process_guard.handle(),
+                desired.0,
+                null(),
+                appcontainer_sid,
+                sid_and_attrs.len() as u32,
+                caps_ptr,
+                0,
+                null(),
+            );
+            if !nt_success(status) {
+                return Err(nt_to_io(status));
             }
-            combined.push_str(&quote_windows_argument(arg));
-        }
-        let mut wide: Vec<u16> = combined.encode_utf16().collect();
-        wide.push(0);
-        wide
-    }
 
-    fn quote_windows_argument(arg: &str) -> String {
-        if !needs_quotes(arg) {
-            return arg.to_string();
+            Ok(HandleGuard::new(new_token))
         }
-        let mut result = String::with_capacity(arg.len() + 2);
-        result.push('"');
-        let mut backslashes = 0;
-        for ch in arg.chars() {
-            match ch {
-                '\\' => backslashes += 1,
-                '"' => {
-                    result.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
-                    result.push('"');
-                    backslashes = 0;
-                }
-                _ => {
-                    if backslashes > 0 {
-                        result.extend(std::iter::repeat('\\').take(backslashes));
-                        backslashes = 0;
-                    }
-                    result.push(ch);
-                }
-            }
-        }
-        if backslashes > 0 {
-            result.extend(std::iter::repeat('\\').take(backslashes * 2));
-        }
-        result.push('"');
-        result
-    }
-
-    fn needs_quotes(arg: &str) -> bool {
-        arg.is_empty()
-            || arg
-                .chars()
-                .any(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{0b}' | '"'))
-    }
-
-    fn build_environment_block(env: &HashMap<String, String>) -> Vec<u16> {
-        if env.is_empty() {
-            return Vec::new();
-        }
-        let mut pairs: Vec<(String, String)> =
-            env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-        let mut block = Vec::new();
-        for (key, value) in pairs {
-            let entry = format!("{key}={value}");
-            block.extend(entry.encode_utf16());
-            block.push(0);
-        }
-        block.push(0);
-        block
     }
 }
 
