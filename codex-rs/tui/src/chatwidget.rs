@@ -664,11 +664,19 @@ impl ChatWidget {
     }
 
     fn handle_stream_finished(&mut self) {
+        // Clean up streaming state
         if self.task_complete_pending {
             self.bottom_pane.hide_status_indicator();
             self.task_complete_pending = false;
         }
-        // A completed stream indicates non-exec content was just inserted.
+
+        // Clear stream controller
+        self.stream_controller = None;
+
+        // Process any queued messages that arrived during streaming
+        self.maybe_send_next_queued_input();
+
+        // Handle any pending interrupts
         self.flush_interrupt_queue();
     }
 
@@ -676,6 +684,9 @@ impl ChatWidget {
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
         self.flush_active_cell();
+
+        // Ensure we're in streaming state
+        self.bottom_pane.set_task_running(true);
 
         if self.stream_controller.is_none() {
             if self.needs_final_message_separator {
@@ -1057,12 +1068,12 @@ impl ChatWidget {
             _ => {
                 match self.bottom_pane.handle_key_event(key_event) {
                     InputResult::Submitted(text) => {
-                        // If a task is running, queue the user input to be sent after the turn completes.
                         let user_message = UserMessage {
                             text,
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
-                        if self.bottom_pane.is_task_running() {
+                        // Queue messages during streaming or task running
+                        if self.bottom_pane.is_task_running() || self.stream_controller.is_some() {
                             self.queued_user_messages.push_back(user_message);
                             self.refresh_queued_user_messages();
                         } else {
