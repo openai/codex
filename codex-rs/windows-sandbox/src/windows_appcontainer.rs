@@ -172,6 +172,30 @@ mod imp {
         configure_writable_roots(sandbox_policy, sandbox_policy_cwd, sid.sid())?;
         configure_writable_roots_for_command_cwd(&command_cwd, sid.sid())?;
 
+        // Also allow the AppContainer to use the user's existing %TEMP% / %TMP% directories.
+        // We do NOT create any directories here; we only add an ACE if the path already exists.
+        // This avoids creating files/folders on other people's machines.
+        if let Some(temp_os) = env::var_os("TEMP") {
+            let temp_path = PathBuf::from(&temp_os);
+            if temp_path.exists() {
+                // Write permission (and inheritance) so child processes can create temp files.
+                grant_path_with_flags(&temp_path, sid.sid(), true)?;
+            }
+        }
+        // If TMP is distinct from TEMP, grant it as well.
+        if let Some(tmp_os) = env::var_os("TMP") {
+            let tmp_path = PathBuf::from(&tmp_os);
+            if tmp_path.exists() {
+                // Only grant if it's different from TEMP (avoid duplicate work).
+                let same_as_temp = env::var_os("TEMP")
+                    .map(|t| PathBuf::from(t))
+                    .map_or(false, |t| t == tmp_path);
+                if !same_as_temp {
+                    grant_path_with_flags(&tmp_path, sid.sid(), true)?;
+                }
+            }
+        }
+
         // Create an AppContainer (low-box) primary token via NtCreateLowBoxToken.
         let token = create_lowbox_token(sid.sid(), &capability_sids)?;
 
