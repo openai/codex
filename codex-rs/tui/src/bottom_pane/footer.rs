@@ -72,70 +72,30 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
 }
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
-    // Merge the optional context indicator with a single hint line so layout
-    // calculations and rendering stay in sync.
-    let mut content = footer_content(props);
-    if let Some(context) = content.context {
-        match content.lines.len() {
-            0 => vec![context],
-            1 => {
-                let mut merged = context;
-                merged.push_span(" · ".dim());
-                merged.extend(content.lines.remove(0).spans);
-                vec![merged]
-            }
-            _ => {
-                let mut lines = Vec::with_capacity(content.lines.len() + 1);
-                lines.push(context);
-                lines.extend(content.lines);
-                lines
-            }
-        }
-    } else {
-        content.lines
-    }
-}
-
-struct FooterContent {
-    context: Option<Line<'static>>,
-    lines: Vec<Line<'static>>,
-}
-
-fn footer_content(props: FooterProps) -> FooterContent {
+    // Show the context indicator on the left, appended after the primary hint
+    // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
+    // the shortcut hint is hidden). Hide it only for the multi-line
+    // ShortcutOverlay.
     match props.mode {
-        FooterMode::CtrlCReminder => FooterContent {
-            context: None,
-            lines: vec![ctrl_c_reminder_line(CtrlCReminderState {
-                is_task_running: props.is_task_running,
-            })],
-        },
-        FooterMode::ShortcutSummary => FooterContent {
-            context: Some(context_window_line(props.context_window_percent)),
-            lines: vec![shortcut_prompt_line()],
-        },
-        FooterMode::ShortcutOverlay => FooterContent {
-            context: None,
-            lines: shortcut_overlay_lines(ShortcutsState {
-                use_shift_enter_hint: props.use_shift_enter_hint,
-                esc_backtrack_hint: props.esc_backtrack_hint,
-            }),
-        },
-        FooterMode::EscHint => FooterContent {
-            context: None,
-            lines: vec![esc_hint_line(props.esc_backtrack_hint)],
-        },
-        FooterMode::ContextOnly => FooterContent {
-            context: Some(context_window_line(props.context_window_percent)),
-            lines: Vec::new(),
-        },
+        FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
+            is_task_running: props.is_task_running,
+        })],
+        FooterMode::ShortcutSummary => {
+            let mut line = context_window_line(props.context_window_percent);
+            line.push_span(" · ".dim());
+            line.extend(vec![
+                key_hint::plain(KeyCode::Char('?')).into(),
+                " for shortcuts".dim(),
+            ]);
+            vec![line]
+        }
+        FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
+            use_shift_enter_hint: props.use_shift_enter_hint,
+            esc_backtrack_hint: props.esc_backtrack_hint,
+        }),
+        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
+        FooterMode::ContextOnly => vec![context_window_line(props.context_window_percent)],
     }
-}
-
-fn shortcut_prompt_line() -> Line<'static> {
-    Line::from(vec![
-        key_hint::plain(KeyCode::Char('?')).into(),
-        " for shortcuts".dim(),
-    ])
 }
 
 #[derive(Clone, Copy, Debug)]
