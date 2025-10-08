@@ -21,6 +21,7 @@ use codex_core::config::Config;
 use codex_core::config_types::McpServerTransportConfig;
 use codex_core::config_types::ReasoningSummaryFormat;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -849,7 +850,8 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
 /// Render MCP tools grouped by connection using the fully-qualified tool names.
 pub(crate) fn new_mcp_tools_output(
     config: &Config,
-    tools: std::collections::HashMap<String, mcp_types::Tool>,
+    tools: HashMap<String, mcp_types::Tool>,
+    auth_statuses: &HashMap<String, McpAuthStatus>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = vec![
         "/mcp".magenta().into(),
@@ -873,6 +875,10 @@ pub(crate) fn new_mcp_tools_output(
             .collect();
         names.sort();
 
+        let status = auth_statuses
+            .get(server.as_str())
+            .copied()
+            .unwrap_or(McpAuthStatus::Unsupported);
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
         let status_line = if cfg.enabled {
             vec!["    • Status: ".into(), "enabled".green()].into()
@@ -880,6 +886,7 @@ pub(crate) fn new_mcp_tools_output(
             vec!["    • Status: ".into(), "disabled".red()].into()
         };
         lines.push(status_line);
+        lines.push(vec!["    • Auth: ".into(), status.to_string().into()].into());
 
         match &cfg.transport {
             McpServerTransportConfig::Stdio { command, args, env } => {

@@ -55,7 +55,9 @@ fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("docs-server"));
     assert!(stdout.contains("TOKEN=secret"));
     assert!(stdout.contains("Status"));
+    assert!(stdout.contains("Auth"));
     assert!(stdout.contains("enabled"));
+    assert!(stdout.contains("Unsupported"));
 
     let mut list_json_cmd = codex_command(codex_home.path())?;
     let json_output = list_json_cmd.args(["mcp", "list", "--json"]).output()?;
@@ -80,7 +82,8 @@ fn list_and_get_render_expected_output() -> Result<()> {
               }
             },
             "startup_timeout_sec": null,
-            "tool_timeout_sec": null
+            "tool_timeout_sec": null,
+            "auth_status": "unsupported"
           }
         ]
         )
