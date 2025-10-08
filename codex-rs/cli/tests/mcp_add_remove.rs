@@ -35,6 +35,7 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
         }
         other => panic!("unexpected transport: {other:?}"),
     }
+    assert!(docs.enabled);
 
     let mut remove_cmd = codex_command(codex_home.path())?;
     remove_cmd
@@ -90,6 +91,7 @@ async fn add_with_env_preserves_key_order_and_values() -> Result<()> {
     assert_eq!(env.len(), 2);
     assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
     assert_eq!(env.get("ALPHA"), Some(&"beta".to_string()));
+    assert!(envy.enabled);
 
     Ok(())
 }
@@ -116,6 +118,7 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
         }
         other => panic!("unexpected transport: {other:?}"),
     }
+    assert!(github.enabled);
 
     assert!(!codex_home.path().join(".credentials.json").exists());
     assert!(!codex_home.path().join(".env").exists());
@@ -153,6 +156,7 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
         }
         other => panic!("unexpected transport: {other:?}"),
     }
+    assert!(issues.enabled);
     Ok(())
 }
 

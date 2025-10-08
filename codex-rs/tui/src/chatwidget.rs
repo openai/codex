@@ -1906,7 +1906,11 @@ impl ChatWidget {
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
-        self.add_to_history(history_cell::new_mcp_tools_output(&self.config, ev.tools));
+        self.add_to_history(history_cell::new_mcp_tools_output(
+            &self.config,
+            ev.tools,
+            &ev.auth_statuses,
+        ));
     }
 
     fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {

@@ -20,6 +20,10 @@ pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
+    /// When `false`, Codex skips initializing this MCP server.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
         default,
@@ -56,6 +60,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             startup_timeout_ms: Option<u64>,
             #[serde(default, with = "option_duration_secs")]
             tool_timeout_sec: Option<Duration>,
+            #[serde(default)]
+            enabled: Option<bool>,
         }
 
         let raw = RawMcpServerConfig::deserialize(deserializer)?;
@@ -127,8 +133,13 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             transport,
             startup_timeout_sec,
             tool_timeout_sec: raw.tool_timeout_sec,
+            enabled: raw.enabled.unwrap_or_else(default_enabled),
         })
     }
+}
+
+const fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -460,6 +471,7 @@ mod tests {
                 env: None
             }
         );
+        assert!(cfg.enabled);
     }
 
     #[test]
@@ -480,6 +492,7 @@ mod tests {
                 env: None
             }
         );
+        assert!(cfg.enabled);
     }
 
     #[test]
@@ -501,6 +514,20 @@ mod tests {
                 env: Some(HashMap::from([("FOO".to_string(), "BAR".to_string())]))
             }
         );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_disabled_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            enabled = false
+        "#,
+        )
+        .expect("should deserialize disabled server config");
+
+        assert!(!cfg.enabled);
     }
 
     #[test]
@@ -519,6 +546,7 @@ mod tests {
                 bearer_token_env_var: None
             }
         );
+        assert!(cfg.enabled);
     }
 
     #[test]
@@ -538,6 +566,7 @@ mod tests {
                 bearer_token_env_var: Some("GITHUB_TOKEN".to_string())
             }
         );
+        assert!(cfg.enabled);
     }
 
     #[test]
