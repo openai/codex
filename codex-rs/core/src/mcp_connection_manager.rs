@@ -214,8 +214,8 @@ impl McpConnectionManager {
                 McpServerTransportConfig::StreamableHttp {
                     bearer_token_env_var,
                     ..
-                } => resolve_bearer_token(&server_name, bearer_token_env_var.as_deref())?,
-                _ => None,
+                } => resolve_bearer_token(&server_name, bearer_token_env_var.as_deref()),
+                _ => Ok(None),
             };
 
             join_set.spawn(async move {
@@ -259,7 +259,7 @@ impl McpConnectionManager {
                         McpClientAdapter::new_streamable_http_client(
                             server_name.clone(),
                             url,
-                            resolved_bearer_token,
+                            resolved_bearer_token.unwrap_or_default(),
                             params,
                             startup_timeout,
                             store_mode,

@@ -214,11 +214,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             let env_map = if stdio.env.is_empty() {
                 None
             } else {
-                let mut map = HashMap::new();
-                for (key, value) in stdio.env {
-                    map.insert(key, value);
-                }
-                Some(map)
+                Some(stdio.env.into_iter().collect::<HashMap<_, _>>())
             };
             McpServerTransportConfig::Stdio {
                 command: command_bin,
