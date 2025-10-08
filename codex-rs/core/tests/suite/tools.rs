@@ -424,7 +424,7 @@ async fn shell_sandbox_denied_truncates_error_output() -> Result<()> {
     let call_id = "shell-denied";
     let long_line = "this is a long stderr line that should trigger truncation 0123456789abcdefghijklmnopqrstuvwxyz";
     let script = format!(
-        "for i in $(seq 1 500); do >&2 echo '{long_line}'; done; cat <<'EOF' > denied.txt\ncontent\nEOF",
+        "for i in $(seq 1 500); do >&2 echo '{long_line}'; done; printf 'content' | tee denied.txt >/dev/null",
     );
     let args = json!({
         "command": ["/bin/sh", "-c", script],
