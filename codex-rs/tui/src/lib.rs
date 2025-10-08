@@ -189,7 +189,7 @@ pub async fn run_main(
         }
     };
 
-    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone());
+    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
 
     let active_profile = config.active_profile.clone();
     let log_dir = codex_core::config::log_dir(&config)?;
@@ -363,8 +363,12 @@ async fn run_ratatui_app(
     let should_show_trust_screen = should_show_trust_screen(&initial_config);
     let should_show_windows_wsl_screen =
         cfg!(target_os = "windows") && !initial_config.windows_wsl_setup_acknowledged;
-    let should_show_onboarding =
-        should_show_onboarding(login_status, &initial_config, should_show_trust_screen);
+    let should_show_onboarding = should_show_onboarding(
+        login_status,
+        &initial_config,
+        should_show_trust_screen,
+        should_show_windows_wsl_screen,
+    );
 
     let config = if should_show_onboarding {
         let onboarding_result = run_onboarding_app(
@@ -397,9 +401,11 @@ async fn run_ratatui_app(
             || onboarding_result
                 .directory_trust_decision
                 .map(|d| d == TrustDirectorySelection::Trust)
-                .or_else(false)
+                .unwrap_or(false)
         {
-            load_config_or_exit(cli_kv_overrides, overrides)
+            load_config_or_exit(cli_kv_overrides, overrides).await
+        } else {
+            initial_config
         }
     } else {
         initial_config
@@ -544,12 +550,12 @@ fn get_login_status(config: &Config) -> LoginStatus {
     }
 }
 
-fn load_config_or_exit(
+async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
 ) -> Config {
     #[allow(clippy::print_stderr)]
-    match Config::load_with_cli_overrides(cli_kv_overrides, overrides) {
+    match Config::load_with_cli_overrides(cli_kv_overrides, overrides).await {
         Ok(config) => config,
         Err(err) => {
             eprintln!("Error loading configuration: {err}");
