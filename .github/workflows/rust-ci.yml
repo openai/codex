@@ -164,7 +164,6 @@ jobs:
           sudo apt install -y musl-tools pkg-config && sudo rm -rf /var/lib/apt/lists/*
 
       - name: cargo clippy
-        id: clippy
         run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} -- -D warnings
 
       # Running `cargo build` from the workspace root builds the workspace using
@@ -173,7 +172,6 @@ jobs:
       # run `cargo check` for each crate individually, though because this is
       # slower, we only do this for the x86_64-unknown-linux-gnu target.
       - name: cargo check individual crates
-        id: cargo_check_all_crates
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release' }}
         continue-on-error: true
         run: |
@@ -186,23 +184,13 @@ jobs:
           version: 0.9.103
 
       - name: tests
-        id: test
         # Tests take too long for release builds to run them on every PR.
-        if: ${{ matrix.profile != 'release' }}
-        continue-on-error: true
+        # Though run the tests even if `cargo clippy` failed to get more
+        # complete information.
+        if: ${{ always() && matrix.profile != 'release' }}
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }}
         env:
           RUST_BACKTRACE: 1
-
-      # Fail the job if any of the previous steps failed.
-      - name: verify all steps passed
-        if: |
-          steps.clippy.outcome == 'failure' ||
-          steps.cargo_check_all_crates.outcome == 'failure' ||
-          steps.test.outcome == 'failure'
-        run: |
-          echo "One or more checks failed (clippy, cargo_check_all_crates, or test). See logs for details."
-          exit 1
 
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
