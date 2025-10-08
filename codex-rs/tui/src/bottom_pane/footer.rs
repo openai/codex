@@ -270,16 +270,8 @@ fn append_context_span(line: &mut Line<'static>, percent: Option<u8>) {
     line.push_span(Span::from(" context left").dim());
 }
 
-fn append_segment<S: Into<String>>(line: &mut Line<'static>, text: Option<S>) {
-    if let Some(text) = text.map(Into::into)
-        && !text.is_empty()
-    {
-        if !line.spans.is_empty() {
-            line.push_span(Span::from(" | "));
-        }
-        line.push_span(Span::from(text).dim());
-    }
-}
+// Note: previous helper `append_segment` was removed to avoid dead_code warnings
+// and to make inline styling more explicit at each call site.
 
 fn info_line(
     model_label: Option<String>,
@@ -307,19 +299,21 @@ fn info_line(
         line.push_span(Span::from("weekly ").dim());
         line.push_span(Span::from(format!("{w}% used")));
     }
-    if model_label.as_ref().is_some() {
-        line.push_span(Span::from(" | "));
-        // Keep metadata dimmed
-        line.push_span(Span::from(model_label.unwrap()).dim());
-    }
-    if directory.as_ref().is_some() {
-        line.push_span(Span::from(" | "));
-        line.push_span(Span::from(directory.unwrap()).dim());
-    }
-    if account_email.as_ref().is_some() {
-        line.push_span(Span::from(" | "));
-        line.push_span(Span::from(account_email.unwrap()).dim());
-    }
+    if let Some(text) = model_label
+        && !text.is_empty() {
+            line.push_span(Span::from(" | "));
+            line.push_span(Span::from(text).dim());
+        }
+    if let Some(text) = directory
+        && !text.is_empty() {
+            line.push_span(Span::from(" | "));
+            line.push_span(Span::from(text).dim());
+        }
+    if let Some(text) = account_email
+        && !text.is_empty() {
+            line.push_span(Span::from(" | "));
+            line.push_span(Span::from(text).dim());
+        }
     if with_shortcuts_hint {
         line.push_span(Span::from(" · ").dim());
         line.extend(vec![
