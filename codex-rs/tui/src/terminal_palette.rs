@@ -11,16 +11,11 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
         #[allow(clippy::disallowed_methods)]
         Color::Rgb(r, g, b)
     } else if color_level.has_256
-        && let Some((i, _)) =
-            XTERM_COLORS
-                .into_iter()
-                .skip(16)
-                .enumerate()
-                .min_by(|(_, a), (_, b)| {
-                    perceptual_distance(*a, target)
-                        .partial_cmp(&perceptual_distance(*b, target))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+        && let Some((i, _)) = xterm_fixed_colors().enumerate().min_by(|(_, a), (_, b)| {
+            perceptual_distance(*a, target)
+                .partial_cmp(&perceptual_distance(*b, target))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     {
         #[allow(clippy::disallowed_methods)]
         Color::Indexed(i as u8)
@@ -105,7 +100,6 @@ mod imp {
         }
     }
 
-    #[allow(dead_code)]
     fn query_default_colors() -> std::io::Result<Option<DefaultColors>> {
         use std::fs::OpenOptions;
         use std::io::ErrorKind;
@@ -239,6 +233,11 @@ mod imp {
     }
 
     pub(super) fn requery_default_colors() {}
+}
+
+/// The subset of Xterm colors that are usually consistent across terminals.
+pub fn xterm_fixed_colors() -> Iter<'static, (u8, u8, u8)> {
+    XTERM_COLORS.into_iter().skip(16)
 }
 
 // Xterm colors; derived from https://ss64.com/bash/syntax-colors.html
