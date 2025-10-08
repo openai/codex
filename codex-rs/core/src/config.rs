@@ -38,8 +38,10 @@ use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+
 use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
 use toml_edit::Array as TomlArray;
@@ -311,10 +313,33 @@ pub async fn load_global_mcp_servers(
         return Ok(BTreeMap::new());
     };
 
+    ensure_no_inline_bearer_tokens(servers_value)?;
+
     servers_value
         .clone()
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// We briefly allowed plain text bearer_token fields in MCP server configs.
+/// We want to warn people who recently added these fields but can remove this after a few months.
+fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
+    let Some(servers_table) = value.as_table() else {
+        return Ok(());
+    };
+
+    for (server_name, server_value) in servers_table {
+        if let Some(server_table) = server_value.as_table()
+            && server_table.contains_key("bearer_token")
+        {
+            let message = format!(
+                "mcp_servers.{server_name} uses unsupported `bearer_token`; set `bearer_token_env_var`."
+            );
+            return Err(std::io::Error::new(ErrorKind::InvalidData, message));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn write_global_mcp_servers(
@@ -365,10 +390,13 @@ pub fn write_global_mcp_servers(
                         entry["env"] = TomlItem::Table(env_table);
                     }
                 }
-                McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                McpServerTransportConfig::StreamableHttp {
+                    url,
+                    bearer_token_env_var,
+                } => {
                     entry["url"] = toml_edit::value(url.clone());
-                    if let Some(token) = bearer_token {
-                        entry["bearer_token"] = toml_edit::value(token.clone());
+                    if let Some(env_var) = bearer_token_env_var {
+                        entry["bearer_token_env_var"] = toml_edit::value(env_var.clone());
                     }
                 }
             }
@@ -1572,6 +1600,31 @@ startup_timeout_ms = 2500
     }
 
     #[tokio::test]
+    async fn load_global_mcp_servers_rejects_inline_bearer_token() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        std::fs::write(
+            &config_path,
+            r#"
+[mcp_servers.docs]
+url = "https://example.com/mcp"
+bearer_token = "secret"
+"#,
+        )?;
+
+        let err = load_global_mcp_servers(codex_home.path())
+            .await
+            .expect_err("bearer_token entries should be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("bearer_token"));
+        assert!(err.to_string().contains("bearer_token_env_var"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn write_global_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
@@ -1634,7 +1687,7 @@ ZIG_VAR = "3"
             McpServerConfig {
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://example.com/mcp".to_string(),
-                    bearer_token: Some("secret-token".to_string()),
+                    bearer_token_env_var: Some("MCP_TOKEN".to_string()),
                 },
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
@@ -1649,7 +1702,7 @@ ZIG_VAR = "3"
             serialized,
             r#"[mcp_servers.docs]
 url = "https://example.com/mcp"
-bearer_token = "secret-token"
+bearer_token_env_var = "MCP_TOKEN"
 startup_timeout_sec = 2.0
 "#
         );
@@ -1657,9 +1710,12 @@ startup_timeout_sec = 2.0
         let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
-            McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+            } => {
                 assert_eq!(url, "https://example.com/mcp");
-                assert_eq!(bearer_token.as_deref(), Some("secret-token"));
+                assert_eq!(bearer_token_env_var.as_deref(), Some("MCP_TOKEN"));
             }
             other => panic!("unexpected transport {other:?}"),
         }
@@ -1670,7 +1726,7 @@ startup_timeout_sec = 2.0
             McpServerConfig {
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://example.com/mcp".to_string(),
-                    bearer_token: None,
+                    bearer_token_env_var: None,
                 },
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
@@ -1689,9 +1745,12 @@ url = "https://example.com/mcp"
         let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
-            McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+            } => {
                 assert_eq!(url, "https://example.com/mcp");
-                assert!(bearer_token.is_none());
+                assert!(bearer_token_env_var.is_none());
             }
             other => panic!("unexpected transport {other:?}"),
         }

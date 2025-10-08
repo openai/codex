@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::Duration;
@@ -209,6 +210,14 @@ impl McpConnectionManager {
             let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
             let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
 
+            let resolved_bearer_token = match &cfg.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    ..
+                } => resolve_bearer_token(&server_name, bearer_token_env_var.as_deref()),
+                _ => Ok(None),
+            };
+
             join_set.spawn(async move {
                 let McpServerConfig { transport, .. } = cfg;
                 let params = mcp_types::InitializeRequestParams {
@@ -246,11 +255,11 @@ impl McpConnectionManager {
                         )
                         .await
                     }
-                    McpServerTransportConfig::StreamableHttp { url, bearer_token } => {
+                    McpServerTransportConfig::StreamableHttp { url, .. } => {
                         McpClientAdapter::new_streamable_http_client(
                             server_name.clone(),
                             url,
-                            bearer_token,
+                            resolved_bearer_token.unwrap_or_default(),
                             params,
                             startup_timeout,
                             store_mode,
@@ -338,6 +347,33 @@ impl McpConnectionManager {
         self.tools
             .get(tool_name)
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
+    }
+}
+
+fn resolve_bearer_token(
+    server_name: &str,
+    bearer_token_env_var: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(env_var) = bearer_token_env_var else {
+        return Ok(None);
+    };
+
+    match env::var(env_var) {
+        Ok(value) => {
+            if value.is_empty() {
+                Err(anyhow!(
+                    "Environment variable {env_var} for MCP server '{server_name}' is empty"
+                ))
+            } else {
+                Ok(Some(value))
+            }
+        }
+        Err(env::VarError::NotPresent) => Err(anyhow!(
+            "Environment variable {env_var} for MCP server '{server_name}' is not set"
+        )),
+        Err(env::VarError::NotUnicode(_)) => Err(anyhow!(
+            "Environment variable {env_var} for MCP server '{server_name}' contains invalid Unicode"
+        )),
     }
 }
 
