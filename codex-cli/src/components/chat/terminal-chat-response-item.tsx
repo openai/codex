@@ -20,6 +20,7 @@ import TerminalRenderer from "marked-terminal";
 import path from "path";
 import React, { useEffect, useMemo } from "react";
 import { formatCommandForDisplay } from "src/format-command.js";
+import { normalizePathForDisplay } from "../../utils/normalize-path.js";
 import supportsHyperlinks from "supports-hyperlinks";
 
 export default function TerminalChatResponseItem({
@@ -185,11 +186,14 @@ function TerminalChatResponseToolCall({
     workdir = action.working_directory;
     cmdReadableText = formatCommandForDisplay(action.command);
   }
+  const displayWorkdir = workdir
+    ? normalizePathForDisplay(workdir)
+    : undefined;
   return (
     <Box flexDirection="column" gap={1}>
       <Text color="magentaBright" bold>
         command
-        {workdir ? <Text dimColor>{` (${workdir})`}</Text> : ""}
+        {displayWorkdir ? <Text dimColor>{` (${displayWorkdir})`}</Text> : ""}
       </Text>
       <Text>
         <Text dimColor>$</Text> {cmdReadableText}

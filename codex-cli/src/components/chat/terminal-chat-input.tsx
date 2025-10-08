@@ -39,6 +39,8 @@ const suggestions = [
   "are there any bugs in my code?",
 ];
 
+type SessionImageReference = { token: string; path: string };
+
 export default function TerminalChatInput({
   isNew,
   loading,
@@ -60,6 +62,8 @@ export default function TerminalChatInput({
   active,
   thinkingSeconds,
   items = [],
+  sessionImages,
+  onPasteImageFromClipboard,
 }: {
   isNew: boolean;
   loading: boolean;
@@ -85,6 +89,11 @@ export default function TerminalChatInput({
   thinkingSeconds: number;
   // New: current conversation items so we can include them in bug reports
   items?: Array<ResponseItem>;
+  sessionImages: Array<SessionImageReference>;
+  onPasteImageFromClipboard: () =>
+    | { token: string; path: string }
+    | null
+    | Promise<{ token: string; path: string } | null>;
 }): React.ReactElement {
   // Slash command suggestion index
   const [selectedSlashSuggestion, setSelectedSlashSuggestion] =
@@ -228,6 +237,36 @@ export default function TerminalChatInput({
 
   useInput(
     (_input, _key) => {
+      const isPasteShortcut =
+        !_key.shift &&
+        ((_key.ctrl &&
+          (_input === "v" || _input === "V" || _input === "\u0016")) ||
+          (_key.meta && (_input === "v" || _input === "V")));
+
+      if (isPasteShortcut) {
+        void Promise.resolve(onPasteImageFromClipboard())
+          .then((result) => {
+            if (!result) {
+              return;
+            }
+            const { token } = result;
+            const needsLeadingSpace = input.length > 0 && !/\s$/.test(input);
+            const updatedText = `${input}${needsLeadingSpace ? " " : ""}${token} `;
+            setInput(updatedText);
+            setDraftInput(updatedText);
+            setFsSuggestions([]);
+            setSelectedCompletion(-1);
+            setEditorState((s) => ({
+              key: s.key + 1,
+              initialCursorOffset: updatedText.length,
+            }));
+          })
+          .catch(() => {
+            // Ignore clipboard errors silently; fall back to default behaviour.
+          });
+        return;
+      }
+
       // Slash command navigation: up/down to select, enter to fill
       if (!confirmationPrompt && !loading && input.trim().startsWith("/")) {
         const prefix = input.trim();
@@ -703,7 +742,25 @@ export default function TerminalChatInput({
       // Expand @file tokens into XML blocks for the model
       const expandedText = await expandFileTags(text);
 
-      const inputItem = await createInputItem(expandedText, images);
+      const placeholderImages = new Set<string>();
+      const tokenPattern = /\[img_(\d+)\]/gi;
+      let match: RegExpExecArray | null;
+      while ((match = tokenPattern.exec(expandedText)) != null) {
+        const token = match[0]?.toLowerCase();
+        if (!token) {
+          continue;
+        }
+        const referenced = sessionImages.find(
+          (entry) => entry.token.toLowerCase() === token,
+        );
+        if (referenced) {
+          placeholderImages.add(referenced.path);
+        }
+      }
+
+      const allImages = Array.from(new Set([...images, ...placeholderImages]));
+
+      const inputItem = await createInputItem(expandedText, allImages);
       submitInput([inputItem]);
 
       // Get config for history persistence.
@@ -742,6 +799,7 @@ export default function TerminalChatInput({
       onCompact,
       skipNextSubmit,
       items,
+      sessionImages,
     ],
   );
 

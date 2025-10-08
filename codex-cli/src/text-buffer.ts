@@ -286,12 +286,17 @@ export default class TextBuffer {
 
     dbg("insert", { ch, beforeCursor: this.getCursor() });
 
+    const sanitized = ch.replace(/\\/g, "/");
+    if (sanitized === "") {
+      return;
+    }
+
     this.pushUndo();
 
     const line = this.line(this.cursorRow);
     this.lines[this.cursorRow] =
-      cpSlice(line, 0, this.cursorCol) + ch + cpSlice(line, this.cursorCol);
-    this.cursorCol += ch.length;
+      cpSlice(line, 0, this.cursorCol) + sanitized + cpSlice(line, this.cursorCol);
+    this.cursorCol += sanitized.length;
     this.version++;
 
     dbg("insert:after", {
@@ -695,7 +700,8 @@ export default class TextBuffer {
     }
 
     // Normalise all newline conventions (\r, \n, \r\n) to a single '\n'.
-    const normalised = str.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const sanitized = str.replace(/\\/g, "/");
+    const normalised = sanitized.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
     // Fast path: resulted in single‑line string ➜ delegate back to insert
     if (!normalised.includes("\n")) {
@@ -818,6 +824,16 @@ export default class TextBuffer {
     const beforeVer = this.version;
     const [beforeRow, beforeCol] = this.getCursor();
 
+    const isPrintableInput = (value: string): boolean => {
+      for (const ch of value) {
+        const codePoint = ch.codePointAt(0);
+        if (codePoint == null || codePoint < 0x20 || codePoint === 0x7f) {
+          return false;
+        }
+      }
+      return true;
+    };
+
     if (key["escape"]) {
       return false;
     }
@@ -929,7 +945,14 @@ export default class TextBuffer {
       this.del();
     }
     // Normal input
-    else if (input && !key["ctrl"] && !key["meta"]) {
+    const altGrPrintable =
+      Boolean(input) &&
+      key["ctrl"] &&
+      key["alt"] &&
+      !key["meta"] &&
+      isPrintableInput(input);
+
+    else if (input && (!key["ctrl"] || altGrPrintable) && !key["meta"]) {
       this.insert(input);
     }
 
