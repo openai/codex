@@ -236,7 +236,7 @@ mod imp {
 }
 
 /// The subset of Xterm colors that are usually consistent across terminals.
-pub fn xterm_fixed_colors() -> Iter<'static, (u8, u8, u8)> {
+pub fn xterm_fixed_colors() -> impl Iterator<Item = (u8, u8, u8)> {
     XTERM_COLORS.into_iter().skip(16)
 }
 
