@@ -15,10 +15,6 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
 
-env:
-  APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-
 jobs:
   tag-check:
     runs-on: ubuntu-latest
@@ -109,6 +105,8 @@ jobs:
         shell: bash
         env:
           KEYCHAIN_PASSWORD: actions
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
 
