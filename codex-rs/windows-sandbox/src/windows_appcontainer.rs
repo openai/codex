@@ -100,7 +100,6 @@ mod imp {
     use windows::Win32::Foundation::GetLastError;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Foundation::HANDLE_FLAG_INHERIT;
-    use windows::Win32::Foundation::HANDLE_FLAGS;
     use windows::Win32::Foundation::HLOCAL;
     use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Foundation::LocalFree;
@@ -198,8 +197,8 @@ mod imp {
             if tmp_path.exists() {
                 // Only grant if it's different from TEMP (avoid duplicate work).
                 let same_as_temp = env::var_os("TEMP")
-                    .map(|t| PathBuf::from(t))
-                    .map_or(false, |t| t == tmp_path);
+                    .map(PathBuf::from)
+                    .is_some_and(|t| t == tmp_path);
                 if !same_as_temp {
                     grant_path_with_flags(&tmp_path, sid.sid(), true)?;
                 }
