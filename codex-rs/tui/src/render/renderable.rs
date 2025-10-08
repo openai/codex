@@ -1,12 +1,23 @@
+use std::sync::Arc;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
+use crate::render::Insets;
+use crate::render::RectExt as _;
+
 pub trait Renderable {
     fn render(&self, area: Rect, buf: &mut Buffer);
     fn desired_height(&self, width: u16) -> u16;
+}
+
+impl<R: Renderable + 'static> From<R> for Box<dyn Renderable> {
+    fn from(value: R) -> Self {
+        Box::new(value)
+    }
 }
 
 impl Renderable for () {
@@ -68,6 +79,15 @@ impl<R: Renderable> Renderable for Option<R> {
     }
 }
 
+impl<R: Renderable> Renderable for Arc<R> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.as_ref().render(area, buf);
+    }
+    fn desired_height(&self, width: u16) -> u16 {
+        self.as_ref().desired_height(width)
+    }
+}
+
 pub struct ColumnRenderable {
     children: Vec<Box<dyn Renderable>>,
 }
@@ -97,6 +117,32 @@ impl ColumnRenderable {
     pub fn new(children: impl IntoIterator<Item = Box<dyn Renderable>>) -> Self {
         Self {
             children: children.into_iter().collect(),
+        }
+    }
+}
+
+pub struct InsetRenderable {
+    child: Box<dyn Renderable>,
+    insets: Insets,
+}
+
+impl Renderable for InsetRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.child.render(area.inset(self.insets), buf);
+    }
+    fn desired_height(&self, width: u16) -> u16 {
+        self.child
+            .desired_height(width - self.insets.left - self.insets.right)
+            + self.insets.top
+            + self.insets.bottom
+    }
+}
+
+impl InsetRenderable {
+    pub fn new(child: impl Into<Box<dyn Renderable>>, insets: Insets) -> Self {
+        Self {
+            child: child.into(),
+            insets,
         }
     }
 }

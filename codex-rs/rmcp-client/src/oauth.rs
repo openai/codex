@@ -59,23 +59,18 @@ pub struct StoredOAuthTokens {
 }
 
 /// Determine where Codex should store and read MCP credentials.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OAuthCredentialsStoreMode {
-    /// Keyring when available, otherwise file.
+    /// `Keyring` when available; otherwise, `File`.
     /// Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
+    #[default]
     Auto,
     /// CODEX_HOME/.credentials.json
     /// This file will be readable to Codex and other applications running as the same user.
     File,
     /// Keyring when available, otherwise fail.
     Keyring,
-}
-
-impl Default for OAuthCredentialsStoreMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 #[derive(Debug)]
@@ -109,9 +104,9 @@ trait KeyringStore {
     fn delete(&self, service: &str, account: &str) -> Result<bool, CredentialStoreError>;
 }
 
-struct RealKeyringStore;
+struct DefaultKeyringStore;
 
-impl KeyringStore for RealKeyringStore {
+impl KeyringStore for DefaultKeyringStore {
     fn load(&self, service: &str, account: &str) -> Result<Option<String>, CredentialStoreError> {
         let entry = Entry::new(service, account).map_err(CredentialStoreError::new)?;
         match entry.get_password() {
@@ -154,7 +149,7 @@ pub(crate) fn load_oauth_tokens(
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<Option<StoredOAuthTokens>> {
-    let keyring_store = RealKeyringStore;
+    let keyring_store = DefaultKeyringStore;
     match store_mode {
         OAuthCredentialsStoreMode::Auto => {
             load_oauth_tokens_from_keyring_with_fallback_to_file(&keyring_store, server_name, url)
@@ -205,7 +200,7 @@ pub fn save_oauth_tokens(
     tokens: &StoredOAuthTokens,
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<()> {
-    let keyring_store = RealKeyringStore;
+    let keyring_store = DefaultKeyringStore;
     match store_mode {
         OAuthCredentialsStoreMode::Auto => save_oauth_tokens_with_keyring_with_fallback_to_file(
             &keyring_store,
@@ -266,7 +261,7 @@ pub fn delete_oauth_tokens(
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<bool> {
-    let keyring_store = RealKeyringStore;
+    let keyring_store = DefaultKeyringStore;
     delete_oauth_tokens_from_keyring_and_file(&keyring_store, store_mode, server_name, url)
 }
 
@@ -283,14 +278,13 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
         Err(error) => {
             let message = error.message();
             warn!("failed to delete OAuth tokens from keyring: {message}");
-            if matches!(
-                store_mode,
-                OAuthCredentialsStoreMode::Auto | OAuthCredentialsStoreMode::Keyring
-            ) {
-                return Err(error.into_error())
-                    .context("failed to delete OAuth tokens from keyring");
+            match store_mode {
+                OAuthCredentialsStoreMode::Auto | OAuthCredentialsStoreMode::Keyring => {
+                    return Err(error.into_error())
+                        .context("failed to delete OAuth tokens from keyring");
+                }
+                OAuthCredentialsStoreMode::File => false,
             }
-            false
         }
     };
 

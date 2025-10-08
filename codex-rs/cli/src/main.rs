@@ -157,9 +157,7 @@ struct LoginCommand {
     )]
     api_key: Option<String>,
 
-    /// EXPERIMENTAL: Use device code flow (not yet supported)
-    /// This feature is experimental and may changed in future releases.
-    #[arg(long = "experimental_use-device-code", hide = true)]
+    #[arg(long = "use-device-code")]
     use_device_code: bool,
 
     /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
