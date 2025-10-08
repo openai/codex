@@ -142,9 +142,6 @@ mod imp {
     use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
     use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows::Win32::System::Threading::CreateProcessAsUserW;
-    use windows::Win32::System::Threading::DUPLICATE_HANDLE_OPTIONS;
-    use windows::Win32::System::Threading::DUPLICATE_SAME_ACCESS;
-    use windows::Win32::System::Threading::DuplicateHandle;
     use windows::Win32::System::Threading::GetCurrentProcess;
     use windows::Win32::System::Threading::GetExitCodeProcess;
     use windows::Win32::System::Threading::OpenProcessToken;
@@ -271,30 +268,17 @@ mod imp {
     fn apply_stdio_policy(startup_info: &mut STARTUPINFOW, policy: StdioPolicy) -> io::Result<()> {
         match policy {
             StdioPolicy::Inherit => unsafe {
-                // GetStdHandle in windows-rs returns Result<HANDLE, Error>
                 let stdin_handle = ensure_valid_handle(GetStdHandle(STD_INPUT_HANDLE)?)?;
                 let stdout_handle = ensure_valid_handle(GetStdHandle(STD_OUTPUT_HANDLE)?)?;
                 let stderr_handle = ensure_valid_handle(GetStdHandle(STD_ERROR_HANDLE)?)?;
 
-                // Ensure they are inheritable for CreateProcessAsUserW(bInheritHandles = TRUE)
-                SetHandleInformation(
-                    stdin_handle,
-                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
-                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
-                )
-                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
-                SetHandleInformation(
-                    stdout_handle,
-                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
-                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
-                )
-                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
-                SetHandleInformation(
-                    stderr_handle,
-                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
-                    HANDLE_FLAGS(HANDLE_FLAG_INHERIT.0),
-                )
-                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+                // dwMask is u32, dwFlags is HANDLE_FLAGS
+                SetHandleInformation(stdin_handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT)
+                    .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+                SetHandleInformation(stdout_handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT)
+                    .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+                SetHandleInformation(stderr_handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT)
+                    .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
 
                 startup_info.dwFlags |= STARTF_USESTDHANDLES;
                 startup_info.hStdInput = stdin_handle;
