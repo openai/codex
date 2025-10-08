@@ -37,6 +37,7 @@ mod mcp_tool_call;
 mod message_history;
 mod model_provider_info;
 pub mod parse_command;
+pub mod providers;
 mod tool_arguments;
 mod truncate;
 mod unified_exec;

@@ -26,6 +26,7 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::providers::ToolMode;
 use anyhow::Context;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
@@ -63,6 +64,25 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum ModelConfigEntry {
+    Name(String),
+    Table(ModelConfigTable),
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelConfigTable {
+    pub provider: Option<String>,
+    pub base_url: Option<String>,
+    #[serde(rename = "api_key_env")]
+    pub api_key_env: Option<String>,
+    pub model: Option<String>,
+    #[serde(default)]
+    pub tool_mode: Option<ToolMode>,
+}
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -88,6 +108,9 @@ pub struct Config {
 
     /// Info needed to make an API request to the model.
     pub model_provider: ModelProviderInfo,
+
+    /// Declared tool strictness for the configured model.
+    pub model_tool_mode: ToolMode,
 
     /// Approval policy for executing commands.
     pub approval_policy: AskForApproval,
@@ -692,8 +715,9 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigToml {
-    /// Optional override of model selection.
-    pub model: Option<String>,
+    /// Optional override of model selection or an inline provider definition.
+    #[serde(default)]
+    pub model: Option<ModelConfigEntry>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 
@@ -817,6 +841,8 @@ pub struct ConfigToml {
 
 impl From<ConfigToml> for UserSavedConfig {
     fn from(config_toml: ConfigToml) -> Self {
+        let model = config_toml.model_name().map(std::string::ToString::to_string);
+
         let profiles = config_toml
             .profiles
             .into_iter()
@@ -827,7 +853,7 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            model: config_toml.model,
+            model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
@@ -863,6 +889,25 @@ impl From<ToolsToml> for Tools {
 }
 
 impl ConfigToml {
+    pub fn model_name(&self) -> Option<&str> {
+        match &self.model {
+            Some(ModelConfigEntry::Name(name)) => Some(name.as_str()),
+            Some(ModelConfigEntry::Table(table)) => table.model.as_deref(),
+            None => None,
+        }
+    }
+
+    pub fn model_table(&self) -> Option<&ModelConfigTable> {
+        match &self.model {
+            Some(ModelConfigEntry::Table(table)) => Some(table),
+            _ => None,
+        }
+    }
+
+    pub fn model_tool_mode(&self) -> Option<ToolMode> {
+        self.model_table().and_then(|table| table.tool_mode)
+    }
+
     /// Derive the effective sandbox policy from the configuration.
     fn derive_sandbox_policy(&self, sandbox_mode_override: Option<SandboxMode>) -> SandboxPolicy {
         let resolved_sandbox_mode = sandbox_mode_override
@@ -1003,14 +1048,50 @@ impl Config {
 
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
+        let inline_model_table = cfg.model_table().cloned();
+        let inline_model_name = cfg.model_name().map(std::string::ToString::to_string);
+        let inline_provider_id = inline_model_table
+            .as_ref()
+            .and_then(|table| table.provider.clone());
+        let inline_tool_mode = cfg.model_tool_mode().unwrap_or_default();
+
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
         }
 
+        if let Some(table) = inline_model_table.as_ref()
+            && let Some(provider_id) = table.provider.clone() {
+                let entry = model_providers
+                    .entry(provider_id.clone())
+                    .or_insert_with(|| ModelProviderInfo {
+                        name: provider_id.clone(),
+                        base_url: None,
+                        env_key: None,
+                        env_key_instructions: None,
+                        wire_api: Default::default(),
+                        query_params: None,
+                        http_headers: None,
+                        env_http_headers: None,
+                        request_max_retries: None,
+                        stream_max_retries: None,
+                        stream_idle_timeout_ms: None,
+                        requires_openai_auth: false,
+                    });
+
+                if let Some(base_url) = &table.base_url {
+                    entry.base_url = Some(base_url.clone());
+                }
+
+                if let Some(api_key_env) = &table.api_key_env {
+                    entry.env_key = Some(api_key_env.clone());
+                }
+            }
+
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
+            .or(inline_provider_id)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers
@@ -1056,7 +1137,7 @@ impl Config {
 
         let model = model
             .or(config_profile.model)
-            .or(cfg.model)
+            .or(inline_model_name)
             .unwrap_or_else(default_model);
 
         let mut model_family =
@@ -1109,6 +1190,7 @@ impl Config {
             model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
+            model_tool_mode: inline_tool_mode,
             cwd: resolved_cwd,
             approval_policy: approval_policy
                 .or(config_profile.approval_policy)
@@ -1544,6 +1626,27 @@ exclude_slash_tmp = true
         Ok(())
     }
 
+    #[test]
+    fn model_table_parses_and_exposes_helpers() {
+        let config_toml = r#"
+[model]
+provider = "internal-qwen"
+base_url = "https://llm.internal/api"
+api_key_env = "INTERNAL_LLM_KEY"
+model = "qwen-coder-72b"
+tool_mode = "strict"
+"#;
+
+        let cfg: ConfigToml = toml::from_str(config_toml).expect("model table parses");
+        let table = cfg.model_table().expect("table present");
+
+        assert_eq!(table.provider.as_deref(), Some("internal-qwen"));
+        assert_eq!(table.base_url.as_deref(), Some("https://llm.internal/api"));
+        assert_eq!(table.api_key_env.as_deref(), Some("INTERNAL_LLM_KEY"));
+        assert_eq!(cfg.model_name(), Some("qwen-coder-72b"));
+        assert_eq!(cfg.model_tool_mode(), Some(ToolMode::Strict));
+    }
+
     #[tokio::test]
     async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
@@ -1573,7 +1676,7 @@ exclude_slash_tmp = true
             std::io::Error::new(std::io::ErrorKind::InvalidData, e)
         })?;
 
-        assert_eq!(cfg.model.as_deref(), Some("managed_config"));
+        assert_eq!(cfg.model_name(), Some("managed_config"));
         Ok(())
     }
 
@@ -1774,7 +1877,7 @@ url = "https://example.com/mcp"
             tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(parsed.model_name(), Some("gpt-5-codex"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
 
         Ok(())
@@ -1808,7 +1911,7 @@ model = "gpt-4.1"
         let serialized = tokio::fs::read_to_string(config_path).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("o4-mini"));
+        assert_eq!(parsed.model_name(), Some("o4-mini"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
         assert_eq!(
             parsed
@@ -2048,6 +2151,7 @@ model_verbosity = "high"
                 model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
+                model_tool_mode: ToolMode::None,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -2111,6 +2215,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
+            model_tool_mode: ToolMode::None,
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -2189,6 +2294,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
+            model_tool_mode: ToolMode::None,
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -2253,6 +2359,7 @@ model_verbosity = "high"
             model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
+            model_tool_mode: ToolMode::None,
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),

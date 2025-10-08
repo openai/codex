@@ -101,6 +101,7 @@ use crate::state::SessionServices;
 use crate::tasks::CompactTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::tool_arguments::repair_tool_arguments;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::format_exec_output_str;
@@ -667,8 +668,13 @@ impl Session {
     /// Records input items: always append to conversation history and
     /// persist these response items to rollout.
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
-        self.record_into_history(items).await;
-        self.persist_rollout_response_items(items).await;
+        if items.is_empty() {
+            return;
+        }
+
+        let sanitized = sanitize_response_items(items.iter().cloned());
+        self.record_into_history(&sanitized).await;
+        self.persist_rollout_response_items(&sanitized).await;
     }
 
     fn reconstruct_history_from_rollout(
@@ -1927,6 +1933,32 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
     }
 }
 
+fn sanitize_response_item(mut item: ResponseItem) -> ResponseItem {
+    if let ResponseItem::FunctionCall {
+        name,
+        arguments,
+        call_id,
+        ..
+    } = &mut item
+        && let Some(fixed) = repair_tool_arguments(arguments.as_str()) {
+            warn!(
+                tool_name = %name,
+                call_id = %call_id,
+                "synthesized missing closing delimiters for stored tool arguments"
+            );
+            *arguments = fixed;
+        }
+
+    item
+}
+
+fn sanitize_response_items<I>(items: I) -> Vec<ResponseItem>
+where
+    I: IntoIterator<Item = ResponseItem>,
+{
+    items.into_iter().map(sanitize_response_item).collect()
+}
+
 async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -1934,6 +1966,7 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<TurnRunResult> {
+    let input = sanitize_response_items(input);
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
@@ -2471,6 +2504,44 @@ mod tests {
     use std::time::Duration as StdDuration;
     use tokio::time::Duration;
     use tokio::time::sleep;
+
+    #[test]
+    fn sanitize_response_items_repairs_unclosed_arguments() {
+        let items = vec![ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            arguments: "{\"foo\": 1".to_string(),
+            call_id: "call-1".to_string(),
+        }];
+
+        let sanitized = sanitize_response_items(items);
+
+        match &sanitized[0] {
+            ResponseItem::FunctionCall { arguments, .. } => {
+                assert_eq!(arguments, "{\"foo\": 1}");
+            }
+            other => panic!("expected function call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanitize_response_items_leaves_valid_arguments_untouched() {
+        let items = vec![ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            arguments: "{\"foo\": 1}".to_string(),
+            call_id: "call-1".to_string(),
+        }];
+
+        let sanitized = sanitize_response_items(items);
+
+        match &sanitized[0] {
+            ResponseItem::FunctionCall { arguments, .. } => {
+                assert_eq!(arguments, "{\"foo\": 1}");
+            }
+            other => panic!("expected function call, got {other:?}"),
+        }
+    }
 
     #[test]
     fn reconstruct_history_matches_live_compactions() {
