@@ -13,6 +13,8 @@ use codex_core::config::load_global_mcp_servers;
 use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
+use codex_core::mcp::auth::compute_auth_statuses;
+use codex_core::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
 
@@ -339,11 +341,20 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
 
     let mut entries: Vec<_> = config.mcp_servers.iter().collect();
     entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let auth_statuses = compute_auth_statuses(
+        config.mcp_servers.iter(),
+        config.mcp_oauth_credentials_store_mode,
+    )
+    .await;
 
     if list_args.json {
         let json_entries: Vec<_> = entries
             .into_iter()
             .map(|(name, cfg)| {
+                let auth_status = auth_statuses
+                    .get(name.as_str())
+                    .copied()
+                    .unwrap_or(McpAuthStatus::Unsupported);
                 let transport = match &cfg.transport {
                     McpServerTransportConfig::Stdio { command, args, env } => serde_json::json!({
                         "type": "stdio",
@@ -372,6 +383,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     "tool_timeout_sec": cfg
                         .tool_timeout_sec
                         .map(|timeout| timeout.as_secs_f64()),
+                    "auth_status": auth_status,
                 })
             })
             .collect();
@@ -385,8 +397,8 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         return Ok(());
     }
 
-    let mut stdio_rows: Vec<[String; 4]> = Vec::new();
-    let mut http_rows: Vec<[String; 3]> = Vec::new();
+    let mut stdio_rows: Vec<[String; 5]> = Vec::new();
+    let mut http_rows: Vec<[String; 4]> = Vec::new();
 
     for (name, cfg) in entries {
         match &cfg.transport {
@@ -409,23 +421,46 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                             .join(", ")
                     }
                 };
-                stdio_rows.push([name.clone(), command.clone(), args_display, env_display]);
+                let status = auth_statuses
+                    .get(name.as_str())
+                    .copied()
+                    .unwrap_or(McpAuthStatus::Unsupported)
+                    .to_string();
+                stdio_rows.push([
+                    name.clone(),
+                    command.clone(),
+                    args_display,
+                    env_display,
+                    status,
+                ]);
             }
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
             } => {
+                let status = auth_statuses
+                    .get(name.as_str())
+                    .copied()
+                    .unwrap_or(McpAuthStatus::Unsupported)
+                    .to_string();
                 http_rows.push([
                     name.clone(),
                     url.clone(),
                     bearer_token_env_var.clone().unwrap_or("-".to_string()),
+                    status,
                 ]);
             }
         }
     }
 
     if !stdio_rows.is_empty() {
-        let mut widths = ["Name".len(), "Command".len(), "Args".len(), "Env".len()];
+        let mut widths = [
+            "Name".len(),
+            "Command".len(),
+            "Args".len(),
+            "Env".len(),
+            "Auth".len(),
+        ];
         for row in &stdio_rows {
             for (i, cell) in row.iter().enumerate() {
                 widths[i] = widths[i].max(cell.len());
@@ -433,28 +468,32 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         }
 
         println!(
-            "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
+            "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}  {:<auth_w$}",
             "Name",
             "Command",
             "Args",
             "Env",
+            "Auth",
             name_w = widths[0],
             cmd_w = widths[1],
             args_w = widths[2],
             env_w = widths[3],
+            auth_w = widths[4],
         );
 
         for row in &stdio_rows {
             println!(
-                "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
+                "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}  {:<auth_w$}",
                 row[0],
                 row[1],
                 row[2],
                 row[3],
+                row[4],
                 name_w = widths[0],
                 cmd_w = widths[1],
                 args_w = widths[2],
                 env_w = widths[3],
+                auth_w = widths[4],
             );
         }
     }
@@ -464,7 +503,12 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     if !http_rows.is_empty() {
-        let mut widths = ["Name".len(), "Url".len(), "Bearer Token Env Var".len()];
+        let mut widths = [
+            "Name".len(),
+            "Url".len(),
+            "Bearer Token Env Var".len(),
+            "Auth".len(),
+        ];
         for row in &http_rows {
             for (i, cell) in row.iter().enumerate() {
                 widths[i] = widths[i].max(cell.len());
@@ -472,24 +516,28 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         }
 
         println!(
-            "{:<name_w$}  {:<url_w$}  {:<token_w$}",
+            "{:<name_w$}  {:<url_w$}  {:<token_w$}  {:<auth_w$}",
             "Name",
             "Url",
             "Bearer Token Env Var",
+            "Auth",
             name_w = widths[0],
             url_w = widths[1],
             token_w = widths[2],
+            auth_w = widths[3],
         );
 
         for row in &http_rows {
             println!(
-                "{:<name_w$}  {:<url_w$}  {:<token_w$}",
+                "{:<name_w$}  {:<url_w$}  {:<token_w$}  {:<auth_w$}",
                 row[0],
                 row[1],
                 row[2],
+                row[3],
                 name_w = widths[0],
                 url_w = widths[1],
                 token_w = widths[2],
+                auth_w = widths[3],
             );
         }
     }

@@ -162,6 +162,14 @@ pub(crate) fn load_oauth_tokens(
     }
 }
 
+pub(crate) fn has_oauth_tokens(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<bool> {
+    Ok(load_oauth_tokens(server_name, url, store_mode)?.is_some())
+}
+
 fn load_oauth_tokens_from_keyring_with_fallback_to_file<K: KeyringStore>(
     keyring_store: &K,
     server_name: &str,
