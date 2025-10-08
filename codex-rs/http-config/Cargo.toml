@@ -1,0 +1,12 @@
+[package]
+name = "codex-http-config"
+version = { workspace = true }
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+tracing = { workspace = true }
