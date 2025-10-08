@@ -206,6 +206,48 @@ pub fn take_prefix_by_width(text: &str, max_cols: usize) -> (String, &str, usize
     (prefix, suffix, cols)
 }
 
+/// Take a suffix of `text` whose visible width is at most `max_cols`.
+/// Returns (suffix, prefix, suffix_width).
+pub fn take_suffix_by_width(text: &str, max_cols: usize) -> (String, &str, usize) {
+    if max_cols == 0 || text.is_empty() {
+        return (String::new(), text, 0);
+    }
+    let mut cols = 0usize;
+    let mut start_idx = text.len();
+    for (i, ch) in text.char_indices().rev() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if cols.saturating_add(ch_width) > max_cols {
+            break;
+        }
+        cols += ch_width;
+        start_idx = i;
+        if cols == max_cols {
+            break;
+        }
+    }
+    let suffix = text[start_idx..].to_string();
+    let prefix = &text[..start_idx];
+    (suffix, prefix, cols)
+}
+
+/// Ellipsize the middle of `text` to fit within `max_cols` display cells using `...`.
+/// Returns `text` unchanged if it already fits or if `max_cols <= 3`.
+pub fn ellipsize_middle_by_width(text: &str, max_cols: usize) -> String {
+    if max_cols <= 3 {
+        return text.to_string();
+    }
+    let w = text.width();
+    if w <= max_cols {
+        return text.to_string();
+    }
+    let budget = max_cols - 3; // reserve for "..."
+    let head_cols = budget.div_ceil(2); // favor head on odd
+    let tail_cols = budget - head_cols;
+    let (head, _, _) = take_prefix_by_width(text, head_cols);
+    let (tail, _, _) = take_suffix_by_width(text, tail_cols);
+    format!("{head}...{tail}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +306,18 @@ mod tests {
         let chunk_rows = rb_chunks.rows().to_vec();
 
         assert_eq!(all_rows, chunk_rows);
+    }
+
+    #[test]
+    fn take_suffix_and_ellipsize_width_respected() {
+        let s = "very-long-repository-name-with-many-segments";
+        let (tail, _prefix, w) = take_suffix_by_width(s, 10);
+        assert!(w <= 10);
+        assert!(tail.width() <= 10);
+
+        let e = ellipsize_middle_by_width(s, 20);
+        assert!(e.contains("..."));
+        assert!(e.width() <= 20);
     }
 
     #[test]
