@@ -63,12 +63,12 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
 }
 
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
-    let lines = prefix_lines(
+    Paragraph::new(prefix_lines(
         footer_lines(props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
-    );
-    Paragraph::new(lines).render(area, buf);
+    ))
+    .render(area, buf);
 }
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
