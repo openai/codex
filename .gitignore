@@ -99,3 +99,4 @@ CHANGELOG.ignore.md
 codex-rs/.cargo/
 codex-rs/.cargo-home/
 codex-rs/.rustup/
+codex-rs/.cgh/

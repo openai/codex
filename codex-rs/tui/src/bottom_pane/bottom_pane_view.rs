@@ -1,9 +1,7 @@
-use crate::app_event::AppEvent;
 use crate::bottom_pane::ApprovalRequest;
 use crate::render::renderable::Renderable;
 use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
-use std::any::Any;
 
 use super::CancellationEvent;
 
@@ -42,13 +40,4 @@ pub(crate) trait BottomPaneView: Renderable {
     ) -> Option<ApprovalRequest> {
         Some(request)
     }
-
-    /// Optional event to emit when the view completes (e.g., dismissed via Esc or selection).
-    /// Implementations should return Some(event) at most once; subsequent calls may return None.
-    fn take_on_complete_event(&mut self) -> Option<AppEvent> {
-        None
-    }
-
-    /// Downcast support for views that expose extra APIs.
-    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
