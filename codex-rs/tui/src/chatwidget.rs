@@ -92,6 +92,8 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
+use crate::bottom_pane::rename_session_view::RenameSessionView;
+use crate::session_name_sidecar;
 use crate::streaming::controller::StreamController;
 use std::path::Path;
 
@@ -241,6 +243,7 @@ pub(crate) struct ChatWidget {
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
     conversation_id: Option<ConversationId>,
+    rollout_path: Option<PathBuf>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -308,6 +311,12 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
+        self.rollout_path = Some(event.rollout_path.clone());
+        // Load persisted session display name (if any) so the footer label
+        // reflects it immediately on resume/new session.
+        if let Ok(Some(label)) = crate::session_name_sidecar::read(&event.rollout_path) {
+            self.bottom_pane.set_session_name(Some(label));
+        }
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -929,6 +938,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             conversation_id: None,
+            rollout_path: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
@@ -992,6 +1002,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             conversation_id: None,
+            rollout_path: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
@@ -1162,6 +1173,9 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::Rename => {
+                self.open_rename_popup();
+            }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
@@ -1201,6 +1215,30 @@ impl ChatWidget {
                 }));
             }
         }
+    }
+
+    pub(crate) fn open_rename_popup(&mut self) {
+        let initial = self.bottom_pane.session_name();
+        let view = RenameSessionView::new(self.app_event_tx.clone(), initial);
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_session_name(&mut self, name: Option<String>) {
+        let trimmed = name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        self.bottom_pane.set_session_name(trimmed.clone());
+        if let (Some(path), Some(label)) = (self.rollout_path.as_ref(), trimmed.as_deref())
+            && let Err(err) = session_name_sidecar::write(path, Some(label))
+        {
+            tracing::warn!("failed to persist session name {:?}: {}", path, err);
+        }
+        if trimmed.is_none()
+            && let Some(path) = self.rollout_path.as_ref()
+        {
+            // Best-effort remove
+            let _ = session_name_sidecar::write(path, None);
+        }
+        self.request_redraw();
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {

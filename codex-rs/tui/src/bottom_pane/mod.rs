@@ -29,6 +29,7 @@ mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod paste_burst;
 pub mod popup_consts;
+pub mod rename_session_view;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
@@ -366,6 +367,11 @@ impl BottomPane {
         self.push_view(Box::new(view));
     }
 
+    /// Show a simple custom view (e.g., rename input).
+    pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
+        self.push_view(view);
+    }
+
     /// Update the queued messages shown under the status header.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages = queued.clone();
@@ -373,6 +379,16 @@ impl BottomPane {
             status.set_queued_messages(queued);
         }
         self.request_redraw();
+    }
+
+    /// Update the optional session name label shown in the footer.
+    pub(crate) fn set_session_name(&mut self, name: Option<String>) {
+        self.composer.set_session_name(name);
+        self.request_redraw();
+    }
+
+    pub(crate) fn session_name(&self) -> Option<String> {
+        self.composer.session_name()
     }
 
     /// Update custom prompts available for the slash popup.
@@ -394,10 +410,6 @@ impl BottomPane {
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
         !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
-    }
-
-    pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
-        self.push_view(view);
     }
 
     /// Called when the agent requests user approval.

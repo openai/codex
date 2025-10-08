@@ -277,6 +277,7 @@ fn make_chatwidget_manual() -> (
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         conversation_id: None,
+        rollout_path: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),

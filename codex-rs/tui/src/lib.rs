@@ -60,6 +60,7 @@ pub mod public_widgets;
 mod render;
 mod resume_picker;
 mod session_log;
+mod session_name_sidecar;
 mod shimmer;
 mod slash_command;
 mod status;

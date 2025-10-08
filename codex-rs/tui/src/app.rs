@@ -306,6 +306,18 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenRenamePopup => {
+                self.chat_widget.open_rename_popup();
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateSessionName(name) => {
+                let label = if name.trim().is_empty() {
+                    None
+                } else {
+                    Some(name)
+                };
+                self.chat_widget.set_session_name(label);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);

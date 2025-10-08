@@ -26,6 +26,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint;
+use crate::session_name_sidecar;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -224,6 +225,7 @@ struct Row {
     preview: String,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
+    display_name: Option<String>,
 }
 
 impl PickerState {
@@ -596,6 +598,10 @@ fn head_to_row(item: &ConversationItem) -> Row {
         preview,
         created_at,
         updated_at,
+        display_name: match session_name_sidecar::read(&item.path) {
+            Ok(Some(name)) => Some(name),
+            _ => None,
+        },
     }
 }
 
@@ -762,8 +768,17 @@ fn render_list(
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
-        let preview = truncate_text(&row.preview, preview_width);
+        // Optional session name prefix (cached in row), styled in cyan.
         let mut spans: Vec<Span> = vec![marker];
+        if let Some(ref name) = row.display_name {
+            use unicode_width::UnicodeWidthStr;
+            let prefix_visible = format!("{name} — ");
+            let prefix_w = prefix_visible.as_str().width();
+            if preview_width > 0 {
+                preview_width = preview_width.saturating_sub(prefix_w);
+            }
+        }
+        let preview = truncate_text(&row.preview, preview_width);
         if let Some(created) = created_span {
             spans.push(created);
             spans.push("  ".into());
@@ -774,6 +789,10 @@ fn render_list(
         }
         if add_leading_gap {
             spans.push("  ".into());
+        }
+        if let Some(name) = row.display_name.clone() {
+            spans.push(Span::from(name).cyan());
+            spans.push(" — ".into());
         }
         spans.push(preview.into());
 
@@ -1089,18 +1108,21 @@ mod tests {
                 preview: String::from("Fix resume picker timestamps"),
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
+                display_name: None,
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
                 preview: String::from("Investigate lazy pagination cap"),
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
+                display_name: None,
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
                 preview: String::from("Explain the codebase"),
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
+                display_name: None,
             },
         ];
         state.all_rows = rows.clone();
