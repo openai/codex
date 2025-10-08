@@ -300,20 +300,23 @@ fn info_line(
         line.push_span(Span::from(format!("{w}% used")));
     }
     if let Some(text) = model_label
-        && !text.is_empty() {
-            line.push_span(Span::from(" | "));
-            line.push_span(Span::from(text).dim());
-        }
+        && !text.is_empty()
+    {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(text).dim());
+    }
     if let Some(text) = directory
-        && !text.is_empty() {
-            line.push_span(Span::from(" | "));
-            line.push_span(Span::from(text).dim());
-        }
+        && !text.is_empty()
+    {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(text).dim());
+    }
     if let Some(text) = account_email
-        && !text.is_empty() {
-            line.push_span(Span::from(" | "));
-            line.push_span(Span::from(text).dim());
-        }
+        && !text.is_empty()
+    {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(text).dim());
+    }
     if with_shortcuts_hint {
         line.push_span(Span::from(" · ").dim());
         line.extend(vec![

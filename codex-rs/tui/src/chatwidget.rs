@@ -1162,6 +1162,9 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::Prune => {
+                // Prune UI disabled in this branch; ignore.
+            }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
@@ -1447,13 +1450,9 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            // New prune-related events (upstream-ignored by default)
-            codex_core::protocol::EventMsg::ConversationUsage(_) => {
-                // No-op in upstream baseline; advanced footer can request this explicitly
-            }
-            codex_core::protocol::EventMsg::ContextItems(_) => {
-                // No-op in upstream baseline; advanced prune UI not wired here
-            }
+            // Prune-related informational events are ignored in this branch.
+            codex_core::protocol::EventMsg::ConversationUsage(_) => {}
+            codex_core::protocol::EventMsg::ContextItems(_) => {}
         }
     }
 

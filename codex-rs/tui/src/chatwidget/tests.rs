@@ -287,12 +287,7 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
-        last_context_usage: None,
-        pending_prune_popup: false,
-        last_context_items: None,
-        prune_keep_indices: std::collections::HashSet::new(),
-        prune_delete_indices: std::collections::HashSet::new(),
-        pending_prune_advanced: false,
+        // Prune UI fields removed in this branch.
     };
     (widget, rx, op_rx)
 }
@@ -2379,66 +2374,4 @@ printf 'fenced within fenced\n'
 
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
-#[test]
-fn prune_by_turn_menu_shows_only_freeform_when_total_le_5() {
-    let (mut chat, _rx, _ops) = make_chatwidget_manual();
-    // Simulate 4 turns (4 user messages)
-    chat.last_context_items = Some(
-        (0..4)
-            .map(|i| codex_core::protocol::ContextItemSummary {
-                index: i,
-                category: codex_core::protocol::PruneCategory::UserMessage,
-                preview: String::new(),
-                included: true,
-            })
-            .collect(),
-    );
-    chat.open_prune_by_turn_menu();
-    // No direct assertion here; just ensure it doesn't panic and the view opens.
-}
-
-#[test]
-fn prune_by_turn_menu_presets_when_total_gt_thresholds() {
-    let (mut chat, _rx, _ops) = make_chatwidget_manual();
-    // Simulate 12 turns
-    chat.last_context_items = Some(
-        (0..12)
-            .map(|i| codex_core::protocol::ContextItemSummary {
-                index: i,
-                category: codex_core::protocol::PruneCategory::UserMessage,
-                preview: String::new(),
-                included: true,
-            })
-            .collect(),
-    );
-    chat.open_prune_by_turn_menu();
-    // Ensure it doesn't panic; rendering is covered by list view tests.
-}
-
-#[test]
-fn advanced_excludes_system_categories() {
-    let (mut chat, _rx, _ops) = make_chatwidget_manual();
-    // Add two system items and one user message
-    chat.last_context_items = Some(vec![
-        codex_core::protocol::ContextItemSummary {
-            index: 0,
-            category: codex_core::protocol::PruneCategory::UserInstructions,
-            preview: "<user instructions>".into(),
-            included: true,
-        },
-        codex_core::protocol::ContextItemSummary {
-            index: 1,
-            category: codex_core::protocol::PruneCategory::EnvironmentContext,
-            preview: "<env>".into(),
-            included: true,
-        },
-        codex_core::protocol::ContextItemSummary {
-            index: 2,
-            category: codex_core::protocol::PruneCategory::UserMessage,
-            preview: "hello".into(),
-            included: true,
-        },
-    ]);
-    chat.render_prune_advanced_view();
-    // If it doesn't panic, filtering occurred; visuals are covered by ListSelectionView tests.
-}
+// Prune-by-turn and advanced prune tests removed in this branch.

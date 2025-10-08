@@ -381,40 +381,17 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
-            AppEvent::OpenPruneAdvanced => {
-                self.chat_widget.open_prune_advanced();
-            }
-            AppEvent::PruneAdvancedClosed => {
-                // Advanced view dismissed: just clear flags; do not reopen menus.
-                self.chat_widget.on_prune_advanced_closed();
-            }
-            AppEvent::ToggleKeepIndex { idx } => {
-                self.chat_widget.toggle_keep_index(idx);
-            }
-            AppEvent::ToggleDeleteIndex { idx } => {
-                self.chat_widget.toggle_delete_index(idx);
-            }
-            AppEvent::ConfirmAdvancedChanges => {
-                self.chat_widget.confirm_advanced_changes();
-            }
-            AppEvent::OpenPruneManual => {
-                self.chat_widget.open_prune_manual_menu();
-            }
-            AppEvent::OpenPruneByTurn => {
-                self.chat_widget.open_prune_by_turn_menu();
-            }
-            AppEvent::OpenPruneByTurnPrompt => {
-                self.chat_widget.show_prune_by_turn_prompt();
-            }
-            AppEvent::ConfirmPruneManual { category } => {
-                self.chat_widget.show_confirm_prune_manual(category);
-            }
-            AppEvent::ConfirmPruneByTurn { count } => {
-                self.chat_widget.show_confirm_prune_by_turn(count);
-            }
-            AppEvent::ConfirmPruneMax => {
-                self.chat_widget.show_confirm_prune_max();
-            }
+            AppEvent::OpenPruneAdvanced => {}
+            AppEvent::PruneAdvancedClosed => {}
+            AppEvent::ToggleKeepIndex { .. } => {}
+            AppEvent::ToggleDeleteIndex { .. } => {}
+            AppEvent::ConfirmAdvancedChanges => {}
+            AppEvent::OpenPruneManual => {}
+            AppEvent::OpenPruneByTurn => {}
+            AppEvent::OpenPruneByTurnPrompt => {}
+            AppEvent::ConfirmPruneManual { .. } => {}
+            AppEvent::ConfirmPruneByTurn { .. } => {}
+            AppEvent::ConfirmPruneMax => {}
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let _ = tui.enter_alt_screen();
