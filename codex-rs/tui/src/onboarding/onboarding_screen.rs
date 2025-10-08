@@ -83,6 +83,7 @@ impl OnboardingScreen {
             config,
         } = args;
         let cwd = config.cwd.clone();
+        let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
         let codex_home = config.codex_home;
         let mut steps: Vec<Step> = Vec::new();
         if show_windows_wsl_screen {
@@ -101,6 +102,7 @@ impl OnboardingScreen {
                 codex_home: codex_home.clone(),
                 login_status,
                 auth_manager,
+                forced_chatgpt_workspace_id,
             }))
         }
         let is_git_repo = get_git_repo_root(&cwd).is_some();

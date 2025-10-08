@@ -38,11 +38,15 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
-    pub forced_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<String>,
 }
 
 impl ServerOptions {
-    pub fn new(codex_home: PathBuf, client_id: String) -> Self {
+    pub fn new(
+        codex_home: PathBuf,
+        client_id: String,
+        forced_chatgpt_workspace_id: Option<String>,
+    ) -> Self {
         Self {
             codex_home,
             client_id,
@@ -50,7 +54,7 @@ impl ServerOptions {
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
-            forced_workspace_id: None,
+            forced_chatgpt_workspace_id,
         }
     }
 }
@@ -112,7 +116,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         &redirect_uri,
         &pkce,
         &state,
-        opts.forced_workspace_id.as_deref(),
+        opts.forced_chatgpt_workspace_id.as_deref(),
     );
 
     if opts.open_browser {
@@ -250,7 +254,7 @@ async fn process_request(
             {
                 Ok(tokens) => {
                     if let Err(message) = ensure_workspace_allowed(
-                        opts.forced_workspace_id.as_deref(),
+                        opts.forced_chatgpt_workspace_id.as_deref(),
                         &tokens.id_token,
                     ) {
                         eprintln!("Workspace restriction error: {message}");
@@ -374,7 +378,7 @@ fn build_authorize_url(
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
-    forced_workspace_id: Option<&str>,
+    forced_chatgpt_workspace_id: Option<&str>,
 ) -> String {
     let mut query = vec![
         ("response_type".to_string(), "code".to_string()),
@@ -397,7 +401,7 @@ fn build_authorize_url(
             originator().value.as_str().to_string(),
         ),
     ];
-    if let Some(workspace_id) = forced_workspace_id {
+    if let Some(workspace_id) = forced_chatgpt_workspace_id {
         query.push(("allowed_workspace_id".to_string(), workspace_id.to_string()));
     }
     let qs = query
@@ -665,6 +669,7 @@ pub(crate) fn ensure_workspace_allowed(
     }
 }
 
+// Respond to the oauth server with an error so the code becomes unusable by anybody else.
 fn login_error_response(message: &str) -> HandledRequest {
     let mut headers = Vec::new();
     if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"text/plain; charset=utf-8"[..])

@@ -785,6 +785,22 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 
 > [!NOTE] > `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
+## Forcing a login method
+
+To force users on a given machine to use a specific login method or workspace, use a combination of [managed configurations](https://developers.openai.com/codex/security#managed-configuration) as well as either or both of the following fields:
+
+```toml
+# Force the user to log in with ChatGPT or via an api key.
+forced_login_method = "chatgpt" or "api"
+# When logging in with ChatGPT, only the specified workspace ID will be presented during the login
+# flow and the id will be validated during the oauth callback as well as every time Codex starts.
+forced_chatgpt_workspace_id = "00000000-0000-0000-0000-000000000000"
+```
+
+If the active credentials don't match the config, the user will be logged out and Codex will exit.
+
+If `forced_chatgpt_workspace_id` is set but `forced_login_method` is not set, API key login will still work.
+
 ## Config reference
 
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
@@ -842,3 +858,5 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `responses_originator_header_internal_override`  | string                                                            | Override `originator` header value.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |
 | `tools.web_search`                               | boolean                                                           | Enable web search tool (alias: `web_search_request`) (default: false).                                                     |
+| `forced_login_method`                            | `chatgpt` \| `api`                                                | Only allow Codex to be used with ChatGPT or API keys.                                                                      |
+| `forced_chatgpt_workspace_id`                    | string (uuid)                                                     | Only allow Codex to be used with the specified ChatGPT workspace.                                                          |

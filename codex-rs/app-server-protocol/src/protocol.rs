@@ -475,7 +475,7 @@ pub struct UserSavedConfig {
     pub sandbox_settings: Option<SandboxSettings>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub forced_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forced_login_method: Option<ForcedLoginMethod>,
 

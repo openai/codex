@@ -16,10 +16,13 @@ use std::path::PathBuf;
 
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
-    forced_workspace_id: Option<String>,
+    forced_chatgpt_workspace_id: Option<String>,
 ) -> std::io::Result<()> {
-    let mut opts = ServerOptions::new(codex_home, CLIENT_ID.to_string());
-    opts.forced_workspace_id = forced_workspace_id;
+    let opts = ServerOptions::new(
+        codex_home,
+        CLIENT_ID.to_string(),
+        forced_chatgpt_workspace_id,
+    );
     let server = run_login_server(opts)?;
 
     eprintln!(
@@ -34,13 +37,13 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     let config = load_config_or_exit(cli_config_overrides).await;
 
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
-        eprintln!("ChatGPT login is disabled by configuration; use API key login instead.");
+        eprintln!("ChatGPT login is disabled. Use API key login instead.");
         std::process::exit(1);
     }
 
-    let forced_workspace_id = config.forced_workspace_id.clone();
+    let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
 
-    match login_with_chatgpt(config.codex_home, forced_workspace_id).await {
+    match login_with_chatgpt(config.codex_home, forced_chatgpt_workspace_id).await {
         Ok(_) => {
             eprintln!("Successfully logged in");
             std::process::exit(0);
@@ -59,7 +62,7 @@ pub async fn run_login_with_api_key(
     let config = load_config_or_exit(cli_config_overrides).await;
 
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
-        eprintln!("API key login is disabled by configuration; use ChatGPT login instead.");
+        eprintln!("API key login is disabled. Use ChatGPT login instead.");
         std::process::exit(1);
     }
 
@@ -110,15 +113,15 @@ pub async fn run_login_with_device_code(
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
     if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
-        eprintln!("ChatGPT login is disabled by configuration; use API key login instead.");
+        eprintln!("ChatGPT login is disabled. Use API key login instead.");
         std::process::exit(1);
     }
-    let forced_workspace_id = config.forced_workspace_id.clone();
+    let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
         config.codex_home,
         client_id.unwrap_or(CLIENT_ID.to_string()),
+        forced_chatgpt_workspace_id,
     );
-    opts.forced_workspace_id = forced_workspace_id;
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
     }

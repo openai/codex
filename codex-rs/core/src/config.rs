@@ -210,7 +210,7 @@ pub struct Config {
     pub chatgpt_base_url: String,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
-    pub forced_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<String>,
 
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
@@ -851,9 +851,11 @@ pub struct ConfigToml {
     pub instructions: Option<String>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
-    pub forced_workspace_id: Option<String>,
+    #[serde(default)]
+    pub forced_chatgpt_workspace_id: Option<String>,
 
     /// When set, restricts the login mechanism users may use.
+    #[serde(default)]
     pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
@@ -962,7 +964,7 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            forced_workspace_id: config_toml.forced_workspace_id,
+            forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
             forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
@@ -1240,14 +1242,15 @@ impl Config {
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
         let use_experimental_use_rmcp_client = features.enabled(Feature::RmcpClient);
 
-        let forced_workspace_id = cfg.forced_workspace_id.as_ref().and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
+        let forced_chatgpt_workspace_id =
+            cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
 
         let forced_login_method = cfg.forced_login_method;
 
@@ -1359,7 +1362,7 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
-            forced_workspace_id,
+            forced_chatgpt_workspace_id,
             forced_login_method,
             include_plan_tool: include_plan_tool_flag,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -2763,7 +2766,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
-                forced_workspace_id: None,
+                forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
@@ -2832,7 +2835,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
-            forced_workspace_id: None,
+            forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -2916,7 +2919,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
-            forced_workspace_id: None,
+            forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -2986,7 +2989,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
-            forced_workspace_id: None,
+            forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,

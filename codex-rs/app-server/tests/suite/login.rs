@@ -169,7 +169,7 @@ fn create_config_toml_forced_workspace(
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
-forced_workspace_id = "{workspace_id}"
+forced_chatgpt_workspace_id = "{workspace_id}"
 "#
     );
     std::fs::write(config_toml, contents)
@@ -203,7 +203,7 @@ async fn login_chatgpt_rejected_when_forced_api() {
 
     assert_eq!(
         err.error.message,
-        "ChatGPT login is disabled by configuration; use API key login instead."
+        "ChatGPT login is disabled. Use API key login instead."
     );
 }
 

@@ -14,15 +14,14 @@ use tempfile::tempdir;
 
 // See spawn.rs for details
 
-fn start_mock_issuer(organization_id: &str) -> (SocketAddr, thread::JoinHandle<()>) {
+fn start_mock_issuer(chatgpt_account_id: &str) -> (SocketAddr, thread::JoinHandle<()>) {
     // Bind to a random available port
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tiny_http::Server::from_listener(listener, None).unwrap();
-    let organization_id = organization_id.to_string();
+    let chatgpt_account_id = chatgpt_account_id.to_string();
 
     let handle = thread::spawn(move || {
-        let org_id = organization_id;
         while let Ok(mut req) = server.recv() {
             let url = req.url().to_string();
             if url.starts_with("/oauth/token") {
@@ -43,8 +42,7 @@ fn start_mock_issuer(organization_id: &str) -> (SocketAddr, thread::JoinHandle<(
                     "email": "user@example.com",
                     "https://api.openai.com/auth": {
                         "chatgpt_plan_type": "pro",
-                        "chatgpt_account_id": "acc-123",
-                        "organization_id": org_id.clone()
+                        "chatgpt_account_id": chatgpt_account_id,
                     }
                 });
                 let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
@@ -83,7 +81,8 @@ fn start_mock_issuer(organization_id: &str) -> (SocketAddr, thread::JoinHandle<(
 async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, issuer_handle) = start_mock_issuer("org-123");
+    let chatgpt_account_id = "12345678-0000-0000-0000-000000000000";
+    let (issuer_addr, issuer_handle) = start_mock_issuer(chatgpt_account_id);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -116,11 +115,13 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         port: 0,
         open_browser: false,
         force_state: Some(state),
-        forced_workspace_id: Some("org-123".to_string()),
+        forced_chatgpt_workspace_id: Some(chatgpt_account_id.to_string()),
     };
     let server = run_login_server(opts)?;
     assert!(
-        server.auth_url.contains("allowed_workspace_id=org-123"),
+        server
+            .auth_url
+            .contains(format!("allowed_workspace_id={chatgpt_account_id}").as_str()),
         "auth URL should include forced workspace parameter"
     );
     let login_port = server.actual_port;
@@ -146,7 +147,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     assert_eq!(json["OPENAI_API_KEY"], "access-123");
     assert_eq!(json["tokens"]["access_token"], "access-123");
     assert_eq!(json["tokens"]["refresh_token"], "refresh-123");
-    assert_eq!(json["tokens"]["account_id"], "acc-123");
+    assert_eq!(json["tokens"]["account_id"], chatgpt_account_id);
 
     // Stop mock issuer
     drop(issuer_handle);
@@ -174,7 +175,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         port: 0,
         open_browser: false,
         force_state: Some(state),
-        forced_workspace_id: None,
+        forced_chatgpt_workspace_id: None,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -195,7 +196,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
 }
 
 #[tokio::test]
-async fn forced_workspace_id_mismatch_blocks_login() -> Result<()> {
+async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer("org-actual");
@@ -212,7 +213,7 @@ async fn forced_workspace_id_mismatch_blocks_login() -> Result<()> {
         port: 0,
         open_browser: false,
         force_state: Some(state.clone()),
-        forced_workspace_id: Some("org-required".to_string()),
+        forced_chatgpt_workspace_id: Some("org-required".to_string()),
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -267,7 +268,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         port: 0,
         open_browser: false,
         force_state: Some("cancel_state".to_string()),
-        forced_workspace_id: None,
+        forced_chatgpt_workspace_id: None,
     };
 
     let first_server = run_login_server(first_opts)?;
@@ -286,7 +287,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         port: login_port,
         open_browser: false,
         force_state: Some("cancel_state_2".to_string()),
-        forced_workspace_id: None,
+        forced_chatgpt_workspace_id: None,
     };
 
     let second_server = run_login_server(second_opts)?;

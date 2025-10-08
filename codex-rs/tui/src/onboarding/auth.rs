@@ -131,6 +131,7 @@ pub(crate) struct AuthModeWidget {
     pub codex_home: PathBuf,
     pub login_status: LoginStatus,
     pub auth_manager: Arc<AuthManager>,
+    pub forced_chatgpt_workspace_id: Option<String>,
 }
 
 impl AuthModeWidget {
@@ -491,7 +492,11 @@ impl AuthModeWidget {
         }
 
         self.error = None;
-        let opts = ServerOptions::new(self.codex_home.clone(), CLIENT_ID.to_string());
+        let opts = ServerOptions::new(
+            self.codex_home.clone(),
+            CLIENT_ID.to_string(),
+            self.forced_chatgpt_workspace_id.clone(),
+        );
         match run_login_server(opts) {
             Ok(child) => {
                 let sign_in_state = self.sign_in_state.clone();

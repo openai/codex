@@ -34,7 +34,7 @@ model_reasoning_summary = "detailed"
 model_reasoning_effort = "high"
 model_verbosity = "medium"
 profile = "test"
-forced_workspace_id = "ws_forced"
+forced_chatgpt_workspace_id = "12345678-0000-0000-0000-000000000000"
 forced_login_method = "chatgpt"
 
 [sandbox_workspace_write]
@@ -95,7 +95,7 @@ async fn get_config_toml_parses_all_fields() {
                 exclude_tmpdir_env_var: Some(true),
                 exclude_slash_tmp: Some(true),
             }),
-            forced_workspace_id: Some("ws_forced".into()),
+            forced_chatgpt_workspace_id: Some("12345678-0000-0000-0000-000000000000".into()),
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
             model: Some("gpt-5-codex".into()),
             model_reasoning_effort: Some(ReasoningEffort::High),
@@ -154,7 +154,7 @@ async fn get_config_toml_empty() {
             approval_policy: None,
             sandbox_mode: None,
             sandbox_settings: None,
-            forced_workspace_id: None,
+            forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             model: None,
             model_reasoning_effort: None,

@@ -302,9 +302,14 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let mut opts = LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string());
-        opts.open_browser = false;
-        opts.forced_workspace_id = config.forced_workspace_id.clone();
+        let opts = LoginServerOptions {
+            open_browser: false,
+            ..LoginServerOptions::new(
+                config.codex_home.clone(),
+                CLIENT_ID.to_string(),
+                config.forced_chatgpt_workspace_id.clone(),
+            )
+        };
 
         enum LoginChatGptReply {
             Response(LoginChatGptResponse),

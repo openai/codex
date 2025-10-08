@@ -187,7 +187,7 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     .map_err(|err| std::io::Error::other(format!("device code exchange failed: {err}")))?;
 
     if let Err(message) = crate::server::ensure_workspace_allowed(
-        opts.forced_workspace_id.as_deref(),
+        opts.forced_chatgpt_workspace_id.as_deref(),
         &tokens.id_token,
     ) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
