@@ -19,7 +19,7 @@ let
       cp -r $src/* .
       cp ${root-pnpm-lock} pnpm-lock.yaml
       export PNPM_HOME=$(pwd)/.pnpm-store
-      pnpm install --frozen-lockfile --ignore-scripts --store-dir $PNPM_HOME
+      pnpm install --ignore-scripts --store-dir $PNPM_HOME
       cp bin/codex.js $out/bin/
       chmod +x $out/bin/codex.js
       ln -s $out/bin/codex.js $out/bin/codex
