@@ -2,7 +2,6 @@ use clap::Parser;
 use codex_protocol::protocol::SandboxPolicy;
 use std::collections::HashMap;
 use std::env;
-use std::path::Path;
 use std::path::PathBuf;
 use tokio::runtime::Builder;
 use tracing::trace;
@@ -52,7 +51,7 @@ pub fn run_main() -> ! {
         .expect("failed to build Tokio runtime");
 
     let status = runtime.block_on(async {
-        let child = spawn_command_under_windows_appcontainer(
+        let mut child = spawn_command_under_windows_appcontainer(
             command,
             current_dir,
             &sandbox_policy,
@@ -284,7 +283,7 @@ mod imp {
         fn drop(&mut self) {
             unsafe {
                 if !self.sid.is_invalid() {
-                    let _ = LocalFree(HLOCAL(self.sid.0));
+                    let _ = LocalFree(Some(HLOCAL(self.sid.0)));
                 }
             }
         }
@@ -318,9 +317,9 @@ mod imp {
             unsafe {
                 let mut list_size = 0usize;
                 let _ = InitializeProcThreadAttributeList(
-                    LPPROC_THREAD_ATTRIBUTE_LIST::default(),
+                    Some(LPPROC_THREAD_ATTRIBUTE_LIST::default()),
                     1,
-                    0,
+                    Some(0),
                     &mut list_size,
                 );
                 let heap =
@@ -330,7 +329,7 @@ mod imp {
                     return Err(io::Error::last_os_error());
                 }
                 let list = LPPROC_THREAD_ATTRIBUTE_LIST(buffer);
-                InitializeProcThreadAttributeList(list, 1, 0, &mut list_size)
+                InitializeProcThreadAttributeList(Some(list), 1, Some(0), &mut list_size)
                     .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
 
                 let mut sid_and_attributes: Vec<SID_AND_ATTRIBUTES> =
@@ -434,7 +433,7 @@ mod imp {
             );
             if status != WIN32_ERROR::from(ERROR_SUCCESS) {
                 if !security_descriptor.is_invalid() {
-                    let _ = LocalFree(HLOCAL(security_descriptor.0));
+                    let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
                 }
                 return Err(io::Error::from_raw_os_error(status.0 as i32));
             }
@@ -462,10 +461,10 @@ mod imp {
                 SetEntriesInAclW(Some(&explicit_entries), Some(existing_dacl), &mut new_dacl);
             if add_result != WIN32_ERROR::from(ERROR_SUCCESS) {
                 if !new_dacl.is_null() {
-                    let _ = LocalFree(HLOCAL(new_dacl.cast()));
+                    let _ = LocalFree(Some(HLOCAL(new_dacl.cast())));
                 }
                 if !security_descriptor.is_invalid() {
-                    let _ = LocalFree(HLOCAL(security_descriptor.0));
+                    let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
                 }
                 return Err(io::Error::from_raw_os_error(add_result.0 as i32));
             }
@@ -481,10 +480,10 @@ mod imp {
             );
             if set_result != WIN32_ERROR::from(ERROR_SUCCESS) {
                 if !new_dacl.is_null() {
-                    let _ = LocalFree(HLOCAL(new_dacl.cast()));
+                    let _ = LocalFree(Some(HLOCAL(new_dacl.cast())));
                 }
                 if !security_descriptor.is_invalid() {
-                    let _ = LocalFree(HLOCAL(security_descriptor.0));
+                    let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
                 }
                 return Err(io::Error::from_raw_os_error(set_result.0 as i32));
             }

@@ -1,3 +1,11 @@
+#![cfg_attr(
+    all(
+        target_os = "windows",
+        feature = "windows_appcontainer_command_ext_raw_attribute"
+    ),
+    feature(windows_process_extensions_raw_attribute_list)
+)]
+
 #[cfg(target_os = "windows")]
 mod windows_appcontainer;
 
