@@ -265,7 +265,9 @@ fn append_context_span(line: &mut Line<'static>, percent: Option<u8>) {
     if !line.spans.is_empty() {
         line.push_span(Span::from(" | "));
     }
-    line.push_span(Span::from(format!("{percent}% context left")).dim());
+    // Style: percentage in default color (white), label dimmed.
+    line.push_span(Span::from(format!("{percent}%")));
+    line.push_span(Span::from(" context left").dim());
 }
 
 fn append_segment<S: Into<String>>(line: &mut Line<'static>, text: Option<S>) {
@@ -289,15 +291,34 @@ fn info_line(
     with_shortcuts_hint: bool,
 ) -> Line<'static> {
     let mut line = Line::from("");
+    // Order: context left | 5h XX% used | weekly XX% used | model | dir | email
     append_context_span(&mut line, context_percent);
-    append_segment(&mut line, model_label);
-    append_segment(&mut line, directory);
-    append_segment(&mut line, account_email);
     if let Some(p) = primary_limit_percent {
-        append_segment(&mut line, Some(format!("5h {p}%")));
+        if !line.spans.is_empty() {
+            line.push_span(Span::from(" | "));
+        }
+        line.push_span(Span::from("5h ").dim());
+        line.push_span(Span::from(format!("{p}% used")));
     }
     if let Some(w) = weekly_limit_percent {
-        append_segment(&mut line, Some(format!("weekly {w}%")));
+        if !line.spans.is_empty() {
+            line.push_span(Span::from(" | "));
+        }
+        line.push_span(Span::from("weekly ").dim());
+        line.push_span(Span::from(format!("{w}% used")));
+    }
+    if model_label.as_ref().is_some() {
+        line.push_span(Span::from(" | "));
+        // Keep metadata dimmed
+        line.push_span(Span::from(model_label.unwrap()).dim());
+    }
+    if directory.as_ref().is_some() {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(directory.unwrap()).dim());
+    }
+    if account_email.as_ref().is_some() {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(account_email.unwrap()).dim());
     }
     if with_shortcuts_hint {
         line.push_span(Span::from(" · ").dim());
