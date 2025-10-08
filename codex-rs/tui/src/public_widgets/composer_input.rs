@@ -55,6 +55,7 @@ impl ComposerInput {
     pub fn input(&mut self, key: KeyEvent) -> ComposerAction {
         let action = match self.inner.handle_key_event(key).0 {
             InputResult::Submitted(text) => ComposerAction::Submitted(text),
+            InputResult::PlanRequested(_) => ComposerAction::None,
             _ => ComposerAction::None,
         };
         self.drain_app_events();

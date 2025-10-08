@@ -31,6 +31,7 @@ use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
@@ -359,6 +360,245 @@ fn rate_limit_warnings_emit_thresholds() {
         ],
         "expected one warning per limit for the highest crossed threshold"
     );
+}
+
+#[test]
+fn shift_tab_triggers_plan_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    let original_sandbox = chat.config.sandbox_policy.clone();
+
+    chat.bottom_pane
+        .set_composer_text("Review the parser module".to_string());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+
+    assert!(chat.bottom_pane.plan_mode_enabled());
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut ops = Vec::new();
+    while let Ok(op) = op_rx.try_recv() {
+        ops.push(op);
+    }
+    assert_eq!(
+        ops.len(),
+        4,
+        "expected override, user input, override, and history ops"
+    );
+
+    let plan_override = &ops[0];
+    match plan_override {
+        Op::OverrideTurnContext {
+            model,
+            effort,
+            approval_policy,
+            sandbox_policy,
+            cwd,
+            summary,
+        } => {
+            assert_eq!(model.as_deref(), Some("gpt-5"));
+            assert_eq!(effort, &Some(Some(ReasoningEffortConfig::High)));
+            assert!(approval_policy.is_none());
+            assert!(matches!(sandbox_policy, Some(SandboxPolicy::ReadOnly)));
+            assert!(cwd.is_none());
+            assert!(summary.is_none());
+        }
+        other => panic!("unexpected first op: {other:?}"),
+    }
+
+    let plan_input = &ops[1];
+    let plan_text = match plan_input {
+        Op::UserInput { items } => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                InputItem::Text { text } => text.clone(),
+                other => panic!("unexpected input item: {other:?}"),
+            }
+        }
+        other => panic!("unexpected second op: {other:?}"),
+    };
+    assert!(plan_text.contains("Plan-Only Mode"));
+    assert!(plan_text.contains("Constraints"));
+    assert!(plan_text.contains("Review the parser module"));
+
+    let revert_override = &ops[2];
+    match revert_override {
+        Op::OverrideTurnContext {
+            model,
+            effort,
+            approval_policy,
+            sandbox_policy,
+            cwd,
+            summary,
+        } => {
+            assert_eq!(model.as_deref(), Some("gpt-5-codex"));
+            assert_eq!(effort, &Some(None));
+            assert!(approval_policy.is_none());
+            assert_eq!(sandbox_policy, &Some(original_sandbox.clone()));
+            assert!(cwd.is_none());
+            assert!(summary.is_none());
+        }
+        other => panic!("unexpected third op: {other:?}"),
+    }
+
+    match &ops[3] {
+        Op::AddToHistory { text } => assert_eq!(text, "Review the parser module"),
+        other => panic!("unexpected fourth op: {other:?}"),
+    }
+
+    assert!(chat.bottom_pane.plan_mode_enabled());
+    assert!(
+        chat.bottom_pane.composer_text().is_empty(),
+        "composer should clear after plan submission"
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let merged: Vec<String> = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged
+            .iter()
+            .any(|line| line.contains("Review the parser module")),
+        "expected user request to appear in history"
+    );
+
+    chat.bottom_pane
+        .set_composer_text("Review the parser module".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut ops_second = Vec::new();
+    while let Ok(op) = op_rx.try_recv() {
+        ops_second.push(op);
+    }
+    assert_eq!(
+        ops_second.len(),
+        4,
+        "expected second plan request to emit override/input/restore/history ops"
+    );
+    assert!(chat.bottom_pane.plan_mode_enabled());
+
+    let plan_input_second = &ops_second[1];
+    match plan_input_second {
+        Op::UserInput { items } => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                InputItem::Text { text } => {
+                    assert!(text.contains("Review the parser module"));
+                }
+                other => panic!("unexpected second plan input item: {other:?}"),
+            }
+        }
+        other => panic!("unexpected second op in repeat plan: {other:?}"),
+    }
+
+    if let Op::OverrideTurnContext { sandbox_policy, .. } = &ops_second[2] {
+        assert_eq!(sandbox_policy, &Some(original_sandbox));
+    } else {
+        panic!("unexpected second revert op: {:?}", ops_second[2]);
+    }
+
+    match &ops_second[3] {
+        Op::AddToHistory { text } => assert_eq!(text, "Review the parser module"),
+        other => panic!("unexpected fourth op in repeat plan: {other:?}"),
+    }
+
+    let cells_second = drain_insert_history(&mut rx);
+    let merged_second: Vec<String> = cells_second
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged_second
+            .iter()
+            .any(|line| line.contains("Review the parser module")),
+        "expected repeated user request to appear in history"
+    );
+}
+
+#[test]
+fn shift_tab_requires_input_before_plan() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane.set_composer_text(String::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+
+    // Entering plan mode should not immediately emit a request or an info message.
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    let cells = drain_insert_history(&mut rx);
+    let merged: Vec<String> = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged
+            .iter()
+            .any(|line| line.contains("Type your request before submitting a plan"))
+    );
+}
+
+#[test]
+fn shift_tab_blocked_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane
+        .set_composer_text("Investigate login flow".to_string());
+    chat.bottom_pane.set_task_running(true);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    let cells = drain_insert_history(&mut rx);
+    let merged: Vec<String> = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged
+            .iter()
+            .any(|line| line.contains("Finish the current task before entering plan mode"))
+    );
+}
+
+#[test]
+fn plan_mode_enter_blocked_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.bottom_pane
+        .set_composer_text("Iterate on onboarding".to_string());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    assert!(chat.bottom_pane.plan_mode_enabled());
+
+    chat.bottom_pane.set_task_running(true);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+
+    let cells = drain_insert_history(&mut rx);
+    let merged: Vec<String> = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect();
+    assert!(
+        merged
+            .iter()
+            .any(|line| line.contains("Finish the current task before requesting a plan"))
+    );
+    assert!(chat.bottom_pane.plan_mode_enabled());
 }
 
 #[test]

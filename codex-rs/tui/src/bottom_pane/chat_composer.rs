@@ -66,6 +66,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 pub enum InputResult {
     Submitted(String),
     Command(SlashCommand),
+    PlanRequested(String),
     None,
 }
 
@@ -109,6 +110,7 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<u8>,
+    plan_mode: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -152,6 +154,7 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutPrompt,
             footer_hint_override: None,
             context_window_percent: None,
+            plan_mode: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -298,7 +301,35 @@ impl ChatComposer {
     /// Override the footer hint items displayed beneath the composer. Passing
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
-        self.footer_hint_override = items;
+        self.footer_hint_override = if self.plan_mode && items.is_none() {
+            Some(Self::plan_mode_hint_items())
+        } else {
+            items
+        };
+    }
+
+    fn set_plan_mode(&mut self, enabled: bool) {
+        if self.plan_mode == enabled {
+            return;
+        }
+
+        self.plan_mode = enabled;
+        if enabled {
+            self.set_footer_hint_override(Some(Self::plan_mode_hint_items()));
+        } else {
+            self.set_footer_hint_override(None);
+        }
+    }
+
+    fn plan_mode_hint_items() -> Vec<(String, String)> {
+        vec![
+            (
+                "plan mode on".to_string(),
+                "(shift+tab to cycle)".to_string(),
+            ),
+            ("Enter".to_string(), "submit plan".to_string()),
+            ("Shift+Enter".to_string(), "newline".to_string()),
+        ]
     }
 
     /// Replace the entire composer content with `text` and reset cursor.
@@ -421,6 +452,15 @@ impl ChatComposer {
         };
 
         match key_event {
+            KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            } => self.handle_plan_shortcut(),
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::SHIFT) => self.handle_plan_shortcut(),
             KeyEvent {
                 code: KeyCode::Up, ..
             } => {
@@ -585,6 +625,15 @@ impl ChatComposer {
         };
 
         match key_event {
+            KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            } => self.handle_plan_shortcut(),
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::SHIFT) => self.handle_plan_shortcut(),
             KeyEvent {
                 code: KeyCode::Up, ..
             } => {
@@ -855,6 +904,15 @@ impl ChatComposer {
         }
         match key_event {
             KeyEvent {
+                code: KeyCode::BackTab,
+                ..
+            } => self.handle_plan_shortcut(),
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::SHIFT) => self.handle_plan_shortcut(),
+            KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
@@ -894,6 +952,9 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
+                if self.plan_mode {
+                    return self.handle_plan_submission();
+                }
                 // If the first line is a bare built-in slash command (no args),
                 // dispatch it even when the slash popup isn't visible. This preserves
                 // the workflow: type a prefix ("/di"), press Tab to complete to
@@ -996,6 +1057,63 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    fn handle_plan_shortcut(&mut self) -> (InputResult, bool) {
+        if self.plan_mode {
+            self.set_plan_mode(false);
+            return (InputResult::None, true);
+        }
+
+        if self.is_task_running {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    "Finish the current task before entering plan mode.".to_string(),
+                    None,
+                ),
+            )));
+            return (InputResult::None, true);
+        }
+
+        self.set_plan_mode(true);
+        (InputResult::None, true)
+    }
+
+    fn handle_plan_submission(&mut self) -> (InputResult, bool) {
+        if self.is_task_running {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    "Finish the current task before requesting a plan.".to_string(),
+                    None,
+                ),
+            )));
+            return (InputResult::None, true);
+        }
+
+        let mut text = self.textarea.text().to_string();
+        for (placeholder, actual) in &self.pending_pastes {
+            if text.contains(placeholder) {
+                text = text.replace(placeholder, actual);
+            }
+        }
+        let trimmed = text.trim().to_string();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    "Type your request before submitting a plan.".to_string(),
+                    None,
+                ),
+            )));
+            return (InputResult::None, true);
+        }
+
+        self.pending_pastes.clear();
+        self.attached_images.clear();
+        self.set_text_content(String::new());
+
+        self.history.record_local_submission(&trimmed);
+
+        (InputResult::PlanRequested(trimmed), true)
     }
 
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
@@ -1346,7 +1464,11 @@ impl ChatComposer {
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
             FooterMode::CtrlCReminder => FooterMode::CtrlCReminder,
             FooterMode::ShortcutPrompt if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
-            FooterMode::ShortcutPrompt if !self.is_empty() => FooterMode::Empty,
+            FooterMode::ShortcutPrompt
+                if !self.is_empty() && self.footer_hint_override.is_none() =>
+            {
+                FooterMode::Empty
+            }
             other => other,
         }
     }
@@ -1471,6 +1593,11 @@ impl ChatComposer {
         if self.context_window_percent != percent {
             self.context_window_percent = percent;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_mode_enabled(&self) -> bool {
+        self.plan_mode
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
@@ -2249,6 +2376,9 @@ mod tests {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
+            InputResult::PlanRequested(_) => {
+                panic!("unexpected plan request while testing '/init'")
+            }
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
@@ -2322,6 +2452,9 @@ mod tests {
                 panic!("expected command dispatch after Tab completion, got literal submit: {text}")
             }
             InputResult::None => panic!("expected Command result for '/diff'"),
+            InputResult::PlanRequested(_) => {
+                panic!("unexpected plan request while testing '/diff'")
+            }
         }
         assert!(composer.textarea.is_empty());
     }
@@ -2355,10 +2488,72 @@ mod tests {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
+            InputResult::PlanRequested(_) => {
+                panic!("unexpected plan request while testing '/mention'")
+            }
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
         composer.insert_str("@");
         assert_eq!(composer.textarea.text(), "@");
+    }
+
+    #[test]
+    fn plan_mode_persists_across_submissions() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.insert_str("Investigate caching");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert!(
+            composer.plan_mode_enabled(),
+            "plan mode should be active after toggle"
+        );
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::PlanRequested(text) => assert_eq!(text, "Investigate caching"),
+            other => panic!("expected plan request, got {other:?}"),
+        }
+        assert!(
+            composer.plan_mode_enabled(),
+            "plan mode should remain active after submit"
+        );
+        assert!(
+            composer.is_empty(),
+            "composer text should clear after submit"
+        );
+
+        composer.insert_str("Investigate caching");
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::PlanRequested(text) => assert_eq!(text, "Investigate caching"),
+            other => panic!("expected second plan request, got {other:?}"),
+        }
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(
+            !composer.plan_mode_enabled(),
+            "plan mode should deactivate after second toggle"
+        );
     }
 
     #[test]

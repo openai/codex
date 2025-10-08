@@ -115,6 +115,8 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
 const MAX_TRACKED_GHOST_COMMITS: usize = 20;
+const DEFAULT_PLAN_MODEL_SLUG: &str = "gpt-5";
+const DEFAULT_PLAN_EFFORT: ReasoningEffortConfig = ReasoningEffortConfig::High;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -1072,6 +1074,9 @@ impl ChatWidget {
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);
                     }
+                    InputResult::PlanRequested(text) => {
+                        self.request_plan_turn(text);
+                    }
                     InputResult::None => {}
                 }
             }
@@ -1120,6 +1125,9 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::PlanModel => {
+                self.open_plan_model_popup();
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
@@ -1283,6 +1291,90 @@ impl ChatWidget {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
         self.needs_final_message_separator = false;
+    }
+
+    fn request_plan_turn(&mut self, source_text: String) {
+        let trimmed = source_text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        let request_text = trimmed.to_string();
+        self.add_to_history(history_cell::new_user_prompt(request_text.clone()));
+        self.needs_final_message_separator = false;
+
+        let (target_model, target_effort) = self.preferred_plan_target();
+        let original_model = self.config.model.clone();
+        let original_effort = self.config.model_reasoning_effort;
+        let plan_prompt = self.build_plan_prompt(trimmed);
+
+        let original_sandbox = self.config.sandbox_policy.clone();
+        let sandbox_changed = !matches!(original_sandbox, SandboxPolicy::ReadOnly);
+
+        let mut context_changed = false;
+        if target_model != original_model || target_effort != original_effort || sandbox_changed {
+            self.submit_op(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: Some(SandboxPolicy::ReadOnly),
+                model: Some(target_model.clone()),
+                effort: Some(target_effort),
+                summary: None,
+            });
+            context_changed = true;
+        }
+
+        self.submit_op(Op::UserInput {
+            items: vec![InputItem::Text { text: plan_prompt }],
+        });
+
+        if context_changed {
+            self.submit_op(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: Some(original_sandbox),
+                model: Some(original_model),
+                effort: Some(original_effort),
+                summary: None,
+            });
+        }
+
+        self.submit_op(Op::AddToHistory { text: request_text });
+    }
+
+    fn build_plan_prompt(&self, user_request: &str) -> String {
+        let objective = "Objective\n- Produce a clear, staged implementation plan for the request below.\n- Do not change the system in any way.\n\n";
+        let constraints = "Constraints\n- Read/inspect only: code, files, repo history, docs, and web sources.\n- No side effects: do not edit/create/delete files, run mutating commands, install packages, commit, or change config.\n\n";
+        let produce = "What to produce\n1) Call update_plan with a concise, sequenced plan:\n   - 5-9 steps max, each 5-7 words.\n   - Status values: pending | in_progress | completed.\n   - Exactly one step may be in_progress; none completed unless already done.\n2) After update_plan, present a brief rationale and ask for approval before any execution.\n3) If essential info is missing, include an \"Open Questions\" note and keep steps pending.\n\n";
+        let guidance = "Guidance\n- Prefer smallest viable path; surface dependencies and risks early.\n- Reference files/paths precisely (relative paths).\n- If external knowledge helps, summarize sources; keep it minimal and relevant.\n- Do not perform any system changes; this is planning only.\n\n";
+        let user = format!("User Request\n{user_request}\n\n");
+        let reminder =
+            "Reminder\nAwait explicit approval before making any changes or running commands.";
+
+        // Assemble sections (simple String concatenation is clearer than one giant format literal).
+        let mut s = String::from("Plan-Only Mode (Read-Only)\n\n");
+        s.push_str(objective);
+        s.push_str(constraints);
+        s.push_str(produce);
+        s.push_str(guidance);
+        s.push_str(&user);
+        s.push_str(reminder);
+        s
+    }
+
+    fn preferred_plan_target(&self) -> (String, Option<ReasoningEffortConfig>) {
+        let plan_model = if self.config.plan_model.trim().is_empty() {
+            DEFAULT_PLAN_MODEL_SLUG.to_string()
+        } else {
+            self.config.plan_model.clone()
+        };
+
+        let plan_effort = self
+            .config
+            .plan_model_reasoning_effort
+            .or(Some(DEFAULT_PLAN_EFFORT));
+
+        (plan_model, plan_effort)
     }
 
     fn capture_ghost_snapshot(&mut self) {
@@ -1648,6 +1740,64 @@ impl ChatWidget {
         });
     }
 
+    /// Open a popup to choose the planning model (stage 1).
+    pub(crate) fn open_plan_model_popup(&mut self) {
+        let current_model = self.config.plan_model.clone();
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
+
+        let mut grouped: Vec<(&str, Vec<ModelPreset>)> = Vec::new();
+        for preset in presets.into_iter() {
+            if let Some((_, entries)) = grouped.iter_mut().find(|(model, _)| *model == preset.model)
+            {
+                entries.push(preset);
+            } else {
+                grouped.push((preset.model, vec![preset]));
+            }
+        }
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for (model_slug, entries) in grouped.into_iter() {
+            let name = model_slug.to_string();
+            let description = Self::model_description_for(model_slug)
+                .map(std::string::ToString::to_string)
+                .or_else(|| {
+                    entries
+                        .iter()
+                        .find(|preset| !preset.description.is_empty())
+                        .map(|preset| preset.description.to_string())
+                })
+                .or_else(|| entries.first().map(|preset| preset.description.to_string()));
+            let is_current = model_slug == current_model;
+            let model_slug_string = model_slug.to_string();
+            let presets_for_model = entries.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenPlanReasoningPopup {
+                    model: model_slug_string.clone(),
+                    presets: presets_for_model.clone(),
+                });
+            })];
+            items.push(SelectionItem {
+                name,
+                description,
+                is_current,
+                actions,
+                dismiss_on_select: false,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Planning Model and Effort".to_string()),
+            subtitle: Some(
+                "Shift+Tab planning turns run with this model until you change it.".to_string(),
+            ),
+            footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
+            items,
+            ..Default::default()
+        });
+    }
+
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(&mut self, model_slug: String, presets: Vec<ModelPreset>) {
         let default_effort = ReasoningEffortConfig::default();
@@ -1767,6 +1917,121 @@ impl ChatWidget {
         });
     }
 
+    /// Open a popup to choose the planning reasoning effort (stage 2).
+    pub(crate) fn open_plan_reasoning_popup(
+        &mut self,
+        model_slug: String,
+        presets: Vec<ModelPreset>,
+    ) {
+        let default_effort = ReasoningEffortConfig::default();
+
+        let has_none_choice = presets.iter().any(|preset| preset.effort.is_none());
+        struct EffortChoice {
+            stored: Option<ReasoningEffortConfig>,
+            display: ReasoningEffortConfig,
+        }
+        let mut choices: Vec<EffortChoice> = Vec::new();
+        for effort in ReasoningEffortConfig::iter() {
+            if presets.iter().any(|preset| preset.effort == Some(effort)) {
+                choices.push(EffortChoice {
+                    stored: Some(effort),
+                    display: effort,
+                });
+            }
+            if has_none_choice && default_effort == effort {
+                choices.push(EffortChoice {
+                    stored: None,
+                    display: effort,
+                });
+            }
+        }
+        if choices.is_empty() {
+            choices.push(EffortChoice {
+                stored: Some(default_effort),
+                display: default_effort,
+            });
+        }
+
+        let default_choice: Option<ReasoningEffortConfig> = if has_none_choice {
+            None
+        } else if choices
+            .iter()
+            .any(|choice| choice.stored == Some(default_effort))
+        {
+            Some(default_effort)
+        } else {
+            choices
+                .iter()
+                .find_map(|choice| choice.stored)
+                .or(Some(default_effort))
+        };
+
+        let is_current_model = self.config.plan_model == model_slug;
+        let highlight_choice = if is_current_model {
+            self.config.plan_model_reasoning_effort
+        } else {
+            default_choice
+        };
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for choice in choices.iter() {
+            let effort = choice.display;
+            let mut effort_label = effort.to_string();
+            if let Some(first) = effort_label.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            if choice.stored == default_choice {
+                effort_label.push_str(" (default)");
+            }
+
+            let description = presets
+                .iter()
+                .find(|preset| preset.effort == choice.stored && !preset.description.is_empty())
+                .map(|preset| preset.description.to_string())
+                .or_else(|| {
+                    presets
+                        .iter()
+                        .find(|preset| preset.effort == choice.stored)
+                        .map(|preset| preset.description.to_string())
+                });
+
+            let model_for_action = model_slug.clone();
+            let effort_for_action = choice.stored;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::UpdatePlanModel(model_for_action.clone()));
+                tx.send(AppEvent::UpdatePlanReasoningEffort(effort_for_action));
+                tx.send(AppEvent::PersistPlanModelSelection {
+                    model: model_for_action.clone(),
+                    effort: effort_for_action,
+                });
+                tracing::info!(
+                    "Selected planning model: {}, Selected planning effort: {}",
+                    model_for_action,
+                    effort_for_action
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "default".to_string())
+                );
+            })];
+
+            items.push(SelectionItem {
+                name: effort_label,
+                description,
+                is_current: is_current_model && choice.stored == highlight_choice,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Planning Reasoning Level".to_string()),
+            subtitle: Some(format!("Planning reasoning for model {model_slug}")),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy;
@@ -1829,6 +2094,16 @@ impl ChatWidget {
     pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
         self.config.model = model.to_string();
+    }
+
+    /// Set the planning model in the widget's config copy.
+    pub(crate) fn set_plan_model(&mut self, model: &str) {
+        self.config.plan_model = model.to_string();
+    }
+
+    /// Set the planning reasoning effort in the widget's config copy.
+    pub(crate) fn set_plan_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.config.plan_model_reasoning_effort = effort;
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {

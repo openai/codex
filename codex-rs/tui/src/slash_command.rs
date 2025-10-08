@@ -13,6 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    PlanModel,
     Approvals,
     Review,
     New,
@@ -43,6 +44,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::PlanModel => "choose the planning model and reasoning effort",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
@@ -65,6 +67,7 @@ impl SlashCommand {
             | SlashCommand::Compact
             | SlashCommand::Undo
             | SlashCommand::Model
+            | SlashCommand::PlanModel
             | SlashCommand::Approvals
             | SlashCommand::Review
             | SlashCommand::Logout => false,

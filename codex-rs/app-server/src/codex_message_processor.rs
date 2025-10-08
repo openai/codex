@@ -1339,6 +1339,8 @@ async fn derive_config_from_params(
     let overrides = ConfigOverrides {
         model,
         review_model: None,
+        plan_model: None,
+        plan_model_reasoning_effort: None,
         config_profile: profile,
         cwd: cwd.map(PathBuf::from),
         approval_policy,
