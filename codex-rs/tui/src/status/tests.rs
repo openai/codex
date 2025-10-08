@@ -37,25 +37,65 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
         .collect()
 }
 
-fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
+fn sanitize_field(
+    line: String,
+    label: &str,
+    replacement: &str,
+    target_pipe_idx: Option<usize>,
+) -> String {
+    let needle = format!("{label}:");
+    let Some(label_pos) = line.find(&needle) else {
+        return line;
+    };
+    let Some(pipe_idx) = line.rfind('│') else {
+        return line;
+    };
+
+    let search_start = label_pos + needle.len();
+    let value_start = line[search_start..pipe_idx]
+        .char_indices()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(offset, _)| search_start + offset)
+        .unwrap_or(pipe_idx);
+
+    let desired_pipe_idx = target_pipe_idx.unwrap_or(pipe_idx);
+    if value_start >= desired_pipe_idx {
+        return line;
+    }
+
+    let value_space = desired_pipe_idx.saturating_sub(value_start);
+    if value_space == 0 {
+        return line;
+    }
+
+    let mut replacement_segment = replacement.to_string();
+    if replacement_segment.len() < value_space {
+        replacement_segment.push_str(&" ".repeat(value_space - replacement_segment.len()));
+    } else if replacement_segment.len() > value_space {
+        replacement_segment.truncate(value_space);
+    }
+
+    let mut rebuilt = String::with_capacity(
+        desired_pipe_idx + line.len().saturating_sub(pipe_idx) + replacement_segment.len(),
+    );
+    rebuilt.push_str(&line[..value_start]);
+    rebuilt.push_str(&replacement_segment);
+    rebuilt.push('│');
+    let pipe_char_len = '│'.len_utf8();
+    if pipe_idx + pipe_char_len <= line.len() {
+        rebuilt.push_str(&line[pipe_idx + pipe_char_len..]);
+    }
+    rebuilt
+}
+
+fn sanitize_paths(lines: Vec<String>) -> Vec<String> {
+    let target_pipe_idx = lines.iter().filter_map(|line| line.rfind('│')).min();
+
     lines
         .into_iter()
         .map(|line| {
-            if let (Some(dir_pos), Some(pipe_idx)) = (line.find("Directory: "), line.rfind('│')) {
-                let prefix = &line[..dir_pos + "Directory: ".len()];
-                let suffix = &line[pipe_idx..];
-                let content_width = pipe_idx.saturating_sub(dir_pos + "Directory: ".len());
-                let replacement = "[[workspace]]";
-                let mut rebuilt = prefix.to_string();
-                rebuilt.push_str(replacement);
-                if content_width > replacement.len() {
-                    rebuilt.push_str(&" ".repeat(content_width - replacement.len()));
-                }
-                rebuilt.push_str(suffix);
-                rebuilt
-            } else {
-                line
-            }
+            let home = sanitize_field(line, "Home", "[[codex_home]]", target_pipe_idx);
+            sanitize_field(home, "Directory", "[[workspace]]", target_pipe_idx)
         })
         .collect()
 }
@@ -110,7 +150,7 @@ fn status_snapshot_includes_reasoning_details() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_paths(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -151,7 +191,7 @@ fn status_snapshot_includes_monthly_limit() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_paths(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -218,7 +258,7 @@ fn status_snapshot_truncates_in_narrow_terminal() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_paths(rendered_lines).join("\n");
 
     assert_snapshot!(sanitized);
 }
@@ -245,7 +285,7 @@ fn status_snapshot_shows_missing_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_paths(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
 }
 
@@ -281,7 +321,7 @@ fn status_snapshot_shows_empty_limits_message() {
             *line = line.replace('\\', "/");
         }
     }
-    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    let sanitized = sanitize_paths(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
 }
 
