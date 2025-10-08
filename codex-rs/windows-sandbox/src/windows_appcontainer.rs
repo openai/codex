@@ -113,6 +113,7 @@ mod imp {
     use windows::Win32::Security::DACL_SECURITY_INFORMATION;
     use windows::Win32::Security::FreeSid;
     use windows::Win32::Security::Isolation::CreateAppContainerProfile;
+    use windows::Win32::Security::Isolation::CreateAppContainerToken;
     use windows::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
     use windows::Win32::Security::OBJECT_INHERIT_ACE;
     use windows::Win32::Security::PSECURITY_DESCRIPTOR;
@@ -142,7 +143,6 @@ mod imp {
     use windows::Win32::System::Threading::STARTF_USESTDHANDLES;
     use windows::Win32::System::Threading::STARTUPINFOW;
     use windows::Win32::System::Threading::WaitForSingleObject;
-    use windows::Win32::System::UserEnv::CreateAppContainerToken;
     use windows::core::PCWSTR;
     use windows::core::PWSTR;
 

@@ -219,7 +219,6 @@ windows = { version = "0.61.3", default-features = false, features = [
     "Win32_Security_Isolation",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
-    "Win32_System_UserEnv",
     "Win32_System_Memory",
     "Win32_System_Threading",
 ] }
