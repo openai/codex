@@ -1846,6 +1846,7 @@ impl ChatWidget {
         // Allow editing the custom limit
         items.push(SelectionItem {
             name: "Use custom token limit…".to_string(),
+            display_shortcut: None,
             description: Some(custom_description),
             is_current: has_custom_limit,
             actions: vec![Box::new(|tx| {
@@ -1858,6 +1859,7 @@ impl ChatWidget {
         // Allow clearing the custom limit
         items.push(SelectionItem {
             name: "Use model default limit".to_string(),
+            display_shortcut: None,
             description: Some(
                 "Clear the custom threshold and rely on the model's default.".to_string(),
             ),
@@ -1909,6 +1911,7 @@ impl ChatWidget {
             })];
             items.push(SelectionItem {
                 name: (*label).to_string(),
+                display_shortcut: None,
                 description: Some((*description).to_string()),
                 is_current,
                 actions,
@@ -1918,12 +1921,12 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: "Auto-compact".to_string(),
+            title: Some("Auto-compact".to_string()),
             subtitle: Some(format!(
                 "{} Select a mode or adjust the limit to fit your workflow.",
                 limit_caption
             )),
-            footer_hint: Some(STANDARD_POPUP_HINT_LINE.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
         });
