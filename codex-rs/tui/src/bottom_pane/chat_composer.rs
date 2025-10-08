@@ -1520,13 +1520,6 @@ impl WidgetRef for ChatComposer {
                                 spans.push("   ".into());
                             }
                         }
-                        // Always append the context percent on the left, even when
-                        // custom hint items are provided.
-                        let percent = self.context_window_percent.unwrap_or(100);
-                        if !spans.is_empty() {
-                            spans.push("   ".into());
-                        }
-                        spans.push(format!("{percent}% context left").dim());
                         let mut custom_rect = hint_rect;
                         if custom_rect.width > 2 {
                             custom_rect.x += 2;
@@ -1651,31 +1644,34 @@ mod tests {
             row
         };
 
-        let mut combined_row: Option<(u16, String)> = None;
+        let mut hint_row: Option<(u16, String)> = None;
         for y in 0..area.height {
             let row = row_to_string(y);
-            if row.contains("? for shortcuts") && (row.contains("context left")) {
-                combined_row = Some((y, row));
+            if row.contains("? for shortcuts") {
+                hint_row = Some((y, row));
+                break;
             }
         }
 
-        let (row_idx, row_contents) =
-            combined_row.expect("expected combined footer row to be rendered");
-        // Footer sits at the last or second-to-last row depending on footer height.
-        assert!(
-            row_idx == area.height - 1 || row_idx == area.height - 2,
-            "combined footer should be in the last or second-to-last line: {row_contents:?} (row_idx={row_idx})",
+        let (hint_row_idx, hint_row_contents) =
+            hint_row.expect("expected footer hint row to be rendered");
+        assert_eq!(
+            hint_row_idx,
+            area.height - 1,
+            "hint row should occupy the bottom line: {hint_row_contents:?}",
         );
 
-        // If a row exists below the footer, it should be blank padding.
-        if row_idx + 1 < area.height {
-            let bottom_row = row_to_string(row_idx + 1);
-            assert_eq!(
-                bottom_row.trim(),
-                "",
-                "expected blank padding row below footer but saw: {bottom_row:?}",
-            );
-        }
+        assert!(
+            hint_row_idx > 0,
+            "expected a spacing row above the footer hints",
+        );
+
+        let spacing_row = row_to_string(hint_row_idx - 1);
+        assert_eq!(
+            spacing_row.trim(),
+            "",
+            "expected blank spacing row above hints but saw: {spacing_row:?}",
+        );
     }
 
     fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
