@@ -555,7 +555,7 @@ mod imp {
             }
         }
         if backslashes > 0 {
-            result.extend(std::iter::repeat('\\').take(backslashes * 2));
+            result.extend(std::iter::repeat_n('\\', backslashes * 2));
         }
         result.push('"');
         result
