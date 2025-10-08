@@ -34,6 +34,8 @@ mod imp {
     use std::sync::Mutex;
     use std::sync::OnceLock;
 
+    const TERMINAL_QUERIES_ENABLED: bool = false;
+
     struct Cache<T> {
         attempted: bool,
         value: Option<T>,
@@ -70,6 +72,9 @@ mod imp {
     }
 
     pub(super) fn terminal_palette() -> Option<[(u8, u8, u8); 256]> {
+        if !TERMINAL_QUERIES_ENABLED {
+            return None;
+        }
         static CACHE: OnceLock<Option<[(u8, u8, u8); 256]>> = OnceLock::new();
         *CACHE.get_or_init(|| match query_terminal_palette() {
             Ok(Some(palette)) => Some(palette),
@@ -78,12 +83,18 @@ mod imp {
     }
 
     pub(super) fn default_colors() -> Option<DefaultColors> {
+        if !TERMINAL_QUERIES_ENABLED {
+            return None;
+        }
         let cache = default_colors_cache();
         let mut cache = cache.lock().ok()?;
         cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
     }
 
     pub(super) fn requery_default_colors() {
+        if !TERMINAL_QUERIES_ENABLED {
+            return;
+        }
         if let Ok(mut cache) = default_colors_cache().lock() {
             cache.refresh_with(|| query_default_colors().unwrap_or_default());
         }
