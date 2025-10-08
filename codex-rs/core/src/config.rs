@@ -841,7 +841,7 @@ pub struct ConfigToml {
 
 impl From<ConfigToml> for UserSavedConfig {
     fn from(config_toml: ConfigToml) -> Self {
-        let model = config_toml.model_name().map(|name| name.to_string());
+        let model = config_toml.model_name().map(std::string::ToString::to_string);
 
         let profiles = config_toml
             .profiles
@@ -1049,11 +1049,11 @@ impl Config {
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
         let inline_model_table = cfg.model_table().cloned();
-        let inline_model_name = cfg.model_name().map(|name| name.to_string());
+        let inline_model_name = cfg.model_name().map(std::string::ToString::to_string);
         let inline_provider_id = inline_model_table
             .as_ref()
             .and_then(|table| table.provider.clone());
-        let inline_tool_mode = cfg.model_tool_mode().unwrap_or_else(ToolMode::default);
+        let inline_tool_mode = cfg.model_tool_mode().unwrap_or_default();
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -1061,8 +1061,8 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        if let Some(table) = inline_model_table.as_ref() {
-            if let Some(provider_id) = table.provider.clone() {
+        if let Some(table) = inline_model_table.as_ref()
+            && let Some(provider_id) = table.provider.clone() {
                 let entry = model_providers
                     .entry(provider_id.clone())
                     .or_insert_with(|| ModelProviderInfo {
@@ -1088,11 +1088,10 @@ impl Config {
                     entry.env_key = Some(api_key_env.clone());
                 }
             }
-        }
 
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
-            .or(inline_provider_id.clone())
+            .or(inline_provider_id)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
         let model_provider = model_providers
