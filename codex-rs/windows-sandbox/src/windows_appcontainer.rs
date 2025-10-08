@@ -134,6 +134,8 @@ mod imp {
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
     use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows::Win32::System::Threading::CreateProcessAsUserW;
+    use windows::Win32::System::Threading::DUPLICATE_SAME_ACCESS;
+    use windows::Win32::System::Threading::DuplicateHandle;
     use windows::Win32::System::Threading::GetCurrentProcess;
     use windows::Win32::System::Threading::GetExitCodeProcess;
     use windows::Win32::System::Threading::OpenProcessToken;
@@ -234,7 +236,7 @@ mod imp {
                 Some(PWSTR(command_line.as_mut_ptr())),
                 None,
                 None,
-                false, // do not inherit handles
+                true,
                 creation_flags,
                 env_ptr,
                 current_dir,
@@ -242,17 +244,60 @@ mod imp {
                 process_info.as_mut_ptr(),
             )
             .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            unsafe {
+                if !startup_info.hStdInput.is_invalid() {
+                    let _ = CloseHandle(startup_info.hStdInput);
+                }
+                if !startup_info.hStdOutput.is_invalid() {
+                    let _ = CloseHandle(startup_info.hStdOutput);
+                }
+                if !startup_info.hStdError.is_invalid() {
+                    let _ = CloseHandle(startup_info.hStdError);
+                }
+            }
         }
 
         wait_for_process(process_info.info())
     }
 
-    // No-op: keeps features minimal (no Win32_System_Console).
-    fn apply_stdio_policy(
-        _startup_info: &mut STARTUPINFOW,
-        _policy: StdioPolicy,
-    ) -> io::Result<()> {
-        Ok(())
+    fn apply_stdio_policy(startup_info: &mut STARTUPINFOW, policy: StdioPolicy) -> io::Result<()> {
+        match policy {
+            StdioPolicy::Inherit => unsafe {
+                let stdin_handle = ensure_valid_handle(GetStdHandle(STD_INPUT_HANDLE))?;
+                let stdout_handle = ensure_valid_handle(GetStdHandle(STD_OUTPUT_HANDLE))?;
+                let stderr_handle = ensure_valid_handle(GetStdHandle(STD_ERROR_HANDLE))?;
+
+                // Duplicate as inheritable so CreateProcessAsUserW(TRUE) can pass them through
+                let inh_in = dup_inheritable(stdin_handle)?;
+                let inh_out = dup_inheritable(stdout_handle)?;
+                let inh_err = dup_inheritable(stderr_handle)?;
+
+                startup_info.dwFlags |= STARTF_USESTDHANDLES;
+                startup_info.hStdInput = inh_in;
+                startup_info.hStdOutput = inh_out;
+                startup_info.hStdError = inh_err;
+                Ok(())
+            },
+        }
+    }
+
+    unsafe fn dup_inheritable(h: HANDLE) -> io::Result<HANDLE> {
+        let mut out = HANDLE::default();
+        let ok = DuplicateHandle(
+            GetCurrentProcess(),
+            h,
+            GetCurrentProcess(),
+            &mut out,
+            0,
+            true, // make inheritable
+            DUPLICATE_SAME_ACCESS,
+        )
+        .as_bool();
+        if ok {
+            Ok(out)
+        } else {
+            Err(io::Error::last_os_error())
+        }
     }
 
     fn to_wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {
