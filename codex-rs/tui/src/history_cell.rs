@@ -880,6 +880,12 @@ pub(crate) fn new_mcp_tools_output(
             .copied()
             .unwrap_or(McpAuthStatus::Unsupported);
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
+        let status_line = if cfg.enabled {
+            vec!["    • Status: ".into(), "enabled".green()].into()
+        } else {
+            vec!["    • Status: ".into(), "disabled".red()].into()
+        };
+        lines.push(status_line);
         lines.push(vec!["    • Auth: ".into(), status.to_string().into()].into());
 
         match &cfg.transport {
@@ -906,7 +912,9 @@ pub(crate) fn new_mcp_tools_output(
             }
         }
 
-        if names.is_empty() {
+        if !cfg.enabled {
+            lines.push(vec!["    • Tools: ".into(), "(disabled)".red()].into());
+        } else if names.is_empty() {
             lines.push("    • Tools: (none)".into());
         } else {
             lines.push(vec!["    • Tools: ".into(), names.join(", ").into()].into());
