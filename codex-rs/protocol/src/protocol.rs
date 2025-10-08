@@ -125,6 +125,12 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// Toggle Plan Mode for subsequent turns. When enabled, the server will
+        /// append a Plan Mode instruction to the session's user instructions;
+        /// when disabled, the server will remove the appended instruction if present.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        plan_mode: Option<bool>,
     },
 
     /// Approve a command execution

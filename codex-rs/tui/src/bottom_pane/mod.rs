@@ -264,6 +264,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_plan_mode(&mut self, enabled: bool) {
+        self.composer.set_plan_mode(enabled);
+        self.request_redraw();
+    }
+
     /// Replace the composer text with `text`.
     pub(crate) fn set_composer_text(&mut self, text: String) {
         self.composer.set_text_content(text);

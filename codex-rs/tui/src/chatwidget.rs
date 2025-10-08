@@ -260,6 +260,10 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+
+    // When true, Plan Mode is active and the composer shows a hint; core gets a
+    // context override to add plan-mode instructions.
+    plan_mode: bool,
 }
 
 struct UserMessage {
@@ -938,6 +942,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            plan_mode: false,
         }
     }
 
@@ -1001,6 +1006,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            plan_mode: false,
         }
     }
 
@@ -1021,6 +1027,15 @@ impl ChatWidget {
                 ..
             } => {
                 self.on_ctrl_c();
+                return;
+            }
+            // Shift+Tab toggles Plan Mode.
+            KeyEvent {
+                code: KeyCode::BackTab,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                self.set_plan_mode(!self.plan_mode);
                 return;
             }
             KeyEvent {
@@ -1076,6 +1091,28 @@ impl ChatWidget {
                 }
             }
         }
+    }
+
+    fn set_plan_mode(&mut self, enabled: bool) {
+        if self.plan_mode == enabled {
+            return;
+        }
+        self.plan_mode = enabled;
+        // Update composer UI hint
+        self.bottom_pane.set_plan_mode(enabled);
+        // Inform core to update user instructions for subsequent turns
+        self.codex_op_tx
+            .send(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                model: None,
+                effort: None,
+                summary: None,
+                plan_mode: Some(enabled),
+            })
+            .unwrap_or_else(|e| tracing::error!("failed to send plan mode override: {e}"));
+        self.request_redraw();
     }
 
     pub(crate) fn attach_image(
@@ -1732,6 +1769,7 @@ impl ChatWidget {
                     model: Some(model_for_action.clone()),
                     effort: Some(effort_for_action),
                     summary: None,
+                    plan_mode: None,
                 }));
                 tx.send(AppEvent::UpdateModel(model_for_action.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -1788,6 +1826,7 @@ impl ChatWidget {
                     model: None,
                     effort: None,
                     summary: None,
+                    plan_mode: None,
                 }));
                 tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
                 tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));

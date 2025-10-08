@@ -1113,6 +1113,37 @@ impl Session {
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
+
+    pub async fn set_plan_mode_enabled(&self, enabled: bool) {
+        let mut state = self.state.lock().await;
+        state.plan_mode = enabled;
+    }
+
+    async fn maybe_prefix_plan_change_input(&self, items: Vec<InputItem>) -> Vec<InputItem> {
+        let (should_emit, current) = {
+            let mut state = self.state.lock().await;
+            let current = state.plan_mode;
+            let changed = state.last_emitted_plan_mode != Some(current);
+            if changed {
+                state.last_emitted_plan_mode = Some(current);
+            }
+            (changed, current)
+        };
+        if should_emit {
+            let text = if current {
+                "User engaged plan mode. *DO NOT* write any code or make changes unless the user has given approval AND plan mode is disabled. In this mode, first create a plan of action, then show it to the user and wait for their approval before executing any patch calls. Even if user explicitly asks you to write code, you should *still wait* until you get the \"Plan mode disengaged\" system message.".to_string()
+            } else {
+                "User disengaged plan mode. You may now write code or make changes.".to_string()
+            };
+            let item = ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText { text }],
+            };
+            self.record_conversation_items(&[item]).await;
+        }
+        items
+    }
 }
 
 impl Drop for Session {
@@ -1143,6 +1174,7 @@ async fn submission_loop(
                 model,
                 effort,
                 summary,
+                plan_mode,
             } => {
                 // Recalculate the persistent turn context with provided overrides.
                 let prev = Arc::clone(&turn_context);
@@ -1229,12 +1261,20 @@ async fn submission_loop(
                     ))])
                     .await;
                 }
+
+                // Persist the plan mode state only; a user-visible message is emitted
+                // the next time user input is sent.
+                if let Some(enabled) = plan_mode {
+                    sess.set_plan_mode_enabled(enabled).await;
+                }
             }
             Op::UserInput { items } => {
                 turn_context
                     .client
                     .get_otel_event_manager()
                     .user_prompt(&items);
+                // If plan mode changed since last emission, prefix a user message first.
+                let items = sess.maybe_prefix_plan_change_input(items).await;
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
                     // no current task, spawn a new one
@@ -3202,5 +3242,147 @@ mod tests {
 
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn plan_mode_prefixes_once_on_enable_and_skips_after() {
+        use crate::protocol::InputItem;
+        let (session, _tc) = make_session_and_context();
+        let sess = Arc::new(session);
+
+        // Enable plan mode before first send
+        sess.set_plan_mode_enabled(true).await;
+
+        // First send should be prefixed with ENGAGED line
+        let items = vec![InputItem::Text {
+            text: "hi".to_string(),
+        }];
+        let out = sess.maybe_prefix_plan_change_input(items).await;
+        // Items are unchanged; notice is a separate developer message in history.
+        assert_eq!(out.len(), 1, "user input should be unchanged");
+        match &out[0] {
+            InputItem::Text { text } => assert_eq!(text, "hi"),
+            _ => panic!("expected original user text only"),
+        }
+        // Find developer notice in history
+        let history = sess.history_snapshot().await;
+        let dev = history
+            .iter()
+            .rev()
+            .find_map(|ri| match ri {
+                ResponseItem::Message { role, content, .. } if role == "developer" => {
+                    let full = content
+                        .iter()
+                        .filter_map(|c| match c {
+                            ContentItem::InputText { text } => Some(text),
+                            _ => None,
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("");
+                    Some(full)
+                }
+                _ => None,
+            })
+            .expect("developer notice in history");
+        let lower = dev.to_lowercase();
+        assert!(dev.contains("<user_action>"));
+        assert!(lower.contains("plan mode"));
+        assert!(lower.contains("engag"), "expected engaged text: {dev}");
+
+        // Second send without change should not get prefixed
+        let items2 = vec![InputItem::Text {
+            text: "hello".to_string(),
+        }];
+        let out2 = sess.maybe_prefix_plan_change_input(items2).await;
+        assert_eq!(out2.len(), 1, "no prefix after no change");
+        match &out2[0] {
+            InputItem::Text { text } => assert_eq!(text, "hello"),
+            _ => panic!("expected original user text only"),
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_mode_prefixes_once_on_disable() {
+        use crate::protocol::InputItem;
+        let (session, _tc) = make_session_and_context();
+        let sess = Arc::new(session);
+
+        // Enable then emit once
+        sess.set_plan_mode_enabled(true).await;
+        let _ = sess
+            .maybe_prefix_plan_change_input(vec![InputItem::Text {
+                text: "first".to_string(),
+            }])
+            .await;
+
+        // Disable plan mode; next send should be prefixed with DISENGAGED
+        sess.set_plan_mode_enabled(false).await;
+        let out = sess
+            .maybe_prefix_plan_change_input(vec![InputItem::Text {
+                text: "second".to_string(),
+            }])
+            .await;
+        assert_eq!(out.len(), 1, "user input should be unchanged");
+        let history = sess.history_snapshot().await;
+        let notices: Vec<String> = history
+            .iter()
+            .filter_map(|ri| match ri {
+                ResponseItem::Message { role, content, .. } if role == "developer" => Some(
+                    content
+                        .iter()
+                        .filter_map(|c| match c {
+                            ContentItem::InputText { text } => Some(text),
+                            _ => None,
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(""),
+                ),
+                _ => None,
+            })
+            .collect();
+        assert!(notices.len() >= 2, "expected two developer notices");
+        let last = notices.last().unwrap();
+        let lower = last.to_lowercase();
+        assert!(last.contains("<user_action>"));
+        assert!(lower.contains("plan mode"));
+        assert!(
+            lower.contains("disengag"),
+            "expected disengaged text: {last}"
+        );
+
+        // Next send with no change should not be prefixed
+        let out2 = sess
+            .maybe_prefix_plan_change_input(vec![InputItem::Text {
+                text: "third".to_string(),
+            }])
+            .await;
+        assert_eq!(out2.len(), 1, "no prefix after disable state unchanged");
+    }
+
+    #[tokio::test]
+    async fn plan_mode_multiple_toggles_before_send_emits_once() {
+        use crate::protocol::InputItem;
+        let (session, _tc) = make_session_and_context();
+        let sess = Arc::new(session);
+
+        // Toggle several times before sending; final state true
+        sess.set_plan_mode_enabled(true).await;
+        sess.set_plan_mode_enabled(false).await;
+        sess.set_plan_mode_enabled(true).await;
+
+        let out = sess
+            .maybe_prefix_plan_change_input(vec![InputItem::Text {
+                text: "go".to_string(),
+            }])
+            .await;
+        assert_eq!(out.len(), 1, "user input should be unchanged");
+        let history = sess.history_snapshot().await;
+        let dev_count = history
+            .iter()
+            .filter(|ri| matches!(ri, ResponseItem::Message { role, .. } if role == "developer"))
+            .count();
+        assert!(dev_count >= 1, "expected a developer notice recorded");
     }
 }

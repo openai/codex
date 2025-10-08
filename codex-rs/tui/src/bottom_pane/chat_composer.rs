@@ -109,6 +109,7 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<u8>,
+    plan_mode: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -152,10 +153,15 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutPrompt,
             footer_hint_override: None,
             context_window_percent: None,
+            plan_mode: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
         this
+    }
+
+    pub(crate) fn set_plan_mode(&mut self, enabled: bool) {
+        self.plan_mode = enabled;
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
@@ -1337,6 +1343,7 @@ impl ChatComposer {
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
+            plan_mode: self.plan_mode,
         }
     }
 
@@ -1345,8 +1352,18 @@ impl ChatComposer {
             FooterMode::EscHint => FooterMode::EscHint,
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
             FooterMode::CtrlCReminder => FooterMode::CtrlCReminder,
-            FooterMode::ShortcutPrompt if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
-            FooterMode::ShortcutPrompt if !self.is_empty() => FooterMode::Empty,
+            FooterMode::ShortcutPrompt => {
+                if self.ctrl_c_quit_hint {
+                    FooterMode::CtrlCReminder
+                } else if self.plan_mode {
+                    // Keep footer visible for Plan Mode regardless of textbox content.
+                    FooterMode::ShortcutPrompt
+                } else if !self.is_empty() {
+                    FooterMode::Empty
+                } else {
+                    FooterMode::ShortcutPrompt
+                }
+            }
             other => other,
         }
     }

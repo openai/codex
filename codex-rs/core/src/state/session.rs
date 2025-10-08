@@ -13,6 +13,9 @@ pub(crate) struct SessionState {
     pub(crate) history: ConversationHistory,
     pub(crate) token_info: Option<TokenUsageInfo>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    // Tracks current Plan Mode and the last state for which a notice was emitted.
+    pub(crate) plan_mode: bool,
+    pub(crate) last_emitted_plan_mode: Option<bool>,
 }
 
 impl SessionState {

@@ -18,6 +18,7 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<u8>,
+    pub(crate) plan_mode: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,7 +78,9 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             is_task_running: props.is_task_running,
         })],
         FooterMode::ShortcutPrompt => {
-            if props.is_task_running {
+            if props.plan_mode {
+                vec![plan_mode_line()]
+            } else if props.is_task_running {
                 vec![context_window_line(props.context_window_percent)]
             } else {
                 vec![Line::from(vec![
@@ -231,6 +234,10 @@ fn context_window_line(percent: Option<u8>) -> Line<'static> {
         }
     }
     Line::from(spans)
+}
+
+fn plan_mode_line() -> Line<'static> {
+    Line::from(vec![">> Plan Mode".cyan()])
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -407,6 +414,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                plan_mode: false,
             },
         );
 
@@ -418,6 +426,7 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 context_window_percent: None,
+                plan_mode: false,
             },
         );
 
@@ -429,6 +438,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                plan_mode: false,
             },
         );
 
@@ -440,6 +450,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: None,
+                plan_mode: false,
             },
         );
 
@@ -451,6 +462,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                plan_mode: false,
             },
         );
 
@@ -462,6 +474,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                plan_mode: false,
             },
         );
 
@@ -473,6 +486,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: Some(72),
+                plan_mode: false,
             },
         );
     }
