@@ -12,6 +12,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -82,7 +83,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            serde_json::json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(
                 first_call_id,
                 "unified_exec",
@@ -91,7 +92,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             ev_completed("resp-1"),
         ]),
         sse(vec![
-            serde_json::json!({"type": "response.created", "response": {"id": "resp-2"}}),
+            ev_response_created("resp-2"),
             ev_function_call(
                 second_call_id,
                 "unified_exec",
@@ -198,7 +199,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 
     let responses = vec![
         sse(vec![
-            serde_json::json!({"type": "response.created", "response": {"id": "resp-1"}}),
+            ev_response_created("resp-1"),
             ev_function_call(
                 first_call_id,
                 "unified_exec",
@@ -207,7 +208,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             ev_completed("resp-1"),
         ]),
         sse(vec![
-            serde_json::json!({"type": "response.created", "response": {"id": "resp-2"}}),
+            ev_response_created("resp-2"),
             ev_function_call(
                 second_call_id,
                 "unified_exec",

@@ -15,6 +15,7 @@ use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
@@ -134,12 +135,16 @@ impl StatusIndicatorWidget {
         self.frame_requester.schedule_frame();
     }
 
-    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+    fn elapsed_duration_at(&self, now: Instant) -> Duration {
         let mut elapsed = self.elapsed_running;
         if !self.is_paused {
             elapsed += now.saturating_duration_since(self.last_resume_at);
         }
-        elapsed.as_secs()
+        elapsed
+    }
+
+    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+        self.elapsed_duration_at(now).as_secs()
     }
 
     pub fn elapsed_seconds(&self) -> u64 {
@@ -156,11 +161,14 @@ impl WidgetRef for StatusIndicatorWidget {
         // Schedule next animation frame.
         self.frame_requester
             .schedule_frame_in(Duration::from_millis(32));
-        let elapsed = self.elapsed_seconds();
-        let pretty_elapsed = fmt_elapsed_compact(elapsed);
+        let now = Instant::now();
+        let elapsed_duration = self.elapsed_duration_at(now);
+        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let mut spans = vec!["• ".dim()];
+        let mut spans = Vec::with_capacity(5);
+        spans.push(spinner(Some(self.last_resume_at)));
+        spans.push(" ".into());
         spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),

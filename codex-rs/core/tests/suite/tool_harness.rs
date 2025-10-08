@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
+use assert_matches::assert_matches;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -8,12 +9,14 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::plan_tool::StepStatus;
+use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_apply_patch_function_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_local_shell_call;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -24,28 +27,12 @@ use serde_json::Value;
 use serde_json::json;
 use wiremock::matchers::any;
 
-fn function_call_output(body: &Value) -> Option<&Value> {
-    body.get("input")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("type").and_then(Value::as_str) == Some("function_call_output")
-            })
-        })
-}
-
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
         Value::String(text) => Some(text.as_str()),
         Value::Object(obj) => obj.get("content").and_then(Value::as_str),
         _ => None,
     })
-}
-
-fn find_request_with_function_call_output(requests: &[Value]) -> Option<&Value> {
-    requests
-        .iter()
-        .find(|body| function_call_output(body).is_some())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -68,10 +55,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
     let call_id = "shell-tool-call";
     let command = vec!["/bin/echo", "tool harness"];
     let first_response = sse(vec![
-        serde_json::json!({
-            "type": "response.created",
-            "response": {"id": "resp-1"}
-        }),
+        ev_response_created("resp-1"),
         ev_local_shell_call(call_id, "completed", command),
         ev_completed("resp-1"),
     ]);
@@ -81,7 +65,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
         ev_assistant_message("msg-1", "all done"),
         ev_completed("resp-2"),
     ]);
-    responses::mount_sse_once_match(&server, any(), second_response).await;
+    let second_mock = responses::mount_sse_once_match(&server, any(), second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -102,25 +86,13 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let request_bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let body_with_tool_output = find_request_with_function_call_output(&request_bodies)
-        .expect("function_call_output item not found in requests");
-    let output_item = function_call_output(body_with_tool_output).expect("tool output item");
-    let output_text = extract_output_text(output_item).expect("output text present");
+    let req = second_mock.single_request();
+    let output_item = req.function_call_output(call_id);
+    let output_text = extract_output_text(&output_item).expect("output text present");
     let exec_output: Value = serde_json::from_str(output_text)?;
     assert_eq!(exec_output["metadata"]["exit_code"], 0);
     let stdout = exec_output["output"].as_str().expect("stdout field");
-    assert!(
-        stdout.contains("tool harness"),
-        "expected stdout to contain command output, got {stdout:?}"
-    );
+    assert_regex_match(r"(?s)^tool harness\n?$", stdout);
 
     Ok(())
 }
@@ -152,10 +124,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     .to_string();
 
     let first_response = sse(vec![
-        serde_json::json!({
-            "type": "response.created",
-            "response": {"id": "resp-1"}
-        }),
+        ev_response_created("resp-1"),
         ev_function_call(call_id, "update_plan", &plan_args),
         ev_completed("resp-1"),
     ]);
@@ -165,7 +134,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "plan acknowledged"),
         ev_completed("resp-2"),
     ]);
-    responses::mount_sse_once_match(&server, any(), second_response).await;
+    let second_mock = responses::mount_sse_once_match(&server, any(), second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -191,9 +160,9 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             assert_eq!(update.explanation.as_deref(), Some("Tool harness check"));
             assert_eq!(update.plan.len(), 2);
             assert_eq!(update.plan[0].step, "Inspect workspace");
-            assert!(matches!(update.plan[0].status, StepStatus::InProgress));
+            assert_matches!(update.plan[0].status, StepStatus::InProgress);
             assert_eq!(update.plan[1].step, "Report results");
-            assert!(matches!(update.plan[1].status, StepStatus::Pending));
+            assert_matches!(update.plan[1].status, StepStatus::Pending);
             false
         }
         EventMsg::TaskComplete(_) => true,
@@ -203,22 +172,13 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
 
     assert!(saw_plan_update, "expected PlanUpdate event");
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let request_bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let body_with_tool_output = find_request_with_function_call_output(&request_bodies)
-        .expect("function_call_output item not found in requests");
-    let output_item = function_call_output(body_with_tool_output).expect("tool output item");
+    let req = second_mock.single_request();
+    let output_item = req.function_call_output(call_id);
     assert_eq!(
         output_item.get("call_id").and_then(Value::as_str),
         Some(call_id)
     );
-    let output_text = extract_output_text(output_item).expect("output text present");
+    let output_text = extract_output_text(&output_item).expect("output text present");
     assert_eq!(output_text, "Plan updated");
 
     Ok(())
@@ -247,10 +207,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     .to_string();
 
     let first_response = sse(vec![
-        serde_json::json!({
-            "type": "response.created",
-            "response": {"id": "resp-1"}
-        }),
+        ev_response_created("resp-1"),
         ev_function_call(call_id, "update_plan", &invalid_args),
         ev_completed("resp-1"),
     ]);
@@ -260,7 +217,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "malformed plan payload"),
         ev_completed("resp-2"),
     ]);
-    responses::mount_sse_once_match(&server, any(), second_response).await;
+    let second_mock = responses::mount_sse_once_match(&server, any(), second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -295,22 +252,13 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
         "did not expect PlanUpdate event for malformed payload"
     );
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let request_bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let body_with_tool_output = find_request_with_function_call_output(&request_bodies)
-        .expect("function_call_output item not found in requests");
-    let output_item = function_call_output(body_with_tool_output).expect("tool output item");
+    let req = second_mock.single_request();
+    let output_item = req.function_call_output(call_id);
     assert_eq!(
         output_item.get("call_id").and_then(Value::as_str),
         Some(call_id)
     );
-    let output_text = extract_output_text(output_item).expect("output text present");
+    let output_text = extract_output_text(&output_item).expect("output text present");
     assert!(
         output_text.contains("failed to parse function arguments"),
         "expected parse error message in output text, got {output_text:?}"
@@ -353,10 +301,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
 *** End Patch"#;
 
     let first_response = sse(vec![
-        serde_json::json!({
-            "type": "response.created",
-            "response": {"id": "resp-1"}
-        }),
+        ev_response_created("resp-1"),
         ev_apply_patch_function_call(call_id, patch_content),
         ev_completed("resp-1"),
     ]);
@@ -366,7 +311,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
         ev_assistant_message("msg-1", "patch complete"),
         ev_completed("resp-2"),
     ]);
-    responses::mount_sse_once_match(&server, any(), second_response).await;
+    let second_mock = responses::mount_sse_once_match(&server, any(), second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -407,22 +352,13 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     let patch_end_success =
         patch_end_success.expect("expected PatchApplyEnd event to capture success flag");
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let request_bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let body_with_tool_output = find_request_with_function_call_output(&request_bodies)
-        .expect("function_call_output item not found in requests");
-    let output_item = function_call_output(body_with_tool_output).expect("tool output item");
+    let req = second_mock.single_request();
+    let output_item = req.function_call_output(call_id);
     assert_eq!(
         output_item.get("call_id").and_then(Value::as_str),
         Some(call_id)
     );
-    let output_text = extract_output_text(output_item).expect("output text present");
+    let output_text = extract_output_text(&output_item).expect("output text present");
 
     if let Ok(exec_output) = serde_json::from_str::<Value>(output_text) {
         let exit_code = exec_output["metadata"]["exit_code"]
@@ -482,10 +418,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
 *** End Patch";
 
     let first_response = sse(vec![
-        serde_json::json!({
-            "type": "response.created",
-            "response": {"id": "resp-1"}
-        }),
+        ev_response_created("resp-1"),
         ev_apply_patch_function_call(call_id, patch_content),
         ev_completed("resp-1"),
     ]);
@@ -495,7 +428,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "failed"),
         ev_completed("resp-2"),
     ]);
-    responses::mount_sse_once_match(&server, any(), second_response).await;
+    let second_mock = responses::mount_sse_once_match(&server, any(), second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -516,22 +449,13 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let request_bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let body_with_tool_output = find_request_with_function_call_output(&request_bodies)
-        .expect("function_call_output item not found in requests");
-    let output_item = function_call_output(body_with_tool_output).expect("tool output item");
+    let req = second_mock.single_request();
+    let output_item = req.function_call_output(call_id);
     assert_eq!(
         output_item.get("call_id").and_then(Value::as_str),
         Some(call_id)
     );
-    let output_text = extract_output_text(output_item).expect("output text present");
+    let output_text = extract_output_text(&output_item).expect("output text present");
 
     assert!(
         output_text.contains("apply_patch verification failed"),

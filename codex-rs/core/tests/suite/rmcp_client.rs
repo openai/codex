@@ -47,10 +47,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         &server,
         any(),
         responses::sse(vec![
-            serde_json::json!({
-                "type": "response.created",
-                "response": {"id": "resp-1"}
-            }),
+            responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
             responses::ev_completed("resp-1"),
         ]),
@@ -184,10 +181,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         &server,
         any(),
         responses::sse(vec![
-            serde_json::json!({
-                "type": "response.created",
-                "response": {"id": "resp-1"}
-            }),
+            responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
             responses::ev_completed("resp-1"),
         ]),
@@ -238,7 +232,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                 McpServerConfig {
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: server_url,
-                        bearer_token: None,
+                        bearer_token_env_var: None,
                     },
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
@@ -352,10 +346,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
         &server,
         any(),
         responses::sse(vec![
-            serde_json::json!({
-                "type": "response.created",
-                "response": {"id": "resp-1"}
-            }),
+            responses::ev_response_created("resp-1"),
             responses::ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
             responses::ev_completed("resp-1"),
         ]),
@@ -421,7 +412,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
                 McpServerConfig {
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: server_url,
-                        bearer_token: None,
+                        bearer_token_env_var: None,
                     },
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,

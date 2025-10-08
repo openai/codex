@@ -3,6 +3,8 @@ import { ThreadEvent, ThreadError, Usage } from "./events";
 import { CodexExec } from "./exec";
 import { ThreadItem } from "./items";
 import { ThreadOptions } from "./threadOptions";
+import { TurnOptions } from "./turnOptions";
+import { createOutputSchemaFile } from "./outputSchemaFile";
 
 /** Completed turn. */
 export type Turn = {
@@ -51,11 +53,15 @@ export class Thread {
   }
 
   /** Provides the input to the agent and streams events as they are produced during the turn. */
-  async runStreamed(input: string): Promise<StreamedTurn> {
-    return { events: this.runStreamedInternal(input) };
+  async runStreamed(input: string, turnOptions: TurnOptions = {}): Promise<StreamedTurn> {
+    return { events: this.runStreamedInternal(input, turnOptions) };
   }
 
-  private async *runStreamedInternal(input: string): AsyncGenerator<ThreadEvent> {
+  private async *runStreamedInternal(
+    input: string,
+    turnOptions: TurnOptions = {},
+  ): AsyncGenerator<ThreadEvent> {
+    const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);
     const options = this._threadOptions;
     const generator = this._exec.run({
       input,
@@ -66,24 +72,29 @@ export class Thread {
       sandboxMode: options?.sandboxMode,
       workingDirectory: options?.workingDirectory,
       skipGitRepoCheck: options?.skipGitRepoCheck,
+      outputSchemaFile: schemaPath,
     });
-    for await (const item of generator) {
-      let parsed: ThreadEvent;
-      try {
-        parsed = JSON.parse(item) as ThreadEvent;
-      } catch (error) {
-        throw new Error(`Failed to parse item: ${item}`, { cause: error });
+    try {
+      for await (const item of generator) {
+        let parsed: ThreadEvent;
+        try {
+          parsed = JSON.parse(item) as ThreadEvent;
+        } catch (error) {
+          throw new Error(`Failed to parse item: ${item}`, { cause: error });
+        }
+        if (parsed.type === "thread.started") {
+          this._id = parsed.thread_id;
+        }
+        yield parsed;
       }
-      if (parsed.type === "thread.started") {
-        this._id = parsed.thread_id;
-      }
-      yield parsed;
+    } finally {
+      await cleanup();
     }
   }
 
   /** Provides the input to the agent and returns the completed turn. */
-  async run(input: string): Promise<Turn> {
-    const generator = this.runStreamedInternal(input);
+  async run(input: string, turnOptions: TurnOptions = {}): Promise<Turn> {
+    const generator = this.runStreamedInternal(input, turnOptions);
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
     let usage: Usage | null = null;

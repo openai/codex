@@ -301,6 +301,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "assert_matches"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -871,6 +877,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "assert_matches",
  "pretty_assertions",
  "similar",
  "tempfile",
@@ -933,6 +940,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "assert_matches",
  "clap",
  "clap_complete",
  "codex-app-server",
@@ -980,12 +988,11 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "throbber-widgets-tui",
  "tokio",
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
- "unicode-width 0.1.14",
+ "unicode-width 0.2.1",
 ]
 
 [[package]]
@@ -1022,6 +1029,7 @@ dependencies = [
  "anyhow",
  "askama",
  "assert_cmd",
+ "assert_matches",
  "async-channel",
  "async-trait",
  "base64",
@@ -1162,6 +1170,7 @@ dependencies = [
 name = "codex-git-tooling"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "pretty_assertions",
  "tempfile",
  "thiserror 2.0.16",
@@ -1249,6 +1258,7 @@ dependencies = [
 name = "codex-ollama"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "async-stream",
  "bytes",
  "codex-core",
@@ -1367,6 +1377,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "assert_matches",
  "async-stream",
  "base64",
  "chrono",
@@ -1413,6 +1424,8 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tree-sitter-bash",
+ "tree-sitter-highlight",
  "unicode-segmentation",
  "unicode-width 0.2.1",
  "url",
@@ -1432,6 +1445,7 @@ dependencies = [
 name = "codex-utils-readiness"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "async-trait",
  "thiserror 2.0.16",
  "time",
@@ -1562,6 +1576,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "codex-core",
+ "regex-lite",
  "serde_json",
  "tempfile",
  "tokio",
@@ -4757,8 +4772,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.7.0"
-source = "git+https://github.com/modelcontextprotocol/rust-sdk?rev=c0b777c7f784ba2d456b03c2ec3b98c9b28b5e10#c0b777c7f784ba2d456b03c2ec3b98c9b28b5e10"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f35acda8f89fca5fd8c96cae3c6d5b4c38ea0072df4c8030915f3b5ff469c1c"
 dependencies = [
  "base64",
  "bytes",
@@ -4790,8 +4806,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "0.7.0"
-source = "git+https://github.com/modelcontextprotocol/rust-sdk?rev=c0b777c7f784ba2d456b03c2ec3b98c9b28b5e10#c0b777c7f784ba2d456b03c2ec3b98c9b28b5e10"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9f1d5220aaa23b79c3d02e18f7a554403b3ccea544bbb6c69d6bcb3e854a274"
 dependencies = [
  "darling 0.21.3",
  "proc-macro2",
@@ -5828,16 +5845,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "throbber-widgets-tui"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d36b5738d666a2b4c91b7c24998a8588db724b3107258343ebf8824bf55b06d"
-dependencies = [
- "rand 0.8.5",
- "ratatui",
-]
-
-[[package]]
 name = "tiff"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6014,6 +6021,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
@@ -6255,9 +6263,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.25.9"
+version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccd2a058a86cfece0bf96f7cce1021efef9c8ed0e892ab74639173e5ed7a34fa"
+checksum = "78f873475d258561b06f1c595d93308a7ed124d9977cb26b148c2084a4a3cc87"
 dependencies = [
  "cc",
  "regex",
@@ -6275,6 +6283,18 @@ checksum = "871b0606e667e98a1237ebdc1b0d7056e0aebfdc3141d12b399865d4cb6ed8a6"
 dependencies = [
  "cc",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-highlight"
+version = "0.25.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adc5f880ad8d8f94e88cb81c3557024cf1a8b75e3b504c50481ed4f5a6006ff3"
+dependencies = [
+ "regex",
+ "streaming-iterator",
+ "thiserror 2.0.16",
+ "tree-sitter",
 ]
 
 [[package]]

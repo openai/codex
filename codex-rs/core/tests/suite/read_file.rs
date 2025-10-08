@@ -10,6 +10,7 @@ use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -47,10 +48,7 @@ async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
     .to_string();
 
     let first_response = sse(vec![
-        serde_json::json!({
-            "type": "response.created",
-            "response": {"id": "resp-1"}
-        }),
+        ev_response_created("resp-1"),
         ev_function_call(call_id, "read_file", &arguments),
         ev_completed("resp-1"),
     ]);
@@ -60,7 +58,7 @@ async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    responses::mount_sse_once_match(&server, any(), second_response).await;
+    let second_mock = responses::mount_sse_once_match(&server, any(), second_response).await;
 
     let session_model = session_configured.model.clone();
 
@@ -81,36 +79,12 @@ async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    let request_bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().unwrap())
-        .collect::<Vec<_>>();
-    assert!(
-        !request_bodies.is_empty(),
-        "expected at least one request body"
-    );
-
-    let tool_output_item = request_bodies
-        .iter()
-        .find_map(|body| {
-            body.get("input")
-                .and_then(Value::as_array)
-                .and_then(|items| {
-                    items.iter().find(|item| {
-                        item.get("type").and_then(Value::as_str) == Some("function_call_output")
-                    })
-                })
-        })
-        .unwrap_or_else(|| {
-            panic!("function_call_output item not found in requests: {request_bodies:#?}")
-        });
-
+    let req = second_mock.single_request();
+    let tool_output_item = req.function_call_output(call_id);
     assert_eq!(
         tool_output_item.get("call_id").and_then(Value::as_str),
         Some(call_id)
     );
-
     let output_text = tool_output_item
         .get("output")
         .and_then(|value| match value {

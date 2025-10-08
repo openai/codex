@@ -932,6 +932,7 @@ fn is_context_window_error(error: &Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use serde_json::json;
     use tokio::sync::mpsc;
     use tokio_test::io::Builder as IoBuilder;
@@ -1391,10 +1392,7 @@ mod tests {
         let resp: ErrorResponse =
             serde_json::from_str(json).expect("should deserialize old schema");
 
-        assert!(matches!(
-            resp.error.plan_type,
-            Some(PlanType::Known(KnownPlan::Pro))
-        ));
+        assert_matches!(resp.error.plan_type, Some(PlanType::Known(KnownPlan::Pro)));
 
         let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
         assert_eq!(plan_json, "\"pro\"");
@@ -1409,7 +1407,7 @@ mod tests {
         let resp: ErrorResponse =
             serde_json::from_str(json).expect("should deserialize old schema");
 
-        assert!(matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip"));
+        assert_matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip");
 
         let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
         assert_eq!(plan_json, "\"vip\"");
