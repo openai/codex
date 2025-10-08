@@ -100,6 +100,7 @@ mod imp {
     use windows::Win32::Foundation::GetLastError;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Foundation::HLOCAL;
+    use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Foundation::LocalFree;
     use windows::Win32::Foundation::NTSTATUS;
     use windows::Win32::Foundation::WAIT_OBJECT_0;
@@ -132,8 +133,13 @@ mod imp {
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+    use windows::Win32::System::Console::GetStdHandle;
+    use windows::Win32::System::Console::STD_ERROR_HANDLE;
+    use windows::Win32::System::Console::STD_INPUT_HANDLE;
+    use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
     use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows::Win32::System::Threading::CreateProcessAsUserW;
+    use windows::Win32::System::Threading::DUPLICATE_HANDLE_OPTIONS;
     use windows::Win32::System::Threading::DUPLICATE_SAME_ACCESS;
     use windows::Win32::System::Threading::DuplicateHandle;
     use windows::Win32::System::Threading::GetCurrentProcess;
@@ -141,6 +147,7 @@ mod imp {
     use windows::Win32::System::Threading::OpenProcessToken;
     use windows::Win32::System::Threading::PROCESS_CREATION_FLAGS;
     use windows::Win32::System::Threading::PROCESS_INFORMATION;
+    use windows::Win32::System::Threading::STARTF_USESTDHANDLES;
     use windows::Win32::System::Threading::STARTUPINFOW;
     use windows::Win32::System::Threading::WaitForSingleObject;
     use windows::core::PCWSTR;
@@ -244,16 +251,14 @@ mod imp {
                 process_info.as_mut_ptr(),
             )
             .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
-            unsafe {
-                if !startup_info.hStdInput.is_invalid() {
-                    let _ = CloseHandle(startup_info.hStdInput);
-                }
-                if !startup_info.hStdOutput.is_invalid() {
-                    let _ = CloseHandle(startup_info.hStdOutput);
-                }
-                if !startup_info.hStdError.is_invalid() {
-                    let _ = CloseHandle(startup_info.hStdError);
-                }
+            if !startup_info.hStdInput.is_invalid() {
+                let _ = CloseHandle(startup_info.hStdInput);
+            }
+            if !startup_info.hStdOutput.is_invalid() {
+                let _ = CloseHandle(startup_info.hStdOutput);
+            }
+            if !startup_info.hStdError.is_invalid() {
+                let _ = CloseHandle(startup_info.hStdError);
             }
         }
 
@@ -290,7 +295,7 @@ mod imp {
             &mut out,
             0,
             true, // make inheritable
-            DUPLICATE_SAME_ACCESS,
+            DUPLICATE_HANDLE_OPTIONS(DUPLICATE_SAME_ACCESS.0),
         )
         .as_bool();
         if ok {
