@@ -234,6 +234,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     let new_entry = McpServerConfig {
         transport,
+        enabled: true,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
     };
@@ -365,6 +366,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
 
                 serde_json::json!({
                     "name": name,
+                    "enabled": cfg.enabled,
                     "transport": transport,
                     "startup_timeout_sec": cfg
                         .startup_timeout_sec
@@ -385,8 +387,8 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         return Ok(());
     }
 
-    let mut stdio_rows: Vec<[String; 4]> = Vec::new();
-    let mut http_rows: Vec<[String; 3]> = Vec::new();
+    let mut stdio_rows: Vec<[String; 5]> = Vec::new();
+    let mut http_rows: Vec<[String; 4]> = Vec::new();
 
     for (name, cfg) in entries {
         match &cfg.transport {
@@ -409,23 +411,46 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                             .join(", ")
                     }
                 };
-                stdio_rows.push([name.clone(), command.clone(), args_display, env_display]);
+                let status = if cfg.enabled {
+                    "enabled".to_string()
+                } else {
+                    "disabled".to_string()
+                };
+                stdio_rows.push([
+                    name.clone(),
+                    command.clone(),
+                    args_display,
+                    env_display,
+                    status,
+                ]);
             }
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
             } => {
+                let status = if cfg.enabled {
+                    "enabled".to_string()
+                } else {
+                    "disabled".to_string()
+                };
                 http_rows.push([
                     name.clone(),
                     url.clone(),
                     bearer_token_env_var.clone().unwrap_or("-".to_string()),
+                    status,
                 ]);
             }
         }
     }
 
     if !stdio_rows.is_empty() {
-        let mut widths = ["Name".len(), "Command".len(), "Args".len(), "Env".len()];
+        let mut widths = [
+            "Name".len(),
+            "Command".len(),
+            "Args".len(),
+            "Env".len(),
+            "Status".len(),
+        ];
         for row in &stdio_rows {
             for (i, cell) in row.iter().enumerate() {
                 widths[i] = widths[i].max(cell.len());
@@ -433,28 +458,32 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         }
 
         println!(
-            "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
+            "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}  {:<status_w$}",
             "Name",
             "Command",
             "Args",
             "Env",
+            "Status",
             name_w = widths[0],
             cmd_w = widths[1],
             args_w = widths[2],
             env_w = widths[3],
+            status_w = widths[4],
         );
 
         for row in &stdio_rows {
             println!(
-                "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}",
+                "{:<name_w$}  {:<cmd_w$}  {:<args_w$}  {:<env_w$}  {:<status_w$}",
                 row[0],
                 row[1],
                 row[2],
                 row[3],
+                row[4],
                 name_w = widths[0],
                 cmd_w = widths[1],
                 args_w = widths[2],
                 env_w = widths[3],
+                status_w = widths[4],
             );
         }
     }
@@ -464,7 +493,12 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     if !http_rows.is_empty() {
-        let mut widths = ["Name".len(), "Url".len(), "Bearer Token Env Var".len()];
+        let mut widths = [
+            "Name".len(),
+            "Url".len(),
+            "Bearer Token Env Var".len(),
+            "Status".len(),
+        ];
         for row in &http_rows {
             for (i, cell) in row.iter().enumerate() {
                 widths[i] = widths[i].max(cell.len());
@@ -472,24 +506,28 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         }
 
         println!(
-            "{:<name_w$}  {:<url_w$}  {:<token_w$}",
+            "{:<name_w$}  {:<url_w$}  {:<token_w$}  {:<status_w$}",
             "Name",
             "Url",
             "Bearer Token Env Var",
+            "Status",
             name_w = widths[0],
             url_w = widths[1],
             token_w = widths[2],
+            status_w = widths[3],
         );
 
         for row in &http_rows {
             println!(
-                "{:<name_w$}  {:<url_w$}  {:<token_w$}",
+                "{:<name_w$}  {:<url_w$}  {:<token_w$}  {:<status_w$}",
                 row[0],
                 row[1],
                 row[2],
+                row[3],
                 name_w = widths[0],
                 url_w = widths[1],
                 token_w = widths[2],
+                status_w = widths[3],
             );
         }
     }
@@ -526,6 +564,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         };
         let output = serde_json::to_string_pretty(&serde_json::json!({
             "name": get_args.name,
+            "enabled": server.enabled,
             "transport": transport,
             "startup_timeout_sec": server
                 .startup_timeout_sec
@@ -539,6 +578,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     }
 
     println!("{}", get_args.name);
+    println!("  enabled: {}", server.enabled);
     match &server.transport {
         McpServerTransportConfig::Stdio { command, args, env } => {
             println!("  transport: stdio");

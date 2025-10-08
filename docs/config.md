@@ -384,6 +384,8 @@ For oauth login, you must enable `experimental_use_rmcp_client = true` and then 
 startup_timeout_sec = 20
 # Optional: override the default 60s per-tool timeout
 tool_timeout_sec = 30
+# Optional: disable a server without removing it
+enabled = false
 ```
 
 ### Experimental RMCP client
@@ -787,9 +789,12 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `disable_response_storage`                       | boolean                                                           | Required for ZDR orgs.                                                                                                     |
 | `notify`                                         | array<string>                                                     | External program for notifications.                                                                                        |
 | `instructions`                                   | string                                                            | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`.                                                    |
-| `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command.                                                                                               |
-| `mcp_servers.<id>.args`                          | array<string>                                                     | MCP server args.                                                                                                           |
-| `mcp_servers.<id>.env`                           | map<string,string>                                                | MCP server env vars.                                                                                                       |
+| `mcp_servers.<id>.command`                       | string                                                            | MCP server launcher command (stdio servers only).                                                                          |
+| `mcp_servers.<id>.args`                          | array<string>                                                     | MCP server args (stdio servers only).                                                                                      |
+| `mcp_servers.<id>.env`                           | map<string,string>                                                | MCP server env vars (stdio servers only).                                                                                  |
+| `mcp_servers.<id>.url`                           | string                                                            | MCP server url (streamable http servers only).                                                                             |
+| `mcp_servers.<id>.bearer_token_env_var`          | string                                                            | environment variable containing a bearer token to use for auth (streamable http servers only).                             |
+| `mcp_servers.<id>.enabled`                       | boolean                                                           | When false, Codex skips starting the server (default: true).                                                               |
 | `mcp_servers.<id>.startup_timeout_sec`           | number                                                            | Startup timeout in seconds (default: 10). Timeout is applied both for initializing MCP server and initially listing tools. |
 | `mcp_servers.<id>.tool_timeout_sec`              | number                                                            | Per-tool timeout in seconds (default: 60). Accepts fractional values; omit to use the default.                             |
 | `model_providers.<id>.name`                      | string                                                            | Display name.                                                                                                              |
