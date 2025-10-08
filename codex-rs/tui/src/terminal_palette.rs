@@ -11,7 +11,7 @@ pub fn best_color(target: (u8, u8, u8)) -> Color {
         #[allow(clippy::disallowed_methods)]
         Color::Rgb(r, g, b)
     } else if color_level.has_256
-        && let Some((i, _)) = xterm_fixed_colors().enumerate().min_by(|(_, a), (_, b)| {
+        && let Some((i, _)) = xterm_fixed_colors().min_by(|(_, a), (_, b)| {
             perceptual_distance(*a, target)
                 .partial_cmp(&perceptual_distance(*b, target))
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -236,8 +236,8 @@ mod imp {
 }
 
 /// The subset of Xterm colors that are usually consistent across terminals.
-pub fn xterm_fixed_colors() -> impl Iterator<Item = (u8, u8, u8)> {
-    XTERM_COLORS.into_iter().skip(16)
+fn xterm_fixed_colors() -> impl Iterator<Item = (usize, (u8, u8, u8))> {
+    XTERM_COLORS.into_iter().enumerate().skip(16)
 }
 
 // Xterm colors; derived from https://ss64.com/bash/syntax-colors.html
