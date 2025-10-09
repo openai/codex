@@ -310,11 +310,13 @@ mod tests {
         let mut stream = LiveExecStream::new();
         let preview = stream.push_chunk(ExecOutputStream::Stdout, b"foo");
         assert_eq!(preview.as_deref(), Some("foo"));
-        assert!(stream.lines_for_display().is_empty());
+        let mut lines = stream.lines_for_display();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "foo");
 
         let preview = stream.push_chunk(ExecOutputStream::Stdout, b"bar\nbaz\n");
         assert_eq!(preview.as_deref(), Some("baz"));
-        let lines = stream.lines_for_display();
+        lines = stream.lines_for_display();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].text, "foobar");
         assert_eq!(lines[1].text, "baz");
