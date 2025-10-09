@@ -392,11 +392,72 @@ fn create_read_file_tool() -> ToolSpec {
             description: Some("The maximum number of lines to return.".to_string()),
         },
     );
+    properties.insert(
+        "mode".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional mode selector: \"slice\" for simple ranges (default) or \"indentation\" \
+                 to expand around an anchor line."
+                    .to_string(),
+            ),
+        },
+    );
+
+    let mut indentation_properties = BTreeMap::new();
+    indentation_properties.insert(
+        "anchor_line".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Anchor line to center the indentation lookup on (defaults to offset).".to_string(),
+            ),
+        },
+    );
+    indentation_properties.insert(
+        "max_levels".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "How many parent indentation levels (smaller indents) to include.".to_string(),
+            ),
+        },
+    );
+    indentation_properties.insert(
+        "include_siblings".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, include additional blocks that share the anchor indentation."
+                    .to_string(),
+            ),
+        },
+    );
+    indentation_properties.insert(
+        "include_header".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Include doc comments or attributes directly above the selected block.".to_string(),
+            ),
+        },
+    );
+    indentation_properties.insert(
+        "max_lines".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Hard cap on the number of lines returned when using indentation mode.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "indentation".to_string(),
+        JsonSchema::Object {
+            properties: indentation_properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "read_file".to_string(),
         description:
-            "Reads a local file with 1-indexed line numbers and returns up to the requested number of lines."
+            "Reads a local file with 1-indexed line numbers, supporting slice and indentation-aware block modes."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
