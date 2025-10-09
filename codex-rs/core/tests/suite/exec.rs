@@ -118,7 +118,7 @@ async fn write_file_fails_as_sandbox_error() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let path = tmp.path().join("test.txt");
     let cmd = vec![
-        "/user/bin/touch",
+        "/usr/bin/touch",
         path.to_str().expect("should be able to get path"),
     ];
 
