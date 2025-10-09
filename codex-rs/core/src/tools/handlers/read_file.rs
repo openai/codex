@@ -502,9 +502,14 @@ mod tests {
     async fn reads_requested_range() -> anyhow::Result<()> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
-        writeln!(temp, "alpha")?;
-        writeln!(temp, "beta")?;
-        writeln!(temp, "gamma")?;
+        write!(
+            temp,
+            "{}",
+            r#"alpha
+beta
+gamma
+"#
+        )?;
 
         let lines = read(temp.path(), 2, 2).await?;
         assert_eq!(lines, vec!["L2: beta".to_string(), "L3: gamma".to_string()]);
@@ -554,9 +559,14 @@ mod tests {
     async fn respects_limit_even_with_more_lines() -> anyhow::Result<()> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
-        writeln!(temp, "first")?;
-        writeln!(temp, "second")?;
-        writeln!(temp, "third")?;
+        write!(
+            temp,
+            "{}",
+            r#"first
+second
+third
+"#
+        )?;
 
         let lines = read(temp.path(), 1, 2).await?;
         assert_eq!(
@@ -583,12 +593,17 @@ mod tests {
     async fn indentation_mode_captures_block() -> anyhow::Result<()> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
-        writeln!(temp, "fn outer() {{")?;
-        writeln!(temp, "    if cond {{")?;
-        writeln!(temp, "        inner();")?;
-        writeln!(temp, "    }}")?;
-        writeln!(temp, "    tail();")?;
-        writeln!(temp, "}}")?;
+        write!(
+            temp,
+            "{}",
+            r#"fn outer() {
+    if cond {
+        inner();
+    }
+    tail();
+}
+"#
+        )?;
 
         let options = IndentationArgs {
             anchor_line: Some(3),
@@ -614,13 +629,18 @@ mod tests {
     async fn indentation_mode_expands_parents() -> anyhow::Result<()> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
-        writeln!(temp, "mod root {{")?;
-        writeln!(temp, "    fn outer() {{")?;
-        writeln!(temp, "        if cond {{")?;
-        writeln!(temp, "            inner();")?;
-        writeln!(temp, "        }}")?;
-        writeln!(temp, "    }}")?;
-        writeln!(temp, "}}")?;
+        write!(
+            temp,
+            "{}",
+            r#"mod root {
+    fn outer() {
+        if cond {
+            inner();
+        }
+    }
+}
+"#
+        )?;
 
         let mut options = IndentationArgs {
             anchor_line: Some(4),
@@ -661,14 +681,19 @@ mod tests {
     async fn indentation_mode_respects_sibling_flag() -> anyhow::Result<()> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
-        writeln!(temp, "fn wrapper() {{")?;
-        writeln!(temp, "    if first {{")?;
-        writeln!(temp, "        do_first();")?;
-        writeln!(temp, "    }}")?;
-        writeln!(temp, "    if second {{")?;
-        writeln!(temp, "        do_second();")?;
-        writeln!(temp, "    }}")?;
-        writeln!(temp, "}}")?;
+        write!(
+            temp,
+            "{}",
+            r#"fn wrapper() {
+    if first {
+        do_first();
+    }
+    if second {
+        do_second();
+    }
+}
+"#
+        )?;
 
         let mut options = IndentationArgs {
             anchor_line: Some(3),
@@ -707,18 +732,23 @@ mod tests {
     async fn indentation_mode_handles_python_sample() -> anyhow::Result<()> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
-        writeln!(temp, "class Foo:")?;
-        writeln!(temp, "    def __init__(self, size):")?;
-        writeln!(temp, "        self.size = size")?;
-        writeln!(temp, "    def double(self, value):")?;
-        writeln!(temp, "        if value is None:")?;
-        writeln!(temp, "            return 0")?;
-        writeln!(temp, "        result = value * self.size")?;
-        writeln!(temp, "        return result")?;
-        writeln!(temp, "class Bar:")?;
-        writeln!(temp, "    def compute(self):")?;
-        writeln!(temp, "        helper = Foo(2)")?;
-        writeln!(temp, "        return helper.double(5)")?;
+        write!(
+            temp,
+            "{}",
+            r#"class Foo:
+    def __init__(self, size):
+        self.size = size
+    def double(self, value):
+        if value is None:
+            return 0
+        result = value * self.size
+        return result
+class Bar:
+    def compute(self):
+        helper = Foo(2)
+        return helper.double(5)
+"#
+        )?;
 
         let options = IndentationArgs {
             anchor_line: Some(7),
@@ -748,30 +778,35 @@ mod tests {
     async fn indentation_mode_handles_javascript_sample() -> anyhow::Result<()> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
-        writeln!(temp, "export function makeThing() {{")?;
-        writeln!(temp, "    const cache = new Map();")?;
-        writeln!(temp, "    function ensure(key) {{")?;
-        writeln!(temp, "        if (!cache.has(key)) {{")?;
-        writeln!(temp, "            cache.set(key, []);")?;
-        writeln!(temp, "        }}")?;
-        writeln!(temp, "        return cache.get(key);")?;
-        writeln!(temp, "    }}")?;
-        writeln!(temp, "    const handlers = {{")?;
-        writeln!(temp, "        init() {{")?;
-        writeln!(temp, "            console.log(\"init\");")?;
-        writeln!(temp, "        }},")?;
-        writeln!(temp, "        run() {{")?;
-        writeln!(temp, "            if (Math.random() > 0.5) {{")?;
-        writeln!(temp, "                return \"heads\";")?;
-        writeln!(temp, "            }}")?;
-        writeln!(temp, "            return \"tails\";")?;
-        writeln!(temp, "        }},")?;
-        writeln!(temp, "    }};")?;
-        writeln!(temp, "    return {{ cache, handlers }};")?;
-        writeln!(temp, "}}")?;
-        writeln!(temp, "export function other() {{")?;
-        writeln!(temp, "    return makeThing();")?;
-        writeln!(temp, "}}")?;
+        write!(
+            temp,
+            "{}",
+            r#"export function makeThing() {
+    const cache = new Map();
+    function ensure(key) {
+        if (!cache.has(key)) {
+            cache.set(key, []);
+        }
+        return cache.get(key);
+    }
+    const handlers = {
+        init() {
+            console.log("init");
+        },
+        run() {
+            if (Math.random() > 0.5) {
+                return "heads";
+            }
+            return "tails";
+        },
+    };
+    return { cache, handlers };
+}
+export function other() {
+    return makeThing();
+}
+"#
+        )?;
 
         let options = IndentationArgs {
             anchor_line: Some(15),
@@ -800,39 +835,44 @@ mod tests {
     fn write_cpp_sample() -> anyhow::Result<NamedTempFile> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
-        writeln!(temp, "#include <vector>")?;
-        writeln!(temp, "#include <string>")?;
-        writeln!(temp)?;
-        writeln!(temp, "namespace sample {{")?;
-        writeln!(temp, "class Runner {{")?;
-        writeln!(temp, "public:")?;
-        writeln!(temp, "    void setup() {{")?;
-        writeln!(temp, "        if (enabled_) {{")?;
-        writeln!(temp, "            init();")?;
-        writeln!(temp, "        }}")?;
-        writeln!(temp, "    }}")?;
-        writeln!(temp)?;
-        writeln!(temp, "    // Run the code")?;
-        writeln!(temp, "    int run() const {{")?;
-        writeln!(temp, "        switch (mode_) {{")?;
-        writeln!(temp, "            case Mode::Fast:")?;
-        writeln!(temp, "                return fast();")?;
-        writeln!(temp, "            case Mode::Slow:")?;
-        writeln!(temp, "                return slow();")?;
-        writeln!(temp, "            default:")?;
-        writeln!(temp, "                return fallback();")?;
-        writeln!(temp, "        }}")?;
-        writeln!(temp, "    }}")?;
-        writeln!(temp)?;
-        writeln!(temp, "private:")?;
-        writeln!(temp, "    bool enabled_ = false;")?;
-        writeln!(temp, "    Mode mode_ = Mode::Fast;")?;
-        writeln!(temp)?;
-        writeln!(temp, "    int fast() const {{")?;
-        writeln!(temp, "        return 1;")?;
-        writeln!(temp, "    }}")?;
-        writeln!(temp, "}};")?;
-        writeln!(temp, "}}  // namespace sample")?;
+        write!(
+            temp,
+            "{}",
+            r#"#include <vector>
+#include <string>
+
+namespace sample {
+class Runner {
+public:
+    void setup() {
+        if (enabled_) {
+            init();
+        }
+    }
+
+    // Run the code
+    int run() const {
+        switch (mode_) {
+            case Mode::Fast:
+                return fast();
+            case Mode::Slow:
+                return slow();
+            default:
+                return fallback();
+        }
+    }
+
+private:
+    bool enabled_ = false;
+    Mode mode_ = Mode::Fast;
+
+    int fast() const {
+        return 1;
+    }
+};
+}  // namespace sample
+"#
+        )?;
         Ok(temp)
     }
 
