@@ -101,4 +101,3 @@ wheel/sdist with `uv build` (or `python -m build`). The `vendor/` directory is
 ignored by git aside from its README, so remember to run the script before
 cutting a release.
 
-See `docs/bundling.md` (planned) for refreshing CLI binaries.
