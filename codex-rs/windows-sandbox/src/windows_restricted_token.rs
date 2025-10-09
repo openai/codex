@@ -332,7 +332,7 @@ mod imp {
                 .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
             let process_guard = HandleGuard::new(process_token);
 
-            // Optionally disable some well-known SIDs (still fine to keep this list).
+            // Optional: disable some well-known SIDs (deny-only)
             let disable_sid_types = [
                 WELL_KNOWN_SID_TYPE::WinBuiltinAdministratorsSid,
                 WELL_KNOWN_SID_TYPE::WinLocalSystemSid,
@@ -350,12 +350,10 @@ mod imp {
                 .iter()
                 .map(|sid| SID_AND_ATTRIBUTES {
                     Sid: sid.as_psid(),
-                    // Deny-only disables group usage
                     Attributes: windows::Win32::Security::SE_GROUP_USE_FOR_DENY_ONLY,
                 })
                 .collect();
 
-            // Create restricted token using flags; no explicit "restrict-to" SID set is required.
             let mut new_token = HANDLE::default();
             CreateRestrictedToken(
                 process_guard.handle(),
@@ -373,7 +371,7 @@ mod imp {
             )
             .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
 
-            // Read the TokenUser SID from the *new* token; we’ll use it for ACL and firewall scoping.
+            // Read TokenUser SID from the new token.
             let user_sid_bytes = query_token_user_sid(new_token)?;
             let restricted_sid = Arc::new(TokenSid::from_bytes(user_sid_bytes));
 
@@ -387,7 +385,6 @@ mod imp {
     /// Read TOKEN_USER SID for the given token.
     fn query_token_user_sid(token: HANDLE) -> io::Result<Vec<u8>> {
         unsafe {
-            // First call to get required length
             let mut needed: u32 = 0;
             let _ = windows::Win32::Security::GetTokenInformation(
                 token,
@@ -439,7 +436,6 @@ mod imp {
         }
 
         fn as_psid(&self) -> PSID {
-            // PSID expects *mut c_void; our buffer is immutable, but we never mutate via PSID.
             PSID(self.buffer.as_ptr() as *mut _)
         }
     }
@@ -466,7 +462,6 @@ mod imp {
                 let s = if pwstr.is_null() {
                     String::new()
                 } else {
-                    // Compute length until NUL and build String
                     let mut len = 0usize;
                     while *pwstr.0.add(len) != 0 {
                         len += 1;
@@ -727,12 +722,10 @@ mod imp {
             let explicit = EXPLICIT_ACCESS_W {
                 grfAccessPermissions: permissions,
                 grfAccessMode: mode,
-                // NOTE: inheritance flags live under Security, not Authorization.
                 grfInheritance: windows::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT
                     | windows::Win32::Security::OBJECT_INHERIT_ACE,
                 Trustee: TRUSTEE_W {
                     pMultipleTrustee: std::ptr::null_mut(),
-                    // No multiple trustee — this field is an enum newtype.
                     MultipleTrusteeOperation:
                         windows::Win32::Security::Authorization::MULTIPLE_TRUSTEE_OPERATION(0),
                     TrusteeForm: TRUSTEE_IS_SID,
@@ -813,7 +806,7 @@ mod imp {
             rule.SetName(&BSTR::from(rule_name.as_str()))?;
             rule.SetDescription(&BSTR::from("Codex sandbox network isolation"))?;
             rule.SetAction(NET_FW_ACTION_BLOCK)?;
-            // Use the newtype enum explicitly; 2 == OUTBOUND
+            // 2 == OUTBOUND
             rule.SetDirection(NET_FW_RULE_DIRECTION(2))?;
             rule.SetEnabled(VARIANT_TRUE)?;
             rule.SetProfiles(NET_FW_PROFILE2_ALL.0 as i32)?;
