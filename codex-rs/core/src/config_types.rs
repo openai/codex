@@ -12,8 +12,22 @@ use wildmatch::WildMatchPattern;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
+use tracing::warn;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
+pub const DEFAULT_MCP_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_MCP_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_MCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(45);
+const MIN_MCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const MAX_MCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(600);
+const MIN_MCP_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_MCP_STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+const MIN_MCP_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_MCP_TOOL_TIMEOUT: Duration = Duration::from_secs(600);
+const MCP_TOOL_TIMEOUT_HEADROOM: Duration = Duration::from_secs(15);
+const ENV_MCP_KEEPALIVE_INTERVAL: &str = "CODEX_MCP_KEEPALIVE_INTERVAL_SEC";
+const ENV_MCP_STARTUP_TIMEOUT: &str = "CODEX_MCP_STARTUP_TIMEOUT_SEC";
+const ENV_MCP_TOOL_TIMEOUT: &str = "CODEX_MCP_TOOL_TIMEOUT_SEC";
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -35,6 +49,17 @@ pub struct McpServerConfig {
     /// Default timeout for MCP tool calls initiated via this server.
     #[serde(default, with = "option_duration_secs")]
     pub tool_timeout_sec: Option<Duration>,
+
+    /// Override for the cadence at which Codex emits client-side MCP keepalive
+    /// notifications. When unset, we stick with the management default that is
+    /// tuned to preempt the idle socket closes captured in
+    /// `docs/codex/analysis/codex-hang-correlation.md:18-45`.
+    #[serde(
+        default,
+        with = "option_duration_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub keepalive_interval_sec: Option<Duration>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -62,6 +87,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             tool_timeout_sec: Option<Duration>,
             #[serde(default)]
             enabled: Option<bool>,
+            #[serde(default, with = "option_duration_secs")]
+            keepalive_interval_sec: Option<Duration>,
         }
 
         let raw = RawMcpServerConfig::deserialize(deserializer)?;
@@ -134,12 +161,158 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             startup_timeout_sec,
             tool_timeout_sec: raw.tool_timeout_sec,
             enabled: raw.enabled.unwrap_or_else(default_enabled),
+            keepalive_interval_sec: raw.keepalive_interval_sec,
         })
     }
 }
 
 const fn default_enabled() -> bool {
     true
+}
+
+impl McpServerConfig {
+    pub fn keepalive_interval(&self) -> Option<Duration> {
+        if let Some(override_value) = env_keepalive_interval_override() {
+            return override_value;
+        }
+
+        match self.keepalive_interval_sec {
+            Some(duration) if duration.is_zero() => None,
+            Some(duration) => Some(clamp_duration(
+                "config.mcp.keepalive_interval_sec",
+                duration,
+                MIN_MCP_KEEPALIVE_INTERVAL,
+                MAX_MCP_KEEPALIVE_INTERVAL,
+            )),
+            None => Some(DEFAULT_MCP_KEEPALIVE_INTERVAL),
+        }
+    }
+
+    pub fn startup_timeout(&self) -> Duration {
+        let raw = env_duration_secs_clamped(
+            ENV_MCP_STARTUP_TIMEOUT,
+            MIN_MCP_STARTUP_TIMEOUT,
+            MAX_MCP_STARTUP_TIMEOUT,
+            "env.CODEX_MCP_STARTUP_TIMEOUT_SEC",
+        )
+        .or(self.startup_timeout_sec)
+        .unwrap_or(DEFAULT_MCP_STARTUP_TIMEOUT);
+
+        clamp_duration(
+            "config.mcp.startup_timeout_sec",
+            raw,
+            MIN_MCP_STARTUP_TIMEOUT,
+            MAX_MCP_STARTUP_TIMEOUT,
+        )
+    }
+
+    pub fn tool_timeout(&self, keepalive_interval: Option<Duration>) -> Duration {
+        let raw = env_duration_secs_clamped(
+            ENV_MCP_TOOL_TIMEOUT,
+            MIN_MCP_TOOL_TIMEOUT,
+            MAX_MCP_TOOL_TIMEOUT,
+            "env.CODEX_MCP_TOOL_TIMEOUT_SEC",
+        )
+        .or(self.tool_timeout_sec)
+        .unwrap_or(DEFAULT_MCP_TOOL_TIMEOUT);
+
+        let mut min_timeout = MIN_MCP_TOOL_TIMEOUT;
+        if let Some(interval) = keepalive_interval {
+            let guard = interval + MCP_TOOL_TIMEOUT_HEADROOM;
+            if guard > min_timeout {
+                min_timeout = guard;
+            }
+        }
+
+        clamp_duration(
+            "config.mcp.tool_timeout_sec",
+            raw,
+            min_timeout,
+            MAX_MCP_TOOL_TIMEOUT,
+        )
+    }
+}
+
+fn env_keepalive_interval_override() -> Option<Option<Duration>> {
+    match std::env::var(ENV_MCP_KEEPALIVE_INTERVAL) {
+        Ok(value) => match parse_env_duration_secs(&value) {
+            Ok(duration) => {
+                if duration.is_zero() {
+                    Some(None)
+                } else {
+                    Some(Some(clamp_duration(
+                        "env.CODEX_MCP_KEEPALIVE_INTERVAL_SEC",
+                        duration,
+                        MIN_MCP_KEEPALIVE_INTERVAL,
+                        MAX_MCP_KEEPALIVE_INTERVAL,
+                    )))
+                }
+            }
+            Err(err) => {
+                warn!(
+                    field = ENV_MCP_KEEPALIVE_INTERVAL,
+                    "invalid value '{value}': {err}"
+                );
+                None
+            }
+        },
+        Err(std::env::VarError::NotPresent) => None,
+        Err(err) => {
+            warn!(field = ENV_MCP_KEEPALIVE_INTERVAL, "{err}");
+            None
+        }
+    }
+}
+
+fn env_duration_secs_clamped(
+    key: &str,
+    min: Duration,
+    max: Duration,
+    field_label: &str,
+) -> Option<Duration> {
+    match std::env::var(key) {
+        Ok(value) => match parse_env_duration_secs(&value) {
+            Ok(duration) => Some(clamp_duration(field_label, duration, min, max)),
+            Err(err) => {
+                warn!(field = key, "invalid value '{value}': {err}");
+                None
+            }
+        },
+        Err(std::env::VarError::NotPresent) => None,
+        Err(err) => {
+            warn!(field = key, "{err}");
+            None
+        }
+    }
+}
+
+fn parse_env_duration_secs(raw: &str) -> Result<Duration, String> {
+    let secs: u64 = raw
+        .parse()
+        .map_err(|err| format!("invalid integer: {err}"))?;
+    Ok(Duration::from_secs(secs))
+}
+
+fn clamp_duration(field: &str, value: Duration, min: Duration, max: Duration) -> Duration {
+    if value < min {
+        warn!(
+            field = field,
+            requested_secs = value.as_secs(),
+            min_secs = min.as_secs(),
+            "clamping value below minimum"
+        );
+        min
+    } else if value > max {
+        warn!(
+            field = field,
+            requested_secs = value.as_secs(),
+            max_secs = max.as_secs(),
+            "clamping value above maximum"
+        );
+        max
+    } else {
+        value
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -453,6 +626,20 @@ pub enum ReasoningSummaryFormat {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::time::Duration;
+
+    fn base_stdio_config() -> McpServerConfig {
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "echo".into(),
+                args: Vec::new(),
+                env: None,
+            },
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            keepalive_interval_sec: None,
+        }
+    }
 
     #[test]
     fn deserialize_stdio_command_server_config() {
@@ -605,5 +792,39 @@ mod tests {
             err.to_string().contains("bearer_token is not supported"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn tool_timeout_clamps_below_keepalive_headroom() {
+        let mut cfg = base_stdio_config();
+        cfg.keepalive_interval_sec = Some(Duration::from_secs(45));
+        cfg.tool_timeout_sec = Some(Duration::from_secs(40));
+
+        let keepalive = cfg.keepalive_interval();
+        assert_eq!(keepalive, Some(Duration::from_secs(45)));
+
+        let effective = cfg.tool_timeout(keepalive);
+        assert_eq!(effective, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn tool_timeout_clamps_to_maximum() {
+        let mut cfg = base_stdio_config();
+        cfg.tool_timeout_sec = Some(Duration::from_secs(900));
+        let effective = cfg.tool_timeout(Some(Duration::from_secs(45)));
+        assert_eq!(effective, MAX_MCP_TOOL_TIMEOUT);
+    }
+
+    #[test]
+    fn startup_timeout_clamps_to_minimum() {
+        let mut cfg = base_stdio_config();
+        cfg.startup_timeout_sec = Some(Duration::from_secs(1));
+        assert_eq!(cfg.startup_timeout(), MIN_MCP_STARTUP_TIMEOUT);
+    }
+
+    #[test]
+    fn startup_timeout_defaults_when_unset() {
+        let cfg = base_stdio_config();
+        assert_eq!(cfg.startup_timeout(), DEFAULT_MCP_STARTUP_TIMEOUT);
     }
 }

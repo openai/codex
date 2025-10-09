@@ -148,14 +148,21 @@ impl OtelEventManager {
         response
     }
 
-    pub fn log_sse_event<E>(
+    pub async fn log_sse_event<Next, Fut, E>(
         &self,
-        response: &Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>,
-        duration: Duration,
-    ) where
+        next: Next,
+        suppress_idle_error: bool,
+    ) -> Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>
+    where
+        Next: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>>,
         E: Display,
     {
-        match response {
+        let start = std::time::Instant::now();
+        let response = next().await;
+        let duration = start.elapsed();
+
+        match &response {
             Ok(Some(Ok(sse))) => {
                 if sse.data.trim() == "[DONE]" {
                     self.sse_event(&sse.event, duration);
@@ -190,9 +197,13 @@ impl OtelEventManager {
             }
             Ok(None) => {}
             Err(_) => {
-                self.sse_event_failed(None, duration, &"idle timeout waiting for SSE");
+                if !suppress_idle_error {
+                    self.sse_event_failed(None, duration, &"idle timeout waiting for SSE");
+                }
             }
         }
+
+        response
     }
 
     fn sse_event(&self, kind: &str, duration: Duration) {
@@ -209,6 +220,23 @@ impl OtelEventManager {
             model = %self.metadata.model,
             slug = %self.metadata.slug,
             duration_ms = %duration.as_millis(),
+        );
+    }
+
+    pub fn sse_event_heartbeat(&self, interval: Duration) {
+        tracing::event!(
+            tracing::Level::INFO,
+            event.name = "codex.sse_event",
+            event.timestamp = %timestamp(),
+            event.kind = "heartbeat",
+            conversation.id = %self.metadata.conversation_id,
+            app.version = %self.metadata.app_version,
+            auth_mode = self.metadata.auth_mode,
+            user.account_id = self.metadata.account_id,
+            terminal.type = %self.metadata.terminal_type,
+            model = %self.metadata.model,
+            slug = %self.metadata.slug,
+            heartbeat.interval_ms = %interval.as_millis(),
         );
     }
 

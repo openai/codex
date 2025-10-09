@@ -39,6 +39,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+codex-otel = { workspace = true }
 sha2 = { workspace = true }
 dirs = { workspace = true }
 oauth2 = "5"

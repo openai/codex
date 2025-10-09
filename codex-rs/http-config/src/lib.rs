@@ -7,6 +7,7 @@ use reqwest::ClientBuilder;
 use tracing::warn;
 
 const DEFAULT_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(330);
+const MAX_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 const DEFAULT_TCP_KEEPALIVE: Duration = Duration::from_secs(30);
 const DEFAULT_HTTP2_KEEPALIVE: Duration = Duration::from_secs(30);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -14,6 +15,8 @@ const MIN_DURATION_MILLIS: u64 = 100;
 const MIN_DURATION_SECS: u64 = 1;
 
 const ENV_POOL_IDLE_MS: &str = "CODEX_HTTP_POOL_IDLE_MS";
+const ENV_POOL_IDLE_SECS: &str = "CODEX_HTTP_POOL_IDLE_S";
+const ENV_POOL_IDLE_TTL: &str = "CODEX_HTTP_IDLE_TTL";
 const ENV_TCP_KEEPALIVE_SECS: &str = "CODEX_TCP_KEEPALIVE_SECS";
 const ENV_HTTP2_KEEPALIVE_SECS: &str = "CODEX_HTTP2_KEEPALIVE_SECS";
 const ENV_CONNECT_TIMEOUT_SECS: &str = "CODEX_HTTP_CONNECT_TIMEOUT_SECS";
@@ -44,17 +47,57 @@ pub fn configure_builder(mut builder: ClientBuilder) -> ClientBuilder {
 }
 
 fn pool_idle_timeout() -> Option<Duration> {
+    if let Some(duration) = read_env_pool_idle_secs(ENV_POOL_IDLE_TTL) {
+        return Some(clamp_pool_idle(duration, ENV_POOL_IDLE_TTL));
+    }
+
+    if let Some(duration) = read_env_pool_idle_secs(ENV_POOL_IDLE_SECS) {
+        return Some(clamp_pool_idle(duration, ENV_POOL_IDLE_SECS));
+    }
+
     match read_duration_millis(
         ENV_POOL_IDLE_MS,
         DEFAULT_POOL_IDLE_TIMEOUT,
         MIN_DURATION_MILLIS,
     ) {
-        Ok(duration) => Some(duration),
+        Ok(duration) => Some(clamp_pool_idle(duration, "env.CODEX_HTTP_POOL_IDLE_MS")),
         Err(err) => {
             warn!(environment = ENV_POOL_IDLE_MS, "{err}");
             Some(DEFAULT_POOL_IDLE_TIMEOUT)
         }
     }
+}
+
+fn read_env_pool_idle_secs(key: &str) -> Option<Duration> {
+    match std::env::var(key) {
+        Ok(value) => match parse_duration_secs(&value, MIN_DURATION_SECS) {
+            Ok(duration) => Some(duration),
+            Err(err) => {
+                warn!(environment = key, "{err}");
+                None
+            }
+        },
+        Err(std::env::VarError::NotPresent) => None,
+        Err(err) => {
+            warn!(environment = key, "{err}");
+            None
+        }
+    }
+}
+
+fn clamp_pool_idle(duration: Duration, source: &str) -> Duration {
+    let min = Duration::from_millis(MIN_DURATION_MILLIS);
+    if duration < min {
+        warn!(field = source, requested_ms = duration.as_millis(), min_ms = MIN_DURATION_MILLIS, "clamping value below minimum");
+        return min;
+    }
+
+    if duration > MAX_POOL_IDLE_TIMEOUT {
+        warn!(field = source, requested_secs = duration.as_secs(), max_secs = MAX_POOL_IDLE_TIMEOUT.as_secs(), "clamping value above maximum");
+        return MAX_POOL_IDLE_TIMEOUT;
+    }
+
+    duration
 }
 
 fn tcp_keepalive() -> Duration {

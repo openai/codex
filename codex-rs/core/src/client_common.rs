@@ -204,6 +204,9 @@ pub enum ResponseEvent {
         call_id: String,
     },
     RateLimits(RateLimitSnapshot),
+    /// Synthetic heartbeat emitted when the streaming transport stays idle but the
+    /// connection is still considered healthy.
+    Heartbeat,
 }
 
 #[derive(Debug, Serialize)]

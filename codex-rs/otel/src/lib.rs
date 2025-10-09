@@ -1,5 +1,6 @@
 pub mod config;
 
+pub mod metrics;
 pub mod otel_event_manager;
 #[cfg(feature = "otel")]
 pub mod otel_provider;

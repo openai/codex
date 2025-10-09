@@ -3,10 +3,14 @@ use std::ffi::OsString;
 use std::io;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_otel::metrics;
 use futures::FutureExt;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -29,9 +33,10 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::info;
-use tracing::warn;
+use tokio::time::MissedTickBehavior;
+use tracing::{event, info, warn};
 
 use crate::load_oauth_tokens;
 use crate::logging_client_handler::LoggingClientHandler;
@@ -69,6 +74,8 @@ enum ClientState {
 /// https://github.com/modelcontextprotocol/rust-sdk
 pub struct RmcpClient {
     state: Mutex<ClientState>,
+    last_activity: Arc<AtomicU64>,
+    keepalive_handle: StdMutex<Option<JoinHandle<()>>>,
 }
 
 impl RmcpClient {
@@ -113,6 +120,8 @@ impl RmcpClient {
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(PendingTransport::ChildProcess(transport)),
             }),
+            last_activity: Arc::new(AtomicU64::new(now_millis())),
+            keepalive_handle: StdMutex::new(None),
         })
     }
 
@@ -153,6 +162,8 @@ impl RmcpClient {
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
             }),
+            last_activity: Arc::new(AtomicU64::new(now_millis())),
+            keepalive_handle: StdMutex::new(None),
         })
     }
 
@@ -221,6 +232,8 @@ impl RmcpClient {
             warn!("failed to persist OAuth tokens after initialize: {error}");
         }
 
+        self.record_activity();
+
         Ok(initialize_result)
     }
 
@@ -238,6 +251,7 @@ impl RmcpClient {
         let result = run_with_timeout(fut, timeout, "tools/list").await?;
         let converted = convert_to_mcp(result)?;
         self.persist_oauth_tokens().await;
+        self.record_activity();
         Ok(converted)
     }
 
@@ -254,6 +268,7 @@ impl RmcpClient {
         let rmcp_result = run_with_timeout(fut, timeout, "tools/call").await?;
         let converted = convert_call_tool_result(rmcp_result)?;
         self.persist_oauth_tokens().await;
+        self.record_activity();
         Ok(converted)
     }
 
@@ -282,6 +297,80 @@ impl RmcpClient {
         {
             warn!("failed to persist OAuth tokens: {error}");
         }
+    }
+
+    pub fn enable_keepalive(self: &Arc<Self>, interval: Duration, transport_label: &'static str) {
+        if interval.is_zero() {
+            return;
+        }
+
+        let weak = Arc::downgrade(self);
+        let interval_ms = interval.as_millis() as u64;
+        let label = transport_label;
+        let handle = tokio::spawn(async move {
+            let mut ticker = time::interval(interval);
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+
+                let Some(client) = weak.upgrade() else {
+                    break;
+                };
+
+                let elapsed_ms = client.millis_since_last_activity();
+                if elapsed_ms < interval_ms {
+                    continue;
+                }
+
+                event!(
+                    tracing::Level::DEBUG,
+                    event.name = "codex.rmcp_keepalive",
+                    status = "emit",
+                    elapsed_ms = elapsed_ms,
+                );
+                metrics::record_heartbeat(label, "emit", Some(elapsed_ms));
+
+                match client.list_tools(None, Some(Duration::from_secs(5))).await {
+                    Ok(_) => {
+                        client.record_activity();
+                        event!(
+                            tracing::Level::DEBUG,
+                            event.name = "codex.rmcp_keepalive",
+                            status = "sent",
+                            interval_ms = interval_ms,
+                        );
+                        metrics::record_heartbeat(label, "sent", Some(interval_ms));
+                    }
+                    Err(error) => {
+                        event!(
+                            tracing::Level::WARN,
+                            event.name = "codex.rmcp_keepalive",
+                            status = "error",
+                            error.message = %error,
+                        );
+                        metrics::record_heartbeat(label, "error", Some(elapsed_ms));
+                    }
+                }
+            }
+        });
+
+        if let Ok(mut guard) = self.keepalive_handle.lock()
+            && let Some(existing) = guard.replace(handle)
+        {
+            existing.abort();
+        }
+    }
+
+    fn record_activity(&self) {
+        Self::record_activity_atomic(&self.last_activity);
+    }
+
+    fn millis_since_last_activity(&self) -> u64 {
+        now_millis().saturating_sub(self.last_activity.load(Ordering::Relaxed))
+    }
+
+    fn record_activity_atomic(activity: &AtomicU64) {
+        activity.store(now_millis(), Ordering::Relaxed);
     }
 }
 
@@ -329,4 +418,21 @@ async fn create_oauth_transport_and_runtime(
     );
 
     Ok((transport, runtime))
+}
+
+impl Drop for RmcpClient {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.keepalive_handle.lock()
+            && let Some(handle) = guard.take()
+        {
+            handle.abort();
+        }
+    }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }

@@ -639,6 +639,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        stream_heartbeat_interval_ms: Some(0),
         requires_openai_auth: false,
     };
 
@@ -1123,6 +1124,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        stream_heartbeat_interval_ms: Some(0),
         requires_openai_auth: false,
     };
 
@@ -1200,6 +1202,7 @@ async fn env_var_overrides_loaded_auth() {
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        stream_heartbeat_interval_ms: Some(0),
         requires_openai_auth: false,
     };
 

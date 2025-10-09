@@ -56,6 +56,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        stream_heartbeat_interval_ms: Some(0),
         requires_openai_auth: false,
     };
 

@@ -1522,6 +1522,7 @@ exclude_slash_tmp = true
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
                 tool_timeout_sec: Some(Duration::from_secs(5)),
+                keepalive_interval_sec: None,
             },
         );
 
@@ -1648,6 +1649,7 @@ bearer_token = "secret"
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                keepalive_interval_sec: None,
             },
         )]);
 
@@ -1699,6 +1701,7 @@ ZIG_VAR = "3"
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
+                keepalive_interval_sec: None,
             },
         )]);
 
@@ -1739,6 +1742,7 @@ startup_timeout_sec = 2.0
                 enabled: true,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                keepalive_interval_sec: None,
             },
         );
         write_global_mcp_servers(codex_home.path(), &servers)?;
@@ -2029,6 +2033,7 @@ model_verbosity = "high"
             request_max_retries: Some(4),
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
+            stream_heartbeat_interval_ms: None,
             requires_openai_auth: false,
         };
         let model_provider_map = {

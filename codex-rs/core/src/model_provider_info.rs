@@ -11,10 +11,22 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::env::VarError;
+use std::sync::OnceLock;
 use std::time::Duration;
+use tracing::warn;
 
 use crate::error::EnvVarError;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
+const DEFAULT_STREAM_HEARTBEAT_INTERVAL_MS: u64 = 45_000;
+const MIN_STREAM_HEARTBEAT_INTERVAL_MS: u64 = 5_000;
+const MIN_STREAM_IDLE_TIMEOUT_MS: u64 = 120_000;
+const MAX_STREAM_IDLE_TIMEOUT_MS: u64 = 320_000;
+const ENV_SSE_IDLE_TIMEOUT_MS: &str = "CODEX_SSE_IDLE_TIMEOUT_MS";
+const ENV_SSE_IDLE_TIMEOUT_S: &str = "CODEX_SSE_IDLE_TIMEOUT_S";
+const ENV_SSE_HEARTBEAT_INTERVAL_MS: &str = "CODEX_SSE_HEARTBEAT_INTERVAL_MS";
+const ENV_SSE_HEARTBEAT_INTERVAL_S: &str = "CODEX_SSE_HEARTBEAT_INTERVAL_S";
+static GLOBAL_STREAM_IDLE_OVERRIDE_MS: OnceLock<Option<u64>> = OnceLock::new();
+static GLOBAL_STREAM_HEARTBEAT_OVERRIDE_MS: OnceLock<Option<u64>> = OnceLock::new();
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
 /// Hard cap for user-configured `stream_max_retries`.
@@ -79,6 +91,10 @@ pub struct ModelProviderInfo {
     /// Idle timeout (in milliseconds) to wait for activity on a streaming response before treating
     /// the connection as lost.
     pub stream_idle_timeout_ms: Option<u64>,
+
+    /// Interval (in milliseconds) for Codex to emit synthetic SSE heartbeats when the
+    /// provider stream stays idle. Set to `0` to disable heartbeats.
+    pub stream_heartbeat_interval_ms: Option<u64>,
 
     /// Does this provider require an OpenAI API Key or ChatGPT login token? If true,
     /// user is presented with login screen on first run, and login preference and token/key
@@ -241,9 +257,171 @@ impl ModelProviderInfo {
 
     /// Effective idle timeout for streaming responses.
     pub fn stream_idle_timeout(&self) -> Duration {
-        self.stream_idle_timeout_ms
-            .map(Duration::from_millis)
-            .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
+        let default_idle_ms =
+            global_stream_idle_override_ms().unwrap_or(DEFAULT_STREAM_IDLE_TIMEOUT_MS);
+        let raw_ms = self.stream_idle_timeout_ms.unwrap_or(default_idle_ms);
+        Duration::from_millis(clamp_idle_timeout_ms(
+            raw_ms,
+            "model_providers.stream_idle_timeout_ms",
+        ))
+    }
+
+    /// Effective heartbeat interval for streaming responses. Returns `None`
+    /// when heartbeats are disabled either explicitly (`0`) or implicitly by
+    /// the provider (defaults).
+    pub fn stream_heartbeat_interval(&self) -> Option<Duration> {
+        let idle_timeout = self.stream_idle_timeout();
+        let idle_budget = idle_timeout
+            .checked_sub(Duration::from_secs(1))
+            .filter(|budget| !budget.is_zero())?;
+
+        let configured = self
+            .stream_heartbeat_interval_ms
+            .and_then(|ms| (ms > 0).then_some(Duration::from_millis(ms)));
+
+        let default_heartbeat_ms =
+            global_stream_heartbeat_override_ms().unwrap_or(DEFAULT_STREAM_HEARTBEAT_INTERVAL_MS);
+
+        let mut interval = match configured {
+            Some(interval) => interval,
+            None => {
+                if self.wire_api == WireApi::Responses {
+                    Duration::from_millis(default_heartbeat_ms)
+                } else {
+                    return None;
+                }
+            }
+        };
+
+        let min_interval = Duration::from_millis(MIN_STREAM_HEARTBEAT_INTERVAL_MS);
+
+        if interval < min_interval {
+            warn!(
+                field = "model_providers.stream_heartbeat_interval_ms",
+                requested_ms = interval.as_millis() as u64,
+                min_ms = MIN_STREAM_HEARTBEAT_INTERVAL_MS,
+                "clamping value below minimum"
+            );
+            interval = min_interval;
+        }
+
+        if interval >= idle_budget {
+            warn!(
+                field = "model_providers.stream_heartbeat_interval_ms",
+                requested_ms = interval.as_millis() as u64,
+                idle_budget_ms = idle_budget.as_millis() as u64,
+                "clamping heartbeat to idle budget"
+            );
+            interval = idle_budget;
+        }
+
+        if interval.is_zero() {
+            None
+        } else {
+            Some(interval)
+        }
+    }
+}
+
+fn global_stream_idle_override_ms() -> Option<u64> {
+    *GLOBAL_STREAM_IDLE_OVERRIDE_MS.get_or_init(|| {
+        read_env_duration_ms(
+            ENV_SSE_IDLE_TIMEOUT_MS,
+            1,
+            MIN_STREAM_IDLE_TIMEOUT_MS,
+            MAX_STREAM_IDLE_TIMEOUT_MS,
+            "env.CODEX_SSE_IDLE_TIMEOUT_MS",
+        )
+        .or_else(|| {
+            read_env_duration_ms(
+                ENV_SSE_IDLE_TIMEOUT_S,
+                1_000,
+                MIN_STREAM_IDLE_TIMEOUT_MS,
+                MAX_STREAM_IDLE_TIMEOUT_MS,
+                "env.CODEX_SSE_IDLE_TIMEOUT_S",
+            )
+        })
+    })
+}
+
+fn global_stream_heartbeat_override_ms() -> Option<u64> {
+    *GLOBAL_STREAM_HEARTBEAT_OVERRIDE_MS.get_or_init(|| {
+        read_env_duration_ms(
+            ENV_SSE_HEARTBEAT_INTERVAL_MS,
+            1,
+            MIN_STREAM_HEARTBEAT_INTERVAL_MS,
+            MAX_STREAM_IDLE_TIMEOUT_MS,
+            "env.CODEX_SSE_HEARTBEAT_INTERVAL_MS",
+        )
+        .or_else(|| {
+            read_env_duration_ms(
+                ENV_SSE_HEARTBEAT_INTERVAL_S,
+                1_000,
+                MIN_STREAM_HEARTBEAT_INTERVAL_MS,
+                MAX_STREAM_IDLE_TIMEOUT_MS,
+                "env.CODEX_SSE_HEARTBEAT_INTERVAL_S",
+            )
+        })
+    })
+}
+
+fn read_env_duration_ms(
+    key: &str,
+    multiplier: u64,
+    min: u64,
+    max: u64,
+    field_label: &str,
+) -> Option<u64> {
+    match std::env::var(key) {
+        Ok(value) => match value.parse::<u64>() {
+            Ok(parsed) => match parsed.checked_mul(multiplier) {
+                Some(ms) => Some(clamp_ms(field_label, ms, min, max)),
+                None => {
+                    warn!(field = key, "value '{value}' overflows milliseconds range");
+                    Some(max)
+                }
+            },
+            Err(err) => {
+                warn!(field = key, "invalid integer '{value}': {err}");
+                None
+            }
+        },
+        Err(std::env::VarError::NotPresent) => None,
+        Err(err) => {
+            warn!(field = key, "{err}");
+            None
+        }
+    }
+}
+
+fn clamp_idle_timeout_ms(value: u64, field: &str) -> u64 {
+    clamp_ms(
+        field,
+        value,
+        MIN_STREAM_IDLE_TIMEOUT_MS,
+        MAX_STREAM_IDLE_TIMEOUT_MS,
+    )
+}
+
+fn clamp_ms(field: &str, value: u64, min: u64, max: u64) -> u64 {
+    if value < min {
+        warn!(
+            field = field,
+            requested_ms = value,
+            min_ms = min,
+            "clamping value below minimum"
+        );
+        min
+    } else if value > max {
+        warn!(
+            field = field,
+            requested_ms = value,
+            max_ms = max,
+            "clamping value above maximum"
+        );
+        max
+    } else {
+        value
     }
 }
 
@@ -296,6 +474,7 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 request_max_retries: None,
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
+                stream_heartbeat_interval_ms: None,
                 requires_openai_auth: true,
             },
         ),
@@ -340,6 +519,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        stream_heartbeat_interval_ms: None,
         requires_openai_auth: false,
     }
 }
@@ -360,6 +540,7 @@ fn matches_azure_responses_base_url(base_url: &str) -> bool {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::time::Duration;
 
     #[test]
     fn test_deserialize_ollama_model_provider_toml() {
@@ -379,6 +560,7 @@ base_url = "http://localhost:11434/v1"
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            stream_heartbeat_interval_ms: None,
             requires_openai_auth: false,
         };
 
@@ -408,6 +590,7 @@ query_params = { api-version = "2025-04-01-preview" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            stream_heartbeat_interval_ms: None,
             requires_openai_auth: false,
         };
 
@@ -440,6 +623,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            stream_heartbeat_interval_ms: None,
             requires_openai_auth: false,
         };
 
@@ -462,6 +646,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 request_max_retries: None,
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
+                stream_heartbeat_interval_ms: None,
                 requires_openai_auth: false,
             }
         }
@@ -494,6 +679,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            stream_heartbeat_interval_ms: None,
             requires_openai_auth: false,
         };
         assert!(named_provider.is_azure_responses_endpoint());
@@ -510,5 +696,59 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 "expected {base_url} not to be detected as Azure"
             );
         }
+    }
+    fn base_responses_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: "test".into(),
+            base_url: None,
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            stream_heartbeat_interval_ms: None,
+            requires_openai_auth: false,
+        }
+    }
+
+    #[test]
+    fn idle_timeout_clamps_to_minimum() {
+        let mut provider = base_responses_provider();
+        provider.stream_idle_timeout_ms = Some(30_000);
+        assert_eq!(
+            provider.stream_idle_timeout(),
+            Duration::from_millis(MIN_STREAM_IDLE_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
+    fn idle_timeout_clamps_to_maximum() {
+        let mut provider = base_responses_provider();
+        provider.stream_idle_timeout_ms = Some(1_000_000);
+        assert_eq!(
+            provider.stream_idle_timeout(),
+            Duration::from_millis(MAX_STREAM_IDLE_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
+    fn heartbeat_clamps_to_idle_budget_and_minimum() {
+        let mut provider = base_responses_provider();
+        provider.stream_idle_timeout_ms = Some(150_000);
+        provider.stream_heartbeat_interval_ms = Some(2_000);
+
+        let interval = provider.stream_heartbeat_interval().unwrap();
+        assert_eq!(
+            interval,
+            Duration::from_millis(MIN_STREAM_HEARTBEAT_INTERVAL_MS)
+        );
+
+        provider.stream_heartbeat_interval_ms = Some(200_000);
+        let interval = provider.stream_heartbeat_interval().unwrap();
+        assert_eq!(interval, Duration::from_millis(149_000));
     }
 }

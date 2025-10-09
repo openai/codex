@@ -73,6 +73,7 @@ async fn continue_after_stream_error() {
         request_max_retries: Some(1),
         stream_max_retries: Some(1),
         stream_idle_timeout_ms: Some(2_000),
+        stream_heartbeat_interval_ms: Some(0),
         requires_openai_auth: false,
     };
 

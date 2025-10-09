@@ -83,7 +83,8 @@ fn list_and_get_render_expected_output() -> Result<()> {
             },
             "startup_timeout_sec": null,
             "tool_timeout_sec": null,
-            "auth_status": "unsupported"
+            "auth_status": "unsupported",
+            "keepalive_interval_sec": null
           }
         ]
         )
@@ -99,6 +100,7 @@ fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("args: --port 4000"));
     assert!(stdout.contains("env: TOKEN=secret"));
     assert!(stdout.contains("enabled: true"));
+    assert!(stdout.contains("keepalive_interval_sec: default"));
     assert!(stdout.contains("remove: codex mcp remove docs"));
 
     let mut get_json_cmd = codex_command(codex_home.path())?;

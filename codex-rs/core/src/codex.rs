@@ -2278,6 +2278,7 @@ async fn try_run_turn(
                 };
                 sess.send_event(event).await;
             }
+            ResponseEvent::Heartbeat => {}
             ResponseEvent::ReasoningContentDelta(delta) => {
                 if sess.show_raw_agent_reasoning() {
                     let event = Event {

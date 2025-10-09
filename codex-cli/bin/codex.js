@@ -80,6 +80,25 @@ function getUpdatedPath(newDirs) {
   return updatedPath;
 }
 
+const tokenize = (cmd) => {
+  if (!cmd) {
+    return [];
+  }
+  const matches = cmd.match(/(?:[^\s"']+|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')+/g);
+  if (!matches) {
+    return [];
+  }
+  return matches.map((token) => {
+    if (
+      (token.startsWith("\"") && token.endsWith("\"")) ||
+      (token.startsWith("'") && token.endsWith("'"))
+    ) {
+      return token.slice(1, -1);
+    }
+    return token;
+  });
+};
+
 const additionalDirs = [];
 const pathDir = path.join(archRoot, "path");
 if (existsSync(pathDir)) {
@@ -87,9 +106,33 @@ if (existsSync(pathDir)) {
 }
 const updatedPath = getUpdatedPath(additionalDirs);
 
-const child = spawn(binaryPath, process.argv.slice(2), {
+const spawnEnv = { ...process.env, PATH: updatedPath, CODEX_MANAGED_BY_NPM: "1" };
+delete spawnEnv.CODEX_STRACE;
+delete spawnEnv.CODEX_STRACE_CMD;
+
+let spawnCommand = binaryPath;
+let spawnArgs = process.argv.slice(2);
+
+const straceRequested =
+  process.platform !== "win32" &&
+  (process.env.CODEX_STRACE_CMD ||
+    (process.env.CODEX_STRACE && process.env.CODEX_STRACE !== "0"));
+
+if (straceRequested) {
+  const raw =
+    (process.env.CODEX_STRACE_CMD && process.env.CODEX_STRACE_CMD.trim()) ||
+    "strace -ff -tt -T -s 256";
+  const tokens = tokenize(raw);
+  if (tokens.length === 0) {
+    throw new Error(`Invalid CODEX_STRACE_CMD value: ${raw}`);
+  }
+  spawnCommand = tokens[0];
+  spawnArgs = [...tokens.slice(1), binaryPath, ...process.argv.slice(2)];
+}
+
+const child = spawn(spawnCommand, spawnArgs, {
   stdio: "inherit",
-  env: { ...process.env, PATH: updatedPath, CODEX_MANAGED_BY_NPM: "1" },
+  env: spawnEnv,
 });
 
 child.on("error", (err) => {
