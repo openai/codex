@@ -61,7 +61,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
-tokio-util = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }

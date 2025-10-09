@@ -12,6 +12,7 @@ axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",
 ] }
+codex-protocol = { workspace = true }
 keyring = { workspace = true, features = [
     "apple-native",
     "crypto-rust",

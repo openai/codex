@@ -445,7 +445,7 @@ async fn review_input_isolated_from_parent_history() {
     .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // Assert the request `input` contains the environment context followed by the review prompt.
+    // Assert the request `input` contains the environment context followed by the user review prompt.
     let request = &server.received_requests().await.unwrap()[0];
     let body = request.body_json::<serde_json::Value>().unwrap();
     let input = body["input"].as_array().expect("input array");
@@ -473,8 +473,13 @@ async fn review_input_isolated_from_parent_history() {
     assert_eq!(review_msg["role"].as_str().unwrap(), "user");
     assert_eq!(
         review_msg["content"][0]["text"].as_str().unwrap(),
-        format!("{REVIEW_PROMPT}\n\n---\n\nNow, here's your task: Please review only this",)
+        review_prompt,
+        "user message should only contain the raw review prompt"
     );
+
+    // Ensure the REVIEW_PROMPT rubric is sent via instructions.
+    let instructions = body["instructions"].as_str().expect("instructions string");
+    assert_eq!(instructions, REVIEW_PROMPT);
 
     // Also verify that a user interruption note was recorded in the rollout.
     codex.submit(Op::GetPath).await.unwrap();

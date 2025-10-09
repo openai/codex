@@ -1243,6 +1243,30 @@ pub struct GetHistoryEntryResponseEvent {
 pub struct McpListToolsResponseEvent {
     /// Fully qualified tool name -> tool definition.
     pub tools: std::collections::HashMap<String, McpTool>,
+    /// Authentication status for each configured MCP server.
+    pub auth_statuses: std::collections::HashMap<String, McpAuthStatus>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum McpAuthStatus {
+    Unsupported,
+    NotLoggedIn,
+    BearerToken,
+    OAuth,
+}
+
+impl fmt::Display for McpAuthStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            McpAuthStatus::Unsupported => "Unsupported",
+            McpAuthStatus::NotLoggedIn => "Not logged in",
+            McpAuthStatus::BearerToken => "Bearer token",
+            McpAuthStatus::OAuth => "OAuth",
+        };
+        f.write_str(text)
+    }
 }
 
 /// Response payload for `Op::ListCustomPrompts`.

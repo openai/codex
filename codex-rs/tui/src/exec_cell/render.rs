@@ -8,8 +8,10 @@ use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
+use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
+use crate::wrapping::word_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
 use codex_protocol::parse_command::ParsedCommand;
@@ -116,10 +118,16 @@ pub(crate) fn output_lines(
 }
 
 pub(crate) fn spinner(start_time: Option<Instant>) -> Span<'static> {
-    let blink_on = start_time
-        .map(|st| ((st.elapsed().as_millis() / 600) % 2) == 0)
-        .unwrap_or(false);
-    if blink_on { "•".into() } else { "◦".dim() }
+    let elapsed = start_time.map(|st| st.elapsed()).unwrap_or_default();
+    if supports_color::on_cached(supports_color::Stream::Stdout)
+        .map(|level| level.has_16m)
+        .unwrap_or(false)
+    {
+        shimmer_spans("•")[0].clone()
+    } else {
+        let blink_on = (elapsed.as_millis() / 600).is_multiple_of(2);
+        if blink_on { "•".into() } else { "◦".dim() }
+    }
 }
 
 impl HistoryCell for ExecCell {
@@ -131,17 +139,25 @@ impl HistoryCell for ExecCell {
         }
     }
 
-    fn transcript_lines(&self) -> Vec<Line<'static>> {
+    fn desired_transcript_height(&self, width: u16) -> u16 {
+        self.transcript_lines(width).len() as u16
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = vec![];
-        for call in self.iter_calls() {
-            let cmd_display = strip_bash_lc_and_escape(&call.command);
-            for (i, part) in cmd_display.lines().enumerate() {
-                if i == 0 {
-                    lines.push(vec!["$ ".magenta(), part.to_string().into()].into());
-                } else {
-                    lines.push(vec!["    ".into(), part.to_string().into()].into());
-                }
+        for (i, call) in self.iter_calls().enumerate() {
+            if i > 0 {
+                lines.push("".into());
             }
+            let script = strip_bash_lc_and_escape(&call.command);
+            let highlighted_script = highlight_bash_to_lines(&script);
+            let cmd_display = word_wrap_lines(
+                &highlighted_script,
+                RtOptions::new(width as usize)
+                    .initial_indent("$ ".magenta().into())
+                    .subsequent_indent("    ".into()),
+            );
+            lines.extend(cmd_display);
 
             if let Some(output) = call.output.as_ref() {
                 lines.extend(output.formatted_output.lines().map(ansi_escape_line));
@@ -160,7 +176,6 @@ impl HistoryCell for ExecCell {
                 result.push_span(format!(" • {duration}").dim());
                 lines.push(result);
             }
-            lines.push("".into());
         }
         lines
     }

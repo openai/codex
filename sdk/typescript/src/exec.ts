@@ -23,6 +23,9 @@ export type CodexExecArgs = {
   outputSchemaFile?: string;
 };
 
+const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
+
 export class CodexExec {
   private executablePath: string;
   constructor(executablePath: string | null = null) {
@@ -59,6 +62,9 @@ export class CodexExec {
     const env = {
       ...process.env,
     };
+    if (!env[INTERNAL_ORIGINATOR_ENV]) {
+      env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
+    }
     if (args.baseUrl) {
       env.OPENAI_BASE_URL = args.baseUrl;
     }

@@ -38,7 +38,6 @@ use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
-use crate::terminal_palette;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 
@@ -150,7 +149,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
-            footer_mode: FooterMode::ShortcutPrompt,
+            footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             context_window_percent: None,
         };
@@ -1346,8 +1345,8 @@ impl ChatComposer {
             FooterMode::EscHint => FooterMode::EscHint,
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
             FooterMode::CtrlCReminder => FooterMode::CtrlCReminder,
-            FooterMode::ShortcutPrompt if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
-            FooterMode::ShortcutPrompt if !self.is_empty() => FooterMode::Empty,
+            FooterMode::ShortcutSummary if self.ctrl_c_quit_hint => FooterMode::CtrlCReminder,
+            FooterMode::ShortcutSummary if !self.is_empty() => FooterMode::ContextOnly,
             other => other,
         }
     }
@@ -1533,7 +1532,7 @@ impl WidgetRef for ChatComposer {
                 }
             }
         }
-        let style = user_message_style(terminal_palette::default_bg());
+        let style = user_message_style();
         let mut block_rect = composer_rect;
         block_rect.y = composer_rect.y.saturating_sub(1);
         block_rect.height = composer_rect.height.saturating_add(1);
@@ -1780,11 +1779,11 @@ mod tests {
 
         // Toggle back to prompt mode so subsequent typing captures characters.
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutPrompt);
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
 
         type_chars_humanlike(&mut composer, &['h']);
         assert_eq!(composer.textarea.text(), "h");
-        assert_eq!(composer.footer_mode(), FooterMode::Empty);
+        assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
@@ -1793,8 +1792,8 @@ mod tests {
         std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
         let _ = composer.flush_paste_burst_if_due();
         assert_eq!(composer.textarea.text(), "h?");
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutPrompt);
-        assert_eq!(composer.footer_mode(), FooterMode::Empty);
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
     }
 
     #[test]
