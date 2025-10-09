@@ -1195,7 +1195,7 @@ impl Config {
             .or_else(|| {
                 openai_model_info
                     .as_ref()
-                    .and_then(|info| info.auto_compact_token_limit)
+                    .map(|info| info.auto_compact_token_limit)
             });
 
         // Load base instructions override from a file if specified. If the

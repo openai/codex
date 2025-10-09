@@ -14,16 +14,18 @@ pub(crate) struct ModelInfo {
     pub(crate) max_output_tokens: u64,
 
     /// Token threshold where we should automatically compact conversation history. This considers
-    /// input tokens + output tokens of this turn.
-    pub(crate) auto_compact_token_limit: Option<i64>,
+    /// input tokens + output tokens of this turn. Defaults to 90% of the context window.
+    pub(crate) auto_compact_token_limit: i64,
 }
 
 impl ModelInfo {
-    const fn new(context_window: u64, max_output_tokens: u64) -> Self {
+    fn new(context_window: u64, max_output_tokens: u64) -> Self {
+        let auto_compact_limit = ((context_window as u128 * 9) / 10).min(i64::MAX as u128) as i64;
+
         Self {
             context_window,
             max_output_tokens,
-            auto_compact_token_limit: None,
+            auto_compact_token_limit: auto_compact_limit,
         }
     }
 }
@@ -62,11 +64,7 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
         // https://platform.openai.com/docs/models/gpt-3.5-turbo
         "gpt-3.5-turbo" => Some(ModelInfo::new(16_385, 4_096)),
 
-        _ if slug.starts_with("gpt-5-codex") => Some(ModelInfo {
-            context_window: 272_000,
-            max_output_tokens: 128_000,
-            auto_compact_token_limit: Some(350_000),
-        }),
+        _ if slug.starts_with("gpt-5-codex") => Some(ModelInfo::new(272_000, 128_000)),
 
         _ if slug.starts_with("gpt-5") => Some(ModelInfo::new(272_000, 128_000)),
 

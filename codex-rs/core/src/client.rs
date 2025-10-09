@@ -116,7 +116,7 @@ impl ModelClient {
 
     pub fn get_auto_compact_token_limit(&self) -> Option<i64> {
         self.config.model_auto_compact_token_limit.or_else(|| {
-            get_model_info(&self.config.model_family).and_then(|info| info.auto_compact_token_limit)
+            get_model_info(&self.config.model_family).map(|info| info.auto_compact_token_limit)
         })
     }
 

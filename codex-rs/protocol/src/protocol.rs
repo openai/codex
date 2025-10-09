@@ -678,13 +678,11 @@ impl TokenUsage {
         self.non_cached_input() + self.output_tokens
     }
 
-    /// For estimating what % of the model's context window is used, we need to account
-    /// for reasoning output tokens from prior turns being dropped from the context window.
-    /// We approximate this here by subtracting reasoning output tokens from the total.
-    /// This will be off for the current turn and pending function calls.
+    /// Returns the tokens currently occupying the model context window. Providers
+    /// report this via the input token count, which already accounts for any
+    /// cached segments and excludes generated output.
     pub fn tokens_in_context_window(&self) -> u64 {
-        self.total_tokens
-            .saturating_sub(self.reasoning_output_tokens)
+        self.input_tokens
     }
 
     /// Estimate the remaining user-controllable percentage of the model's context window.
