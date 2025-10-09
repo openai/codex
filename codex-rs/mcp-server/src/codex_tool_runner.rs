@@ -279,7 +279,6 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::TurnAborted(_)
                     | EventMsg::ConversationPath(_)
                     | EventMsg::UserMessage(_)
-                    | EventMsg::SessionRenamed(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::ViewImageToolCall(_)
                     | EventMsg::EnteredReviewMode(_)
