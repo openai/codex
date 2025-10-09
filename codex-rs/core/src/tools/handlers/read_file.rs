@@ -504,11 +504,10 @@ mod tests {
         use std::io::Write as _;
         write!(
             temp,
-            "{}",
-            r#"alpha
+            "alpha
 beta
 gamma
-"#
+"
         )?;
 
         let lines = read(temp.path(), 2, 2).await?;
@@ -561,11 +560,10 @@ gamma
         use std::io::Write as _;
         write!(
             temp,
-            "{}",
-            r#"first
+            "first
 second
 third
-"#
+"
         )?;
 
         let lines = read(temp.path(), 1, 2).await?;
@@ -595,14 +593,13 @@ third
         use std::io::Write as _;
         write!(
             temp,
-            "{}",
-            r#"fn outer() {
-    if cond {
+            "fn outer() {{
+    if cond {{
         inner();
-    }
+    }}
     tail();
-}
-"#
+}}
+"
         )?;
 
         let options = IndentationArgs {
@@ -631,15 +628,14 @@ third
         use std::io::Write as _;
         write!(
             temp,
-            "{}",
-            r#"mod root {
-    fn outer() {
-        if cond {
+            "mod root {{
+    fn outer() {{
+        if cond {{
             inner();
-        }
-    }
-}
-"#
+        }}
+    }}
+}}
+"
         )?;
 
         let mut options = IndentationArgs {
@@ -683,16 +679,15 @@ third
         use std::io::Write as _;
         write!(
             temp,
-            "{}",
-            r#"fn wrapper() {
-    if first {
+            "fn wrapper() {{
+    if first {{
         do_first();
-    }
-    if second {
+    }}
+    if second {{
         do_second();
-    }
-}
-"#
+    }}
+}}
+"
         )?;
 
         let mut options = IndentationArgs {
@@ -734,8 +729,7 @@ third
         use std::io::Write as _;
         write!(
             temp,
-            "{}",
-            r#"class Foo:
+            "class Foo:
     def __init__(self, size):
         self.size = size
     def double(self, value):
@@ -747,7 +741,7 @@ class Bar:
     def compute(self):
         helper = Foo(2)
         return helper.double(5)
-"#
+"
         )?;
 
         let options = IndentationArgs {
@@ -780,32 +774,31 @@ class Bar:
         use std::io::Write as _;
         write!(
             temp,
-            "{}",
-            r#"export function makeThing() {
+            "export function makeThing() {{
     const cache = new Map();
-    function ensure(key) {
-        if (!cache.has(key)) {
+    function ensure(key) {{
+        if (!cache.has(key)) {{
             cache.set(key, []);
-        }
+        }}
         return cache.get(key);
-    }
-    const handlers = {
-        init() {
-            console.log("init");
-        },
-        run() {
-            if (Math.random() > 0.5) {
-                return "heads";
-            }
-            return "tails";
-        },
-    };
-    return { cache, handlers };
-}
-export function other() {
+    }}
+    const handlers = {{
+        init() {{
+            console.log(\"init\");
+        }},
+        run() {{
+            if (Math.random() > 0.5) {{
+                return \"heads\";
+            }}
+            return \"tails\";
+        }},
+    }};
+    return {{ cache, handlers }};
+}}
+export function other() {{
     return makeThing();
-}
-"#
+}}
+"
         )?;
 
         let options = IndentationArgs {
@@ -837,41 +830,40 @@ export function other() {
         use std::io::Write as _;
         write!(
             temp,
-            "{}",
-            r#"#include <vector>
+            "#include <vector>
 #include <string>
 
-namespace sample {
-class Runner {
+namespace sample {{
+class Runner {{
 public:
-    void setup() {
-        if (enabled_) {
+    void setup() {{
+        if (enabled_) {{
             init();
-        }
-    }
+        }}
+    }}
 
     // Run the code
-    int run() const {
-        switch (mode_) {
+    int run() const {{
+        switch (mode_) {{
             case Mode::Fast:
                 return fast();
             case Mode::Slow:
                 return slow();
             default:
                 return fallback();
-        }
-    }
+        }}
+    }}
 
 private:
     bool enabled_ = false;
     Mode mode_ = Mode::Fast;
 
-    int fast() const {
+    int fast() const {{
         return 1;
-    }
-};
-}  // namespace sample
-"#
+    }}
+}};
+}}  // namespace sample
+"
         )?;
         Ok(temp)
     }
