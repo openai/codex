@@ -1,9 +1,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Iterable, Literal, Sequence, cast
 
 from .exceptions import CodexError
+
+
+class CommandExecutionStatus(StrEnum):
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class PatchChangeKind(StrEnum):
+    ADD = "add"
+    DELETE = "delete"
+    UPDATE = "update"
+
+
+class PatchApplyStatus(StrEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class McpToolCallStatus(StrEnum):
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,14 +36,14 @@ class CommandExecutionItem:
     id: str
     command: str
     aggregated_output: str
-    status: Literal["in_progress", "completed", "failed"]
+    status: CommandExecutionStatus
     exit_code: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class FileUpdateChange:
     path: str
-    kind: Literal["add", "delete", "update"]
+    kind: PatchChangeKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +51,7 @@ class FileChangeItem:
     type: Literal["file_change"] = field(default="file_change", init=False)
     id: str
     changes: Sequence[FileUpdateChange]
-    status: Literal["completed", "failed"]
+    status: PatchApplyStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +60,7 @@ class McpToolCallItem:
     id: str
     server: str
     tool: str
-    status: Literal["in_progress", "completed", "failed"]
+    status: McpToolCallStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,14 +135,11 @@ def _parse_changes(values: Iterable[object]) -> list[FileUpdateChange]:
             raise CodexError("Invalid file change entry")
         path = _ensure_str(value.get("path"), "path")
         kind = _ensure_str(value.get("kind"), "kind")
-        if kind not in {"add", "delete", "update"}:
-            raise CodexError(f"Unsupported file change kind: {kind}")
-        changes.append(
-            FileUpdateChange(
-                path=path,
-                kind=cast(Literal["add", "delete", "update"], kind),
-            )
-        )
+        try:
+            enum_kind = PatchChangeKind(kind)
+        except ValueError as exc:
+            raise CodexError(f"Unsupported file change kind: {kind}") from exc
+        changes.append(FileUpdateChange(path=path, kind=enum_kind))
     return changes
 
 
@@ -151,9 +172,11 @@ def parse_thread_item(payload: object) -> ThreadItem:
     if type_name == "command_execution":
         command = _ensure_str(payload.get("command"), "command")
         aggregated_output = _ensure_str(payload.get("aggregated_output"), "aggregated_output")
-        status = cast(
-            Literal["in_progress", "completed", "failed"], _ensure_str(payload.get("status"), "status")
-        )
+        status_str = _ensure_str(payload.get("status"), "status")
+        try:
+            status = CommandExecutionStatus(status_str)
+        except ValueError as exc:
+            raise CodexError(f"Unsupported command execution status: {status_str}") from exc
         exit_code = payload.get("exit_code")
         exit_value = int(exit_code) if isinstance(exit_code, int) else None
         return CommandExecutionItem(
@@ -166,23 +189,27 @@ def parse_thread_item(payload: object) -> ThreadItem:
 
     if type_name == "file_change":
         changes_raw = _ensure_sequence(payload.get("changes"), "changes")
-        status = cast(
-            Literal["completed", "failed"], _ensure_str(payload.get("status"), "status")
-        )
+        status_str = _ensure_str(payload.get("status"), "status")
+        try:
+            change_status = PatchApplyStatus(status_str)
+        except ValueError as exc:
+            raise CodexError(f"Unsupported file change status: {status_str}") from exc
         changes = _parse_changes(changes_raw)
-        return FileChangeItem(id=item_id, changes=changes, status=status)
+        return FileChangeItem(id=item_id, changes=changes, status=change_status)
 
     if type_name == "mcp_tool_call":
         server = _ensure_str(payload.get("server"), "server")
         tool = _ensure_str(payload.get("tool"), "tool")
-        status = cast(
-            Literal["in_progress", "completed", "failed"], _ensure_str(payload.get("status"), "status")
-        )
+        status_str = _ensure_str(payload.get("status"), "status")
+        try:
+            call_status = McpToolCallStatus(status_str)
+        except ValueError as exc:
+            raise CodexError(f"Unsupported MCP tool call status: {status_str}") from exc
         return McpToolCallItem(
             id=item_id,
             server=server,
             tool=tool,
-            status=status,
+            status=call_status,
         )
 
     if type_name == "web_search":
