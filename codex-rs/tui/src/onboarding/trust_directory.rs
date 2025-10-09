@@ -4,6 +4,7 @@ use codex_core::config::set_project_trusted;
 use codex_core::git_info::resolve_root_git_project_for_trust;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -109,6 +110,10 @@ impl WidgetRef for &TrustDirectoryWidget {
 
 impl KeyboardHandler for TrustDirectoryWidget {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if key_event.kind == KeyEventKind::Release {
+            return;
+        }
+
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.highlighted = TrustDirectorySelection::Trust;
@@ -151,5 +156,39 @@ impl TrustDirectoryWidget {
     fn handle_dont_trust(&mut self) {
         self.highlighted = TrustDirectorySelection::DontTrust;
         self.selection = Some(TrustDirectorySelection::DontTrust);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyEventKind;
+    use crossterm::event::KeyModifiers;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    #[test]
+    fn release_event_does_not_change_selection() {
+        let mut widget = TrustDirectoryWidget {
+            codex_home: PathBuf::from("."),
+            cwd: PathBuf::from("."),
+            is_git_repo: false,
+            selection: None,
+            highlighted: TrustDirectorySelection::DontTrust,
+            error: None,
+        };
+
+        let release = KeyEvent {
+            kind: KeyEventKind::Release,
+            ..KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        };
+        widget.handle_key_event(release);
+        assert_eq!(widget.selection, None);
+
+        let press = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        widget.handle_key_event(press);
+        assert_eq!(widget.selection, Some(TrustDirectorySelection::DontTrust));
     }
 }

@@ -6,7 +6,6 @@ use std::time::Duration;
 use super::backends::ExecutionMode;
 use super::backends::backend_for_mode;
 use super::cache::ApprovalCache;
-use crate::codex::ExecCommandContext;
 use crate::codex::Session;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
@@ -24,6 +23,7 @@ use crate::protocol::AskForApproval;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::shell;
+use crate::tools::context::ExecCommandContext;
 use codex_otel::otel_event_manager::ToolDecisionSource;
 
 #[derive(Clone, Debug)]
@@ -148,10 +148,8 @@ impl Executor {
                     )
                     .await
                 } else {
-                    Err(ExecError::rejection(format!(
-                        "failed in sandbox {:?} with execution error: {error:?}",
-                        sandbox_decision.initial_sandbox
-                    )))
+                    let message = sandbox_failure_message(error);
+                    Err(ExecError::rejection(message))
                 }
             }
             Err(err) => Err(err.into()),
@@ -255,6 +253,12 @@ fn maybe_translate_shell_command(
     params
 }
 
+fn sandbox_failure_message(error: SandboxErr) -> String {
+    let codex_error = CodexErr::Sandbox(error);
+    let friendly = get_error_message_ui(&codex_error);
+    format!("failed in sandbox: {friendly}")
+}
+
 pub(crate) struct ExecutionRequest {
     pub params: ExecParams,
     pub approval_command: Vec<String>,
@@ -299,6 +303,7 @@ pub(crate) fn normalize_exec_result(
             let message = match err {
                 ExecError::Function(FunctionCallError::RespondToModel(msg)) => msg.clone(),
                 ExecError::Codex(e) => get_error_message_ui(e),
+                err => err.to_string(),
             };
             let synthetic = ExecToolCallOutput {
                 exit_code: -1,
@@ -356,6 +361,23 @@ mod tests {
             normalized.event_output().aggregated_output.text,
             "timed out payload"
         );
+    }
+
+    #[test]
+    fn sandbox_failure_message_uses_denied_stderr() {
+        let output = ExecToolCallOutput {
+            exit_code: 101,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new("sandbox stderr".to_string()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::from_millis(10),
+            timed_out: false,
+        };
+        let err = SandboxErr::Denied {
+            output: Box::new(output),
+        };
+        let message = sandbox_failure_message(err);
+        assert_eq!(message, "failed in sandbox: sandbox stderr");
     }
 
     #[test]

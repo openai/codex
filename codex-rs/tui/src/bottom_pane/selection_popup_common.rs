@@ -9,11 +9,14 @@ use ratatui::text::Span;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 
+use crate::key_hint::KeyBinding;
+
 use super::scroll_state::ScrollState;
 
 /// A generic representation of a display row for selection popups.
 pub(crate) struct GenericDisplayRow {
     pub name: String,
+    pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub is_current: bool,
     pub description: Option<String>, // optional grey text after the name
@@ -92,6 +95,10 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
 
     let this_name_width = Line::from(name_spans.clone()).width();
     let mut full_spans: Vec<Span> = name_spans;
+    if let Some(display_shortcut) = row.display_shortcut {
+        full_spans.push(" ".into());
+        full_spans.push(display_shortcut.into());
+    }
     if let Some(desc) = row.description.as_ref() {
         let gap = desc_col.saturating_sub(this_name_width);
         if gap > 0 {
@@ -155,6 +162,7 @@ pub(crate) fn render_rows(
         let GenericDisplayRow {
             name,
             match_indices,
+            display_shortcut,
             is_current: _is_current,
             description,
         } = row;
@@ -163,6 +171,7 @@ pub(crate) fn render_rows(
             &GenericDisplayRow {
                 name: name.clone(),
                 match_indices: match_indices.clone(),
+                display_shortcut: *display_shortcut,
                 is_current: *_is_current,
                 description: description.clone(),
             },

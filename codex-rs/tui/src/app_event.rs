@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
@@ -58,6 +59,12 @@ pub(crate) enum AppEvent {
     PersistModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
+    },
+
+    /// Open the reasoning selection popup after picking a model.
+    OpenReasoningPopup {
+        model: String,
+        presets: Vec<ModelPreset>,
     },
 
     /// Update the current approval policy in the running app and widget.

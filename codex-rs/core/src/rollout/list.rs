@@ -17,6 +17,7 @@ use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionSource;
 
 /// Returned page of conversation summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -52,6 +53,7 @@ struct HeadTailSummary {
     tail: Vec<serde_json::Value>,
     saw_session_meta: bool,
     saw_user_event: bool,
+    source: Option<SessionSource>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
@@ -106,6 +108,7 @@ pub(crate) async fn get_conversations(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
+    allowed_sources: &[SessionSource],
 ) -> io::Result<ConversationsPage> {
     let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
@@ -121,7 +124,8 @@ pub(crate) async fn get_conversations(
 
     let anchor = cursor.cloned();
 
-    let result = traverse_directories_for_paths(root.clone(), page_size, anchor).await?;
+    let result =
+        traverse_directories_for_paths(root.clone(), page_size, anchor, allowed_sources).await?;
     Ok(result)
 }
 
@@ -140,6 +144,7 @@ async fn traverse_directories_for_paths(
     root: PathBuf,
     page_size: usize,
     anchor: Option<Cursor>,
+    allowed_sources: &[SessionSource],
 ) -> io::Result<ConversationsPage> {
     let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
@@ -196,6 +201,13 @@ async fn traverse_directories_for_paths(
                     let summary = read_head_and_tail(&path, HEAD_RECORD_LIMIT, TAIL_RECORD_LIMIT)
                         .await
                         .unwrap_or_default();
+                    if !allowed_sources.is_empty()
+                        && !summary
+                            .source
+                            .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
+                    {
+                        continue;
+                    }
                     // Apply filters: must have session meta and at least one user message event
                     if summary.saw_session_meta && summary.saw_user_event {
                         let HeadTailSummary {
@@ -341,6 +353,7 @@ async fn read_head_and_tail(
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
+                summary.source = Some(session_meta_line.meta.source);
                 summary.created_at = summary
                     .created_at
                     .clone()

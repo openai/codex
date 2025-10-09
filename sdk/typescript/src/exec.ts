@@ -1,10 +1,9 @@
 import { spawn } from "node:child_process";
-
+import path from "node:path";
 import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 
 import { SandboxMode } from "./threadOptions";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 export type CodexExecArgs = {
   input: string;
@@ -20,7 +19,12 @@ export type CodexExecArgs = {
   workingDirectory?: string;
   // --skip-git-repo-check
   skipGitRepoCheck?: boolean;
+  // --output-schema
+  outputSchemaFile?: string;
 };
+
+const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+const TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
 
 export class CodexExec {
   private executablePath: string;
@@ -47,6 +51,10 @@ export class CodexExec {
       commandArgs.push("--skip-git-repo-check");
     }
 
+    if (args.outputSchemaFile) {
+      commandArgs.push("--output-schema", args.outputSchemaFile);
+    }
+
     if (args.threadId) {
       commandArgs.push("resume", args.threadId);
     }
@@ -54,11 +62,14 @@ export class CodexExec {
     const env = {
       ...process.env,
     };
+    if (!env[INTERNAL_ORIGINATOR_ENV]) {
+      env[INTERNAL_ORIGINATOR_ENV] = TYPESCRIPT_SDK_ORIGINATOR;
+    }
     if (args.baseUrl) {
       env.OPENAI_BASE_URL = args.baseUrl;
     }
     if (args.apiKey) {
-      env.OPENAI_API_KEY = args.apiKey;
+      env.CODEX_API_KEY = args.apiKey;
     }
 
     const child = spawn(this.executablePath, commandArgs, {
