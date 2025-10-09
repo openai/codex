@@ -753,7 +753,7 @@ mod imp {
             // 2 == OUTBOUND
             rule.SetDirection(NET_FW_RULE_DIRECTION(2))?;
             rule.SetEnabled(VARIANT_TRUE)?;
-            rule.SetProfiles(NET_FW_PROFILE2_ALL.0 as i32)?;
+            rule.SetProfiles(NET_FW_PROFILE2_ALL.0)?;
             rule.SetInterfaceTypes(&BSTR::from("All"))?;
             rule.SetLocalUserAuthorizedList(&BSTR::from(sid_string.as_str()))?;
 
