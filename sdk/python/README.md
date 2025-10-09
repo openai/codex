@@ -80,7 +80,7 @@ print(turn.final_response)
 
 ## Development
 
-- Install dependencies with `uv pip install -e .[dev]`.
+- Install dependencies with `uv sync --extra dev`.
 - Run formatting and linting: `uv run ruff check .` and `uv run ruff format .`.
 - Type-check with `uv run mypy`.
 - Tests via `uv run pytest`.
