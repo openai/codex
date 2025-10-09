@@ -1177,7 +1177,7 @@ impl ChatWidget {
                 self.add_mcp_output();
             }
             SlashCommand::Prune => {
-                self.open_prune_advanced();
+                self.open_prune_menu();
             }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
@@ -1722,6 +1722,79 @@ impl ChatWidget {
             on_enter_event: Some(Box::new(|tx: &AppEventSender| {
                 tx.send(AppEvent::ConfirmAdvancedChanges);
             })),
+        });
+    }
+
+    /// Open the prune menu with common actions: advanced, manual by category, and fix context.
+    fn open_prune_menu(&mut self) {
+        use codex_core::protocol::Op;
+        use codex_core::protocol::PruneCategory as PC;
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        // Advanced prune (non-destructive by default)
+        items.push(SelectionItem {
+            name: "Advanced prune (non-destructive)".to_string(),
+            description: Some("Toggle keep/delete per item; apply with Enter".to_string()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenPruneAdvanced);
+                tx.send(AppEvent::CodexOp(Op::GetContextItems));
+            })],
+            ..Default::default()
+        });
+
+        // Manual prune by top categories
+        let mut push_prune = |label: &str, cat: PC| {
+            let cat_copy = cat; // move into closure by value per item
+            items.push(SelectionItem {
+                name: format!("Prune {label}"),
+                description: Some("Remove matching items from context".to_string()),
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::CodexOp(Op::PruneContext {
+                        categories: vec![cat_copy.clone()],
+                        range: codex_core::protocol::PruneRange::All,
+                    }));
+                    tx.send(AppEvent::CodexOp(Op::GetContextItems));
+                })],
+                ..Default::default()
+            });
+        };
+        push_prune("tool outputs", PC::ToolOutput);
+        push_prune("tool calls", PC::ToolCall);
+        push_prune("assistant messages", PC::AssistantMessage);
+        push_prune("user messages", PC::UserMessage);
+        push_prune("reasoning", PC::Reasoning);
+
+        // Fix context (smart)
+        items.push(SelectionItem {
+            name: "Fix context (smart)".to_string(),
+            description: Some("Attempt to restore missing tool-call links".to_string()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                // Injection fix is automatic; refresh list for user feedback
+                tx.send(AppEvent::CodexOp(Op::GetContextItems));
+            })],
+            ..Default::default()
+        });
+
+        // Close
+        items.push(SelectionItem {
+            name: "Close".to_string(),
+            actions: vec![Box::new(|tx: &AppEventSender| tx.send(AppEvent::PruneAdvancedClosed))],
+            ..Default::default()
+        });
+
+        // Show the menu; Enter executa a ação do item.
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Prune Context".to_string()),
+            subtitle: None,
+            footer_hint: Some(ratatui::text::Line::from(
+                "enter: select | esc: back",
+            )),
+            items,
+            is_searchable: false,
+            search_placeholder: None,
+            header: Box::new(ratatui::text::Line::from("Select an action")),
+            on_enter_event: None,
         });
     }
 

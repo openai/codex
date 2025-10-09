@@ -86,6 +86,8 @@ pub(crate) enum AppEvent {
     OpenReviewCustomPrompt,
 
     // --- Advanced Prune (experimental) ---
+    /// Open the non-destructive advanced prune view.
+    OpenPruneAdvanced,
     /// Close the advanced prune view.
     PruneAdvancedClosed,
     /// Toggle keep marker for an index in the advanced list.
