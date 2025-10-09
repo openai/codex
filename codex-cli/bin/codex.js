@@ -2,7 +2,7 @@
 // Unified entry point for the Codex CLI.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -62,7 +62,35 @@ if (!targetTriple) {
 const vendorRoot = path.join(__dirname, "..", "vendor");
 const archRoot = path.join(vendorRoot, targetTriple);
 const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
-const binaryPath = path.join(archRoot, "codex", codexBinaryName);
+const vendorBinaryPath = path.join(archRoot, "codex", codexBinaryName);
+const repoRoot = path.resolve(__dirname, "..", "..");
+const releaseBinaryPath = path.join(
+  repoRoot,
+  "codex-rs",
+  "target",
+  "release",
+  codexBinaryName,
+);
+const debugBinaryPath = path.join(
+  repoRoot,
+  "codex-rs",
+  "target",
+  "debug",
+  codexBinaryName,
+);
+
+const binaryCandidates = [vendorBinaryPath, releaseBinaryPath, debugBinaryPath];
+const binaryPath = binaryCandidates.find((candidate) => existsSync(candidate));
+
+if (!binaryPath) {
+  const hints = [
+    `Missing native executable for target ${targetTriple}.`,
+    `Looked in:`,
+    ...binaryCandidates.map((candidate) => `  • ${candidate}`),
+    `Consider running 'cargo build -p codex-cli --release' from repo root or reinstalling the CLI package.`,
+  ];
+  throw new Error(hints.join("\n"));
+}
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
@@ -87,9 +115,23 @@ if (existsSync(pathDir)) {
 }
 const updatedPath = getUpdatedPath(additionalDirs);
 
+let disableUpdateCheck = false;
+try {
+  const packageJsonPath = path.join(__dirname, "..", "package.json");
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  disableUpdateCheck = packageJson?.name === "codex-super";
+} catch {
+  /* ignore */
+}
+
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
-  env: { ...process.env, PATH: updatedPath, CODEX_MANAGED_BY_NPM: "1" },
+  env: {
+    ...process.env,
+    PATH: updatedPath,
+    CODEX_MANAGED_BY_NPM: "1",
+    ...(disableUpdateCheck ? { CODEX_DISABLE_UPDATE_CHECK: "1" } : {}),
+  },
 });
 
 child.on("error", (err) => {

@@ -418,6 +418,11 @@ pub(crate) fn new_session_info(
             ]),
             Line::from(vec![
                 "  ".into(),
+                "/global-prompt".into(),
+                " - configure text auto-sent with your first prompt".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
                 "/review".into(),
                 " - review any changes and find issues".dim(),
             ]),

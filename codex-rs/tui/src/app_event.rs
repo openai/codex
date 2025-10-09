@@ -61,6 +61,11 @@ pub(crate) enum AppEvent {
         effort: Option<ReasoningEffort>,
     },
 
+    /// Persist the global prompt that should auto-prepend to new sessions.
+    PersistGlobalPrompt {
+        prompt: Option<String>,
+    },
+
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: String,

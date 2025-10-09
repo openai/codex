@@ -3,6 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
+use crate::chatwidget::prompts_equivalent;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
@@ -16,6 +17,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::config::persist_global_prompt;
 use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
@@ -94,13 +96,31 @@ impl App {
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
 
+        let sanitized_cli_prompt = initial_prompt
+            .as_ref()
+            .and_then(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+            .filter(|prompt| {
+                config
+                    .global_prompt
+                    .as_ref()
+                    .map(|gp| !prompts_equivalent(prompt, gp))
+                    .unwrap_or(true)
+            });
+
         let chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_prompt: initial_prompt.clone(),
+                    initial_prompt: sanitized_cli_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
@@ -122,7 +142,7 @@ impl App {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_prompt: initial_prompt.clone(),
+                    initial_prompt: sanitized_cli_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
@@ -153,6 +173,12 @@ impl App {
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
         };
+
+        let onboarding_notice = Line::from(
+            "[Codex Super] Auto-interaction mode active: trust, login, and approvals run automatically.",
+        );
+        tui.insert_history_lines(vec![onboarding_notice]);
+        app.has_emitted_history_lines = true;
 
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
@@ -363,6 +389,45 @@ impl App {
                             self.chat_widget
                                 .add_error_message(format!("Failed to save default model: {err}"));
                         }
+                    }
+                }
+            }
+            AppEvent::PersistGlobalPrompt { prompt } => {
+                match persist_global_prompt(&self.config.codex_home, prompt.as_deref()).await {
+                    Ok(()) => {
+                        let new_value = prompt.clone();
+                        self.config.global_prompt = new_value.clone();
+                        self.chat_widget.set_global_prompt(new_value.clone());
+
+                        let (message, hint) = if let Some(text) = new_value.as_ref() {
+                            let trimmed = text.trim();
+                            let trimmed_len = trimmed.chars().count();
+                            let mut preview: String = trimmed.chars().take(80).collect();
+                            if trimmed_len > preview.chars().count() {
+                                preview.push('…');
+                            }
+                            (
+                                "Global prompt updated".to_string(),
+                                Some(format!(
+                                    "Will be prepended to your first message: {preview}"
+                                )),
+                            )
+                        } else {
+                            (
+                                "Global prompt cleared".to_string(),
+                                Some(
+                                    "New sessions will start without prepending extra instructions."
+                                        .to_string(),
+                                ),
+                            )
+                        };
+
+                        self.chat_widget.add_info_message(message, hint);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist global prompt");
+                        self.chat_widget
+                            .add_error_message(format!("Failed to update global prompt: {err}"));
                     }
                 }
             }

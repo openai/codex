@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and optionally package the @openai/codex npm module."""
+"""Stage and optionally package the codex-super npm module."""
 
 import argparse
 import json
@@ -16,24 +16,37 @@ RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / 
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
 
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
-    "codex": ["codex", "rg"],
+    "codex-super": ["codex-super", "rg"],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
-    "codex-sdk": ["codex"],
+    "codex-sdk": ["codex-super"],
 }
 COMPONENT_DEST_DIR: dict[str, str] = {
-    "codex": "codex",
+    "codex-super": "codex",
     "codex-responses-api-proxy": "codex-responses-api-proxy",
     "rg": "path",
 }
+COMPONENT_BINARY_BASENAME: dict[str, str] = {
+    "codex-super": "codex",
+    "codex-responses-api-proxy": "codex-responses-api-proxy",
+    "rg": "rg",
+}
+REQUIRED_VENDOR_TARGETS: tuple[str, ...] = (
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
     parser.add_argument(
         "--package",
-        choices=("codex", "codex-responses-api-proxy", "codex-sdk"),
-        default="codex",
-        help="Which npm package to stage (default: codex).",
+        choices=("codex-super", "codex-responses-api-proxy", "codex-sdk"),
+        default="codex-super",
+        help="Which npm package to stage (default: codex-super).",
     )
     parser.add_argument(
         "--version",
@@ -103,11 +116,14 @@ def main() -> int:
                     "pointing to a directory containing pre-installed binaries."
                 )
 
+            if release_version:
+                validate_native_binaries(vendor_src, native_components)
+
             copy_native_binaries(vendor_src, staging_dir, native_components)
 
         if release_version:
             staging_dir_str = str(staging_dir)
-            if package == "codex":
+            if package == "codex-super":
                 print(
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the CLI:\n"
@@ -155,7 +171,7 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
 
 
 def stage_sources(staging_dir: Path, version: str, package: str) -> None:
-    if package == "codex":
+    if package == "codex-super":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
@@ -268,6 +284,47 @@ def copy_native_binaries(vendor_src: Path, staging_dir: Path, components: list[s
             if dest_component_dir.exists():
                 shutil.rmtree(dest_component_dir)
             shutil.copytree(src_component_dir, dest_component_dir)
+
+
+def validate_native_binaries(vendor_src: Path, components: list[str]) -> None:
+    components_set = {component for component in components if component in COMPONENT_DEST_DIR}
+    if not components_set:
+        return
+
+    missing_paths: set[Path] = set()
+
+    for target in REQUIRED_VENDOR_TARGETS:
+        target_dir = vendor_src / target
+        if not target_dir.exists():
+            missing_paths.add(target_dir)
+            continue
+
+        for component in components_set:
+            dest_dir_name = COMPONENT_DEST_DIR.get(component)
+            if dest_dir_name is None:
+                continue
+
+            component_dir = target_dir / dest_dir_name
+            if not component_dir.exists():
+                missing_paths.add(component_dir)
+                continue
+
+            binary_basename = COMPONENT_BINARY_BASENAME.get(component)
+            if not binary_basename:
+                continue
+
+            binary_name = f"{binary_basename}.exe" if "windows" in target else binary_basename
+            binary_path = component_dir / binary_name
+            if not binary_path.exists():
+                missing_paths.add(binary_path)
+
+    if missing_paths:
+        formatted = "\n  ".join(str(path) for path in sorted(missing_paths))
+        raise RuntimeError(
+            "Missing native binaries required for release.\n"
+            "Run 'codex-cli/scripts/install_native_deps.py' to populate vendor before staging.\n"
+            f"Missing paths:\n  {formatted}"
+        )
 
 
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:

@@ -20,6 +20,7 @@ pub struct ConfigProfile {
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
+    pub global_prompt: Option<String>,
 }
 
 impl From<ConfigProfile> for codex_app_server_protocol::Profile {

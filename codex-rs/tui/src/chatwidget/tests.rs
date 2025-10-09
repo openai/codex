@@ -22,6 +22,7 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::InputItem;
 use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
@@ -267,6 +268,8 @@ fn make_chatwidget_manual() -> (
         auth_manager,
         session_header: SessionHeader::new(cfg.model),
         initial_user_message: None,
+        pending_global_prompt: None,
+        has_sent_user_message: false,
         token_info: None,
         rate_limit_snapshot: None,
         rate_limit_warnings: RateLimitWarningState::default(),
@@ -327,6 +330,64 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+#[test]
+fn global_prompt_waits_for_first_user_message() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+    chat.pending_global_prompt = Some("Stay focused".to_string());
+
+    chat.submit_text_message("Stay focused".to_string());
+
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+    assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    assert_eq!(chat.pending_global_prompt.as_deref(), Some("Stay focused"));
+    assert!(!chat.has_sent_user_message);
+
+    chat.submit_text_message("Implement feature".to_string());
+
+    let items = match op_rx
+        .try_recv()
+        .expect("expected user input op after real prompt")
+    {
+        Op::UserInput { items } => items,
+        other => panic!("unexpected op: {other:?}"),
+    };
+    let combined_text = match &items[..] {
+        [InputItem::Text { text }] => text.clone(),
+        other => panic!("unexpected input items: {other:?}"),
+    };
+    assert_eq!(combined_text, "Stay focused\n\nImplement feature");
+
+    match op_rx
+        .try_recv()
+        .expect("expected add-to-history op after real prompt")
+    {
+        Op::AddToHistory { text } => assert_eq!(text, "Stay focused\n\nImplement feature"),
+        other => panic!("unexpected op: {other:?}"),
+    }
+
+    let history_cells = drain_insert_history(&mut rx);
+    assert!(
+        !history_cells.is_empty(),
+        "expected at least one history cell for the submitted prompt"
+    );
+    let rendered = lines_to_single_string(history_cells.last().unwrap());
+    assert!(rendered.contains("Stay focused"));
+    assert!(rendered.contains("Implement feature"));
+    assert!(chat.pending_global_prompt.is_none());
+    assert!(chat.has_sent_user_message);
+}
+
+#[test]
+fn prompts_equivalent_ignores_common_invisible_variants() {
+    use crate::chatwidget::prompts_equivalent;
+
+    assert!(prompts_equivalent(
+        "\u{200b}Stay\u{2060}   focused\u{200d}\u{200b}",
+        "Stay focused"
+    ));
+    assert!(!prompts_equivalent("Stay focused!", "Stay focused"));
 }
 
 #[test]

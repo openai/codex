@@ -116,6 +116,49 @@ use strum::IntoEnumIterator;
 
 const MAX_TRACKED_GHOST_COMMITS: usize = 20;
 
+pub(crate) fn prompts_equivalent(a: &str, b: &str) -> bool {
+    normalize_prompt(a) == normalize_prompt(b)
+}
+
+fn normalize_prompt(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut last_was_space = false;
+    let mut seen_non_space = false;
+
+    for ch in text.chars() {
+        if is_ignorable_prompt_char(ch) {
+            continue;
+        }
+        if ch.is_whitespace() {
+            if seen_non_space && !last_was_space {
+                normalized.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            normalized.push(ch);
+            last_was_space = false;
+            seen_non_space = true;
+        }
+    }
+
+    while normalized.ends_with(' ') {
+        normalized.pop();
+    }
+
+    normalized
+}
+
+fn is_ignorable_prompt_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{200b}' // zero width space
+            | '\u{200c}' // zero width non-joiner
+            | '\u{200d}' // zero width joiner
+            | '\u{2060}' // word joiner
+            | '\u{feff}' // zero width no-break space (BOM)
+    )
+}
+
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -227,6 +270,8 @@ pub(crate) struct ChatWidget {
     auth_manager: Arc<AuthManager>,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
+    pending_global_prompt: Option<String>,
+    has_sent_user_message: bool,
     token_info: Option<TokenUsageInfo>,
     rate_limit_snapshot: Option<RateLimitSnapshotDisplay>,
     rate_limit_warnings: RateLimitWarningState,
@@ -895,9 +940,23 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
         } = common;
+        let trimmed_global_prompt = config
+            .global_prompt
+            .as_ref()
+            .map(|p| p.trim().to_string())
+            .filter(|s| !s.is_empty());
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
+        let initial_user_message =
+            create_initial_user_message(initial_prompt.unwrap_or_default(), initial_images).filter(
+                |msg| {
+                    trimmed_global_prompt
+                        .as_ref()
+                        .map(|gp| !prompts_equivalent(&msg.text, gp))
+                        .unwrap_or(true)
+                },
+            );
 
         Self {
             app_event_tx: app_event_tx.clone(),
@@ -915,10 +974,9 @@ impl ChatWidget {
             config: config.clone(),
             auth_manager,
             session_header: SessionHeader::new(config.model),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-            ),
+            initial_user_message,
+            pending_global_prompt: trimmed_global_prompt,
+            has_sent_user_message: false,
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -956,11 +1014,25 @@ impl ChatWidget {
             enhanced_keys_supported,
             auth_manager,
         } = common;
+        let trimmed_global_prompt = config
+            .global_prompt
+            .as_ref()
+            .map(|p| p.trim().to_string())
+            .filter(|s| !s.is_empty());
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+        let initial_user_message =
+            create_initial_user_message(initial_prompt.unwrap_or_default(), initial_images).filter(
+                |msg| {
+                    trimmed_global_prompt
+                        .as_ref()
+                        .map(|gp| !prompts_equivalent(&msg.text, gp))
+                        .unwrap_or(true)
+                },
+            );
 
         Self {
             app_event_tx: app_event_tx.clone(),
@@ -978,10 +1050,9 @@ impl ChatWidget {
             config: config.clone(),
             auth_manager,
             session_header: SessionHeader::new(config.model),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-            ),
+            initial_user_message,
+            pending_global_prompt: None,
+            has_sent_user_message: true,
             token_info: None,
             rate_limit_snapshot: None,
             rate_limit_warnings: RateLimitWarningState::default(),
@@ -1124,6 +1195,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::GlobalPrompt => {
+                self.open_global_prompt_editor();
+            }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
@@ -1246,16 +1320,42 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
-        if text.is_empty() && image_paths.is_empty() {
+        let UserMessage {
+            mut text,
+            image_paths,
+        } = user_message;
+
+        let trimmed_text = text.trim().to_owned();
+
+        if trimmed_text.is_empty() && image_paths.is_empty() {
             return;
+        }
+
+        if !self.has_sent_user_message
+            && image_paths.is_empty()
+            && !trimmed_text.is_empty()
+            && self
+                .pending_global_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompts_equivalent(&trimmed_text, prompt))
+        {
+            return;
+        }
+
+        if !text.is_empty()
+            && let Some(prompt) = self.pending_global_prompt.take()
+            && !prompt.is_empty()
+        {
+            text = format!("{prompt}\n\n{text}");
         }
 
         self.capture_ghost_snapshot();
 
         let mut items: Vec<InputItem> = Vec::new();
 
-        if !text.is_empty() {
+        let has_text = !text.is_empty();
+
+        if has_text {
             items.push(InputItem::Text { text: text.clone() });
         }
 
@@ -1269,20 +1369,19 @@ impl ChatWidget {
                 tracing::error!("failed to send message: {e}");
             });
 
-        // Persist the text to cross-session message history.
-        if !text.is_empty() {
+        if has_text {
             self.codex_op_tx
                 .send(Op::AddToHistory { text: text.clone() })
                 .unwrap_or_else(|e| {
                     tracing::error!("failed to send AddHistory op: {e}");
                 });
-        }
-
-        // Only show the text portion in conversation history.
-        if !text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(text));
         }
+
         self.needs_final_message_separator = false;
+        if has_text {
+            self.has_sent_user_message = true;
+        }
     }
 
     fn capture_ghost_snapshot(&mut self) {
@@ -1831,6 +1930,16 @@ impl ChatWidget {
         self.config.model = model.to_string();
     }
 
+    pub(crate) fn set_global_prompt(&mut self, prompt: Option<String>) {
+        if !self.has_sent_user_message {
+            self.pending_global_prompt = prompt
+                .as_ref()
+                .map(|p| p.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+        self.config.global_prompt = prompt;
+    }
+
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
@@ -2065,6 +2174,8 @@ impl ChatWidget {
             "Custom review instructions".to_string(),
             "Type instructions and press Enter".to_string(),
             None,
+            None,
+            false,
             Box::new(move |prompt: String| {
                 let trimmed = prompt.trim().to_string();
                 if trimmed.is_empty() {
@@ -2076,6 +2187,29 @@ impl ChatWidget {
                         user_facing_hint: trimmed,
                     },
                 }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_global_prompt_editor(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let initial_text = self.config.global_prompt.clone();
+        let view = CustomPromptView::new(
+            "Set global prompt".to_string(),
+            "Type instructions and press Enter (leave blank to clear)".to_string(),
+            Some("Applies to the first user message of new sessions".to_string()),
+            initial_text,
+            true,
+            Box::new(move |input: String| {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    tx.send(AppEvent::PersistGlobalPrompt { prompt: None });
+                } else {
+                    tx.send(AppEvent::PersistGlobalPrompt {
+                        prompt: Some(trimmed.to_string()),
+                    });
+                }
             }),
         );
         self.bottom_pane.show_view(Box::new(view));

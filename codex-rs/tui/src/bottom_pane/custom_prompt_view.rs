@@ -30,6 +30,7 @@ pub(crate) struct CustomPromptView {
     placeholder: String,
     context_label: Option<String>,
     on_submit: PromptSubmitted,
+    allow_empty_submit: bool,
 
     // UI state
     textarea: TextArea,
@@ -42,14 +43,23 @@ impl CustomPromptView {
         title: String,
         placeholder: String,
         context_label: Option<String>,
+        initial_text: Option<String>,
+        allow_empty_submit: bool,
         on_submit: PromptSubmitted,
     ) -> Self {
+        let mut textarea = TextArea::new();
+        if let Some(text) = initial_text {
+            textarea.set_text(&text);
+            textarea.set_cursor(text.len());
+        }
+
         Self {
             title,
             placeholder,
             context_label,
             on_submit,
-            textarea: TextArea::new(),
+            allow_empty_submit,
+            textarea,
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
         }
@@ -70,10 +80,11 @@ impl BottomPaneView for CustomPromptView {
                 ..
             } => {
                 let text = self.textarea.text().trim().to_string();
-                if !text.is_empty() {
-                    (self.on_submit)(text);
-                    self.complete = true;
+                if text.is_empty() && !self.allow_empty_submit {
+                    return;
                 }
+                (self.on_submit)(text);
+                self.complete = true;
             }
             KeyEvent {
                 code: KeyCode::Enter,

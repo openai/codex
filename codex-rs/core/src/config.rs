@@ -111,6 +111,9 @@ pub struct Config {
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
+    /// Optional text prepended to the first user message of every session.
+    pub global_prompt: Option<String>,
+
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -590,6 +593,52 @@ fn ensure_profile_table<'a>(
 }
 
 // TODO(jif) refactor config persistence.
+pub async fn persist_global_prompt(codex_home: &Path, prompt: Option<&str>) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    match prompt.and_then(|p| {
+        let trimmed = p.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(value) => {
+            doc["global_prompt"] = toml_edit::value(value);
+        }
+        None => {
+            doc.as_table_mut().remove("global_prompt");
+        }
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
 pub async fn persist_model_selection(
     codex_home: &Path,
     active_profile: Option<&str>,
@@ -731,6 +780,9 @@ pub struct ConfigToml {
 
     /// System instructions.
     pub instructions: Option<String>,
+
+    /// Global prompt prepended to the first user message of every session.
+    pub global_prompt: Option<String>,
 
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     #[serde(default)]
@@ -1099,6 +1151,20 @@ impl Config {
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
 
+        let global_prompt = config_profile
+            .global_prompt
+            .or(cfg.global_prompt)
+            .and_then(|prompt| {
+                let trimmed = prompt.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if trimmed.len() == prompt.len() {
+                    Some(prompt)
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+
         // Default review model when not set in config; allow CLI override to take precedence.
         let review_model = override_review_model
             .or(cfg.review_model)
@@ -1123,6 +1189,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
+            global_prompt,
             mcp_servers: cfg.mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -1943,6 +2010,44 @@ model = "gpt-5-codex"
         Ok(())
     }
 
+    #[tokio::test]
+    async fn persist_global_prompt_sets_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_global_prompt(codex_home.path(), Some("Reply in Korean.")).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.global_prompt.as_deref(), Some("Reply in Korean."));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_global_prompt_clears_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+global_prompt = "Reply in Korean."
+"#,
+        )
+        .await?;
+
+        persist_global_prompt(codex_home.path(), None).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert!(parsed.global_prompt.is_none());
+
+        Ok(())
+    }
+
     struct PrecedenceTestFixture {
         cwd: TempDir,
         codex_home: TempDir,
@@ -2113,6 +2218,7 @@ model_verbosity = "high"
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
+                global_prompt: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
@@ -2176,6 +2282,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            global_prompt: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -2254,6 +2361,7 @@ model_verbosity = "high"
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            global_prompt: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
@@ -2318,6 +2426,7 @@ model_verbosity = "high"
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
+            global_prompt: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,

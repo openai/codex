@@ -12,6 +12,7 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
@@ -38,10 +39,11 @@ pub enum TrustDirectorySelection {
 
 impl WidgetRef for &TrustDirectoryWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 "> ".into(),
-                "You are running Codex in ".bold(),
+                "You are running Codex Super in ".bold(),
                 self.cwd.to_string_lossy().to_string().into(),
             ]),
             "".into(),
@@ -49,10 +51,25 @@ impl WidgetRef for &TrustDirectoryWidget {
 
         if self.is_git_repo {
             lines.push(
-                "  Since this folder is version controlled, you may wish to allow Codex".into(),
+                "  Codex Super can work in trusted folders without repeated approvals,".into(),
+            );
+            lines.push(
+                "  so you stay focused on building while keeping control when it matters.".into(),
+            );
+            lines.push("".into());
+            lines.push(
+                "  Since this folder is version controlled, you may wish to allow Codex Super"
+                    .into(),
             );
             lines.push("  to work in this folder without asking for approval.".into());
         } else {
+            lines.push(
+                "  Codex Super works best in trusted folders where approvals are optional,".into(),
+            );
+            lines.push(
+                "  but in untracked directories we recommend keeping approvals for safety.".into(),
+            );
+            lines.push("".into());
             lines.push(
                 "  Since this folder is not version controlled, we recommend requiring".into(),
             );
@@ -74,7 +91,7 @@ impl WidgetRef for &TrustDirectoryWidget {
             lines.push(create_option(
                 0,
                 TrustDirectorySelection::Trust,
-                "Yes, allow Codex to work in this folder without asking for approval",
+                "Yes, allow Codex Super to work in this folder without asking for approval",
             ));
             lines.push(create_option(
                 1,
@@ -85,7 +102,7 @@ impl WidgetRef for &TrustDirectoryWidget {
             lines.push(create_option(
                 0,
                 TrustDirectorySelection::Trust,
-                "Allow Codex to work in this folder without asking for approval",
+                "Allow Codex Super to work in this folder without asking for approval",
             ));
             lines.push(create_option(
                 1,
