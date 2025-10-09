@@ -106,6 +106,7 @@ mod imp {
     use windows::Win32::Foundation::VARIANT_TRUE;
     use windows::Win32::Foundation::WAIT_OBJECT_0;
     use windows::Win32::Foundation::WIN32_ERROR;
+    use windows::Win32::Security::DACL_SECURITY_INFORMATION;
 
     use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
     use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule;
