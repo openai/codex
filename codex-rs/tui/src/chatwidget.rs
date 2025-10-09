@@ -1104,6 +1104,7 @@ impl ChatWidget {
             return;
         }
         match cmd {
+            SlashCommand::Name => self.open_name_popup(),
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
@@ -1248,6 +1249,29 @@ impl ChatWidget {
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
+            return;
+        }
+
+        // Intercept '/name <new name>' as a local rename command (no images allowed).
+        if image_paths.is_empty()
+            && let Some((cmd, rest)) = crate::bottom_pane::prompt_args::parse_slash_name(&text)
+            && cmd == "name"
+        {
+            let name = rest.trim();
+            if name.is_empty() {
+                // Provide a brief usage hint.
+                self.add_to_history(history_cell::new_info_event(
+                    "Usage: /name <new name>".to_string(),
+                    None,
+                ));
+                self.request_redraw();
+            } else {
+                // Send the rename op; persistence and ack come as an event.
+                let name_str = name.to_string();
+                self.codex_op_tx
+                    .send(Op::SetSessionName { name: name_str })
+                    .unwrap_or_else(|e| tracing::error!("failed to send SetSessionName op: {e}"));
+            }
             return;
         }
 
@@ -1442,6 +1466,13 @@ impl ChatWidget {
             EventMsg::ConversationPath(ev) => {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
+            }
+            EventMsg::SessionRenamed(ev) => {
+                self.add_to_history(history_cell::new_info_event(
+                    format!("Named this chat: {}", ev.name),
+                    None,
+                ));
+                self.request_redraw();
             }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request)
@@ -2079,6 +2110,33 @@ impl ChatWidget {
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_name_popup(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Name this chat".to_string(),
+            "Type a name and press Enter".to_string(),
+            None,
+            Box::new(move |name: String| {
+                let trimmed = name.trim().to_string();
+                if trimmed.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::SetSessionName(trimmed));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn begin_set_session_name(&mut self, name: String) {
+        let trimmed = name.trim().to_string();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.codex_op_tx
+            .send(Op::SetSessionName { name: trimmed })
+            .unwrap_or_else(|e| tracing::error!("failed to send SetSessionName op: {e}"));
     }
 
     /// Programmatically submit a user text message as if typed in the

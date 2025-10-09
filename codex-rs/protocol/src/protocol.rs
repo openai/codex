@@ -171,6 +171,11 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Set a human-friendly name for the current session.
+    /// The agent will persist this to the rollout as an event so that UIs can
+    /// surface it when listing sessions.
+    SetSessionName { name: String },
+
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
@@ -457,6 +462,9 @@ pub enum EventMsg {
     AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent),
     /// Signaled when the model begins a new reasoning summary section (e.g., a new titled block).
     AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent),
+
+    /// Session was given a human-friendly name by the user.
+    SessionRenamed(SessionRenamedEvent),
 
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
@@ -893,6 +901,11 @@ pub struct WebSearchBeginEvent {
 pub struct WebSearchEndEvent {
     pub call_id: String,
     pub query: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct SessionRenamedEvent {
+    pub name: String,
 }
 
 /// Response payload for `Op::GetHistory` containing the current session's

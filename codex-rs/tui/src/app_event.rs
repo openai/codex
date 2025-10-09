@@ -85,6 +85,9 @@ pub(crate) enum AppEvent {
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
 
+    /// Begin setting a human-readable name for the current session.
+    SetSessionName(String),
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 }

@@ -88,6 +88,7 @@ use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::SessionRenamedEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
@@ -1504,6 +1505,16 @@ async fn submission_loop(
                         conversation_id: sess.conversation_id,
                         path,
                     }),
+                };
+                sess.send_event(event).await;
+            }
+            Op::SetSessionName { name } => {
+                // Persist a rename event and notify the client. We rely on the
+                // recorder's filtering to include this in the rollout.
+                let sub_id = sub.id.clone();
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::SessionRenamed(SessionRenamedEvent { name }),
                 };
                 sess.send_event(event).await;
             }

@@ -15,6 +15,7 @@ pub enum SlashCommand {
     Model,
     Approvals,
     Review,
+    Name,
     New,
     Init,
     Compact,
@@ -33,6 +34,7 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
+            SlashCommand::Name => "set a name for this chat",
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
@@ -60,6 +62,8 @@ impl SlashCommand {
     /// Whether this command can be run while a task is in progress.
     pub fn available_during_task(self) -> bool {
         match self {
+            // Naming is a local UI action; allow during tasks.
+            SlashCommand::Name => true,
             SlashCommand::New
             | SlashCommand::Init
             | SlashCommand::Compact
