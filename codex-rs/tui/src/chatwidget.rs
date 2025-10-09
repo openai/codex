@@ -1589,10 +1589,6 @@ impl ChatWidget {
         self.submit_op(Op::GetContextItems);
     }
 
-    pub(crate) fn on_prune_advanced_closed(&mut self) {
-        self.pending_prune_advanced = false;
-    }
-
     pub(crate) fn toggle_keep_index(&mut self, idx: usize) {
         if self.prune_keep_indices.contains(&idx) {
             self.prune_keep_indices.remove(&idx);
