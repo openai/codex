@@ -218,6 +218,10 @@ pub struct Config {
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
 
+    /// When true, disables all built-in tools (shell, read_file, list_dir, grep_files, apply_patch).
+    /// MCP tools and web search remain available if configured.
+    pub disable_builtin_tools: bool,
+
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
 
@@ -957,6 +961,7 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub disable_builtin_tools: Option<bool>,
 }
 
 impl Config {
@@ -985,6 +990,7 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            disable_builtin_tools,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1177,6 +1183,7 @@ impl Config {
                 .unwrap_or(false),
             use_experimental_use_rmcp_client: cfg.experimental_use_rmcp_client.unwrap_or(false),
             include_view_image_tool,
+            disable_builtin_tools: disable_builtin_tools.unwrap_or(false),
             active_profile: active_profile_name,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
@@ -2120,6 +2127,7 @@ model_verbosity = "high"
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
                 include_view_image_tool: true,
+                disable_builtin_tools: false,
                 active_profile: Some("o3".to_string()),
                 windows_wsl_setup_acknowledged: false,
                 disable_paste_burst: false,
@@ -2183,6 +2191,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            disable_builtin_tools: false,
             active_profile: Some("gpt3".to_string()),
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
@@ -2261,6 +2270,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            disable_builtin_tools: false,
             active_profile: Some("zdr".to_string()),
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
@@ -2325,6 +2335,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            disable_builtin_tools: false,
             active_profile: Some("gpt5".to_string()),
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,

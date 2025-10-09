@@ -29,6 +29,7 @@ pub(crate) struct ToolsConfig {
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
     pub experimental_supported_tools: Vec<String>,
+    pub disable_builtin_tools: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -39,6 +40,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
+    pub(crate) disable_builtin_tools: bool,
 }
 
 impl ToolsConfig {
@@ -51,6 +53,7 @@ impl ToolsConfig {
             use_streamable_shell_tool,
             include_view_image_tool,
             experimental_unified_exec_tool,
+            disable_builtin_tools,
         } = params;
         let shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::Streamable
@@ -80,6 +83,7 @@ impl ToolsConfig {
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
+            disable_builtin_tools: *disable_builtin_tools,
         }
     }
 }
@@ -681,87 +685,90 @@ pub(crate) fn build_specs(
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
 
-    if config.experimental_unified_exec_tool {
-        builder.push_spec(create_unified_exec_tool());
-        builder.register_handler("unified_exec", unified_exec_handler);
-    } else {
-        match &config.shell_type {
-            ConfigShellToolType::Default => {
-                builder.push_spec(create_shell_tool());
-            }
-            ConfigShellToolType::Local => {
-                builder.push_spec(ToolSpec::LocalShell {});
-            }
-            ConfigShellToolType::Streamable => {
-                builder.push_spec(ToolSpec::Function(
-                    create_exec_command_tool_for_responses_api(),
-                ));
-                builder.push_spec(ToolSpec::Function(
-                    create_write_stdin_tool_for_responses_api(),
-                ));
-                builder.register_handler(EXEC_COMMAND_TOOL_NAME, exec_stream_handler.clone());
-                builder.register_handler(WRITE_STDIN_TOOL_NAME, exec_stream_handler);
-            }
-        }
-    }
-
-    // Always register shell aliases so older prompts remain compatible.
-    builder.register_handler("shell", shell_handler.clone());
-    builder.register_handler("container.exec", shell_handler.clone());
-    builder.register_handler("local_shell", shell_handler);
-
-    if config.plan_tool {
-        builder.push_spec(PLAN_TOOL.clone());
-        builder.register_handler("update_plan", plan_handler);
-    }
-
-    if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
-        match apply_patch_tool_type {
-            ApplyPatchToolType::Freeform => {
-                builder.push_spec(create_apply_patch_freeform_tool());
-            }
-            ApplyPatchToolType::Function => {
-                builder.push_spec(create_apply_patch_json_tool());
+    // Skip built-in tools if the flag is set
+    if !config.disable_builtin_tools {
+        if config.experimental_unified_exec_tool {
+            builder.push_spec(create_unified_exec_tool());
+            builder.register_handler("unified_exec", unified_exec_handler);
+        } else {
+            match &config.shell_type {
+                ConfigShellToolType::Default => {
+                    builder.push_spec(create_shell_tool());
+                }
+                ConfigShellToolType::Local => {
+                    builder.push_spec(ToolSpec::LocalShell {});
+                }
+                ConfigShellToolType::Streamable => {
+                    builder.push_spec(ToolSpec::Function(
+                        create_exec_command_tool_for_responses_api(),
+                    ));
+                    builder.push_spec(ToolSpec::Function(
+                        create_write_stdin_tool_for_responses_api(),
+                    ));
+                    builder.register_handler(EXEC_COMMAND_TOOL_NAME, exec_stream_handler.clone());
+                    builder.register_handler(WRITE_STDIN_TOOL_NAME, exec_stream_handler);
+                }
             }
         }
-        builder.register_handler("apply_patch", apply_patch_handler);
-    }
 
-    if config
-        .experimental_supported_tools
-        .contains(&"grep_files".to_string())
-    {
-        let grep_files_handler = Arc::new(GrepFilesHandler);
-        builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
-        builder.register_handler("grep_files", grep_files_handler);
-    }
+        // Always register shell aliases so older prompts remain compatible.
+        builder.register_handler("shell", shell_handler.clone());
+        builder.register_handler("container.exec", shell_handler.clone());
+        builder.register_handler("local_shell", shell_handler);
 
-    if config
-        .experimental_supported_tools
-        .contains(&"read_file".to_string())
-    {
-        let read_file_handler = Arc::new(ReadFileHandler);
-        builder.push_spec_with_parallel_support(create_read_file_tool(), true);
-        builder.register_handler("read_file", read_file_handler);
-    }
+        if config.plan_tool {
+            builder.push_spec(PLAN_TOOL.clone());
+            builder.register_handler("update_plan", plan_handler);
+        }
 
-    if config
-        .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "list_dir")
-    {
-        let list_dir_handler = Arc::new(ListDirHandler);
-        builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
-        builder.register_handler("list_dir", list_dir_handler);
-    }
+        if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
+            match apply_patch_tool_type {
+                ApplyPatchToolType::Freeform => {
+                    builder.push_spec(create_apply_patch_freeform_tool());
+                }
+                ApplyPatchToolType::Function => {
+                    builder.push_spec(create_apply_patch_json_tool());
+                }
+            }
+            builder.register_handler("apply_patch", apply_patch_handler);
+        }
 
-    if config
-        .experimental_supported_tools
-        .contains(&"test_sync_tool".to_string())
-    {
-        let test_sync_handler = Arc::new(TestSyncHandler);
-        builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
-        builder.register_handler("test_sync_tool", test_sync_handler);
+        if config
+            .experimental_supported_tools
+            .contains(&"grep_files".to_string())
+        {
+            let grep_files_handler = Arc::new(GrepFilesHandler);
+            builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
+            builder.register_handler("grep_files", grep_files_handler);
+        }
+
+        if config
+            .experimental_supported_tools
+            .contains(&"read_file".to_string())
+        {
+            let read_file_handler = Arc::new(ReadFileHandler);
+            builder.push_spec_with_parallel_support(create_read_file_tool(), true);
+            builder.register_handler("read_file", read_file_handler);
+        }
+
+        if config
+            .experimental_supported_tools
+            .iter()
+            .any(|tool| tool == "list_dir")
+        {
+            let list_dir_handler = Arc::new(ListDirHandler);
+            builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
+            builder.register_handler("list_dir", list_dir_handler);
+        }
+
+        if config
+            .experimental_supported_tools
+            .contains(&"test_sync_tool".to_string())
+        {
+            let test_sync_handler = Arc::new(TestSyncHandler);
+            builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
+            builder.register_handler("test_sync_tool", test_sync_handler);
+        }
     }
 
     if config.web_search_request {
@@ -853,6 +860,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            disable_builtin_tools: false,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -873,6 +881,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            disable_builtin_tools: false,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -895,6 +904,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: false,
             experimental_unified_exec_tool: true,
+            disable_builtin_tools: false,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -916,6 +926,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: false,
             experimental_unified_exec_tool: false,
+            disable_builtin_tools: false,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -948,6 +959,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            disable_builtin_tools: false,
         });
         let (tools, _) = build_specs(
             &config,
@@ -1409,6 +1421,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            disable_builtin_tools: false,
         });
         let (tools, _) = build_specs(
             &config,

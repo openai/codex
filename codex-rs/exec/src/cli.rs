@@ -71,6 +71,11 @@ pub struct Cli {
     #[arg(long = "include-plan-tool", default_value_t = false)]
     pub include_plan_tool: bool,
 
+    /// Disable all built-in tools (shell, read_file, list_dir, grep_files, apply_patch).
+    /// MCP tools and web search will still be available if configured.
+    #[arg(long = "disable-builtin-tools", default_value_t = false)]
+    pub disable_builtin_tools: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
     pub last_message_file: Option<PathBuf>,
