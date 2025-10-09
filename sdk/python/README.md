@@ -82,7 +82,7 @@ print(turn.final_response)
 
 - Install dependencies with `uv sync --extra dev`.
 - Run formatting and linting: `uv run ruff check .` and `uv run ruff format .`.
-- Type-check with `uv run mypy`.
+- Type-check with `uv run mypy --config-file pyproject.toml src/codex`.
 - Tests via `uv run pytest`.
 
 ### Bundling native binaries

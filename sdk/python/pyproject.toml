@@ -22,7 +22,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.4", "mypy>=1.12", "ruff>=0.5", "pydantic>=2.7"]
+dev = ["pytest>=8.4", "mypy>=1.18", "ruff>=0.5", "pydantic>=2.7"]
 
 [project.urls]
 Homepage = "https://github.com/openai/codex"
