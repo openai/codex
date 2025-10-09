@@ -7,6 +7,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::export_client_responses;
 use codex_app_server_protocol::export_server_responses;
+use codex_app_server_protocol::generate_json as generate_protocol_json;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
@@ -20,6 +21,7 @@ const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 
 pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     ensure_dir(out_dir)?;
+    generate_json(out_dir)?;
 
     // Generate the TS bindings client -> server messages.
     ClientRequest::export_all_to(out_dir)?;
@@ -54,6 +56,12 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+pub fn generate_json(out_dir: &Path) -> Result<()> {
+    ensure_dir(out_dir)?;
+    generate_protocol_json(out_dir)?;
     Ok(())
 }
 
