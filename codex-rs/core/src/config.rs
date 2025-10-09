@@ -240,13 +240,17 @@ impl Config {
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
 
-        let root_value = load_resolved_config(
+        let mut layers = load_config_layers_with_overrides(
             &codex_home,
-            cli_overrides,
             crate::config_loader::LoaderOverrides::default(),
         )
         .await?;
 
+        if let Some(project_value) = load_project_config_as_toml_from_overrides(&overrides)? {
+            merge_toml_values(&mut layers.base, &project_value);
+        }
+
+        let root_value = apply_overlays(layers, cli_overrides);
         let cfg: ConfigToml = root_value.try_into().map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
             std::io::Error::new(std::io::ErrorKind::InvalidData, e)
@@ -273,6 +277,56 @@ pub async fn load_config_as_toml_with_cli_overrides(
     })?;
 
     Ok(cfg)
+}
+
+/// Attempt to load a project-local `.codex/config.toml` using cwd hints from
+/// `ConfigOverrides` (if any). Returns `Ok(Some(toml))` when found and parsed,
+/// `Ok(None)` when missing.
+fn load_project_config_as_toml_from_overrides(
+    overrides: &ConfigOverrides,
+) -> std::io::Result<Option<TomlValue>> {
+    let preliminary_cwd = match overrides.cwd.as_ref() {
+        None => std::env::current_dir()?,
+        Some(p) if p.is_absolute() => p.clone(),
+        Some(p) => {
+            let mut current = std::env::current_dir()?;
+            current.push(p);
+            current
+        }
+    };
+
+    load_project_config_as_toml(&preliminary_cwd)
+}
+
+/// Try to load `.codex/config.toml` from the project directory.
+/// Search order:
+///   1. If inside a git worktree: `<git-root>/.codex/config.toml`
+///   2. Fallback: `<cwd>/.codex/config.toml`
+fn load_project_config_as_toml(cwd: &Path) -> std::io::Result<Option<TomlValue>> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(root) = resolve_root_git_project_for_trust(cwd) {
+        candidates.push(root.join(".codex").join(CONFIG_TOML_FILE));
+    }
+    candidates.push(cwd.join(".codex").join(CONFIG_TOML_FILE));
+
+    for path in candidates {
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
+                Ok(val) => return Ok(Some(val)),
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to parse project .codex/config.toml at {}: {e}",
+                        path.display()
+                    );
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e));
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(None)
 }
 
 async fn load_resolved_config(
@@ -1308,6 +1362,7 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use crate::config_types::HistoryPersistence;
+    use crate::config_types::McpServerTransportConfig;
     use crate::config_types::Notifications;
 
     use super::*;
@@ -2429,6 +2484,69 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#;
         assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_local_codex_config_overrides_globals() -> std::io::Result<()> {
+        use std::fs;
+
+        // Arrange global config value in-memory
+        let global = r#"
+[mcp_servers.shared]
+command = "echo"
+args = ["global"]
+
+[mcp_servers.only-global]
+command = "true"
+"#;
+        let mut global_val: TomlValue = toml::from_str(global).unwrap();
+
+        // Arrange project `.codex/config.toml` on disk so loader can find it
+        let project_dir = TempDir::new()?;
+        let proj_codex_dir = project_dir.path().join(".codex");
+        fs::create_dir_all(&proj_codex_dir)?;
+        let project_toml = r#"
+[mcp_servers.shared]
+command = "echo"
+args = ["project"]
+
+[mcp_servers.only-project]
+command = "false"
+"#;
+        fs::write(proj_codex_dir.join(CONFIG_TOML_FILE), project_toml)?;
+
+        // Load project-local config and merge with global
+        let project_val = load_project_config_as_toml(project_dir.path())?
+            .expect("project config should be found");
+        merge_toml_values(&mut global_val, &project_val);
+
+        // Deserialize to ConfigToml and finish loading Config
+        let config_toml: ConfigToml = global_val.try_into().unwrap();
+        let overrides = ConfigOverrides {
+            cwd: Some(project_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let cfg = Config::load_from_base_config_with_overrides(
+            config_toml,
+            overrides,
+            TempDir::new()?.keep(),
+        )?;
+
+        // shared should be overridden by project
+        let shared_server = cfg
+            .mcp_servers
+            .get("shared")
+            .expect("shared server should exist");
+        match &shared_server.transport {
+            McpServerTransportConfig::Stdio { args, .. } => {
+                assert_eq!(args, &["project".to_string()]);
+            }
+            transport => panic!("expected stdio transport, got {transport:?}"),
+        }
+        assert!(cfg.mcp_servers.contains_key("only-project"));
+        assert!(cfg.mcp_servers.contains_key("only-global"));
 
         Ok(())
     }
