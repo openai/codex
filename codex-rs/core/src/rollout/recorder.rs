@@ -6,9 +6,7 @@ use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::mcp_protocol::ConversationId;
-use serde::Deserialize;
-use serde::Serialize;
+use codex_protocol::ConversationId;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -26,28 +24,15 @@ use super::list::Cursor;
 use super::list::get_conversations;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
-use crate::default_client::ORIGINATOR;
+use crate::default_client::originator;
 use crate::git_info::collect_git_info;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
-
-#[derive(Serialize, Deserialize, Default, Clone)]
-pub struct SessionStateSnapshot {}
-
-#[derive(Serialize, Deserialize, Default, Clone)]
-pub struct SavedSession {
-    pub session: SessionMeta,
-    #[serde(default)]
-    pub items: Vec<ResponseItem>,
-    #[serde(default)]
-    pub state: SessionStateSnapshot,
-    pub session_id: ConversationId,
-}
+use codex_protocol::protocol::SessionSource;
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.
@@ -69,6 +54,7 @@ pub enum RolloutRecorderParams {
     Create {
         conversation_id: ConversationId,
         instructions: Option<String>,
+        source: SessionSource,
     },
     Resume {
         path: PathBuf,
@@ -87,10 +73,15 @@ enum RolloutCmd {
 }
 
 impl RolloutRecorderParams {
-    pub fn new(conversation_id: ConversationId, instructions: Option<String>) -> Self {
+    pub fn new(
+        conversation_id: ConversationId,
+        instructions: Option<String>,
+        source: SessionSource,
+    ) -> Self {
         Self::Create {
             conversation_id,
             instructions,
+            source,
         }
     }
 
@@ -105,8 +96,9 @@ impl RolloutRecorder {
         codex_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
+        allowed_sources: &[SessionSource],
     ) -> std::io::Result<ConversationsPage> {
-        get_conversations(codex_home, page_size, cursor).await
+        get_conversations(codex_home, page_size, cursor, allowed_sources).await
     }
 
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
@@ -117,6 +109,7 @@ impl RolloutRecorder {
             RolloutRecorderParams::Create {
                 conversation_id,
                 instructions,
+                source,
             } => {
                 let LogFileInfo {
                     file,
@@ -140,9 +133,10 @@ impl RolloutRecorder {
                         id: session_id,
                         timestamp,
                         cwd: config.cwd.clone(),
-                        originator: ORIGINATOR.value.clone(),
+                        originator: originator().value.clone(),
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
+                        source,
                     }),
                 )
             }

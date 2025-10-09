@@ -2,6 +2,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use std::ops::Range;
 use textwrap::Options;
+use textwrap::wrap_algorithms::Penalties;
 
 use crate::render::line_utils::push_owned_lines;
 
@@ -90,7 +91,11 @@ impl<'a> RtOptions<'a> {
             subsequent_indent: Line::default(),
             break_words: true,
             word_separator: textwrap::WordSeparator::new(),
-            wrap_algorithm: textwrap::WrapAlgorithm::new(),
+            wrap_algorithm: textwrap::WrapAlgorithm::OptimalFit(Penalties {
+                // ~infinite overflow penalty, we never want to overflow a line.
+                overflow_penalty: usize::MAX / 4,
+                ..Default::default()
+            }),
             word_splitter: textwrap::WordSplitter::HyphenSplitter,
         }
     }
@@ -149,6 +154,7 @@ impl<'a> RtOptions<'a> {
     }
 }
 
+#[must_use]
 pub(crate) fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> Vec<Line<'a>>
 where
     O: Into<RtOptions<'a>>,
@@ -186,7 +192,7 @@ where
     };
 
     // Build first wrapped line with initial indent.
-    let mut first_line = rt_opts.initial_indent.clone();
+    let mut first_line = rt_opts.initial_indent.clone().style(line.style);
     {
         let sliced = slice_line_spans(line, &span_bounds, first_line_range);
         let mut spans = first_line.spans;
@@ -214,7 +220,7 @@ where
         if r.is_empty() {
             continue;
         }
-        let mut subsequent_line = rt_opts.subsequent_indent.clone();
+        let mut subsequent_line = rt_opts.subsequent_indent.clone().style(line.style);
         let offset_range = (r.start + base)..(r.end + base);
         let sliced = slice_line_spans(line, &span_bounds, &offset_range);
         let mut spans = subsequent_line.spans;
@@ -329,6 +335,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
     use ratatui::style::Stylize;
+    use std::string::ToString;
 
     fn concat_line(line: &Line) -> String {
         line.spans
@@ -511,7 +518,7 @@ mod tests {
             .subsequent_indent(Line::from("  "));
 
         let lines = [Line::from("hello world"), Line::from("foo bar baz")];
-        let out = word_wrap_lines_borrowed(lines.iter().collect::<Vec<_>>(), opts);
+        let out = word_wrap_lines_borrowed(lines.iter(), opts);
 
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert!(rendered.first().unwrap().starts_with("- "));
@@ -523,7 +530,7 @@ mod tests {
     #[test]
     fn wrap_lines_borrowed_without_indents_is_concat_of_single_wraps() {
         let lines = [Line::from("hello"), Line::from("world!")];
-        let out = word_wrap_lines_borrowed(lines.iter().collect::<Vec<_>>(), 10);
+        let out = word_wrap_lines_borrowed(lines.iter(), 10);
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert_eq!(rendered, vec!["hello", "world!"]);
     }
@@ -543,7 +550,7 @@ mod tests {
         let lines = [line];
         // Force small width to exercise wrapping at spaces.
         let wrapped = word_wrap_lines_borrowed(&lines, 40);
-        let joined: String = wrapped.iter().map(|l| l.to_string()).join("\n");
+        let joined: String = wrapped.iter().map(ToString::to_string).join("\n");
         assert_eq!(
             joined,
             r#"Years passed, and Willowmere thrived

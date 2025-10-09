@@ -169,6 +169,12 @@ async fn python_getpwuid_works_under_seatbelt() {
         return;
     }
 
+    // For local dev.
+    if which::which("python3").is_err() {
+        eprintln!("python3 not found in PATH, skipping test.");
+        return;
+    }
+
     // ReadOnly is sufficient here since we are only exercising user lookup.
     let policy = SandboxPolicy::ReadOnly;
     let command_cwd = std::env::current_dir().expect("getcwd");

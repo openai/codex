@@ -259,6 +259,7 @@ pub struct ShellToolCallParams {
 #[derive(Debug, Clone, PartialEq, TS)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
+    // TODO(jif) drop this.
     pub success: Option<bool>,
 }
 
@@ -318,9 +319,10 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
 
     #[test]
-    fn serializes_success_as_plain_string() {
+    fn serializes_success_as_plain_string() -> Result<()> {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: FunctionCallOutputPayload {
@@ -329,15 +331,16 @@ mod tests {
             },
         };
 
-        let json = serde_json::to_string(&item).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&item)?;
+        let v: serde_json::Value = serde_json::from_str(&json)?;
 
         // Success case -> output should be a plain string
         assert_eq!(v.get("output").unwrap().as_str().unwrap(), "ok");
+        Ok(())
     }
 
     #[test]
-    fn serializes_failure_as_string() {
+    fn serializes_failure_as_string() -> Result<()> {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: FunctionCallOutputPayload {
@@ -346,21 +349,22 @@ mod tests {
             },
         };
 
-        let json = serde_json::to_string(&item).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&item)?;
+        let v: serde_json::Value = serde_json::from_str(&json)?;
 
         assert_eq!(v.get("output").unwrap().as_str().unwrap(), "bad");
+        Ok(())
     }
 
     #[test]
-    fn deserialize_shell_tool_call_params() {
+    fn deserialize_shell_tool_call_params() -> Result<()> {
         let json = r#"{
             "command": ["ls", "-l"],
             "workdir": "/tmp",
             "timeout": 1000
         }"#;
 
-        let params: ShellToolCallParams = serde_json::from_str(json).unwrap();
+        let params: ShellToolCallParams = serde_json::from_str(json)?;
         assert_eq!(
             ShellToolCallParams {
                 command: vec!["ls".to_string(), "-l".to_string()],
@@ -371,5 +375,6 @@ mod tests {
             },
             params
         );
+        Ok(())
     }
 }

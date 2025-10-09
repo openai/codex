@@ -44,6 +44,6 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     } else {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Request failed with status {}: {}", status, body)
+        anyhow::bail!("Request failed with status {status}: {body}")
     }
 }

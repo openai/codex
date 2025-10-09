@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +17,8 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_mcp_client::McpClient;
+use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_rmcp_client::RmcpClient;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::Tool;
@@ -28,6 +31,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::config_types::McpServerConfig;
+use crate::config_types::McpServerTransportConfig;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -39,6 +43,9 @@ const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Default timeout for initializing MCP server & initially listing tools.
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default timeout for individual tool calls.
+const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
@@ -83,8 +90,75 @@ struct ToolInfo {
 }
 
 struct ManagedClient {
-    client: Arc<McpClient>,
+    client: McpClientAdapter,
     startup_timeout: Duration,
+    tool_timeout: Option<Duration>,
+}
+
+#[derive(Clone)]
+enum McpClientAdapter {
+    Legacy(Arc<McpClient>),
+    Rmcp(Arc<RmcpClient>),
+}
+
+impl McpClientAdapter {
+    async fn new_stdio_client(
+        use_rmcp_client: bool,
+        program: OsString,
+        args: Vec<OsString>,
+        env: Option<HashMap<String, String>>,
+        params: mcp_types::InitializeRequestParams,
+        startup_timeout: Duration,
+    ) -> Result<Self> {
+        if use_rmcp_client {
+            let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
+            client.initialize(params, Some(startup_timeout)).await?;
+            Ok(McpClientAdapter::Rmcp(client))
+        } else {
+            let client = Arc::new(McpClient::new_stdio_client(program, args, env).await?);
+            client.initialize(params, Some(startup_timeout)).await?;
+            Ok(McpClientAdapter::Legacy(client))
+        }
+    }
+
+    async fn new_streamable_http_client(
+        server_name: String,
+        url: String,
+        bearer_token: Option<String>,
+        params: mcp_types::InitializeRequestParams,
+        startup_timeout: Duration,
+        store_mode: OAuthCredentialsStoreMode,
+    ) -> Result<Self> {
+        let client = Arc::new(
+            RmcpClient::new_streamable_http_client(&server_name, &url, bearer_token, store_mode)
+                .await?,
+        );
+        client.initialize(params, Some(startup_timeout)).await?;
+        Ok(McpClientAdapter::Rmcp(client))
+    }
+
+    async fn list_tools(
+        &self,
+        params: Option<mcp_types::ListToolsRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::ListToolsResult> {
+        match self {
+            McpClientAdapter::Legacy(client) => client.list_tools(params, timeout).await,
+            McpClientAdapter::Rmcp(client) => client.list_tools(params, timeout).await,
+        }
+    }
+
+    async fn call_tool(
+        &self,
+        name: String,
+        arguments: Option<serde_json::Value>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::CallToolResult> {
+        match self {
+            McpClientAdapter::Legacy(client) => client.call_tool(name, arguments, timeout).await,
+            McpClientAdapter::Rmcp(client) => client.call_tool(name, arguments, timeout).await,
+        }
+    }
 }
 
 /// A thin wrapper around a set of running [`McpClient`] instances.
@@ -111,6 +185,8 @@ impl McpConnectionManager {
     /// user should be informed about these errors.
     pub async fn new(
         mcp_servers: HashMap<String, McpServerConfig>,
+        use_rmcp_client: bool,
+        store_mode: OAuthCredentialsStoreMode,
     ) -> Result<(Self, ClientStartErrors)> {
         // Early exit if no servers are configured.
         if mcp_servers.is_empty() {
@@ -125,74 +201,87 @@ impl McpConnectionManager {
             // Validate server name before spawning
             if !is_valid_mcp_server_name(&server_name) {
                 let error = anyhow::anyhow!(
-                    "invalid server name '{}': must match pattern ^[a-zA-Z0-9_-]+$",
-                    server_name
+                    "invalid server name '{server_name}': must match pattern ^[a-zA-Z0-9_-]+$"
                 );
                 errors.insert(server_name, error);
                 continue;
             }
 
-            let startup_timeout = cfg
-                .startup_timeout_ms
-                .map(Duration::from_millis)
-                .unwrap_or(DEFAULT_STARTUP_TIMEOUT);
+            if !cfg.enabled {
+                continue;
+            }
+
+            let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
+            let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
+
+            let resolved_bearer_token = match &cfg.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    bearer_token_env_var,
+                    ..
+                } => resolve_bearer_token(&server_name, bearer_token_env_var.as_deref()),
+                _ => Ok(None),
+            };
 
             join_set.spawn(async move {
-                let McpServerConfig {
-                    command, args, env, ..
-                } = cfg;
-                let client_res = McpClient::new_stdio_client(
-                    command.into(),
-                    args.into_iter().map(OsString::from).collect(),
-                    env,
-                )
-                .await;
-                match client_res {
-                    Ok(client) => {
-                        // Initialize the client.
-                        let params = mcp_types::InitializeRequestParams {
-                            capabilities: ClientCapabilities {
-                                experimental: None,
-                                roots: None,
-                                sampling: None,
-                                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-                                // indicates this should be an empty object.
-                                elicitation: Some(json!({})),
-                            },
-                            client_info: Implementation {
-                                name: "codex-mcp-client".to_owned(),
-                                version: env!("CARGO_PKG_VERSION").to_owned(),
-                                title: Some("Codex".into()),
-                                // This field is used by Codex when it is an MCP
-                                // server: it should not be used when Codex is
-                                // an MCP client.
-                                user_agent: None,
-                            },
-                            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
-                        };
-                        let initialize_notification_params = None;
-                        match client
-                            .initialize(
-                                params,
-                                initialize_notification_params,
-                                Some(startup_timeout),
-                            )
-                            .await
-                        {
-                            Ok(_response) => (server_name, Ok((client, startup_timeout))),
-                            Err(e) => (server_name, Err(e)),
-                        }
+                let McpServerConfig { transport, .. } = cfg;
+                let params = mcp_types::InitializeRequestParams {
+                    capabilities: ClientCapabilities {
+                        experimental: None,
+                        roots: None,
+                        sampling: None,
+                        // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                        // indicates this should be an empty object.
+                        elicitation: Some(json!({})),
+                    },
+                    client_info: Implementation {
+                        name: "codex-mcp-client".to_owned(),
+                        version: env!("CARGO_PKG_VERSION").to_owned(),
+                        title: Some("Codex".into()),
+                        // This field is used by Codex when it is an MCP
+                        // server: it should not be used when Codex is
+                        // an MCP client.
+                        user_agent: None,
+                    },
+                    protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
+                };
+
+                let client = match transport {
+                    McpServerTransportConfig::Stdio { command, args, env } => {
+                        let command_os: OsString = command.into();
+                        let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
+                        McpClientAdapter::new_stdio_client(
+                            use_rmcp_client,
+                            command_os,
+                            args_os,
+                            env,
+                            params,
+                            startup_timeout,
+                        )
+                        .await
                     }
-                    Err(e) => (server_name, Err(e.into())),
+                    McpServerTransportConfig::StreamableHttp { url, .. } => {
+                        McpClientAdapter::new_streamable_http_client(
+                            server_name.clone(),
+                            url,
+                            resolved_bearer_token.unwrap_or_default(),
+                            params,
+                            startup_timeout,
+                            store_mode,
+                        )
+                        .await
+                    }
                 }
+                .map(|c| (c, startup_timeout));
+
+                ((server_name, tool_timeout), client)
             });
         }
 
         let mut clients: HashMap<String, ManagedClient> = HashMap::with_capacity(join_set.len());
 
         while let Some(res) = join_set.join_next().await {
-            let (server_name, client_res) = match res {
-                Ok((server_name, client_res)) => (server_name, client_res),
+            let ((server_name, tool_timeout), client_res) = match res {
+                Ok(result) => result,
                 Err(e) => {
                     warn!("Task panic when starting MCP server: {e:#}");
                     continue;
@@ -204,8 +293,9 @@ impl McpConnectionManager {
                     clients.insert(
                         server_name,
                         ManagedClient {
-                            client: Arc::new(client),
+                            client,
                             startup_timeout,
+                            tool_timeout: Some(tool_timeout),
                         },
                     );
                 }
@@ -243,14 +333,13 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
-        timeout: Option<Duration>,
     ) -> Result<mcp_types::CallToolResult> {
-        let client = self
+        let managed = self
             .clients
             .get(server)
-            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?
-            .client
-            .clone();
+            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let client = managed.client.clone();
+        let timeout = managed.tool_timeout;
 
         client
             .call_tool(tool.to_string(), arguments, timeout)
@@ -262,6 +351,33 @@ impl McpConnectionManager {
         self.tools
             .get(tool_name)
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
+    }
+}
+
+fn resolve_bearer_token(
+    server_name: &str,
+    bearer_token_env_var: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(env_var) = bearer_token_env_var else {
+        return Ok(None);
+    };
+
+    match env::var(env_var) {
+        Ok(value) => {
+            if value.is_empty() {
+                Err(anyhow!(
+                    "Environment variable {env_var} for MCP server '{server_name}' is empty"
+                ))
+            } else {
+                Ok(Some(value))
+            }
+        }
+        Err(env::VarError::NotPresent) => Err(anyhow!(
+            "Environment variable {env_var} for MCP server '{server_name}' is not set"
+        )),
+        Err(env::VarError::NotUnicode(_)) => Err(anyhow!(
+            "Environment variable {env_var} for MCP server '{server_name}' contains invalid Unicode"
+        )),
     }
 }
 

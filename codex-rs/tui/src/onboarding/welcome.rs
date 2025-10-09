@@ -62,7 +62,7 @@ impl WidgetRef for &WelcomeWidget {
             let frame = self.animation.current_frame();
             // let frame_line_count = frame.lines().count();
             // lines.reserve(frame_line_count + 2);
-            lines.extend(frame.lines().map(|l| l.into()));
+            lines.extend(frame.lines().map(Into::into));
             lines.push("".into());
         }
         lines.push(Line::from(vec![
