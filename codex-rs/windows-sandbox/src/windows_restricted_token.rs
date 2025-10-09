@@ -95,80 +95,86 @@ mod imp {
     use std::process::ExitStatus;
     use std::ptr::null_mut;
     use std::sync::Arc;
+
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Foundation::HANDLE_FLAG_INHERIT;
+    use windows::Win32::Foundation::HLOCAL;
     use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Foundation::LocalFree;
-    use windows::Win32::Foundation::PSID;
     use windows::Win32::Foundation::SetHandleInformation;
+    use windows::Win32::Foundation::VARIANT_TRUE;
     use windows::Win32::Foundation::WAIT_OBJECT_0;
     use windows::Win32::Foundation::WIN32_ERROR;
+
     use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
     use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule;
     use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule3;
     use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRules;
     use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_ACTION_BLOCK;
     use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_PROFILE2_ALL;
-    use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_RULE_DIRECTION_OUT;
+    use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_RULE_DIRECTION_OUTBOUND;
     use windows::Win32::NetworkManagement::WindowsFirewall::NetFwPolicy2;
     use windows::Win32::NetworkManagement::WindowsFirewall::NetFwRule;
-    use windows::Win32::Security::Authorization::ACCESS_MODE;
+
     use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
     use windows::Win32::Security::Authorization::DENY_ACCESS;
     use windows::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
     use windows::Win32::Security::Authorization::GetNamedSecurityInfoW;
-    use windows::Win32::Security::Authorization::MULTIPLE_TRUSTEE_NO_MULTIPLE_TRUSTEE;
-    use windows::Win32::Security::Authorization::OBJECT_INHERIT_ACE;
-    use windows::Win32::Security::Authorization::REVOKE_ACCESS;
     use windows::Win32::Security::Authorization::SE_FILE_OBJECT;
-    use windows::Win32::Security::Authorization::SET_ACCESS;
-    use windows::Win32::Security::Authorization::SUB_CONTAINERS_AND_OBJECTS_INHERIT;
     use windows::Win32::Security::Authorization::SetEntriesInAclW;
     use windows::Win32::Security::Authorization::SetNamedSecurityInfoW;
     use windows::Win32::Security::Authorization::TRUSTEE_IS_SID;
     use windows::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
     use windows::Win32::Security::Authorization::TRUSTEE_W;
+
+    use windows::Win32::Security::AllocateAndInitializeSid;
+    use windows::Win32::Security::CopySid;
     use windows::Win32::Security::CreateRestrictedToken;
     use windows::Win32::Security::CreateWellKnownSid;
     use windows::Win32::Security::DACL_SECURITY_INFORMATION;
-    use windows::Win32::Security::LUID_AND_ATTRIBUTES;
-    use windows::Win32::Security::SE_GROUP_USE_FOR_DENY_ONLY;
+    use windows::Win32::Security::DISABLE_MAX_PRIVILEGE;
+    use windows::Win32::Security::FreeSid;
+    use windows::Win32::Security::GetLengthSid;
+    use windows::Win32::Security::LUA_TOKEN;
+    use windows::Win32::Security::PSECURITY_DESCRIPTOR;
+    use windows::Win32::Security::PSID; // correct PSID path
     use windows::Win32::Security::SECURITY_MAX_SID_SIZE;
+    use windows::Win32::Security::SECURITY_WORLD_SID_AUTHORITY;
     use windows::Win32::Security::SID_AND_ATTRIBUTES;
+    use windows::Win32::Security::SID_IDENTIFIER_AUTHORITY;
+    use windows::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT;
     use windows::Win32::Security::TOKEN_ACCESS_MASK;
     use windows::Win32::Security::TOKEN_ADJUST_DEFAULT;
-    use windows::Win32::Security::TOKEN_ADJUST_PRIVILEGES;
     use windows::Win32::Security::TOKEN_ADJUST_SESSIONID;
     use windows::Win32::Security::TOKEN_ASSIGN_PRIMARY;
     use windows::Win32::Security::TOKEN_DUPLICATE;
     use windows::Win32::Security::TOKEN_QUERY;
     use windows::Win32::Security::WELL_KNOWN_SID_TYPE;
+    use windows::Win32::Security::WRITE_RESTRICTED;
+
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+
     use windows::Win32::System::Com::CLSCTX_INPROC_SERVER;
     use windows::Win32::System::Com::COINIT_MULTITHREADED;
     use windows::Win32::System::Com::CoCreateInstance;
     use windows::Win32::System::Com::CoInitializeEx;
-    use windows::Win32::System::Com::CoInitializeSecurity;
     use windows::Win32::System::Com::CoUninitialize;
-    use windows::Win32::System::Com::EOAC_NONE;
-    use windows::Win32::System::Com::RPC_C_AUTHN_LEVEL_DEFAULT;
-    use windows::Win32::System::Com::RPC_C_AUTHN_WINNT;
-    use windows::Win32::System::Com::RPC_C_AUTHZ_NONE;
-    use windows::Win32::System::Com::RPC_C_IMP_LEVEL_IMPERSONATE;
-    use windows::Win32::System::Com::RPC_E_TOO_LATE;
-    use windows::Win32::System::Com::VARIANT_TRUE;
+
     use windows::Win32::System::Console::GetStdHandle;
     use windows::Win32::System::Console::STD_ERROR_HANDLE;
     use windows::Win32::System::Console::STD_INPUT_HANDLE;
     use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
+
     use windows::Win32::System::JobObjects::AssignProcessToJobObject;
     use windows::Win32::System::JobObjects::CreateJobObjectW;
     use windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     use windows::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
+    use windows::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
     use windows::Win32::System::JobObjects::SetInformationJobObject;
+
     use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows::Win32::System::Threading::CreateProcessAsUserW;
     use windows::Win32::System::Threading::GetCurrentProcess;
@@ -179,6 +185,7 @@ mod imp {
     use windows::Win32::System::Threading::STARTF_USESTDHANDLES;
     use windows::Win32::System::Threading::STARTUPINFOW;
     use windows::Win32::System::Threading::WaitForSingleObject;
+
     use windows::core::BSTR;
     use windows::core::Interface;
     use windows::core::PCWSTR;
@@ -201,9 +208,17 @@ mod imp {
             ));
         }
 
+        // Initialize COM (ignore "already initialized" HRESULT).
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        let _com_guard = ComGuard;
+
+        // Create a *restricted* primary token with a unique “restricted” SID.
         let restricted = create_restricted_token()?;
         let restricted_sid = restricted.restricted_sid.clone();
 
+        // ACLs for workspace / writable roots / TMP / CWD
         let mut _acl_guards = configure_writable_paths(
             sandbox_policy,
             sandbox_policy_cwd,
@@ -214,14 +229,17 @@ mod imp {
         let mut temp_guards = configure_temp_directories(&restricted_sid)?;
         _acl_guards.append(&mut temp_guards);
 
+        // Windows Firewall transient egress block when network is disallowed
         let _firewall_guard = configure_firewall(sandbox_policy, &restricted_sid)?;
 
+        // Prepare stdio
         let mut startup_info = STARTUPINFOW {
             cb: size_of::<STARTUPINFOW>() as u32,
             ..Default::default()
         };
         apply_stdio_policy(&mut startup_info, stdio_policy)?;
 
+        // Build command-line & env
         let mut command_line = build_command_line(&command);
         let mut environment_block = build_environment_block(&env);
         let mut cwd = to_wide(&command_cwd);
@@ -265,6 +283,7 @@ mod imp {
             }
         }
 
+        // Kill the whole tree if we exit
         let job = create_job_object()?;
         unsafe {
             AssignProcessToJobObject(job.handle(), process_info.info().hProcess)
@@ -301,6 +320,8 @@ mod imp {
         s.as_ref().encode_wide().chain(std::iter::once(0)).collect()
     }
 
+    // ==================== Restricted token helpers ====================
+
     struct RestrictedToken {
         token: HandleGuard,
         restricted_sid: Arc<WellKnownSid>,
@@ -308,40 +329,20 @@ mod imp {
 
     fn create_restricted_token() -> io::Result<RestrictedToken> {
         unsafe {
+            // Open current process token
             let desired = TOKEN_ACCESS_MASK(
                 TOKEN_DUPLICATE.0
                     | TOKEN_QUERY.0
                     | TOKEN_ASSIGN_PRIMARY.0
                     | TOKEN_ADJUST_DEFAULT.0
-                    | TOKEN_ADJUST_SESSIONID.0
-                    | TOKEN_ADJUST_PRIVILEGES.0,
+                    | TOKEN_ADJUST_SESSIONID.0,
             );
             let mut process_token = HANDLE::default();
             OpenProcessToken(GetCurrentProcess(), desired, &mut process_token)
                 .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
             let process_guard = HandleGuard::new(process_token);
 
-            let disable_sid_types = [
-                WELL_KNOWN_SID_TYPE::WinBuiltinAdministratorsSid,
-                WELL_KNOWN_SID_TYPE::WinLocalSystemSid,
-                WELL_KNOWN_SID_TYPE::WinLocalServiceSid,
-                WELL_KNOWN_SID_TYPE::WinNetworkServiceSid,
-                WELL_KNOWN_SID_TYPE::WinBuiltinPowerUsersSid,
-                WELL_KNOWN_SID_TYPE::WinBuiltinBackupOperatorsSid,
-                WELL_KNOWN_SID_TYPE::WinBuiltinReplicatorSid,
-            ];
-            let mut disable_storage = Vec::new();
-            for sid_type in disable_sid_types {
-                disable_storage.push(WellKnownSid::new(sid_type)?);
-            }
-            let disable_entries: Vec<SID_AND_ATTRIBUTES> = disable_storage
-                .iter()
-                .map(|sid| SID_AND_ATTRIBUTES {
-                    Sid: sid.as_psid(),
-                    Attributes: SE_GROUP_USE_FOR_DENY_ONLY,
-                })
-                .collect();
-
+            // Use the well-known "restricted code" SID
             let restricted_sid = Arc::new(WellKnownSid::new(
                 WELL_KNOWN_SID_TYPE::WinRestrictedCodeSid,
             )?);
@@ -350,23 +351,13 @@ mod imp {
                 Attributes: 0,
             }];
 
-            let mut new_token = HANDLE::default();
-            CreateRestrictedToken(
+            // The windows 0.61 API uses Option<&[...]> parameters.
+            let new_token = CreateRestrictedToken(
                 process_guard.handle(),
-                windows::Win32::Security::DISABLE_MAX_PRIVILEGE
-                    | windows::Win32::Security::LUA_TOKEN
-                    | windows::Win32::Security::WRITE_RESTRICTED,
-                disable_entries.len() as u32,
-                if disable_entries.is_empty() {
-                    std::ptr::null()
-                } else {
-                    disable_entries.as_ptr()
-                },
-                0,
-                std::ptr::null::<LUID_AND_ATTRIBUTES>(),
-                restricted_entries.len() as u32,
-                restricted_entries.as_ptr(),
-                &mut new_token,
+                DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
+                None, // sids to disable
+                None, // privileges to delete
+                Some(&restricted_entries),
             )
             .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
 
@@ -387,8 +378,14 @@ mod imp {
             unsafe {
                 let mut buffer = vec![0u8; SECURITY_MAX_SID_SIZE as usize];
                 let mut size = buffer.len() as u32;
-                CreateWellKnownSid(kind, None, buffer.as_mut_ptr().cast(), &mut size)
-                    .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+                // psid expects Option<PSID>
+                CreateWellKnownSid(
+                    kind,
+                    None,
+                    Some(PSID(buffer.as_mut_ptr().cast())),
+                    &mut size,
+                )
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
                 buffer.truncate(size as usize);
                 Ok(Self {
                     buffer: Arc::new(buffer),
@@ -408,15 +405,12 @@ mod imp {
                 let s = if sid_string.is_null() {
                     String::new()
                 } else {
-                    let mut len = 0;
-                    while *sid_string.0.add(len) != 0 {
-                        len += 1;
-                    }
-                    let slice = std::slice::from_raw_parts(sid_string.0, len);
-                    String::from_utf16_lossy(slice)
+                    sid_string
+                        .to_string()
+                        .map_err(|e| io::Error::from_raw_os_error(e.code().0))?
                 };
                 if !sid_string.is_null() {
-                    let _ = LocalFree(sid_string.0.cast());
+                    let _ = LocalFree(Some(HLOCAL(sid_string.0.cast())));
                 }
                 Ok(s)
             }
@@ -513,7 +507,7 @@ mod imp {
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             SetInformationJobObject(
                 job_guard.handle(),
-                windows::Win32::System::JobObjects::JobObjectExtendedLimitInformation,
+                JobObjectExtendedLimitInformation,
                 &limits as *const _ as *const c_void,
                 size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )
@@ -521,6 +515,8 @@ mod imp {
             Ok(job_guard)
         }
     }
+
+    // ==================== ACL helpers ====================
 
     fn configure_writable_paths(
         policy: &SandboxPolicy,
@@ -582,7 +578,7 @@ mod imp {
 
     impl Drop for AclGuard {
         fn drop(&mut self) {
-            let _ = apply_acl_change(&self.path, &self.sid, &self.change, REVOKE_ACCESS);
+            let _ = apply_acl_change(&self.path, &self.sid, &self.change, /*revoke*/ true);
         }
     }
 
@@ -592,31 +588,9 @@ mod imp {
         DenyWrite,
     }
 
-    impl AclChange {
-        fn mode(&self) -> ACCESS_MODE {
-            match self {
-                AclChange::Allow { .. } => SET_ACCESS,
-                AclChange::DenyWrite => DENY_ACCESS,
-            }
-        }
-
-        fn permissions(&self) -> u32 {
-            match self {
-                AclChange::Allow { write } => {
-                    if *write {
-                        (FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE).0
-                    } else {
-                        (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE).0
-                    }
-                }
-                AclChange::DenyWrite => (FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE).0,
-            }
-        }
-    }
-
     fn allow_path(path: &Path, sid: &Arc<WellKnownSid>, write: bool) -> io::Result<AclGuard> {
         let change = AclChange::Allow { write };
-        apply_acl_change(path, sid, &change, change.mode())?;
+        apply_acl_change(path, sid, &change, /*revoke*/ false)?;
         Ok(AclGuard {
             path: path.to_path_buf(),
             sid: sid.clone(),
@@ -626,7 +600,7 @@ mod imp {
 
     fn deny_write(path: &Path, sid: &Arc<WellKnownSid>) -> io::Result<AclGuard> {
         let change = AclChange::DenyWrite;
-        apply_acl_change(path, sid, &change, change.mode())?;
+        apply_acl_change(path, sid, &change, /*revoke*/ false)?;
         Ok(AclGuard {
             path: path.to_path_buf(),
             sid: sid.clone(),
@@ -638,15 +612,18 @@ mod imp {
         path: &Path,
         sid: &Arc<WellKnownSid>,
         change: &AclChange,
-        mode: ACCESS_MODE,
+        revoke: bool,
     ) -> io::Result<()> {
+        use windows::Win32::Security::Authorization::OBJECT_INHERIT_ACE;
+        use windows::Win32::Security::Authorization::REVOKE_ACCESS;
+        use windows::Win32::Security::Authorization::SET_ACCESS;
         if !path.exists() {
             return Ok(());
         }
         let wide = to_wide(path.as_os_str());
         unsafe {
             let mut existing_dacl = null_mut();
-            let mut security_descriptor = windows::Win32::Security::PSECURITY_DESCRIPTOR::default();
+            let mut security_descriptor = PSECURITY_DESCRIPTOR::default();
             let status = GetNamedSecurityInfoW(
                 PCWSTR(wide.as_ptr()),
                 SE_FILE_OBJECT,
@@ -659,21 +636,33 @@ mod imp {
             );
             if status != WIN32_ERROR(0) {
                 if !security_descriptor.is_invalid() {
-                    let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(
-                        security_descriptor.0,
-                    )));
+                    let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
                 }
                 return Err(io::Error::from_raw_os_error(status.0 as i32));
             }
 
-            let permissions = change.permissions();
-            let mut explicit = EXPLICIT_ACCESS_W {
-                grfAccessPermissions: permissions,
+            let (mode, perms) = match change {
+                AclChange::Allow { write } => {
+                    let p = if *write {
+                        (FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE).0
+                    } else {
+                        (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE).0
+                    };
+                    (if revoke { REVOKE_ACCESS } else { SET_ACCESS }, p)
+                }
+                AclChange::DenyWrite => {
+                    let p = (FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE).0;
+                    (if revoke { REVOKE_ACCESS } else { DENY_ACCESS }, p)
+                }
+            };
+
+            let explicit = EXPLICIT_ACCESS_W {
+                grfAccessPermissions: perms,
                 grfAccessMode: mode,
                 grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT | OBJECT_INHERIT_ACE,
                 Trustee: TRUSTEE_W {
-                    pMultipleTrustee: None,
-                    MultipleTrusteeOperation: MULTIPLE_TRUSTEE_NO_MULTIPLE_TRUSTEE,
+                    pMultipleTrustee: std::ptr::null_mut(), // raw pointer, not Option
+                    MultipleTrusteeOperation: 0,            // MULTIPLE_TRUSTEE_NO_MULTIPLE_TRUSTEE
                     TrusteeForm: TRUSTEE_IS_SID,
                     TrusteeType: TRUSTEE_IS_UNKNOWN,
                     ptstrName: PWSTR(sid.as_psid().0.cast()),
@@ -685,12 +674,10 @@ mod imp {
             let add_result = SetEntriesInAclW(Some(&entries), Some(existing_dacl), &mut new_dacl);
             if add_result != WIN32_ERROR(0) {
                 if !new_dacl.is_null() {
-                    let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(new_dacl.cast())));
+                    let _ = LocalFree(Some(HLOCAL(new_dacl.cast())));
                 }
                 if !security_descriptor.is_invalid() {
-                    let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(
-                        security_descriptor.0,
-                    )));
+                    let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
                 }
                 return Err(io::Error::from_raw_os_error(add_result.0 as i32));
             }
@@ -706,26 +693,24 @@ mod imp {
             );
             if set_result != WIN32_ERROR(0) {
                 if !new_dacl.is_null() {
-                    let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(new_dacl.cast())));
+                    let _ = LocalFree(Some(HLOCAL(new_dacl.cast())));
                 }
                 if !security_descriptor.is_invalid() {
-                    let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(
-                        security_descriptor.0,
-                    )));
+                    let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
                 }
                 return Err(io::Error::from_raw_os_error(set_result.0 as i32));
             }
             if !new_dacl.is_null() {
-                let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(new_dacl.cast())));
+                let _ = LocalFree(Some(HLOCAL(new_dacl.cast())));
             }
             if !security_descriptor.is_invalid() {
-                let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(
-                    security_descriptor.0,
-                )));
+                let _ = LocalFree(Some(HLOCAL(security_descriptor.0)));
             }
         }
         Ok(())
     }
+
+    // ==================== Firewall helpers ====================
 
     struct FirewallGuard {
         rules: INetFwRules,
@@ -735,8 +720,7 @@ mod imp {
 
     impl Drop for FirewallGuard {
         fn drop(&mut self) {
-            let wide_name: Vec<u16> = self.name.encode_utf16().chain(std::iter::once(0)).collect();
-            let _ = unsafe { self.rules.Remove(PWSTR(wide_name.as_ptr() as *mut _)) };
+            let _ = unsafe { self.rules.Remove(&BSTR::from(self.name.as_str())) };
         }
     }
 
@@ -749,24 +733,41 @@ mod imp {
         }
         unsafe {
             let com = ComGuard::new()?;
-            let policy: INetFwPolicy2 =
-                CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER)?;
-            let rules = policy.Rules()?;
-            let rule: INetFwRule3 = CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER)?;
+            let policy: INetFwPolicy2 = CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            let rules = policy
+                .Rules()
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            let rule: INetFwRule3 = CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
 
             let sid_string = restricted_sid.to_string()?;
             let rule_name = format!("codex-restricted-token-block-{sid_string}");
-            rule.SetName(&BSTR::from(rule_name.as_str()))?;
-            rule.SetDescription(&BSTR::from("Codex sandbox network isolation"))?;
-            rule.SetAction(NET_FW_ACTION_BLOCK)?;
-            rule.SetDirection(NET_FW_RULE_DIRECTION_OUT)?;
-            rule.SetEnabled(VARIANT_TRUE)?;
-            rule.SetProfiles(NET_FW_PROFILE2_ALL.0 as i32)?;
-            rule.SetInterfaceTypes(&BSTR::from("All"))?;
-            rule.SetLocalUserAuthorizedList(&BSTR::from(sid_string.as_str()))?;
+            rule.SetName(&BSTR::from(rule_name.as_str()))
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            rule.SetDescription(&BSTR::from("Codex sandbox network isolation"))
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            rule.SetAction(NET_FW_ACTION_BLOCK)
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            rule.SetDirection(NET_FW_RULE_DIRECTION_OUTBOUND.0 as i32)
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            rule.SetEnabled(VARIANT_TRUE)
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            rule.SetProfiles(NET_FW_PROFILE2_ALL.0 as i32)
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            rule.SetInterfaceTypes(&BSTR::from("All"))
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            // Limit to our restricted SID.
+            rule.SetLocalUserAuthorizedList(&BSTR::from(sid_string.as_str()))
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
 
-            let base_rule: INetFwRule = rule.cast()?;
-            rules.Add(base_rule)?;
+            let base_rule: INetFwRule = rule
+                .cast()
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            rules
+                .Add(&base_rule) // pass by reference
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+
             Ok(Some(FirewallGuard {
                 rules,
                 name: rule_name,
@@ -776,39 +777,19 @@ mod imp {
     }
 
     struct ComGuard;
-
     impl ComGuard {
         fn new() -> io::Result<Self> {
-            unsafe {
-                CoInitializeEx(None, COINIT_MULTITHREADED)
-                    .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
-                match CoInitializeSecurity(
-                    None,
-                    -1,
-                    None,
-                    None,
-                    RPC_C_AUTHN_LEVEL_DEFAULT,
-                    RPC_C_IMP_LEVEL_IMPERSONATE,
-                    None,
-                    EOAC_NONE,
-                    None,
-                ) {
-                    Ok(()) => {}
-                    Err(err) if err.code() == RPC_E_TOO_LATE => {}
-                    Err(err) => return Err(io::Error::from_raw_os_error(err.code().0)),
-                }
-            }
+            // CoInitializeEx is already called above; nothing else required here.
             Ok(Self)
         }
     }
-
     impl Drop for ComGuard {
         fn drop(&mut self) {
-            unsafe {
-                CoUninitialize();
-            }
+            unsafe { CoUninitialize() }
         }
     }
+
+    // ==================== Command line & env ====================
 
     fn build_command_line(command: &[String]) -> Vec<u16> {
         let mut combined = String::new();
@@ -834,13 +815,13 @@ mod imp {
             match ch {
                 '\\' => backslashes += 1,
                 '"' => {
-                    result.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                    result.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
                     result.push('"');
                     backslashes = 0;
                 }
                 _ => {
                     if backslashes > 0 {
-                        result.extend(std::iter::repeat_n('\\', backslashes * 2));
+                        result.extend(std::iter::repeat('\\').take(backslashes * 2));
                         backslashes = 0;
                     }
                     result.push(ch);
@@ -848,7 +829,7 @@ mod imp {
             }
         }
         if backslashes > 0 {
-            result.extend(std::iter::repeat_n('\\', backslashes * 2));
+            result.extend(std::iter::repeat('\\').take(backslashes * 2));
         }
         result.push('"');
         result
@@ -927,10 +908,13 @@ mod imp {
             let file_path = temp.path().join("allowed.txt");
             let mut cmd = sandbox_bin();
             cmd.current_dir(temp.path());
-            cmd.arg(policy_json(&SandboxPolicy::new_workspace_write_policy()));
-            cmd.arg("cmd");
-            cmd.arg("/C");
-            cmd.arg(format!("echo hi > {}", file_path.display()));
+            cmd.arg("--sandbox-policy-cwd")
+                .arg(temp.path())
+                .arg(policy_json(&SandboxPolicy::new_workspace_write_policy()))
+                .arg("--")
+                .arg("cmd")
+                .arg("/C")
+                .arg(format!("echo hi > {}", file_path.display()));
             cmd.assert().success();
             assert!(file_path.exists(), "file should be created");
         }
@@ -944,23 +928,31 @@ mod imp {
             }
             let mut cmd = sandbox_bin();
             cmd.current_dir(temp.path());
-            cmd.arg(policy_json(&SandboxPolicy::new_workspace_write_policy()));
-            cmd.arg("cmd");
-            cmd.arg("/C");
-            cmd.arg(format!("echo hi > {}", outside.display()));
+            cmd.arg("--sandbox-policy-cwd")
+                .arg(temp.path())
+                .arg(policy_json(&SandboxPolicy::new_workspace_write_policy()))
+                .arg("--")
+                .arg("cmd")
+                .arg("/C")
+                .arg(format!("echo hi > {}", outside.display()));
             cmd.assert().failure();
             assert!(!outside.exists(), "outside file must not be created");
         }
 
         #[test]
         fn powershell_runs_in_sandbox() {
+            let temp = TempDir::new().expect("tempdir");
             let mut cmd = sandbox_bin();
-            cmd.arg(policy_json(&SandboxPolicy::new_workspace_write_policy()));
-            cmd.arg("powershell");
-            cmd.arg("-NoLogo");
-            cmd.arg("-NoProfile");
-            cmd.arg("-Command");
-            cmd.arg("Write-Output 'sandbox'");
+            cmd.current_dir(temp.path());
+            cmd.arg("--sandbox-policy-cwd")
+                .arg(temp.path())
+                .arg(policy_json(&SandboxPolicy::new_workspace_write_policy()))
+                .arg("--")
+                .arg("powershell")
+                .arg("-NoLogo")
+                .arg("-NoProfile")
+                .arg("-Command")
+                .arg("Write-Output 'sandbox'");
             cmd.assert().success();
         }
     }
