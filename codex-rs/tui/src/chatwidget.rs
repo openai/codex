@@ -317,6 +317,25 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
+        // Update footer model and directory/account if available
+        self.bottom_pane
+            .set_footer_model_label(Some(model_for_header.clone()));
+        let dir = self.config.cwd.display().to_string();
+        self.bottom_pane.set_footer_directory(Some(dir));
+        // Try to read auth info to show account/email in footer.
+        if let Ok(auth_file) = std::panic::catch_unwind(|| codex_core::auth::get_auth_file(&self.config.codex_home)) {
+            if let Ok(auth) = codex_core::auth::try_read_auth_json(&auth_file) {
+                if let Some(tokens) = auth.tokens.as_ref() {
+                    let email = tokens.id_token.email.clone();
+                    self.bottom_pane.set_footer_account_email(email);
+                } else if let Some(key) = auth.openai_api_key
+                    && !key.is_empty()
+                {
+                    self.bottom_pane
+                        .set_footer_account_email(Some("api key".to_string()));
+                }
+            }
+        }
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
@@ -447,6 +466,16 @@ impl ChatWidget {
 
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
+            // Update footer limits (primary/weekly used%)
+            let primary = snapshot
+                .primary
+                .as_ref()
+                .map(|w| w.used_percent.round() as u8);
+            let weekly = snapshot
+                .secondary
+                .as_ref()
+                .map(|w| w.used_percent.round() as u8);
+            self.bottom_pane.set_footer_limits(primary, weekly);
 
             if !warnings.is_empty() {
                 for warning in warnings {

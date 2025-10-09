@@ -1372,6 +1372,23 @@ impl ChatComposer {
             .map(|items| if items.is_empty() { 0 } else { 1 })
     }
 
+    pub(crate) fn set_footer_model_label(&mut self, label: Option<String>) {
+        self.footer_model_label = label;
+    }
+
+    pub(crate) fn set_footer_directory(&mut self, directory: Option<String>) {
+        self.footer_directory = directory;
+    }
+
+    pub(crate) fn set_footer_account_email(&mut self, email: Option<String>) {
+        self.footer_account_email = email;
+    }
+
+    pub(crate) fn set_footer_limits(&mut self, primary: Option<u8>, weekly: Option<u8>) {
+        self.footer_primary_limit_percent = primary;
+        self.footer_weekly_limit_percent = weekly;
+    }
+
     /// Synchronize `self.command_popup` with the current text in the
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.

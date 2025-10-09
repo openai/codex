@@ -360,6 +360,26 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_footer_model_label(&mut self, label: Option<String>) {
+        self.composer.set_footer_model_label(label);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_footer_directory(&mut self, directory: Option<String>) {
+        self.composer.set_footer_directory(directory);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_footer_account_email(&mut self, email: Option<String>) {
+        self.composer.set_footer_account_email(email);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_footer_limits(&mut self, primary: Option<u8>, weekly: Option<u8>) {
+        self.composer.set_footer_limits(primary, weekly);
+        self.request_redraw();
+    }
+
     // Footer metadata is owned by the composer; no mirrored state kept here.
 
     /// Show a generic list selection view with the provided items.
