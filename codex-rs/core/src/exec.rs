@@ -202,19 +202,22 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
         return false;
     }
 
+    // Quick rejects: well-known non-sandbox shell exit codes
+    // 2: misuse of shell builtins
+    // 126: permission denied
+    // 127: command not found
     const QUICK_REJECT_EXIT_CODES: [i32; 3] = [2, 126, 127];
     if QUICK_REJECT_EXIT_CODES.contains(&exec_output.exit_code) {
         return false;
     }
 
-    const SANDBOX_DENIED_KEYWORDS: [&str; 7] = [
+    const SANDBOX_DENIED_KEYWORDS: [&str; 6] = [
         "operation not permitted",
         "permission denied",
         "read-only file system",
         "seccomp",
         "sandbox",
         "landlock",
-        "bad system call",
     ];
 
     if [
