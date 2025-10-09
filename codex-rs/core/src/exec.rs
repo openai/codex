@@ -226,7 +226,6 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exec_output: &ExecToolCal
         &exec_output.aggregated_output.text,
     ]
     .into_iter()
-    .filter(|section| !section.is_empty())
     .any(|section| {
         let lower = section.to_lowercase();
         SANDBOX_DENIED_KEYWORDS
