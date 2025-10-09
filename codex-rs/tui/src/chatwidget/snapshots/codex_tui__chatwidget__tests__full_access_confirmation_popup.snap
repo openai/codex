@@ -2,15 +2,12 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Enable Full Access?
-  Full access removes sandbox protections and lets Codex run commands, edit
-  files, and use the network without prompts.
-  Codex can read files, make edits, and run commands with network access,
-  without approval. Exercise caution
-  Confirm Full Access
+  Confirm Full Access?
+  Full access removes sandbox protections and comes with increased risk of
+  data loss. Please confirm you understand the risks.
 
 › 1. Accept Full Access          Apply full access for this session
-  2. Accept and don't ask again  Remember this choice in config.toml
+  2. Accept and don't ask again  Enable full access and remember this choice
   3. Deny                        Go back without enabling full access
 
   Press enter to confirm or esc to go back
