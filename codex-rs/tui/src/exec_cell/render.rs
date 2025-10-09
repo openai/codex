@@ -382,7 +382,7 @@ impl ExecCell {
         if call.output.is_none() {
             let live_lines = self.live_lines_for_display();
             if !live_lines.is_empty() {
-                if self.show_live_output {
+                if self.show_live_output() {
                     let mut rendered_live: Vec<Line<'static>> = Vec::new();
                     for live in live_lines {
                         let mut line = ansi_escape_line(&live.text);

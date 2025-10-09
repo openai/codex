@@ -731,7 +731,6 @@ impl McpToolCallCell {
             invocation,
             start_time: Instant::now(),
             duration: None,
-            live: LiveExecStream::new(),
             result: None,
         }
     }

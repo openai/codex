@@ -44,35 +44,45 @@ impl LiveExecStream {
 
     pub(crate) fn push_chunk(&mut self, stream: ExecOutputStream, chunk: &[u8]) -> Option<String> {
         let text = String::from_utf8_lossy(chunk);
-        let pending = match stream {
-            ExecOutputStream::Stdout => &mut self.pending_stdout,
-            ExecOutputStream::Stderr => &mut self.pending_stderr,
+        match stream {
+            ExecOutputStream::Stdout => self.pending_stdout.push_str(&text),
+            ExecOutputStream::Stderr => self.pending_stderr.push_str(&text),
+        }
+        self.touch_pending_order(&stream);
+
+        let (completed_lines, pending_snapshot, pending_empty) = {
+            let pending = match stream {
+                ExecOutputStream::Stdout => &mut self.pending_stdout,
+                ExecOutputStream::Stderr => &mut self.pending_stderr,
+            };
+            let mut completed: Vec<String> = Vec::new();
+            while let Some(idx) = pending.find('\n') {
+                let mut line: String = pending.drain(..=idx).collect();
+                if line.ends_with('\n') {
+                    line.pop();
+                }
+                if line.ends_with('\r') {
+                    line.pop();
+                }
+                completed.push(line);
+            }
+            let pending_snapshot = pending.clone();
+            let pending_empty = pending.is_empty();
+            (completed, pending_snapshot, pending_empty)
         };
-        pending.push_str(&text);
-        self.touch_pending_order(stream);
 
-        let mut latest_line: Option<String> = None;
-        while let Some(idx) = pending.find('\n') {
-            let mut line: String = pending.drain(..=idx).collect();
-            if line.ends_with('\n') {
-                line.pop();
-            }
-            if line.ends_with('\r') {
-                line.pop();
-            }
-            let trimmed = line;
-            self.push_line(stream, trimmed.clone());
-            latest_line = Some(trimmed);
+        if pending_empty {
+            self.pending_order.retain(|s| s != &stream);
         }
 
-        if pending.is_empty() {
-            self.pending_order.retain(|s| *s != stream);
+        for line in &completed_lines {
+            self.push_line(stream.clone(), line.clone());
         }
 
-        if let Some(line) = latest_line {
-            Some(line)
-        } else if !pending.is_empty() {
-            Some(pending.clone())
+        if let Some(last) = completed_lines.last() {
+            Some(last.clone())
+        } else if !pending_snapshot.is_empty() {
+            Some(pending_snapshot)
         } else {
             None
         }
@@ -89,7 +99,7 @@ impl LiveExecStream {
                 continue;
             }
             out.push(LiveExecLine {
-                stream: *stream,
+                stream: stream.clone(),
                 text: pending.clone(),
             });
         }
@@ -103,9 +113,9 @@ impl LiveExecStream {
         }
     }
 
-    fn touch_pending_order(&mut self, stream: ExecOutputStream) {
-        self.pending_order.retain(|s| *s != stream);
-        self.pending_order.push(stream);
+    fn touch_pending_order(&mut self, stream: &ExecOutputStream) {
+        self.pending_order.retain(|s| s != stream);
+        self.pending_order.push(stream.clone());
     }
 }
 
@@ -287,12 +297,6 @@ impl ExecCell {
                         | ParsedCommand::Search { .. }
                 )
             })
-    }
-}
-
-impl ExecCall {
-    pub(crate) fn has_live_content(&self) -> bool {
-        self.live.has_content()
     }
 }
 
