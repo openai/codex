@@ -14,6 +14,7 @@ pub use codex_core::AuthManager;
 pub use codex_core::CodexAuth;
 pub use codex_core::auth::AuthDotJson;
 pub use codex_core::auth::CLIENT_ID;
+pub use codex_core::auth::CODEX_API_KEY_ENV_VAR;
 pub use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
 pub use codex_core::auth::get_auth_file;
 pub use codex_core::auth::login_with_api_key;

@@ -95,11 +95,11 @@ pub struct ThreadItem {
 
 /// Typed payloads for each supported thread item type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(tag = "item_type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThreadItemDetails {
     /// Response from the agent.
     /// Either a natural-language response or a JSON string when structured output is requested.
-    AssistantMessage(AssistantMessageItem),
+    AgentMessage(AgentMessageItem),
     /// Agent's reasoning summary.
     Reasoning(ReasoningItem),
     /// Tracks a command executed by the agent. The item starts when the command is
@@ -124,7 +124,7 @@ pub enum ThreadItemDetails {
 /// Response from the agent.
 /// Either a natural-language response or a JSON string when structured output is requested.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-pub struct AssistantMessageItem {
+pub struct AgentMessageItem {
     pub text: String,
 }
 

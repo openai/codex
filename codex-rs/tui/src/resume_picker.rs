@@ -8,6 +8,7 @@ use chrono::Utc;
 use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
 use codex_core::Cursor;
+use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -24,6 +25,7 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use unicode_width::UnicodeWidthStr;
 
+use crate::key_hint;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -76,6 +78,7 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
                 &request.codex_home,
                 PAGE_SIZE,
                 request.cursor.as_ref(),
+                INTERACTIVE_SESSION_SOURCES,
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -323,7 +326,13 @@ impl PickerState {
     }
 
     async fn load_initial_page(&mut self) -> Result<()> {
-        let page = RolloutRecorder::list_conversations(&self.codex_home, PAGE_SIZE, None).await?;
+        let page = RolloutRecorder::list_conversations(
+            &self.codex_home,
+            PAGE_SIZE,
+            None,
+            INTERACTIVE_SESSION_SOURCES,
+        )
+        .await?;
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
@@ -678,16 +687,18 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
 
         // Hint line
         let hint_line: Line = vec![
-            "Enter".bold(),
-            " to resume ".into(),
-            "• ".dim(),
-            "Esc".bold(),
-            " to start new ".into(),
-            "• ".dim(),
-            "Ctrl+C".into(),
-            " to quit ".into(),
-            "• ".dim(),
-            "↑/↓".into(),
+            key_hint::plain(KeyCode::Enter).into(),
+            " to resume ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " to start new ".dim(),
+            "    ".dim(),
+            key_hint::ctrl(KeyCode::Char('c')).into(),
+            " to quit ".dim(),
+            "    ".dim(),
+            key_hint::plain(KeyCode::Up).into(),
+            "/".dim(),
+            key_hint::plain(KeyCode::Down).into(),
             " to browse".dim(),
         ]
         .into();

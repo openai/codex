@@ -16,7 +16,6 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = [
@@ -27,10 +26,12 @@ codex-common = { workspace = true, features = [
 codex-core = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
 owo-colors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
+supports-color = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -40,7 +41,6 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-opentelemetry-appender-tracing = { workspace = true }
 ts-rs = { workspace = true, features = [
     "uuid-impl",
     "serde-json-impl",
@@ -52,10 +52,10 @@ ts-rs = { workspace = true, features = [
 assert_cmd = { workspace = true }
 core_test_support = { workspace = true }
 libc = { workspace = true }
+mcp-types = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
-mcp-types = { workspace = true }

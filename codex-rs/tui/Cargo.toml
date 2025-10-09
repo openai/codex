@@ -68,6 +68,8 @@ strum_macros = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
+tree-sitter-highlight = { workspace = true }
+tree-sitter-bash = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -94,6 +96,7 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
+assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }

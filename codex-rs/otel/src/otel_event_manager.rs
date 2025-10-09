@@ -14,6 +14,7 @@ use eventsource_stream::EventStreamError as StreamError;
 use reqwest::Error;
 use reqwest::Response;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::fmt::Display;
 use std::time::Duration;
 use std::time::Instant;
@@ -147,21 +148,15 @@ impl OtelEventManager {
         response
     }
 
-    pub async fn log_sse_event<Next, Fut, E>(
+    pub fn log_sse_event<E>(
         &self,
-        next: Next,
-    ) -> Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>
-    where
-        Next: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>>,
+        response: &Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>,
+        duration: Duration,
+    ) where
         E: Display,
     {
-        let start = std::time::Instant::now();
-        let response = next().await;
-        let duration = start.elapsed();
-
         match response {
-            Ok(Some(Ok(ref sse))) => {
+            Ok(Some(Ok(sse))) => {
                 if sse.data.trim() == "[DONE]" {
                     self.sse_event(&sse.event, duration);
                 } else {
@@ -190,7 +185,7 @@ impl OtelEventManager {
                     }
                 }
             }
-            Ok(Some(Err(ref error))) => {
+            Ok(Some(Err(error))) => {
                 self.sse_event_failed(None, duration, error);
             }
             Ok(None) => {}
@@ -198,8 +193,6 @@ impl OtelEventManager {
                 self.sse_event_failed(None, duration, &"idle timeout waiting for SSE");
             }
         }
-
-        response
     }
 
     fn sse_event(&self, kind: &str, duration: Duration) {
@@ -366,10 +359,10 @@ impl OtelEventManager {
         call_id: &str,
         arguments: &str,
         f: F,
-    ) -> Result<String, E>
+    ) -> Result<(String, bool), E>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<String, E>>,
+        Fut: Future<Output = Result<(String, bool), E>>,
         E: Display,
     {
         let start = Instant::now();
@@ -377,9 +370,11 @@ impl OtelEventManager {
         let duration = start.elapsed();
 
         let (output, success) = match &result {
-            Ok(content) => (content, true),
-            Err(error) => (&error.to_string(), false),
+            Ok((preview, success)) => (Cow::Borrowed(preview.as_str()), *success),
+            Err(error) => (Cow::Owned(error.to_string()), false),
         };
+
+        let success_str = if success { "true" } else { "false" };
 
         tracing::event!(
             tracing::Level::INFO,
@@ -396,7 +391,8 @@ impl OtelEventManager {
             call_id = %call_id,
             arguments = %arguments,
             duration_ms = %duration.as_millis(),
-            success = %success,
+            success = %success_str,
+            // `output` is truncated by the tool layer before reaching telemetry.
             output = %output,
         );
 

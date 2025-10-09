@@ -30,19 +30,21 @@ pub(crate) fn pull_events_from_value(value: &JsonValue) -> Vec<PullEvent> {
 
 #[cfg(test)]
 mod tests {
+    use assert_matches::assert_matches;
+
     use super::*;
 
     #[test]
     fn test_pull_events_decoder_status_and_success() {
         let v: JsonValue = serde_json::json!({"status":"verifying"});
         let events = pull_events_from_value(&v);
-        assert!(matches!(events.as_slice(), [PullEvent::Status(s)] if s == "verifying"));
+        assert_matches!(events.as_slice(), [PullEvent::Status(s)] if s == "verifying");
 
         let v2: JsonValue = serde_json::json!({"status":"success"});
         let events2 = pull_events_from_value(&v2);
         assert_eq!(events2.len(), 2);
-        assert!(matches!(events2[0], PullEvent::Status(ref s) if s == "success"));
-        assert!(matches!(events2[1], PullEvent::Success));
+        assert_matches!(events2[0], PullEvent::Status(ref s) if s == "success");
+        assert_matches!(events2[1], PullEvent::Success);
     }
 
     #[test]
@@ -50,33 +52,24 @@ mod tests {
         let v: JsonValue = serde_json::json!({"digest":"sha256:abc","total":100});
         let events = pull_events_from_value(&v);
         assert_eq!(events.len(), 1);
-        match &events[0] {
+        assert_matches!(
+            &events[0],
             PullEvent::ChunkProgress {
                 digest,
                 total,
                 completed,
-            } => {
-                assert_eq!(digest, "sha256:abc");
-                assert_eq!(*total, Some(100));
-                assert_eq!(*completed, None);
-            }
-            _ => panic!("expected ChunkProgress"),
-        }
-
+            } if digest == "sha256:abc" && total == &Some(100) && completed.is_none()
+        );
         let v2: JsonValue = serde_json::json!({"digest":"sha256:def","completed":42});
         let events2 = pull_events_from_value(&v2);
         assert_eq!(events2.len(), 1);
-        match &events2[0] {
+        assert_matches!(
+            &events2[0],
             PullEvent::ChunkProgress {
                 digest,
                 total,
                 completed,
-            } => {
-                assert_eq!(digest, "sha256:def");
-                assert_eq!(*total, None);
-                assert_eq!(*completed, Some(42));
-            }
-            _ => panic!("expected ChunkProgress"),
-        }
+            } if digest == "sha256:def" && total.is_none() && completed == &Some(42)
+        );
     }
 }
