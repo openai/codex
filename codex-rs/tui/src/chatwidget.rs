@@ -323,8 +323,8 @@ impl ChatWidget {
         let dir = self.config.cwd.display().to_string();
         self.bottom_pane.set_footer_directory(Some(dir));
         // Try to read auth info to show account/email in footer.
-        if let Ok(auth_file) = std::panic::catch_unwind(|| codex_core::auth::get_auth_file(&self.config.codex_home)) {
-            if let Ok(auth) = codex_core::auth::try_read_auth_json(&auth_file) {
+        if let Ok(auth_file) = std::panic::catch_unwind(|| codex_core::auth::get_auth_file(&self.config.codex_home))
+            && let Ok(auth) = codex_core::auth::try_read_auth_json(&auth_file) {
                 if let Some(tokens) = auth.tokens.as_ref() {
                     let email = tokens.id_token.email.clone();
                     self.bottom_pane.set_footer_account_email(email);
@@ -335,7 +335,6 @@ impl ChatWidget {
                         .set_footer_account_email(Some("api key".to_string()));
                 }
             }
-        }
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
@@ -1746,7 +1745,7 @@ impl ChatWidget {
     /// Open the prune menu with common actions: advanced, manual by category, and fix context.
     fn open_prune_menu(&mut self) {
         use codex_core::protocol::Op;
-        use codex_core::protocol::PruneCategory as PC;
+        
 
         let mut items: Vec<SelectionItem> = Vec::new();
 

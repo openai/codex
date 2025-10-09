@@ -90,8 +90,6 @@ pub(crate) enum AppEvent {
     OpenPruneAdvanced,
     /// Open the manual prune submenu (by category).
     OpenPruneManual,
-    /// Close the advanced prune view.
-    PruneAdvancedClosed,
     /// Toggle keep marker for an index in the advanced list.
     ToggleKeepIndex { idx: usize },
     /// Toggle delete marker for an index in the advanced list.
