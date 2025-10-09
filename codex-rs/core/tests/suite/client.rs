@@ -223,15 +223,9 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     // Mock server that will receive the resumed request
     let server = MockServer::start().await;
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
 
     // Configure Codex to resume from our file
     let model_provider = ModelProviderInfo {
@@ -277,8 +271,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
     let expected_input = json!([
         {
             "type": "message",
@@ -372,18 +366,9 @@ async fn includes_base_instructions_override_in_request() {
     skip_if_no_network!();
     // Mock server
     let server = MockServer::start().await;
-
-    // First request – must NOT include `previous_response_id`.
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -414,8 +399,8 @@ async fn includes_base_instructions_override_in_request() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
 
     assert!(
         request_body["instructions"]
@@ -570,16 +555,9 @@ async fn includes_user_instructions_message_in_request() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock =
+        responses::mount_sse_once_match(&server, path("/v1/responses"), sse_completed("resp1"))
+            .await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -610,8 +588,8 @@ async fn includes_user_instructions_message_in_request() {
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
 
     assert!(
         !request_body["instructions"]

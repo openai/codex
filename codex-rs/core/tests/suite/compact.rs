@@ -22,6 +22,7 @@ use core_test_support::responses::ev_function_call;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 // --- Test helpers -----------------------------------------------------------
@@ -38,6 +39,8 @@ const SECOND_LARGE_REPLY: &str = "SECOND_LARGE_REPLY";
 const FIRST_AUTO_SUMMARY: &str = "FIRST_AUTO_SUMMARY";
 const SECOND_AUTO_SUMMARY: &str = "SECOND_AUTO_SUMMARY";
 const FINAL_REPLY: &str = "FINAL_REPLY";
+const CONTEXT_LIMIT_MESSAGE: &str =
+    "Your input exceeds the context window of this model. Please adjust your input and try again.";
 const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
 
@@ -620,6 +623,130 @@ async fn auto_compact_stops_after_failed_attempt() {
         !contains_prompt,
         "third request should be the follow-up turn, not another summarization",
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_retries_after_context_window_error() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let user_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let compact_failed = sse_failed(
+        "resp-fail",
+        "context_length_exceeded",
+        CONTEXT_LIMIT_MESSAGE,
+    );
+    let compact_succeeds = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            user_turn.clone(),
+            compact_failed.clone(),
+            compact_succeeds.clone(),
+        ],
+    )
+    .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_auto_compact_token_limit = Some(200_000);
+    let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "first turn".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+
+    let EventMsg::BackgroundEvent(event) =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::BackgroundEvent(_))).await
+    else {
+        panic!("expected background event after compact retry");
+    };
+    assert!(
+        event.message.contains("Trimmed 1 older conversation item"),
+        "background event should mention trimmed item count: {}",
+        event.message
+    );
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user turn and two compact attempts"
+    );
+
+    let compact_attempt = requests[1].body_json();
+    let retry_attempt = requests[2].body_json();
+
+    let compact_input = compact_attempt["input"]
+        .as_array()
+        .unwrap_or_else(|| panic!("compact attempt missing input array: {compact_attempt}"));
+    let retry_input = retry_attempt["input"]
+        .as_array()
+        .unwrap_or_else(|| panic!("retry attempt missing input array: {retry_attempt}"));
+    assert_eq!(
+        compact_input
+            .last()
+            .and_then(|item| item.get("content"))
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|entry| entry.get("text"))
+            .and_then(|text| text.as_str()),
+        Some(SUMMARIZATION_PROMPT),
+        "compact attempt should include summarization prompt"
+    );
+    assert_eq!(
+        retry_input
+            .last()
+            .and_then(|item| item.get("content"))
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|entry| entry.get("text"))
+            .and_then(|text| text.as_str()),
+        Some(SUMMARIZATION_PROMPT),
+        "retry attempt should include summarization prompt"
+    );
+    assert_eq!(
+        retry_input.len(),
+        compact_input.len().saturating_sub(1),
+        "retry should drop exactly one history item (before {} vs after {})",
+        compact_input.len(),
+        retry_input.len()
+    );
+    if let (Some(first_before), Some(first_after)) = (compact_input.first(), retry_input.first()) {
+        assert_ne!(
+            first_before, first_after,
+            "retry should drop the oldest conversation item"
+        );
+    } else {
+        panic!("expected non-empty compact inputs");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

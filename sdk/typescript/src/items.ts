@@ -102,11 +102,6 @@ export type TodoListItem = {
   items: TodoItem[];
 };
 
-export type SessionItem = {
-  id: string;
-  type: "session";
-  session_id: string;
-};
 
 /** Canonical union of thread items and their type-specific payloads. */
 export type ThreadItem =

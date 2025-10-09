@@ -320,6 +320,56 @@ fn create_test_sync_tool() -> ToolSpec {
     })
 }
 
+fn create_grep_files_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "pattern".to_string(),
+        JsonSchema::String {
+            description: Some("Regular expression pattern to search for.".to_string()),
+        },
+    );
+    properties.insert(
+        "include".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional glob that limits which files are searched (e.g. \"*.rs\" or \
+                 \"*.{ts,tsx}\")."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Directory or file path to search. Defaults to the session's working directory."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum number of file paths to return (defaults to 100).".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "grep_files".to_string(),
+        description: "Finds files whose contents match the pattern and lists them by modification \
+                      time."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["pattern".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_read_file_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -342,16 +392,122 @@ fn create_read_file_tool() -> ToolSpec {
             description: Some("The maximum number of lines to return.".to_string()),
         },
     );
+    properties.insert(
+        "mode".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional mode selector: \"slice\" for simple ranges (default) or \"indentation\" \
+                 to expand around an anchor line."
+                    .to_string(),
+            ),
+        },
+    );
+
+    let mut indentation_properties = BTreeMap::new();
+    indentation_properties.insert(
+        "anchor_line".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Anchor line to center the indentation lookup on (defaults to offset).".to_string(),
+            ),
+        },
+    );
+    indentation_properties.insert(
+        "max_levels".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "How many parent indentation levels (smaller indents) to include.".to_string(),
+            ),
+        },
+    );
+    indentation_properties.insert(
+        "include_siblings".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, include additional blocks that share the anchor indentation."
+                    .to_string(),
+            ),
+        },
+    );
+    indentation_properties.insert(
+        "include_header".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Include doc comments or attributes directly above the selected block.".to_string(),
+            ),
+        },
+    );
+    indentation_properties.insert(
+        "max_lines".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Hard cap on the number of lines returned when using indentation mode.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "indentation".to_string(),
+        JsonSchema::Object {
+            properties: indentation_properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "read_file".to_string(),
         description:
-            "Reads a local file with 1-indexed line numbers and returns up to the requested number of lines."
+            "Reads a local file with 1-indexed line numbers, supporting slice and indentation-aware block modes."
                 .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["file_path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_list_dir_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "dir_path".to_string(),
+        JsonSchema::String {
+            description: Some("Absolute path to the directory to list.".to_string()),
+        },
+    );
+    properties.insert(
+        "offset".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "The entry number to start listing from. Must be 1 or greater.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some("The maximum number of entries to return.".to_string()),
+        },
+    );
+    properties.insert(
+        "depth".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "The maximum directory depth to traverse. Must be 1 or greater.".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_dir".to_string(),
+        description:
+            "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["dir_path".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -565,6 +721,8 @@ pub(crate) fn build_specs(
     use crate::exec_command::create_write_stdin_tool_for_responses_api;
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::ExecStreamHandler;
+    use crate::tools::handlers::GrepFilesHandler;
+    use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
@@ -632,8 +790,16 @@ pub(crate) fn build_specs(
 
     if config
         .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "read_file")
+        .contains(&"grep_files".to_string())
+    {
+        let grep_files_handler = Arc::new(GrepFilesHandler);
+        builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
+        builder.register_handler("grep_files", grep_files_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .contains(&"read_file".to_string())
     {
         let read_file_handler = Arc::new(ReadFileHandler);
         builder.push_spec_with_parallel_support(create_read_file_tool(), true);
@@ -643,7 +809,16 @@ pub(crate) fn build_specs(
     if config
         .experimental_supported_tools
         .iter()
-        .any(|tool| tool == "test_sync_tool")
+        .any(|tool| tool == "list_dir")
+    {
+        let list_dir_handler = Arc::new(ListDirHandler);
+        builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
+        builder.register_handler("list_dir", list_dir_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .contains(&"test_sync_tool".to_string())
     {
         let test_sync_handler = Arc::new(TestSyncHandler);
         builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
@@ -785,6 +960,8 @@ mod tests {
         let (tools, _) = build_specs(&config, None).build();
 
         assert!(!find_tool(&tools, "unified_exec").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
     }
 
@@ -813,6 +990,12 @@ mod tests {
                 .iter()
                 .any(|tool| tool_name(&tool.spec) == "read_file")
         );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "grep_files")
+        );
+        assert!(tools.iter().any(|tool| tool_name(&tool.spec) == "list_dir"));
     }
 
     #[test]
