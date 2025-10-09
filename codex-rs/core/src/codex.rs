@@ -1578,6 +1578,51 @@ async fn submission_loop(
                 };
                 sess.send_event(event).await;
             }
+            Op::RestoreFullContext => {
+                // Flush rollout, read lines, reconstruct and replace history
+                let (path, rec_opt) = {
+                    let guard = sess.services.rollout.lock().await;
+                    match guard.as_ref() {
+                        Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
+                        None => {
+                            error!("rollout recorder not found for RestoreFullContext");
+                            continue;
+                        }
+                    }
+                };
+                if let Some(rec) = rec_opt
+                    && let Err(e) = rec.flush().await
+                {
+                    warn!("failed to flush rollout recorder before RestoreFullContext: {e}");
+                }
+                let rebuilt = match tokio::fs::read_to_string(&path).await {
+                    Ok(contents) => {
+                        let mut rollout_items: Vec<RolloutItem> = Vec::new();
+                        for line in contents.lines() {
+                            if line.trim().is_empty() { continue; }
+                            match serde_json::from_str::<crate::protocol::RolloutLine>(line) {
+                                Ok(rl) => rollout_items.push(rl.item),
+                                Err(e) => {
+                                    warn!("restore: failed to parse rollout line: {e}");
+                                }
+                            }
+                        }
+                        sess.reconstruct_history_from_rollout(&turn_context, &rollout_items)
+                    }
+                    Err(e) => {
+                        warn!("restore: failed to read rollout file: {e}");
+                        Vec::new()
+                    }
+                };
+                if !rebuilt.is_empty() {
+                    sess.replace_history(rebuilt).await;
+                }
+                // Emit fresh usage and list for UI
+                let usage = compute_context_usage(&sess).await;
+                sess.send_event(Event { id: sub.id.clone(), msg: EventMsg::ConversationUsage(usage) }).await;
+                let items = compute_context_items(&sess).await;
+                sess.send_event(Event { id: sub.id.clone(), msg: EventMsg::ContextItems(items) }).await;
+            }
             Op::Review { review_request } => {
                 spawn_review_thread(
                     sess.clone(),

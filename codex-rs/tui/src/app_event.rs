@@ -88,6 +88,8 @@ pub(crate) enum AppEvent {
     // --- Advanced Prune (experimental) ---
     /// Open the non-destructive advanced prune view.
     OpenPruneAdvanced,
+    /// Open the manual prune submenu (by category).
+    OpenPruneManual,
     /// Close the advanced prune view.
     PruneAdvancedClosed,
     /// Toggle keep marker for an index in the advanced list.

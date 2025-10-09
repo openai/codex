@@ -385,6 +385,9 @@ impl App {
             AppEvent::OpenPruneAdvanced => {
                 self.chat_widget.open_prune_advanced();
             }
+            AppEvent::OpenPruneManual => {
+                self.chat_widget.open_prune_manual_menu();
+            }
             AppEvent::PruneAdvancedClosed => {
                 self.chat_widget.on_prune_advanced_closed();
             }
