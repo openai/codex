@@ -56,6 +56,28 @@ turn = thread.run("Summarize repository status", TurnOptions(output_schema=schem
 print(turn.final_response)
 ```
 
+### Structured output with Pydantic (optional)
+
+If you use [Pydantic](https://docs.pydantic.dev/latest/) v2, you can pass a model class or instance directly. The SDK converts it to JSON Schema automatically:
+
+```python
+from pydantic import BaseModel
+from codex import Codex, TurnOptions
+
+
+class StatusReport(BaseModel):
+    summary: str
+    status: str
+
+
+thread = Codex().start_thread()
+turn = thread.run(
+    "Summarize repository status",
+    TurnOptions(output_schema=StatusReport),
+)
+print(turn.final_response)
+```
+
 ## Development
 
 - Install dependencies with `uv pip install -e .[dev]`.
