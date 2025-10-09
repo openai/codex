@@ -1,6 +1,7 @@
 # Plan: Toggleable Live Stdout/Stderr Streaming in Codex CLI
 
 ## Current Behavior and Constraints
+
 - `codex-rs/core/src/exec.rs` already emits `EventMsg::ExecCommandOutputDelta` via `read_capped`, streaming stdout/stderr chunks while a command runs. The deltas carry the `call_id`, stream discriminator, and raw bytes, so the backend is ready.
 - The TUI ignores those deltas today (`tui/src/chatwidget.rs` drops them in `on_exec_command_output_delta`), and `ExecCell` only renders final `CommandOutput` once `ExecCommandEnd` arrives. While a command is running the UI shows only a spinner and the command header.
 - The bottom status indicator (`tui/src/status_indicator_widget.rs`) has infrastructure for queued hints but no hook for live command output lines or toggle affordances.

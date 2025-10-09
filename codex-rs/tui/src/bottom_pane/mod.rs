@@ -69,6 +69,9 @@ pub(crate) struct BottomPane {
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
     context_window_percent: Option<u8>,
+    status_live_line: Option<String>,
+    live_output_visible: bool,
+    live_output_toggle_enabled: bool,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -102,6 +105,9 @@ impl BottomPane {
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
+            status_live_line: None,
+            live_output_visible: false,
+            live_output_toggle_enabled: false,
         }
     }
 
@@ -335,11 +341,17 @@ impl BottomPane {
             }
             if let Some(status) = self.status.as_mut() {
                 status.set_queued_messages(self.queued_user_messages.clone());
+                status.set_live_output_preview(self.status_live_line.clone());
+                status.set_live_output_visible(self.live_output_visible);
+                status.set_live_output_toggle_enabled(self.live_output_toggle_enabled);
             }
             self.request_redraw();
         } else {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();
+            self.status_live_line = None;
+            self.live_output_visible = false;
+            self.live_output_toggle_enabled = false;
         }
     }
 
@@ -371,6 +383,39 @@ impl BottomPane {
         self.queued_user_messages = queued.clone();
         if let Some(status) = self.status.as_mut() {
             status.set_queued_messages(queued);
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_status_live_line(&mut self, line: Option<String>) {
+        if self.status_live_line == line {
+            return;
+        }
+        self.status_live_line = line.clone();
+        if let Some(status) = self.status.as_mut() {
+            status.set_live_output_preview(line);
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_live_output_visible(&mut self, visible: bool) {
+        if self.live_output_visible == visible {
+            return;
+        }
+        self.live_output_visible = visible;
+        if let Some(status) = self.status.as_mut() {
+            status.set_live_output_visible(visible);
+        }
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_live_output_toggle_enabled(&mut self, enabled: bool) {
+        if self.live_output_toggle_enabled == enabled {
+            return;
+        }
+        self.live_output_toggle_enabled = enabled;
+        if let Some(status) = self.status.as_mut() {
+            status.set_live_output_toggle_enabled(enabled);
         }
         self.request_redraw();
     }

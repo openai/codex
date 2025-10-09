@@ -21,6 +21,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandOutputDeltaEvent;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::InputMessageKind;
@@ -386,6 +387,9 @@ impl ChatWidget {
     fn on_task_started(&mut self) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
+        self.bottom_pane.set_status_live_line(None);
+        self.bottom_pane.set_live_output_visible(false);
+        self.bottom_pane.set_live_output_toggle_enabled(false);
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
@@ -396,6 +400,9 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
+        self.bottom_pane.set_status_live_line(None);
+        self.bottom_pane.set_live_output_visible(false);
+        self.bottom_pane.set_live_output_toggle_enabled(false);
         self.running_commands.clear();
         self.request_redraw();
 
@@ -537,11 +544,39 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
     }
 
-    fn on_exec_command_output_delta(
-        &mut self,
-        _ev: codex_core::protocol::ExecCommandOutputDeltaEvent,
-    ) {
-        // TODO: Handle streaming exec output if/when implemented
+    fn on_exec_command_output_delta(&mut self, ev: ExecCommandOutputDeltaEvent) {
+        let ExecCommandOutputDeltaEvent {
+            call_id,
+            stream,
+            chunk,
+        } = ev;
+
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+        {
+            let preview = cell.append_live_chunk(&call_id, stream, &chunk);
+            let has_live = !cell.live_lines_for_display().is_empty();
+            if let Some(text) = preview.or_else(|| cell.latest_live_preview()) {
+                self.bottom_pane.set_status_live_line(Some(text));
+            }
+            if has_live {
+                self.bottom_pane.set_live_output_toggle_enabled(true);
+            }
+            self.bottom_pane
+                .set_live_output_visible(cell.show_live_output());
+            self.request_redraw();
+            return;
+        }
+
+        if !chunk.is_empty() {
+            let fallback = String::from_utf8_lossy(&chunk).to_string();
+            if !fallback.is_empty() {
+                self.bottom_pane
+                    .set_status_live_line(Some(fallback.trim_end_matches('\n').to_string()));
+            }
+        }
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
@@ -739,6 +774,9 @@ impl ChatWidget {
                 self.flush_active_cell();
             }
         }
+        self.bottom_pane.set_status_live_line(None);
+        self.bottom_pane.set_live_output_visible(false);
+        self.bottom_pane.set_live_output_toggle_enabled(false);
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -817,6 +855,17 @@ impl ChatWidget {
                 ev.parsed_cmd,
             )));
         }
+
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+        {
+            cell.set_live_output_visible(false);
+        }
+        self.bottom_pane.set_status_live_line(None);
+        self.bottom_pane.set_live_output_visible(false);
+        self.bottom_pane.set_live_output_toggle_enabled(true);
 
         self.request_redraw();
     }
@@ -1034,6 +1083,16 @@ impl ChatWidget {
                 }
                 return;
             }
+            KeyEvent {
+                code: KeyCode::Char('r'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if self.toggle_live_output_view() {
+                    return;
+                }
+            }
             other if other.kind == KeyEventKind::Press => {
                 self.bottom_pane.clear_ctrl_c_quit_hint();
             }
@@ -1230,6 +1289,27 @@ impl ChatWidget {
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
+    }
+
+    fn toggle_live_output_view(&mut self) -> bool {
+        let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+        else {
+            return false;
+        };
+        if !cell.is_active() {
+            return false;
+        }
+        let new_state = cell.toggle_live_output();
+        self.bottom_pane.set_live_output_visible(new_state);
+        self.bottom_pane.set_live_output_toggle_enabled(true);
+        if let Some(preview) = cell.latest_live_preview() {
+            self.bottom_pane.set_status_live_line(Some(preview));
+        }
+        self.request_redraw();
+        true
     }
 
     fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
