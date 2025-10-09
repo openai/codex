@@ -15,9 +15,14 @@ use crate::protocol::SandboxPolicy;
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
-    AutoApprove { sandbox_type: SandboxType },
+    AutoApprove {
+        sandbox_type: SandboxType,
+        user_explicitly_approved: bool,
+    },
     AskUser,
-    Reject { reason: String },
+    Reject {
+        reason: String,
+    },
 }
 
 pub fn assess_patch_safety(
@@ -54,12 +59,16 @@ pub fn assess_patch_safety(
         // fall back to asking the user because the patch may touch arbitrary
         // paths outside the project.
         match get_platform_sandbox() {
-            Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
+            Some(sandbox_type) => SafetyCheck::AutoApprove {
+                sandbox_type,
+                user_explicitly_approved: false,
+            },
             None if sandbox_policy == &SandboxPolicy::DangerFullAccess => {
                 // If the user has explicitly requested DangerFullAccess, then
                 // we can auto-approve even without a sandbox.
                 SafetyCheck::AutoApprove {
                     sandbox_type: SandboxType::None,
+                    user_explicitly_approved: false,
                 }
             }
             None => SafetyCheck::AskUser,
@@ -89,8 +98,15 @@ pub fn assess_command_safety(
 ) -> SafetyCheck {
     // Some commands look dangerous. Even if they are run inside a sandbox,
     // unless the user has explicitly approved them, we should ask,
-    // regardless of the approval policy and sandbox policy.
+    // or reject if the approval_policy tells us not to ask.
     if command_might_be_dangerous(command) && !approved.contains(command) {
+        if approval_policy == AskForApproval::Never {
+            return SafetyCheck::Reject {
+                reason: "dangerous command detected; rejected by user approval settings"
+                    .to_string(),
+            };
+        }
+
         return SafetyCheck::AskUser;
     }
 
@@ -109,8 +125,10 @@ pub fn assess_command_safety(
     // the session _because_ they know it needs to run outside a sandbox.
 
     if is_known_safe_command(command) || approved.contains(command) {
+        let user_explicitly_approved = approved.contains(command);
         return SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
+            user_explicitly_approved,
         };
     }
 
@@ -136,13 +154,17 @@ pub(crate) fn assess_safety_for_untrusted_command(
         | (Never, DangerFullAccess)
         | (OnRequest, DangerFullAccess) => SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
+            user_explicitly_approved: false,
         },
         (OnRequest, ReadOnly) | (OnRequest, WorkspaceWrite { .. }) => {
             if with_escalated_permissions {
                 SafetyCheck::AskUser
             } else {
                 match get_platform_sandbox() {
-                    Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
+                    Some(sandbox_type) => SafetyCheck::AutoApprove {
+                        sandbox_type,
+                        user_explicitly_approved: false,
+                    },
                     // Fall back to asking since the command is untrusted and
                     // we do not have a sandbox available
                     None => SafetyCheck::AskUser,
@@ -154,7 +176,10 @@ pub(crate) fn assess_safety_for_untrusted_command(
         | (OnFailure, ReadOnly)
         | (OnFailure, WorkspaceWrite { .. }) => {
             match get_platform_sandbox() {
-                Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
+                Some(sandbox_type) => SafetyCheck::AutoApprove {
+                    sandbox_type,
+                    user_explicitly_approved: false,
+                },
                 None => {
                     if matches!(approval_policy, OnFailure) {
                         // Since the command is not trusted, even though the
@@ -355,7 +380,8 @@ mod tests {
         assert_eq!(
             safety_check,
             SafetyCheck::AutoApprove {
-                sandbox_type: SandboxType::None
+                sandbox_type: SandboxType::None,
+                user_explicitly_approved: true,
             }
         );
     }
@@ -376,7 +402,13 @@ mod tests {
             request_escalated_privileges,
         );
 
-        assert_eq!(safety_check, SafetyCheck::AskUser);
+        assert_eq!(
+            safety_check,
+            SafetyCheck::Reject {
+                reason: "dangerous command detected; rejected by user approval settings"
+                    .to_string(),
+            }
+        );
     }
 
     #[test]
@@ -396,7 +428,10 @@ mod tests {
         );
 
         let expected = match get_platform_sandbox() {
-            Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
+            Some(sandbox_type) => SafetyCheck::AutoApprove {
+                sandbox_type,
+                user_explicitly_approved: false,
+            },
             None => SafetyCheck::AskUser,
         };
         assert_eq!(safety_check, expected);

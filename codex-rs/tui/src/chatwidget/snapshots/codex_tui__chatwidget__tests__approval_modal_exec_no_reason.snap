@@ -1,16 +1,13 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: terminal.backend()
+expression: terminal.backend().vt100().screen().contents()
 ---
-"                                                                                "
-"▌ Command: echo hello world                                                     "
-"▌                                                                               "
-"▌ Allow command?                                                                "
-"▌                                                                               "
-"▌ > 1. Approve and run now          (Y) Run this command one time               "
-"▌   2. Always approve this session  (A) Automatically approve this command for  "
-"▌                                   the rest of the session                     "
-"▌   3. Cancel                       (N) Do not run the command                  "
-"                                                                                "
-"Press Enter to confirm or Esc to cancel                                         "
-"                                                                                "
+  Would you like to run the following command?
+
+  $ echo hello world
+
+› 1. Yes, proceed
+  2. Yes, and don't ask again for this command
+  3. No, and tell Codex what to do differently esc
+
+  Press enter to confirm or esc to cancel

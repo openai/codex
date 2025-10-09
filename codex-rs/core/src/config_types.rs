@@ -3,25 +3,26 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
+use serde::Deserializer;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
-use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
 
+pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
-    pub command: String,
+    #[serde(flatten)]
+    pub transport: McpServerTransportConfig,
 
-    #[serde(default)]
-    pub args: Vec<String>,
-
-    #[serde(default)]
-    pub env: Option<HashMap<String, String>>,
+    /// When `false`, Codex skips initializing this MCP server.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
@@ -43,17 +44,24 @@ impl<'de> Deserialize<'de> for McpServerConfig {
     {
         #[derive(Deserialize)]
         struct RawMcpServerConfig {
-            command: String,
+            command: Option<String>,
             #[serde(default)]
-            args: Vec<String>,
+            args: Option<Vec<String>>,
             #[serde(default)]
             env: Option<HashMap<String, String>>,
+
+            url: Option<String>,
+            bearer_token: Option<String>,
+            bearer_token_env_var: Option<String>,
+
             #[serde(default)]
             startup_timeout_sec: Option<f64>,
             #[serde(default)]
             startup_timeout_ms: Option<u64>,
             #[serde(default, with = "option_duration_secs")]
             tool_timeout_sec: Option<Duration>,
+            #[serde(default)]
+            enabled: Option<bool>,
         }
 
         let raw = RawMcpServerConfig::deserialize(deserializer)?;
@@ -67,14 +75,93 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             (None, None) => None,
         };
 
+        fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
+        where
+            E: SerdeError,
+        {
+            if value.is_none() {
+                return Ok(());
+            }
+            Err(E::custom(format!(
+                "{field} is not supported for {transport}",
+            )))
+        }
+
+        let transport = match raw {
+            RawMcpServerConfig {
+                command: Some(command),
+                args,
+                env,
+                url,
+                bearer_token_env_var,
+                ..
+            } => {
+                throw_if_set("stdio", "url", url.as_ref())?;
+                throw_if_set(
+                    "stdio",
+                    "bearer_token_env_var",
+                    bearer_token_env_var.as_ref(),
+                )?;
+                McpServerTransportConfig::Stdio {
+                    command,
+                    args: args.unwrap_or_default(),
+                    env,
+                }
+            }
+            RawMcpServerConfig {
+                url: Some(url),
+                bearer_token,
+                bearer_token_env_var,
+                command,
+                args,
+                env,
+                ..
+            } => {
+                throw_if_set("streamable_http", "command", command.as_ref())?;
+                throw_if_set("streamable_http", "args", args.as_ref())?;
+                throw_if_set("streamable_http", "env", env.as_ref())?;
+                throw_if_set("streamable_http", "bearer_token", bearer_token.as_ref())?;
+                McpServerTransportConfig::StreamableHttp {
+                    url,
+                    bearer_token_env_var,
+                }
+            }
+            _ => return Err(SerdeError::custom("invalid transport")),
+        };
+
         Ok(Self {
-            command: raw.command,
-            args: raw.args,
-            env: raw.env,
+            transport,
             startup_timeout_sec,
             tool_timeout_sec: raw.tool_timeout_sec,
+            enabled: raw.enabled.unwrap_or_else(default_enabled),
         })
     }
+}
+
+const fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
+pub enum McpServerTransportConfig {
+    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env: Option<HashMap<String, String>>,
+    },
+    /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
+    StreamableHttp {
+        url: String,
+        /// Name of the environment variable to read for an HTTP bearer token.
+        /// When set, requests will include the token via `Authorization: Bearer <token>`.
+        /// The actual secret value must be provided via the environment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer_token_env_var: Option<String>,
+    },
 }
 
 mod option_duration_secs {
@@ -155,6 +242,64 @@ pub enum HistoryPersistence {
     None,
 }
 
+// ===== OTEL configuration =====
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OtelHttpProtocol {
+    /// Binary payload
+    Binary,
+    /// JSON payload
+    Json,
+}
+
+/// Which OTEL exporter to use.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OtelExporterKind {
+    None,
+    OtlpHttp {
+        endpoint: String,
+        headers: HashMap<String, String>,
+        protocol: OtelHttpProtocol,
+    },
+    OtlpGrpc {
+        endpoint: String,
+        headers: HashMap<String, String>,
+    },
+}
+
+/// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct OtelConfigToml {
+    /// Log user prompt in traces
+    pub log_user_prompt: Option<bool>,
+
+    /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
+    pub environment: Option<String>,
+
+    /// Exporter to use. Defaults to `otlp-file`.
+    pub exporter: Option<OtelExporterKind>,
+}
+
+/// Effective OTEL settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OtelConfig {
+    pub log_user_prompt: bool,
+    pub environment: String,
+    pub exporter: OtelExporterKind,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        OtelConfig {
+            log_user_prompt: false,
+            environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
+            exporter: OtelExporterKind::None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 pub enum Notifications {
@@ -189,7 +334,7 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_slash_tmp: bool,
 }
 
-impl From<SandboxWorkspaceWrite> for codex_protocol::mcp_protocol::SandboxSettings {
+impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings {
     fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
         Self {
             writable_roots: sandbox_workspace_write.writable_roots,
@@ -302,4 +447,163 @@ pub enum ReasoningSummaryFormat {
     #[default]
     None,
     Experimental,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn deserialize_stdio_command_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_args() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            args = ["hello", "world"]
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec!["hello".to_string(), "world".to_string()],
+                env: None
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_arg_with_args_and_env() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            args = ["hello", "world"]
+            env = { "FOO" = "BAR" }
+        "#,
+        )
+        .expect("should deserialize command config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec!["hello".to_string(), "world".to_string()],
+                env: Some(HashMap::from([("FOO".to_string(), "BAR".to_string())]))
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_disabled_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            enabled = false
+        "#,
+        )
+        .expect("should deserialize disabled server config");
+
+        assert!(!cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+        "#,
+        )
+        .expect("should deserialize http config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: None
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config_with_env_var() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+            bearer_token_env_var = "GITHUB_TOKEN"
+        "#,
+        )
+        .expect("should deserialize http config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: Some("GITHUB_TOKEN".to_string())
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_rejects_command_and_url() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            url = "https://example.com"
+        "#,
+        )
+        .expect_err("should reject command+url");
+    }
+
+    #[test]
+    fn deserialize_rejects_env_for_http_transport() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            url = "https://example.com"
+            env = { "FOO" = "BAR" }
+        "#,
+        )
+        .expect_err("should reject env for http transport");
+    }
+
+    #[test]
+    fn deserialize_rejects_inline_bearer_token_field() {
+        let err = toml::from_str::<McpServerConfig>(
+            r#"
+            url = "https://example.com"
+            bearer_token = "secret"
+        "#,
+        )
+        .expect_err("should reject bearer_token field");
+
+        assert!(
+            err.to_string().contains("bearer_token is not supported"),
+            "unexpected error: {err}"
+        );
+    }
 }

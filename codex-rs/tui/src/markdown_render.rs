@@ -1,4 +1,7 @@
 use crate::citation_regex::CITATION_REGEX;
+use crate::render::line_utils::line_to_static;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::CowStr;
 use pulldown_cmark::Event;
@@ -32,25 +35,30 @@ impl IndentContext {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn render_markdown_text(input: &str) -> Text<'static> {
+pub fn render_markdown_text(input: &str) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, None, None);
+    let mut w = Writer::new(parser, None, None, None);
     w.run();
     w.text
 }
 
 pub(crate) fn render_markdown_text_with_citations(
     input: &str,
+    width: Option<usize>,
     scheme: Option<&str>,
     cwd: &Path,
 ) -> Text<'static> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, scheme.map(str::to_string), Some(cwd.to_path_buf()));
+    let mut w = Writer::new(
+        parser,
+        scheme.map(str::to_string),
+        Some(cwd.to_path_buf()),
+        width,
+    );
     w.run();
     w.text
 }
@@ -71,13 +79,24 @@ where
     scheme: Option<String>,
     cwd: Option<std::path::PathBuf>,
     in_code_block: bool,
+    wrap_width: Option<usize>,
+    current_line_content: Option<Line<'static>>,
+    current_initial_indent: Vec<Span<'static>>,
+    current_subsequent_indent: Vec<Span<'static>>,
+    current_line_style: Style,
+    current_line_in_code_block: bool,
 }
 
 impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
-    fn new(iter: I, scheme: Option<String>, cwd: Option<std::path::PathBuf>) -> Self {
+    fn new(
+        iter: I,
+        scheme: Option<String>,
+        cwd: Option<std::path::PathBuf>,
+        wrap_width: Option<usize>,
+    ) -> Self {
         Self {
             iter,
             text: Text::default(),
@@ -91,6 +110,12 @@ where
             scheme,
             cwd,
             in_code_block: false,
+            wrap_width,
+            current_line_content: None,
+            current_initial_indent: Vec::new(),
+            current_subsequent_indent: Vec::new(),
+            current_line_style: Style::default(),
+            current_line_in_code_block: false,
         }
     }
 
@@ -98,6 +123,7 @@ where
         while let Some(ev) = self.iter.next() {
             self.handle_event(ev);
         }
+        self.flush_current_line();
     }
 
     fn handle_event(&mut self, event: Event<'a>) {
@@ -109,6 +135,7 @@ where
             Event::SoftBreak => self.soft_break(),
             Event::HardBreak => self.hard_break(),
             Event::Rule => {
+                self.flush_current_line();
                 if !self.text.lines.is_empty() {
                     self.push_blank_line();
                 }
@@ -237,16 +264,21 @@ where
             self.push_line(Line::default());
         }
         self.pending_marker_line = false;
-        if self.in_code_block
-            && !self.needs_newline
-            && self
-                .text
-                .lines
-                .last()
+        if self.in_code_block && !self.needs_newline {
+            let has_content = self
+                .current_line_content
+                .as_ref()
                 .map(|line| !line.spans.is_empty())
-                .unwrap_or(false)
-        {
-            self.push_line(Line::default());
+                .unwrap_or_else(|| {
+                    self.text
+                        .lines
+                        .last()
+                        .map(|line| !line.spans.is_empty())
+                        .unwrap_or(false)
+                });
+            if has_content {
+                self.push_line(Line::default());
+            }
         }
         for (i, line) in text.lines().enumerate() {
             if self.needs_newline {
@@ -351,6 +383,7 @@ where
     }
 
     fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
+        self.flush_current_line();
         if !self.text.lines.is_empty() {
             self.push_blank_line();
         }
@@ -360,16 +393,10 @@ where
             None,
             false,
         ));
-        // let opener = match lang {
-        //     Some(l) if !l.is_empty() => format!("```{l}"),
-        //     _ => "```".to_string(),
-        // };
-        // self.push_line(opener.into());
         self.needs_newline = true;
     }
 
     fn end_codeblock(&mut self) {
-        // self.push_line("```".into());
         self.needs_newline = true;
         self.in_code_block = false;
         self.indent_stack.pop();
@@ -397,11 +424,34 @@ where
         }
     }
 
+    fn flush_current_line(&mut self) {
+        if let Some(line) = self.current_line_content.take() {
+            let style = self.current_line_style;
+            // NB we don't wrap code in code blocks, in order to preserve whitespace for copy/paste.
+            if !self.current_line_in_code_block
+                && let Some(width) = self.wrap_width
+            {
+                let opts = RtOptions::new(width)
+                    .initial_indent(self.current_initial_indent.clone().into())
+                    .subsequent_indent(self.current_subsequent_indent.clone().into());
+                for wrapped in word_wrap_line(&line, opts) {
+                    let owned = line_to_static(&wrapped).style(style);
+                    self.text.lines.push(owned);
+                }
+            } else {
+                let mut spans = self.current_initial_indent.clone();
+                let mut line = line;
+                spans.append(&mut line.spans);
+                self.text.lines.push(Line::from_iter(spans).style(style));
+            }
+            self.current_initial_indent.clear();
+            self.current_subsequent_indent.clear();
+            self.current_line_in_code_block = false;
+        }
+    }
+
     fn push_line(&mut self, line: Line<'static>) {
-        let mut line = line;
-        let was_pending = self.pending_marker_line;
-        let mut spans = self.current_prefix_spans();
-        spans.append(&mut line.spans);
+        self.flush_current_line();
         let blockquote_active = self
             .indent_stack
             .iter()
@@ -411,31 +461,38 @@ where
         } else {
             line.style
         };
-        self.text.lines.push(Line::from_iter(spans).style(style));
-        if was_pending {
-            self.pending_marker_line = false;
-        }
+        let was_pending = self.pending_marker_line;
+
+        self.current_initial_indent = self.prefix_spans(was_pending);
+        self.current_subsequent_indent = self.prefix_spans(false);
+        self.current_line_style = style;
+        self.current_line_content = Some(line);
+        self.current_line_in_code_block = self.in_code_block;
+
+        self.pending_marker_line = false;
     }
 
     fn push_span(&mut self, span: Span<'static>) {
-        if let Some(last) = self.text.lines.last_mut() {
-            last.push_span(span);
+        if let Some(line) = self.current_line_content.as_mut() {
+            line.push_span(span);
         } else {
             self.push_line(Line::from(vec![span]));
         }
     }
 
     fn push_blank_line(&mut self) {
+        self.flush_current_line();
         if self.indent_stack.iter().all(|ctx| ctx.is_list) {
             self.text.lines.push(Line::default());
         } else {
             self.push_line(Line::default());
+            self.flush_current_line();
         }
     }
 
-    fn current_prefix_spans(&self) -> Vec<Span<'static>> {
+    fn prefix_spans(&self, pending_marker_line: bool) -> Vec<Span<'static>> {
         let mut prefix: Vec<Span<'static>> = Vec::new();
-        let last_marker_index = if self.pending_marker_line {
+        let last_marker_index = if pending_marker_line {
             self.indent_stack
                 .iter()
                 .enumerate()
@@ -447,7 +504,7 @@ where
         let last_list_index = self.indent_stack.iter().rposition(|ctx| ctx.is_list);
 
         for (i, ctx) in self.indent_stack.iter().enumerate() {
-            if self.pending_marker_line {
+            if pending_marker_line {
                 if Some(i) == last_marker_index
                     && let Some(marker) = &ctx.marker
                 {
@@ -514,6 +571,19 @@ mod markdown_render_tests {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::text::Text;
+
+    fn lines_to_strings(text: &Text<'_>) -> Vec<String> {
+        text.lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
+            .collect()
+    }
 
     #[test]
     fn citation_is_rewritten_with_absolute_path() {
@@ -546,17 +616,136 @@ mod tests {
         let unchanged = rewrite_file_citations_with_scheme(markdown, Some("vscode"), cwd);
         // The helper itself always rewrites – this test validates behaviour of
         // append_markdown when `file_opener` is None.
-        let rendered = render_markdown_text_with_citations(markdown, None, cwd);
+        let rendered = render_markdown_text_with_citations(markdown, None, None, cwd);
         // Convert lines back to string for comparison.
-        let rendered: String = rendered
-            .lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|s| s.content.clone())
-            .collect::<Vec<_>>()
-            .join("");
+        let rendered: String = lines_to_strings(&rendered).join("");
         assert_eq!(markdown, rendered);
         // Ensure helper rewrites.
         assert_ne!(markdown, unchanged);
+    }
+
+    #[test]
+    fn wraps_plain_text_when_width_provided() {
+        let markdown = "This is a simple sentence that should wrap.";
+        let cwd = Path::new("/");
+        let rendered = render_markdown_text_with_citations(markdown, Some(16), None, cwd);
+        let lines = lines_to_strings(&rendered);
+        assert_eq!(
+            lines,
+            vec![
+                "This is a simple".to_string(),
+                "sentence that".to_string(),
+                "should wrap.".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wraps_list_items_preserving_indent() {
+        let markdown = "- first second third fourth";
+        let cwd = Path::new("/");
+        let rendered = render_markdown_text_with_citations(markdown, Some(14), None, cwd);
+        let lines = lines_to_strings(&rendered);
+        assert_eq!(
+            lines,
+            vec!["- first second".to_string(), "  third fourth".to_string(),]
+        );
+    }
+
+    #[test]
+    fn wraps_nested_lists() {
+        let markdown =
+            "- outer item with several words to wrap\n  - inner item that also needs wrapping";
+        let cwd = Path::new("/");
+        let rendered = render_markdown_text_with_citations(markdown, Some(20), None, cwd);
+        let lines = lines_to_strings(&rendered);
+        assert_eq!(
+            lines,
+            vec![
+                "- outer item with".to_string(),
+                "  several words".to_string(),
+                "  to wrap".to_string(),
+                "    - inner item".to_string(),
+                "      that also".to_string(),
+                "      needs wrapping".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wraps_ordered_lists() {
+        let markdown = "1. ordered item contains many words for wrapping";
+        let cwd = Path::new("/");
+        let rendered = render_markdown_text_with_citations(markdown, Some(18), None, cwd);
+        let lines = lines_to_strings(&rendered);
+        assert_eq!(
+            lines,
+            vec![
+                "1. ordered item".to_string(),
+                "   contains many".to_string(),
+                "   words for".to_string(),
+                "   wrapping".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wraps_blockquotes() {
+        let markdown = "> block quote with content that should wrap nicely";
+        let cwd = Path::new("/");
+        let rendered = render_markdown_text_with_citations(markdown, Some(22), None, cwd);
+        let lines = lines_to_strings(&rendered);
+        assert_eq!(
+            lines,
+            vec![
+                "> block quote with".to_string(),
+                "> content that should".to_string(),
+                "> wrap nicely".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wraps_blockquotes_inside_lists() {
+        let markdown = "- list item\n  > block quote inside list that wraps";
+        let cwd = Path::new("/");
+        let rendered = render_markdown_text_with_citations(markdown, Some(24), None, cwd);
+        let lines = lines_to_strings(&rendered);
+        assert_eq!(
+            lines,
+            vec![
+                "- list item".to_string(),
+                "  > block quote inside".to_string(),
+                "  > list that wraps".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wraps_list_items_containing_blockquotes() {
+        let markdown = "1. item with quote\n   > quoted text that should wrap";
+        let cwd = Path::new("/");
+        let rendered = render_markdown_text_with_citations(markdown, Some(24), None, cwd);
+        let lines = lines_to_strings(&rendered);
+        assert_eq!(
+            lines,
+            vec![
+                "1. item with quote".to_string(),
+                "   > quoted text that".to_string(),
+                "   > should wrap".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn does_not_wrap_code_blocks() {
+        let markdown = "````\nfn main() { println!(\"hi from a long line\"); }\n````";
+        let cwd = Path::new("/");
+        let rendered = render_markdown_text_with_citations(markdown, Some(10), None, cwd);
+        let lines = lines_to_strings(&rendered);
+        assert_eq!(
+            lines,
+            vec!["fn main() { println!(\"hi from a long line\"); }".to_string(),]
+        );
     }
 }

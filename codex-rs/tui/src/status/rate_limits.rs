@@ -11,7 +11,6 @@ use std::convert::TryFrom;
 const STATUS_LIMIT_BAR_SEGMENTS: usize = 20;
 const STATUS_LIMIT_BAR_FILLED: &str = "█";
 const STATUS_LIMIT_BAR_EMPTY: &str = "░";
-pub(crate) const RESET_BULLET: &str = "·";
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusRateLimitRow {
@@ -105,7 +104,7 @@ pub(crate) fn compose_rate_limit_data(
             }
 
             if rows.is_empty() {
-                StatusRateLimitData::Missing
+                StatusRateLimitData::Available(vec![])
             } else {
                 StatusRateLimitData::Available(rows)
             }

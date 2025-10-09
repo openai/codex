@@ -1,0 +1,43 @@
+name: sdk
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+
+jobs:
+  sdks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@1.90
+
+      - name: build codex
+        run: cargo build --bin codex
+        working-directory: codex-rs
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK packages
+        run: pnpm -r --filter ./sdk/typescript run build
+
+      - name: Lint SDK packages
+        run: pnpm -r --filter ./sdk/typescript run lint
+
+      - name: Test SDK packages
+        run: pnpm -r --filter ./sdk/typescript run test

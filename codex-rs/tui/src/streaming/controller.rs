@@ -15,10 +15,10 @@ pub(crate) struct StreamController {
 }
 
 impl StreamController {
-    pub(crate) fn new(config: Config) -> Self {
+    pub(crate) fn new(config: Config, width: Option<usize>) -> Self {
         Self {
             config,
-            state: StreamState::new(),
+            state: StreamState::new(width),
             finishing_after_drain: false,
             header_emitted: false,
         }
@@ -90,16 +90,16 @@ mod tests {
     use super::*;
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
+    use pretty_assertions::assert_eq;
 
-    fn test_config() -> Config {
+    async fn test_config() -> Config {
         let overrides = ConfigOverrides {
             cwd: std::env::current_dir().ok(),
             ..Default::default()
         };
-        match Config::load_with_cli_overrides(vec![], overrides) {
-            Ok(c) => c,
-            Err(e) => panic!("load test config: {e}"),
-        }
+        Config::load_with_cli_overrides(vec![], overrides)
+            .await
+            .expect("load test config")
     }
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
@@ -115,10 +115,10 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
-        let cfg = test_config();
-        let mut ctrl = StreamController::new(cfg.clone());
+    #[tokio::test]
+    async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
+        let cfg = test_config().await;
+        let mut ctrl = StreamController::new(cfg.clone(), None);
         let mut lines = Vec::new();
 
         // Exact deltas from the session log (section: Loose vs. tight list items)
@@ -196,7 +196,7 @@ mod tests {
         for d in deltas.iter() {
             ctrl.push(d);
             while let (Some(cell), idle) = ctrl.on_commit_tick() {
-                lines.extend(cell.transcript_lines());
+                lines.extend(cell.transcript_lines(u16::MAX));
                 if idle {
                     break;
                 }
@@ -204,26 +204,19 @@ mod tests {
         }
         // Finalize and flush remaining lines now.
         if let Some(cell) = ctrl.finalize() {
-            lines.extend(cell.transcript_lines());
+            lines.extend(cell.transcript_lines(u16::MAX));
         }
 
-        let mut flat = lines;
-        // Drop leading blank and header line if present.
-        if !flat.is_empty() && lines_to_plain_strings(&[flat[0].clone()])[0].is_empty() {
-            flat.remove(0);
-        }
-        if !flat.is_empty() {
-            let s0 = lines_to_plain_strings(&[flat[0].clone()])[0].clone();
-            if s0 == "codex" {
-                flat.remove(0);
-            }
-        }
-        let streamed = lines_to_plain_strings(&flat);
+        let streamed: Vec<_> = lines_to_plain_strings(&lines)
+            .into_iter()
+            // skip • and 2-space indentation
+            .map(|s| s.chars().skip(2).collect::<String>())
+            .collect();
 
         // Full render of the same source
         let source: String = deltas.iter().copied().collect();
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(&source, &mut rendered, &cfg);
+        crate::markdown::append_markdown(&source, None, &mut rendered, &cfg);
         let rendered_strs = lines_to_plain_strings(&rendered);
 
         assert_eq!(streamed, rendered_strs);

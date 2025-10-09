@@ -1,7 +1,5 @@
 //! Session-wide mutable state.
 
-use std::collections::HashSet;
-
 use codex_protocol::models::ResponseItem;
 
 use crate::conversation_history::ConversationHistory;
@@ -12,7 +10,6 @@ use crate::protocol::TokenUsageInfo;
 /// Persistent, session-scoped state previously stored directly on `Session`.
 #[derive(Default)]
 pub(crate) struct SessionState {
-    pub(crate) approved_commands: HashSet<Vec<String>>,
     pub(crate) history: ConversationHistory,
     pub(crate) token_info: Option<TokenUsageInfo>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
@@ -44,15 +41,6 @@ impl SessionState {
         self.history.replace(items);
     }
 
-    // Approved command helpers
-    pub(crate) fn add_approved_command(&mut self, cmd: Vec<String>) {
-        self.approved_commands.insert(cmd);
-    }
-
-    pub(crate) fn approved_commands_ref(&self) -> &HashSet<Vec<String>> {
-        &self.approved_commands
-    }
-
     // Token/rate limit helpers
     pub(crate) fn update_token_info_from_usage(
         &mut self,
@@ -74,6 +62,15 @@ impl SessionState {
         &self,
     ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
         (self.token_info.clone(), self.latest_rate_limits.clone())
+    }
+
+    pub(crate) fn set_token_usage_full(&mut self, context_window: u64) {
+        match &mut self.token_info {
+            Some(info) => info.fill_to_context_window(context_window),
+            None => {
+                self.token_info = Some(TokenUsageInfo::full_context_window(context_window));
+            }
+        }
     }
 
     // Pending input/approval moved to TurnState.
