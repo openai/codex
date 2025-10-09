@@ -6,7 +6,7 @@ on:
   pull_request: {}
 
 jobs:
-  sdks:
+  typescript-sdk:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -41,3 +41,40 @@ jobs:
 
       - name: Test SDK packages
         run: pnpm -r --filter ./sdk/typescript run test
+
+  python-sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@1.90
+
+      - name: Build codex
+        run: cargo build --bin codex
+        working-directory: codex-rs
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: |
+            sdk/python/pyproject.toml
+            sdk/python/uv.lock
+
+      - name: Install Python runtime
+        run: uv python install 3.12
+
+      - name: Sync Python dependencies
+        run: uv sync --project sdk/python --extra dev
+
+      - name: Lint Python SDK
+        run: uv run --project sdk/python ruff check
+
+      - name: Type-check Python SDK
+        run: uv run --project sdk/python mypy
+
+      - name: Test Python SDK
+        run: uv run --project sdk/python pytest
