@@ -51,6 +51,9 @@ yarn-error.log*
 !.env.example
 **/.venv/
 **/.ruff_cache/
+sdk/python/src/codex/vendor/**
+!sdk/python/src/codex/vendor/
+!sdk/python/src/codex/vendor/README.md
 
 # package
 *.tgz

@@ -63,4 +63,20 @@ print(turn.final_response)
 - Type-check with `uv run mypy`.
 - Tests via `uv run pytest`.
 
+### Bundling native binaries
+
+The SDK shells out to the Rust `codex` executable. For local testing we point at
+`codex-rs/target/debug/codex`, but release builds should bundle the official
+artifacts in `src/codex/vendor/` just like the TypeScript SDK. Use the helper
+script to fetch prebuilt binaries from the Rust release workflow:
+
+```bash
+uv run python sdk/python/scripts/install_native_deps.py --clean --workflow-url <workflow-url>
+```
+
+Omit `--workflow-url` to use the default pinned run. After bundling, build the
+wheel/sdist with `uv build` (or `python -m build`). The `vendor/` directory is
+ignored by git aside from its README, so remember to run the script before
+cutting a release.
+
 See `docs/bundling.md` (planned) for refreshing CLI binaries.
