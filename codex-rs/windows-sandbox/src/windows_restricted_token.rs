@@ -102,8 +102,8 @@ mod imp {
     use windows::Win32::Foundation::HLOCAL;
     use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Foundation::LocalFree;
-    use windows::Win32::Foundation::PSID;
     use windows::Win32::Foundation::SetHandleInformation;
+    use windows::Win32::Foundation::VARIANT_TRUE;
     use windows::Win32::Foundation::WAIT_OBJECT_0;
     use windows::Win32::Foundation::WIN32_ERROR;
 
@@ -132,10 +132,8 @@ mod imp {
     use windows::Win32::Security::Authorization::TRUSTEE_W;
 
     use windows::Win32::Security::CreateRestrictedToken;
-    use windows::Win32::Security::CreateWellKnownSid;
-    use windows::Win32::Security::DACL_SECURITY_INFORMATION;
     use windows::Win32::Security::LUID_AND_ATTRIBUTES;
-    use windows::Win32::Security::SECURITY_MAX_SID_SIZE;
+    use windows::Win32::Security::PSID;
     use windows::Win32::Security::SID_AND_ATTRIBUTES;
     use windows::Win32::Security::TOKEN_ACCESS_MASK;
     use windows::Win32::Security::TOKEN_ADJUST_DEFAULT;
@@ -143,20 +141,18 @@ mod imp {
     use windows::Win32::Security::TOKEN_ADJUST_SESSIONID;
     use windows::Win32::Security::TOKEN_ASSIGN_PRIMARY;
     use windows::Win32::Security::TOKEN_DUPLICATE;
-    use windows::Win32::Security::TOKEN_INFORMATION_CLASS::TokenUser;
     use windows::Win32::Security::TOKEN_QUERY;
     use windows::Win32::Security::TOKEN_USER;
-    use windows::Win32::Security::WELL_KNOWN_SID_TYPE;
 
     use windows::Win32::Security::CopySid;
     use windows::Win32::Security::GetLengthSid;
+    use windows::Win32::Security::TokenUser;
 
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
     use windows::Win32::System::Com::CLSCTX_INPROC_SERVER;
-    use windows::Win32::System::Com::COINIT_MULTITHREADED;
     use windows::Win32::System::Com::CoCreateInstance;
     use windows::Win32::System::Com::CoInitializeEx;
     use windows::Win32::System::Com::CoInitializeSecurity;
@@ -164,14 +160,6 @@ mod imp {
     use windows::Win32::System::Com::EOAC_NONE;
     use windows::Win32::System::Com::RPC_C_AUTHN_LEVEL_DEFAULT;
     use windows::Win32::System::Com::RPC_C_IMP_LEVEL_IMPERSONATE;
-    use windows::Win32::System::Com::RPC_E_TOO_LATE;
-    use windows::Win32::System::Com::VARIANT_TRUE;
-
-    use windows::Win32::System::Console::GetStdHandle;
-    use windows::Win32::System::Console::STD_ERROR_HANDLE;
-    use windows::Win32::System::Console::STD_INPUT_HANDLE;
-    use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
-
     use windows::Win32::System::JobObjects::AssignProcessToJobObject;
     use windows::Win32::System::JobObjects::CreateJobObjectW;
     use windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -287,6 +275,10 @@ mod imp {
     fn apply_stdio_policy(startup_info: &mut STARTUPINFOW, policy: StdioPolicy) -> io::Result<()> {
         match policy {
             StdioPolicy::Inherit => unsafe {
+                use windows::Win32::System::Console::GetStdHandle;
+                use windows::Win32::System::Console::STD_ERROR_HANDLE;
+                use windows::Win32::System::Console::STD_INPUT_HANDLE;
+                use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
                 let stdin_handle = ensure_valid_handle(GetStdHandle(STD_INPUT_HANDLE)?)?;
                 let stdout_handle = ensure_valid_handle(GetStdHandle(STD_OUTPUT_HANDLE)?)?;
                 let stderr_handle = ensure_valid_handle(GetStdHandle(STD_ERROR_HANDLE)?)?;
@@ -332,46 +324,21 @@ mod imp {
                 .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
             let process_guard = HandleGuard::new(process_token);
 
-            // Optional: disable some well-known SIDs (deny-only)
-            let disable_sid_types = [
-                WELL_KNOWN_SID_TYPE::WinBuiltinAdministratorsSid,
-                WELL_KNOWN_SID_TYPE::WinLocalSystemSid,
-                WELL_KNOWN_SID_TYPE::WinLocalServiceSid,
-                WELL_KNOWN_SID_TYPE::WinNetworkServiceSid,
-                WELL_KNOWN_SID_TYPE::WinBuiltinPowerUsersSid,
-                WELL_KNOWN_SID_TYPE::WinBuiltinBackupOperatorsSid,
-                WELL_KNOWN_SID_TYPE::WinBuiltinReplicatorSid,
-            ];
-            let mut disable_storage = Vec::new();
-            for sid_type in disable_sid_types {
-                disable_storage.push(WellKnownSid::new(sid_type)?);
-            }
-            let disable_entries: Vec<SID_AND_ATTRIBUTES> = disable_storage
-                .iter()
-                .map(|sid| SID_AND_ATTRIBUTES {
-                    Sid: sid.as_psid(),
-                    Attributes: windows::Win32::Security::SE_GROUP_USE_FOR_DENY_ONLY,
-                })
-                .collect();
-
+            // No explicit "SIDs to disable" list (avoids WELL_KNOWN_SID_TYPE issues on older metadata).
             let mut new_token = HANDLE::default();
             CreateRestrictedToken(
                 process_guard.handle(),
                 windows::Win32::Security::DISABLE_MAX_PRIVILEGE
                     | windows::Win32::Security::LUA_TOKEN
                     | windows::Win32::Security::WRITE_RESTRICTED,
-                if disable_entries.is_empty() {
-                    None
-                } else {
-                    Some(&disable_entries)
-                },
-                None::<&[LUID_AND_ATTRIBUTES]>,
-                None::<&[SID_AND_ATTRIBUTES]>,
+                None::<&[SID_AND_ATTRIBUTES]>,  // sids to disable
+                None::<&[LUID_AND_ATTRIBUTES]>, // privileges to delete
+                None::<&[SID_AND_ATTRIBUTES]>,  // restricted sids
                 &mut new_token,
             )
             .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
 
-            // Read TokenUser SID from the new token.
+            // Read the TokenUser SID from the *new* token.
             let user_sid_bytes = query_token_user_sid(new_token)?;
             let restricted_sid = Arc::new(TokenSid::from_bytes(user_sid_bytes));
 
@@ -410,33 +377,9 @@ mod imp {
             let sid = token_user.User.Sid;
             let sid_len = GetLengthSid(sid) as usize;
             let mut sid_bytes = vec![0u8; sid_len];
-            CopySid(sid_len as u32, sid_bytes.as_mut_ptr().cast(), sid)
+            CopySid(sid_len as u32, PSID(sid_bytes.as_mut_ptr().cast()), sid)
                 .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
             Ok(sid_bytes)
-        }
-    }
-
-    #[derive(Clone)]
-    struct WellKnownSid {
-        buffer: Arc<Vec<u8>>,
-    }
-
-    impl WellKnownSid {
-        fn new(kind: WELL_KNOWN_SID_TYPE) -> io::Result<Self> {
-            unsafe {
-                let mut buffer = vec![0u8; SECURITY_MAX_SID_SIZE as usize];
-                let mut size = buffer.len() as u32;
-                CreateWellKnownSid(kind, None, buffer.as_mut_ptr().cast(), &mut size)
-                    .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
-                buffer.truncate(size as usize);
-                Ok(Self {
-                    buffer: Arc::new(buffer),
-                })
-            }
-        }
-
-        fn as_psid(&self) -> PSID {
-            PSID(self.buffer.as_ptr() as *mut _)
         }
     }
 
@@ -828,8 +771,11 @@ mod imp {
     impl ComGuard {
         fn new() -> io::Result<Self> {
             unsafe {
-                CoInitializeEx(None, COINIT_MULTITHREADED)
+                // CoInitializeEx returns HRESULT (not Result) in windows 0.61; use .ok()
+                CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED)
+                    .ok()
                     .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+
                 match CoInitializeSecurity(
                     None,
                     -1,
@@ -842,7 +788,10 @@ mod imp {
                     None,
                 ) {
                     Ok(()) => {}
-                    Err(err) if err.code() == RPC_E_TOO_LATE => {}
+                    // If already initialized, ignore
+                    Err(err)
+                        if err.code().0 as u32
+                            == windows::Win32::Foundation::RPC_E_TOO_LATE.0 as u32 => {}
                     Err(err) => return Err(io::Error::from_raw_os_error(err.code().0)),
                 }
             }
