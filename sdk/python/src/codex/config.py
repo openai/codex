@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Mapping, Optional
+from typing import Mapping, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pydantic import BaseModel as PydanticBaseModel
+    SchemaInput = Mapping[str, object] | type[PydanticBaseModel] | PydanticBaseModel
+else:
+    SchemaInput = Mapping[str, object]
 
 
 class ApprovalMode(StrEnum):
@@ -35,4 +41,4 @@ class ThreadOptions:
 
 @dataclass(frozen=True, slots=True)
 class TurnOptions:
-    output_schema: Optional[Mapping[str, object]] = None
+    output_schema: Optional[SchemaInput] = None

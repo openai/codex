@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
-
 from pathlib import Path
+
+from pydantic import BaseModel
 
 from codex import ThreadOptions, TurnOptions
 from codex.config import SandboxMode
@@ -147,6 +148,30 @@ def test_structured_output_writes_temp_file(codex_client, codex_exec_spy) -> Non
 
         payload = proxy.requests[0]["json"]
         assert payload["text"]["format"]["schema"] == schema
+
+        command = codex_exec_spy[0]["command"]
+        schema_flag_index = command.index("--output-schema")
+        schema_path = Path(command[schema_flag_index + 1])
+        assert not schema_path.exists()
+    finally:
+        proxy.close()
+
+
+def test_structured_output_accepts_pydantic_model(codex_client, codex_exec_spy) -> None:
+    proxy = start_responses_proxy([sse(response_started(), assistant_message("Structured"), response_completed())])
+
+    class ResponseModel(BaseModel):
+        answer: str
+
+    try:
+        client = codex_client(proxy.url)
+        thread = client.start_thread()
+        thread.run("structured", TurnOptions(output_schema=ResponseModel))
+
+        payload = proxy.requests[0]["json"]
+        schema = payload["text"]["format"]["schema"]
+        assert schema["type"] == "object"
+        assert schema["properties"]["answer"]["type"] == "string"
 
         command = codex_exec_spy[0]["command"]
         schema_flag_index = command.index("--output-schema")
