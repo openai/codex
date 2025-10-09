@@ -109,6 +109,9 @@ impl App {
 
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
+        // Flush any in‑progress explore stack so it lands in history first.
+        self.chat_widget.flush_active_cell();
+        self.chat_widget.set_transcript_mode(true);
         let _ = tui.enter_alt_screen();
         self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
         tui.frame_requester().schedule_frame();
@@ -117,6 +120,8 @@ impl App {
     /// Close transcript overlay and restore normal UI.
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.leave_alt_screen();
+        // Leave transcript mode so future tool calls return to the explore stack.
+        self.chat_widget.set_transcript_mode(false);
         let was_backtrack = self.backtrack.overlay_preview_active;
         if !self.deferred_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.deferred_history_lines);

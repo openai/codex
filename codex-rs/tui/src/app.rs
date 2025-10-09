@@ -421,10 +421,8 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                // Enter alternate screen and set viewport to full size.
-                let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
-                tui.frame_requester().schedule_frame();
+                // Open transcript overlay: flush explore stack, enter alt screen, and enable transcript mode.
+                self.open_transcript_overlay(tui);
             }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with an empty composer. In any other state, forward Esc so the
