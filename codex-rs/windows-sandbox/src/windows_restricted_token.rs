@@ -84,11 +84,13 @@ mod imp {
     use std::collections::HashMap;
     use std::env;
     use std::ffi::OsStr;
+    use std::ffi::OsString;
     use std::ffi::c_void;
     use std::io::ErrorKind;
     use std::io::{self};
     use std::mem::size_of;
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::ffi::OsStringExt;
     use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
     use std::path::PathBuf;
@@ -152,6 +154,7 @@ mod imp {
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
     use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+    use windows::Win32::Storage::FileSystem::GetLogicalDriveStringsW;
 
     use windows::Win32::System::Com::CLSCTX_INPROC_SERVER;
     use windows::Win32::System::Com::CoCreateInstance;
@@ -527,13 +530,20 @@ mod imp {
         restricted_sid: &Arc<TokenSid>,
     ) -> io::Result<Vec<AclGuard>> {
         let mut guards = Vec::new();
+        let drive_roots = enumerate_drive_roots()?;
+        let allow_global_write = matches!(policy, SandboxPolicy::DangerFullAccess);
+        for drive in &drive_roots {
+            guards.push(allow_path(
+                drive.as_path(),
+                restricted_sid,
+                allow_global_write,
+            )?);
+        }
+        guards.push(allow_path(command_cwd, restricted_sid, allow_global_write)?);
+
         match policy {
-            SandboxPolicy::DangerFullAccess => {
-                guards.push(allow_path(command_cwd, restricted_sid, true)?);
-            }
-            SandboxPolicy::ReadOnly => {
-                guards.push(allow_path(sandbox_policy_cwd, restricted_sid, false)?);
-            }
+            SandboxPolicy::DangerFullAccess => {}
+            SandboxPolicy::ReadOnly => {}
             SandboxPolicy::WorkspaceWrite { .. } => {
                 let roots = policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
                 for writable in roots {
@@ -548,6 +558,52 @@ mod imp {
             }
         }
         Ok(guards)
+    }
+
+    fn enumerate_drive_roots() -> io::Result<Vec<PathBuf>> {
+        unsafe {
+            let len = GetLogicalDriveStringsW(0, PWSTR::null());
+            if len == 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(0) {
+                    return Ok(Vec::new());
+                }
+                return Err(err);
+            }
+            let mut buffer = vec![0u16; len as usize + 1];
+            let copied = GetLogicalDriveStringsW(len + 1, PWSTR(buffer.as_mut_ptr()));
+            if copied == 0 {
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() == Some(0) {
+                    return Ok(Vec::new());
+                }
+                return Err(err);
+            }
+            let mut drives = Vec::new();
+            let mut start = 0usize;
+            while start < buffer.len() {
+                let mut end = start;
+                while end < buffer.len() && buffer[end] != 0 {
+                    end += 1;
+                }
+                if end == start {
+                    if end == buffer.len() {
+                        break;
+                    }
+                    start += 1;
+                    continue;
+                }
+                let os_string = OsString::from_wide(&buffer[start..end]);
+                if !os_string.is_empty() {
+                    drives.push(PathBuf::from(os_string));
+                }
+                if end == buffer.len() {
+                    break;
+                }
+                start = end + 1;
+            }
+            Ok(drives)
+        }
     }
 
     fn configure_temp_directories(restricted_sid: &Arc<TokenSid>) -> io::Result<Vec<AclGuard>> {
