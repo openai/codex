@@ -5,6 +5,8 @@ pub(crate) use model::CommandOutput;
 #[cfg(test)]
 pub(crate) use model::ExecCall;
 pub(crate) use model::ExecCell;
+#[cfg(test)]
+pub(crate) use model::LiveExecStream;
 pub(crate) use render::OutputLinesParams;
 pub(crate) use render::TOOL_CALL_MAX_LINES;
 pub(crate) use render::new_active_exec_command;

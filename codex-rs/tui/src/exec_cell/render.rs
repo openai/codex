@@ -3,6 +3,7 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
+use super::model::LiveExecStream;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -14,10 +15,13 @@ use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::elapsed::format_duration;
+use codex_core::protocol::ExecOutputStream;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Itertools;
 use ratatui::prelude::*;
+use ratatui::style::Color;
 use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
@@ -45,6 +49,7 @@ pub(crate) fn new_active_exec_command(
         output: None,
         start_time: Some(Instant::now()),
         duration: None,
+        live: LiveExecStream::new(),
     })
 }
 
@@ -356,6 +361,10 @@ impl ExecCell {
             }
         }
 
+        let output_wrap_width = layout.output_block.wrap_width(width);
+        let output_opts =
+            RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
+
         let mut lines: Vec<Line<'static>> = vec![header_line];
 
         let continuation_lines = Self::limit_lines_from_start(
@@ -368,6 +377,42 @@ impl ExecCell {
                 Span::from(layout.command_continuation.initial_prefix).dim(),
                 Span::from(layout.command_continuation.subsequent_prefix).dim(),
             ));
+        }
+
+        if call.output.is_none() {
+            let live_lines = self.live_lines_for_display();
+            if !live_lines.is_empty() {
+                if self.show_live_output() {
+                    let mut rendered_live: Vec<Line<'static>> = Vec::new();
+                    for live in live_lines {
+                        let mut line = ansi_escape_line(&live.text);
+                        let style = match live.stream {
+                            ExecOutputStream::Stdout => Style::default().dim(),
+                            ExecOutputStream::Stderr => Style::default().fg(Color::Red),
+                        };
+                        for span in line.spans.iter_mut() {
+                            span.style = span.style.patch(style);
+                        }
+                        push_owned_lines(
+                            &word_wrap_line(&line, output_opts.clone()),
+                            &mut rendered_live,
+                        );
+                    }
+                    if !rendered_live.is_empty() {
+                        lines.extend(prefix_lines(
+                            rendered_live,
+                            Span::from(layout.output_block.initial_prefix).dim(),
+                            Span::from(layout.output_block.subsequent_prefix),
+                        ));
+                    }
+                } else {
+                    lines.extend(prefix_lines(
+                        vec![Line::from("live output hidden — press ctrl+r".dim())],
+                        Span::from(layout.output_block.initial_prefix).dim(),
+                        Span::from(layout.output_block.subsequent_prefix),
+                    ));
+                }
+            }
         }
 
         if let Some(output) = call.output.as_ref() {
@@ -391,9 +436,6 @@ impl ExecCell {
                     Self::truncate_lines_middle(&raw_output_lines, layout.output_max_lines);
 
                 let mut wrapped_output: Vec<Line<'static>> = Vec::new();
-                let output_wrap_width = layout.output_block.wrap_width(width);
-                let output_opts =
-                    RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
                 for line in trimmed_output {
                     push_owned_lines(
                         &word_wrap_line(&line, output_opts.clone()),

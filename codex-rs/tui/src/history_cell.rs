@@ -1278,6 +1278,7 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use crate::exec_cell::LiveExecStream;
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
@@ -1599,6 +1600,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
         // Mark call complete so markers are ✓
         cell.complete_call(
@@ -1630,6 +1632,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
         // Call 1: Search only
         cell.complete_call(
@@ -1712,6 +1715,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
         cell.complete_call(
             "c1",
@@ -1740,6 +1744,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
         // Mark call complete so it renders as "Ran"
         cell.complete_call(
@@ -1770,6 +1775,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
         cell.complete_call(
             &call_id,
@@ -1798,6 +1804,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
         cell.complete_call(
             &call_id,
@@ -1825,6 +1832,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
         cell.complete_call(
             &call_id,
@@ -1853,6 +1861,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
         cell.complete_call(
             &call_id,
@@ -1881,6 +1890,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
         let stderr: String = (1..=10)
             .map(|n| n.to_string())
@@ -1927,6 +1937,7 @@ mod tests {
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
+            live: LiveExecStream::new(),
         });
 
         let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();

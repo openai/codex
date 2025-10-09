@@ -25,6 +25,12 @@ pub(crate) struct StatusIndicatorWidget {
     header: String,
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
+    /// Most recent stdout/stderr line from the active exec call.
+    live_line: Option<String>,
+    /// Whether the live output panel is expanded in the active exec cell.
+    live_output_visible: bool,
+    /// Whether ctrl+r toggle hint should be shown.
+    live_output_toggle_enabled: bool,
 
     elapsed_running: Duration,
     last_resume_at: Instant,
@@ -55,6 +61,9 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             queued_messages: Vec::new(),
+            live_line: None,
+            live_output_visible: false,
+            live_output_toggle_enabled: false,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
             is_paused: false,
@@ -69,10 +78,20 @@ impl StatusIndicatorWidget {
         // + optional ellipsis line per truncated message + 1 spacer line
         let inner_width = width.max(1) as usize;
         let mut total: u16 = 1; // status line
+        let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
+        if self.live_line.is_some() {
+            total = total.saturating_add(1); // blank line before live preview
+            if text_width > 0 {
+                let wrapped =
+                    textwrap::wrap(self.live_line.as_deref().unwrap_or_default(), text_width);
+                total = total.saturating_add(wrapped.len() as u16);
+            } else {
+                total = total.saturating_add(1);
+            }
+        }
         if !self.queued_messages.is_empty() {
             total = total.saturating_add(1); // blank line between status and queued messages
         }
-        let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
         if text_width > 0 {
             for q in &self.queued_messages {
                 let wrapped = textwrap::wrap(q, text_width);
@@ -88,6 +107,9 @@ impl StatusIndicatorWidget {
         } else {
             // At least one line per message if width is extremely narrow
             total = total.saturating_add(self.queued_messages.len() as u16);
+        }
+        if self.live_output_toggle_enabled {
+            total = total.saturating_add(1);
         }
         total.saturating_add(1) // spacer line
     }
@@ -107,6 +129,30 @@ impl StatusIndicatorWidget {
     pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
         self.queued_messages = queued;
         // Ensure a redraw so changes are visible.
+        self.frame_requester.schedule_frame();
+    }
+
+    pub(crate) fn set_live_output_preview(&mut self, preview: Option<String>) {
+        if self.live_line == preview {
+            return;
+        }
+        self.live_line = preview;
+        self.frame_requester.schedule_frame();
+    }
+
+    pub(crate) fn set_live_output_visible(&mut self, visible: bool) {
+        if self.live_output_visible == visible {
+            return;
+        }
+        self.live_output_visible = visible;
+        self.frame_requester.schedule_frame();
+    }
+
+    pub(crate) fn set_live_output_toggle_enabled(&mut self, enabled: bool) {
+        if self.live_output_toggle_enabled == enabled {
+            return;
+        }
+        self.live_output_toggle_enabled = enabled;
         self.frame_requester.schedule_frame();
     }
 
@@ -180,11 +226,25 @@ impl WidgetRef for StatusIndicatorWidget {
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(spans));
+        let text_width = area.width.saturating_sub(3); // " ↳ " prefix
+        if self.live_line.is_some() {
+            lines.push(Line::from(""));
+        }
         if !self.queued_messages.is_empty() {
             lines.push(Line::from(""));
         }
+        if let Some(live) = &self.live_line {
+            if text_width > 0 {
+                for (i, piece) in textwrap::wrap(live, text_width as usize).iter().enumerate() {
+                    let prefix = if i == 0 { " ↳ " } else { "   " };
+                    let content = format!("{prefix}{piece}");
+                    lines.push(Line::from(content.dim().italic()));
+                }
+            } else {
+                lines.push(Line::from(" ↳".dim().italic()));
+            }
+        }
         // Wrap queued messages using textwrap and show up to the first 3 lines per message.
-        let text_width = area.width.saturating_sub(3); // " ↳ " prefix
         for q in &self.queued_messages {
             let wrapped = textwrap::wrap(q, text_width as usize);
             for (i, piece) in wrapped.iter().take(3).enumerate() {
@@ -202,6 +262,21 @@ impl WidgetRef for StatusIndicatorWidget {
                     "   ".into(),
                     key_hint::alt(KeyCode::Up).into(),
                     " edit".into(),
+                ])
+                .dim(),
+            );
+        }
+        if self.live_output_toggle_enabled {
+            let action = if self.live_output_visible {
+                " hide output"
+            } else {
+                " show output"
+            };
+            lines.push(
+                Line::from(vec![
+                    "   ".into(),
+                    key_hint::ctrl(KeyCode::Char('r')).into(),
+                    action.into(),
                 ])
                 .dim(),
             );
