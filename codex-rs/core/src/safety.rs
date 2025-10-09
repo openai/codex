@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
@@ -12,6 +14,12 @@ use crate::command_safety::is_dangerous_command::command_might_be_dangerous;
 use crate::command_safety::is_safe_command::is_known_safe_command;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+
+static WINDOWS_SANDBOX_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_windows_sandbox_enabled(enabled: bool) {
+    WINDOWS_SANDBOX_ENABLED.store(enabled, Ordering::Relaxed);
+}
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -206,6 +214,12 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
         Some(SandboxType::MacosSeatbelt)
     } else if cfg!(target_os = "linux") {
         Some(SandboxType::LinuxSeccomp)
+    } else if cfg!(target_os = "windows") {
+        if WINDOWS_SANDBOX_ENABLED.load(Ordering::Relaxed) {
+            Some(SandboxType::WindowsAppContainer)
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -435,5 +449,20 @@ mod tests {
             None => SafetyCheck::AskUser,
         };
         assert_eq!(safety_check, expected);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_sandbox_toggle_controls_platform_sandbox() {
+        set_windows_sandbox_enabled(false);
+        assert_eq!(get_platform_sandbox(), None);
+
+        set_windows_sandbox_enabled(true);
+        assert_eq!(
+            get_platform_sandbox(),
+            Some(SandboxType::WindowsAppContainer)
+        );
+
+        set_windows_sandbox_enabled(false);
     }
 }

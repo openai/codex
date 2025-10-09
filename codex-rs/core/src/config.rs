@@ -26,6 +26,7 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::safety::set_windows_sandbox_enabled;
 use anyhow::Context;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
@@ -181,6 +182,9 @@ pub struct Config {
     ///
     /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+
+    /// Enable the experimental Windows sandbox implementation.
+    pub experimental_windows_sandbox: bool,
 
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
@@ -801,6 +805,7 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
+    pub experimental_windows_sandbox: Option<bool>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
@@ -1058,6 +1063,8 @@ impl Config {
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
 
+        let experimental_windows_sandbox = cfg.experimental_windows_sandbox.unwrap_or(false);
+
         let model = model
             .or(config_profile.model)
             .or(cfg.model)
@@ -1146,6 +1153,7 @@ impl Config {
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
+            experimental_windows_sandbox,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
             show_raw_agent_reasoning: cfg
@@ -1199,6 +1207,7 @@ impl Config {
                 }
             },
         };
+        set_windows_sandbox_enabled(config.experimental_windows_sandbox);
         Ok(config)
     }
 
@@ -2106,6 +2115,7 @@ model_verbosity = "high"
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
+                experimental_windows_sandbox: false,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
@@ -2169,6 +2179,7 @@ model_verbosity = "high"
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
+            experimental_windows_sandbox: false,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
@@ -2247,6 +2258,7 @@ model_verbosity = "high"
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
+            experimental_windows_sandbox: false,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
@@ -2311,6 +2323,7 @@ model_verbosity = "high"
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
+            experimental_windows_sandbox: false,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),

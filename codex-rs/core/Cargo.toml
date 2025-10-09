@@ -79,6 +79,27 @@ seccompiler = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security_Isolation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
+
+[features]
+default = []
+windows_appcontainer_command_ext = []
+windows_appcontainer_command_ext_raw_attribute = [
+    "windows_appcontainer_command_ext",
+]
+windows_appcontainer_raw_attribute_api = [
+    "windows_appcontainer_command_ext_raw_attribute",
+]
+
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }

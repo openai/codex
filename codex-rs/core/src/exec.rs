@@ -27,6 +27,8 @@ use crate::protocol::SandboxPolicy;
 use crate::seatbelt::spawn_command_under_seatbelt;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+#[cfg(windows)]
+use crate::windows_appcontainer::spawn_command_under_windows_appcontainer;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -70,6 +72,9 @@ pub enum SandboxType {
 
     /// Only available on Linux.
     LinuxSeccomp,
+
+    /// Only available on Windows.
+    WindowsAppContainer,
 }
 
 #[derive(Clone)]
@@ -94,6 +99,31 @@ pub async fn process_exec_tool_call(
     let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
     {
         SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
+        SandboxType::WindowsAppContainer => {
+            #[cfg(windows)]
+            {
+                let ExecParams {
+                    command,
+                    cwd: command_cwd,
+                    env,
+                    ..
+                } = params;
+                let child = spawn_command_under_windows_appcontainer(
+                    command,
+                    command_cwd,
+                    sandbox_policy,
+                    sandbox_cwd,
+                    StdioPolicy::RedirectForShellTool,
+                    env,
+                )
+                .await?;
+                consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
+            }
+            #[cfg(not(windows))]
+            {
+                panic!("windows sandboxing is not available on this platform");
+            }
+        }
         SandboxType::MacosSeatbelt => {
             let ExecParams {
                 command,
@@ -198,7 +228,10 @@ pub async fn process_exec_tool_call(
 /// For now, we conservatively check for 'command not found' (exit code 127),
 /// and can add additional cases as necessary.
 fn is_likely_sandbox_denied(sandbox_type: SandboxType, exit_code: i32) -> bool {
-    if sandbox_type == SandboxType::None {
+    if matches!(
+        sandbox_type,
+        SandboxType::None | SandboxType::WindowsAppContainer
+    ) {
         return false;
     }
 

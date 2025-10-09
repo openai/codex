@@ -1,5 +1,9 @@
 //! Root of the `codex-core` library.
 
+#![cfg_attr(
+    all(windows, feature = "windows_appcontainer_raw_attribute_api"),
+    feature(windows_process_extensions_raw_attribute)
+)]
 // Prevent accidental direct writes to stdout/stderr in library code. All
 // user-visible output must go through the appropriate abstraction (e.g.,
 // the TUI or the tracing stack).
@@ -82,6 +86,9 @@ mod state;
 mod tasks;
 mod user_notification;
 pub mod util;
+
+#[cfg(windows)]
+pub mod windows_appcontainer;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use command_safety::is_safe_command;
