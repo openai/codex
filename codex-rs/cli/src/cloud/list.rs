@@ -46,7 +46,9 @@ pub async fn run(ctx: &mut CloudContext, args: &ListArgs) -> Result<()> {
         .map(TaskRow::from)
         .collect();
 
-    let environment = selected_env.map(str::to_string);
+    let environment = selected_env
+        .map(str::to_string)
+        .or_else(|| env_arg.map(str::to_string));
 
     if args.json {
         let payload = serde_json::json!({
@@ -58,7 +60,7 @@ pub async fn run(ctx: &mut CloudContext, args: &ListArgs) -> Result<()> {
         return Ok(());
     }
 
-    print_task_table(selected_env, args.include_reviews, &rows);
+    print_task_table(environment.as_deref(), args.include_reviews, &rows);
     Ok(())
 }
 
