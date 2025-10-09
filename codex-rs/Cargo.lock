@@ -1555,10 +1555,12 @@ dependencies = [
 name = "codex-windows-sandbox"
 version = "0.0.0"
 dependencies = [
+ "assert_cmd",
  "clap",
  "codex-protocol",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "windows",
 ]
