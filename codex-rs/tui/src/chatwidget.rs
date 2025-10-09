@@ -683,7 +683,11 @@ impl ChatWidget {
                     .bottom_pane
                     .status_widget()
                     .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
-                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
+                let rate_limits = self.rate_limit_snapshot.clone();
+                self.add_to_history(history_cell::FinalMessageSeparator::new(
+                    elapsed_seconds,
+                    rate_limits,
+                ));
                 self.needs_final_message_separator = false;
             }
             self.stream_controller = Some(StreamController::new(
