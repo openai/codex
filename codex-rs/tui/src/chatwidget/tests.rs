@@ -287,6 +287,10 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
+        last_context_items: None,
+        prune_keep_indices: std::collections::HashSet::new(),
+        prune_delete_indices: std::collections::HashSet::new(),
+        pending_prune_advanced: false,
     };
     (widget, rx, op_rx)
 }

@@ -42,6 +42,7 @@ use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::protocol::ContextItemSummary;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
@@ -260,6 +261,11 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+    // Advanced prune state
+    last_context_items: Option<Vec<ContextItemSummary>>,
+    prune_keep_indices: std::collections::HashSet<usize>,
+    prune_delete_indices: std::collections::HashSet<usize>,
+    pending_prune_advanced: bool,
 }
 
 struct UserMessage {
@@ -938,6 +944,10 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            last_context_items: None,
+            prune_keep_indices: std::collections::HashSet::new(),
+            prune_delete_indices: std::collections::HashSet::new(),
+            pending_prune_advanced: false,
         }
     }
 
@@ -1001,6 +1011,10 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            last_context_items: None,
+            prune_keep_indices: std::collections::HashSet::new(),
+            prune_delete_indices: std::collections::HashSet::new(),
+            pending_prune_advanced: false,
         }
     }
 
@@ -1161,6 +1175,9 @@ impl ChatWidget {
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
+            }
+            SlashCommand::Prune => {
+                self.open_prune_advanced();
             }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
@@ -1447,12 +1464,24 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            // New prune-related events (upstream-ignored by default)
-            codex_core::protocol::EventMsg::ConversationUsage(_) => {
-                // No-op in upstream baseline; advanced footer can request this explicitly
+            // Advanced prune events
+            codex_core::protocol::EventMsg::ConversationUsage(_ev) => {
+                // Reserved for future footer usage metrics
             }
-            codex_core::protocol::EventMsg::ContextItems(_) => {
-                // No-op in upstream baseline; advanced prune UI not wired here
+            codex_core::protocol::EventMsg::ContextItems(ev) => {
+                self.last_context_items = Some(ev.items);
+                self.prune_keep_indices.clear();
+                self.prune_delete_indices.clear();
+                if let Some(list) = &self.last_context_items {
+                    for it in list.iter() {
+                        if it.included {
+                            self.prune_keep_indices.insert(it.index);
+                        }
+                    }
+                }
+                if self.pending_prune_advanced {
+                    self.render_prune_advanced_view();
+                }
             }
         }
     }
@@ -1523,6 +1552,177 @@ impl ChatWidget {
 
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
+    }
+
+    /// User requested the non-destructive advanced prune view. Set a pending flag
+    /// so that when the ContextItems event arrives, we render the view.
+    pub(crate) fn open_prune_advanced(&mut self) {
+        self.pending_prune_advanced = true;
+        self.submit_op(Op::GetContextItems);
+    }
+
+    pub(crate) fn on_prune_advanced_closed(&mut self) {
+        self.pending_prune_advanced = false;
+    }
+
+    pub(crate) fn toggle_keep_index(&mut self, idx: usize) {
+        if self.prune_keep_indices.contains(&idx) {
+            self.prune_keep_indices.remove(&idx);
+        } else {
+            self.prune_keep_indices.insert(idx);
+            // If it was marked for delete, unmark delete when toggling keep on
+            self.prune_delete_indices.remove(&idx);
+        }
+        // Update the visible list in place without resetting the view
+        self.update_advanced_item_marker(idx);
+    }
+
+    pub(crate) fn toggle_delete_index(&mut self, idx: usize) {
+        if self.prune_delete_indices.contains(&idx) {
+            self.prune_delete_indices.remove(&idx);
+        } else {
+            self.prune_delete_indices.insert(idx);
+            // When marking delete, it is no longer considered kept
+            self.prune_keep_indices.remove(&idx);
+        }
+        // Update the visible list in place without resetting the view
+        self.update_advanced_item_marker(idx);
+    }
+
+    fn update_advanced_item_marker(&mut self, _idx: usize) {
+        // No-op: the list will refresh on next ContextItems fetch.
+        self.request_redraw();
+    }
+
+    pub(crate) fn confirm_advanced_changes(&mut self) {
+        // Ensure advanced view does not auto-reopen while we're processing the result.
+        self.pending_prune_advanced = false;
+        // Apply staged inclusion toggles and, if present, prune deletions after confirmation.
+        // Compute inclusion diffs once so we can apply them together with deletions.
+        let mut to_include: Vec<usize> = Vec::new();
+        let mut to_exclude: Vec<usize> = Vec::new();
+        if let Some(list) = &self.last_context_items {
+            for it in list.iter() {
+                let desired = self.prune_keep_indices.contains(&it.index);
+                if desired != it.included {
+                    if desired {
+                        to_include.push(it.index);
+                    } else {
+                        to_exclude.push(it.index);
+                    }
+                }
+            }
+        }
+
+        // Apply inclusion changes first
+        if !to_include.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::CodexOp(Op::SetContextInclusion {
+                    indices: to_include,
+                    included: true,
+                }));
+        }
+        if !to_exclude.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::CodexOp(Op::SetContextInclusion {
+                    indices: to_exclude,
+                    included: false,
+                }));
+        }
+        // Then prune deletions (destructive)
+        if !self.prune_delete_indices.is_empty() {
+            let indices: Vec<usize> = self.prune_delete_indices.iter().copied().collect();
+            self.app_event_tx
+                .send(AppEvent::CodexOp(Op::PruneContextByIndices { indices }));
+        }
+        // Refresh listing and close popup.
+        self.submit_op(Op::GetContextItems);
+    }
+
+    /// Render the advanced prune view listing context items with toggles.
+    fn render_prune_advanced_view(&mut self) {
+        use codex_core::protocol::Op;
+        use codex_core::protocol::PruneCategory as PC;
+        use ratatui::style::Stylize;
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        // Control actions
+        items.push(SelectionItem {
+            name: "Refresh list".to_string(),
+            display_shortcut: None,
+            description: Some("Re-query current context".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::CodexOp(Op::GetContextItems));
+            })],
+            delete_actions: Vec::new(),
+            dismiss_on_select: true,
+            search_value: None,
+        });
+        items.push(SelectionItem {
+            name: "Close".to_string(),
+            display_shortcut: None,
+            description: Some("Close advanced prune view".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::PruneAdvancedClosed);
+            })],
+            delete_actions: Vec::new(),
+            dismiss_on_select: true,
+            search_value: None,
+        });
+
+        // Build toggle entries; Enter toggles keep; Delete toggles delete
+        if let Some(list) = &self.last_context_items {
+            for it in list.iter() {
+                // Skip items we never want to show in advanced: project/system context
+                if it.category == PC::UserInstructions || it.category == PC::EnvironmentContext {
+                    continue;
+                }
+                let marker = if self.prune_delete_indices.contains(&it.index) {
+                    "[D]"
+                } else if self.prune_keep_indices.contains(&it.index) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+                let name = format!("{} {} {:?}", it.index, marker, it.category);
+                let desc = it.preview.clone();
+                let idx = it.index;
+                // Actions on space/delete only update local state; Enter is handled by on_enter_event
+                items.push(SelectionItem {
+                    name,
+                    display_shortcut: None,
+                    description: Some(desc),
+                    // Do not show '(current)' marker; the checkbox already signals state.
+                    is_current: false,
+                    actions: vec![Box::new(move |tx: &AppEventSender| {
+                        tx.send(AppEvent::ToggleKeepIndex { idx });
+                    })],
+                    delete_actions: vec![Box::new(move |tx: &AppEventSender| {
+                        tx.send(AppEvent::ToggleDeleteIndex { idx });
+                    })],
+                    dismiss_on_select: false,
+                    search_value: Some(format!("IDX:{idx}|CAT:{:?}|{}", it.category, it.preview)),
+                });
+            }
+        }
+
+        // Show view
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Prune Context (Advanced)".to_string()),
+            subtitle: None,
+            footer_hint: Some(ratatui::text::Line::from(
+                "space: toggle keep | del: toggle delete | enter: apply | esc: back",
+            )),
+            items,
+            is_searchable: true,
+            search_placeholder: Some("Filter context items".to_string()),
+            header: Box::new(ratatui::text::Line::from("Type to filter").dim()),
+            on_enter_event: Some(Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::ConfirmAdvancedChanges);
+            })),
+        });
     }
 
     fn notify(&mut self, notification: Notification) {

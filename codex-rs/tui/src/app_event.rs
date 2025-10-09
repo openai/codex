@@ -85,6 +85,16 @@ pub(crate) enum AppEvent {
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
 
+    // --- Advanced Prune (experimental) ---
+    /// Close the advanced prune view.
+    PruneAdvancedClosed,
+    /// Toggle keep marker for an index in the advanced list.
+    ToggleKeepIndex { idx: usize },
+    /// Toggle delete marker for an index in the advanced list.
+    ToggleDeleteIndex { idx: usize },
+    /// Apply staged inclusion/deletion changes.
+    ConfirmAdvancedChanges,
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 }

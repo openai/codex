@@ -109,6 +109,11 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<u8>,
+    footer_model_label: Option<String>,
+    footer_directory: Option<String>,
+    footer_account_email: Option<String>,
+    footer_primary_limit_percent: Option<u8>,
+    footer_weekly_limit_percent: Option<u8>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -152,6 +157,11 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutPrompt,
             footer_hint_override: None,
             context_window_percent: None,
+            footer_model_label: None,
+            footer_directory: None,
+            footer_account_email: None,
+            footer_primary_limit_percent: None,
+            footer_weekly_limit_percent: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -162,7 +172,7 @@ impl ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         self.textarea
@@ -179,7 +189,7 @@ impl ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
@@ -1337,6 +1347,11 @@ impl ChatComposer {
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
+            model_label: self.footer_model_label.clone(),
+            directory: self.footer_directory.clone(),
+            account_email: self.footer_account_email.clone(),
+            primary_limit_percent: self.footer_primary_limit_percent,
+            weekly_limit_percent: self.footer_weekly_limit_percent,
         }
     }
 
@@ -1473,6 +1488,8 @@ impl ChatComposer {
         }
     }
 
+    // Footer metadata setters removed; composer reads directly from internal fields.
+
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
         if show {
@@ -1497,7 +1514,7 @@ impl WidgetRef for ChatComposer {
                 let footer_props = self.footer_props();
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
-                    custom_height.unwrap_or_else(|| footer_height(footer_props));
+                    custom_height.unwrap_or_else(|| footer_height(&footer_props));
                 let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([
@@ -1520,6 +1537,11 @@ impl WidgetRef for ChatComposer {
                                 spans.push("   ".into());
                             }
                         }
+                        let percent = self.context_window_percent.unwrap_or(100);
+                        if !spans.is_empty() {
+                            spans.push(" | ".dim());
+                        }
+                        spans.push(format!("{percent}% context left").dim());
                         let mut custom_rect = hint_rect;
                         if custom_rect.width > 2 {
                             custom_rect.x += 2;
@@ -1644,34 +1666,30 @@ mod tests {
             row
         };
 
-        let mut hint_row: Option<(u16, String)> = None;
+        let mut combined_row: Option<(u16, String)> = None;
         for y in 0..area.height {
             let row = row_to_string(y);
-            if row.contains("? for shortcuts") {
-                hint_row = Some((y, row));
-                break;
+            if row.contains("? for shortcuts") && (row.contains("context left")) {
+                combined_row = Some((y, row));
             }
         }
 
-        let (hint_row_idx, hint_row_contents) =
-            hint_row.expect("expected footer hint row to be rendered");
-        assert_eq!(
-            hint_row_idx,
-            area.height - 1,
-            "hint row should occupy the bottom line: {hint_row_contents:?}",
-        );
-
+        let (row_idx, row_contents) =
+            combined_row.expect("expected combined footer row to be rendered");
+        // Footer sits at the last or second-to-last row depending on footer height.
         assert!(
-            hint_row_idx > 0,
-            "expected a spacing row above the footer hints",
+            row_idx == area.height - 1 || row_idx == area.height - 2,
+            "combined footer should be in the last or second-to-last line: {row_contents:?} (row_idx={row_idx})",
         );
-
-        let spacing_row = row_to_string(hint_row_idx - 1);
-        assert_eq!(
-            spacing_row.trim(),
-            "",
-            "expected blank spacing row above hints but saw: {spacing_row:?}",
-        );
+        // If a row exists below the footer, it should be blank padding.
+        if row_idx + 1 < area.height {
+            let bottom_row = row_to_string(row_idx + 1);
+            assert_eq!(
+                bottom_row.trim(),
+                "",
+                "expected blank padding row below footer but saw: {bottom_row:?}",
+            );
+        }
     }
 
     fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
@@ -1693,7 +1711,7 @@ mod tests {
         );
         setup(&mut composer);
         let footer_props = composer.footer_props();
-        let footer_lines = footer_height(footer_props);
+        let footer_lines = footer_height(&footer_props);
         let footer_spacing = ChatComposer::footer_spacing(footer_lines);
         let height = footer_lines + footer_spacing + 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();

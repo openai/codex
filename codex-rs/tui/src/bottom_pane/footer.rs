@@ -11,13 +11,18 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<u8>,
+    pub(crate) model_label: Option<String>,
+    pub(crate) directory: Option<String>,
+    pub(crate) account_email: Option<String>,
+    pub(crate) primary_limit_percent: Option<u8>,
+    pub(crate) weekly_limit_percent: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,40 +63,77 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     }
 }
 
-pub(crate) fn footer_height(props: FooterProps) -> u16 {
+pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     footer_lines(props).len() as u16
 }
 
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
-    Paragraph::new(prefix_lines(
-        footer_lines(props),
+    let lines = prefix_lines(
+        footer_lines(&props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
-    ))
-    .render(area, buf);
+    );
+    Paragraph::new(lines).render(area, buf);
 }
 
-fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+fn footer_lines(props: &FooterProps) -> Vec<Line<'static>> {
     match props.mode {
-        FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
-            is_task_running: props.is_task_running,
-        })],
-        FooterMode::ShortcutPrompt => {
-            if props.is_task_running {
-                vec![context_window_line(props.context_window_percent)]
-            } else {
-                vec![Line::from(vec![
-                    key_hint::plain(KeyCode::Char('?')).into(),
-                    " for shortcuts".dim(),
-                ])]
-            }
-        }
+        // Multi-line overlay suppresses the context indicator.
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
             use_shift_enter_hint: props.use_shift_enter_hint,
             esc_backtrack_hint: props.esc_backtrack_hint,
         }),
-        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::Empty => Vec::new(),
+        FooterMode::CtrlCReminder => {
+            let mut line = Line::from("");
+            append_context_span(&mut line, props.context_window_percent);
+            line.push_span(Span::from(" | ").dim());
+            let ctrl = ctrl_c_reminder_line(CtrlCReminderState {
+                is_task_running: props.is_task_running,
+            });
+            line.extend(ctrl.spans);
+            vec![line]
+        }
+        FooterMode::EscHint => {
+            let mut line = Line::from("");
+            append_context_span(&mut line, props.context_window_percent);
+            line.push_span(Span::from(" | ").dim());
+            let esc = esc_hint_line(props.esc_backtrack_hint);
+            line.extend(esc.spans);
+            vec![line]
+        }
+        FooterMode::ShortcutPrompt => {
+            if props.is_task_running {
+                vec![info_line(
+                    props.model_label.clone(),
+                    props.directory.clone(),
+                    props.account_email.clone(),
+                    props.primary_limit_percent,
+                    props.weekly_limit_percent,
+                    props.context_window_percent,
+                    /*with_shortcuts_hint=*/ false,
+                )]
+            } else {
+                vec![info_line(
+                    props.model_label.clone(),
+                    props.directory.clone(),
+                    props.account_email.clone(),
+                    props.primary_limit_percent,
+                    props.weekly_limit_percent,
+                    props.context_window_percent,
+                    /*with_shortcuts_hint=*/ true,
+                )]
+            }
+        }
+        // When otherwise empty, still show the context indicator.
+        FooterMode::Empty => vec![info_line(
+            props.model_label.clone(),
+            props.directory.clone(),
+            props.account_email.clone(),
+            props.primary_limit_percent,
+            props.weekly_limit_percent,
+            props.context_window_percent,
+            /*with_shortcuts_hint=*/ false,
+        )],
     }
 }
 
@@ -218,19 +260,71 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn context_window_line(percent: Option<u8>) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    match percent {
-        Some(percent) => {
-            spans.push(format!("{percent}%").dim());
-            spans.push(" context left".dim());
-        }
-        None => {
-            spans.push(key_hint::plain(KeyCode::Char('?')).into());
-            spans.push(" for shortcuts".dim());
-        }
+fn append_context_span(line: &mut Line<'static>, percent: Option<u8>) {
+    let percent = percent.unwrap_or(100);
+    if !line.spans.is_empty() {
+        line.push_span(Span::from(" | "));
     }
-    Line::from(spans)
+    // Style: percentage in default color (white), label dimmed.
+    line.push_span(Span::from(format!("{percent}%")));
+    line.push_span(Span::from(" context left").dim());
+}
+
+// Note: previous helper `append_segment` was removed to avoid dead_code warnings
+// and to make inline styling more explicit at each call site.
+
+fn info_line(
+    model_label: Option<String>,
+    directory: Option<String>,
+    account_email: Option<String>,
+    primary_limit_percent: Option<u8>,
+    weekly_limit_percent: Option<u8>,
+    context_percent: Option<u8>,
+    with_shortcuts_hint: bool,
+) -> Line<'static> {
+    let mut line = Line::from("");
+    // Order: context left | 5h XX% used | weekly XX% used | model | dir | email
+    append_context_span(&mut line, context_percent);
+    if let Some(p) = primary_limit_percent {
+        if !line.spans.is_empty() {
+            line.push_span(Span::from(" | "));
+        }
+        line.push_span(Span::from("5h ").dim());
+        line.push_span(Span::from(format!("{p}% used")));
+    }
+    if let Some(w) = weekly_limit_percent {
+        if !line.spans.is_empty() {
+            line.push_span(Span::from(" | "));
+        }
+        line.push_span(Span::from("weekly ").dim());
+        line.push_span(Span::from(format!("{w}% used")));
+    }
+    if let Some(text) = model_label
+        && !text.is_empty()
+    {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(text).dim());
+    }
+    if let Some(text) = directory
+        && !text.is_empty()
+    {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(text).dim());
+    }
+    if let Some(text) = account_email
+        && !text.is_empty()
+    {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(text).dim());
+    }
+    if with_shortcuts_hint {
+        line.push_span(Span::from(" · ").dim());
+        line.extend(vec![
+            key_hint::plain(KeyCode::Char('?')).into(),
+            Span::from(" for shortcuts").dim(),
+        ]);
+    }
+    line
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -386,7 +480,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        let height = footer_height(props).max(1);
+        let height = footer_height(&props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
         terminal
             .draw(|f| {
@@ -407,6 +501,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -418,6 +517,11 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -429,6 +533,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -440,6 +549,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -451,6 +565,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -462,6 +581,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
 
@@ -473,6 +597,11 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: Some(72),
+                model_label: None,
+                directory: None,
+                account_email: None,
+                primary_limit_percent: None,
+                weekly_limit_percent: None,
             },
         );
     }

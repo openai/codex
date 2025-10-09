@@ -14,6 +14,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::app_event_sender::AppEventSender;
+// re-use the SelectionAction defined in this module
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
 use crate::render::RectExt as _;
@@ -39,6 +40,8 @@ pub(crate) struct SelectionItem {
     pub description: Option<String>,
     pub is_current: bool,
     pub actions: Vec<SelectionAction>,
+    /// Optional actions invoked when the user presses the Delete key.
+    pub delete_actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
 }
@@ -51,6 +54,8 @@ pub(crate) struct SelectionViewParams {
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
+    /// Optional action to invoke when user presses Enter (global confirm).
+    pub on_enter_event: Option<SelectionAction>,
 }
 
 impl Default for SelectionViewParams {
@@ -63,6 +68,7 @@ impl Default for SelectionViewParams {
             is_searchable: false,
             search_placeholder: None,
             header: Box::new(()),
+            on_enter_event: None,
         }
     }
 }
@@ -79,6 +85,7 @@ pub(crate) struct ListSelectionView {
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
+    on_enter_event: Option<SelectionAction>,
 }
 
 impl ListSelectionView {
@@ -109,6 +116,7 @@ impl ListSelectionView {
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             header,
+            on_enter_event: params.on_enter_event,
         };
         s.apply_filter();
         s
@@ -236,6 +244,18 @@ impl ListSelectionView {
         }
     }
 
+    fn accept_delete(&mut self) {
+        if let Some(idx) = self.state.selected_idx
+            && let Some(actual_idx) = self.filtered_indices.get(idx)
+            && let Some(item) = self.items.get(*actual_idx)
+        {
+            for act in &item.delete_actions {
+                act(&self.app_event_tx);
+            }
+            // Do not dismiss on delete unless caller encoded it via actions
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn set_search_query(&mut self, query: String) {
         self.search_query = query;
@@ -298,11 +318,15 @@ impl BottomPaneView for ListSelectionView {
                     self.accept();
                 }
             }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.accept(),
+            KeyEvent { code: KeyCode::Char(' '), .. } => self.accept(),
+            KeyEvent { code: KeyCode::Enter, modifiers: KeyModifiers::NONE, .. } => {
+                if let Some(ref act) = self.on_enter_event {
+                    (act)(&self.app_event_tx);
+                } else {
+                    self.accept();
+                }
+            }
+            KeyEvent { code: KeyCode::Delete, .. } => self.accept_delete(),
             _ => {}
         }
     }

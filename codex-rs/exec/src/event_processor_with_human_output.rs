@@ -498,6 +498,32 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     view.path.display()
                 );
             }
+            EventMsg::ConversationUsage(ev) => {
+                let total = ev.total_bytes;
+                let mut categories = ev.by_category;
+                categories.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+                let top = categories
+                    .into_iter()
+                    .take(2)
+                    .map(|cat| format!("{:?} {}B", cat.category, format_with_separators(cat.bytes)))
+                    .collect::<Vec<_>>();
+                ts_msg!(
+                    self,
+                    "{} total={}B{}{}",
+                    "context usage".style(self.magenta),
+                    format_with_separators(total),
+                    if top.is_empty() { "" } else { ", top: " },
+                    top.join(", ")
+                );
+            }
+            EventMsg::ContextItems(ev) => {
+                ts_msg!(
+                    self,
+                    "{} {} items",
+                    "context items".style(self.magenta),
+                    ev.total
+                );
+            }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
                 TurnAbortReason::Interrupted => {
                     ts_msg!(self, "task interrupted");

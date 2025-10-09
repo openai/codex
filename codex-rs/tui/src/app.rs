@@ -381,6 +381,18 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::PruneAdvancedClosed => {
+                self.chat_widget.on_prune_advanced_closed();
+            }
+            AppEvent::ToggleKeepIndex { idx } => {
+                self.chat_widget.toggle_keep_index(idx);
+            }
+            AppEvent::ToggleDeleteIndex { idx } => {
+                self.chat_widget.toggle_delete_index(idx);
+            }
+            AppEvent::ConfirmAdvancedChanges => {
+                self.chat_widget.confirm_advanced_changes();
+            }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let _ = tui.enter_alt_screen();

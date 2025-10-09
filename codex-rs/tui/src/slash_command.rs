@@ -23,6 +23,7 @@ pub enum SlashCommand {
     Mention,
     Status,
     Mcp,
+    Prune,
     Logout,
     Quit,
     #[cfg(debug_assertions)]
@@ -45,6 +46,7 @@ impl SlashCommand {
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
+            SlashCommand::Prune => "open advanced context prune",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
@@ -72,6 +74,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
+            | SlashCommand::Prune
             | SlashCommand::Quit => true,
 
             #[cfg(debug_assertions)]
