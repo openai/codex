@@ -395,15 +395,6 @@ fn create_read_file_tool() -> ToolSpec {
             ),
         },
     );
-    indentation_properties.insert(
-        "highlight_anchor".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "Append a trailing marker to highlight the anchor line in the output.".to_string(),
-            ),
-        },
-    );
-
     properties.insert(
         "indentation".to_string(),
         JsonSchema::Object {
