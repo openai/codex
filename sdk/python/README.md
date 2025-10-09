@@ -1,0 +1,66 @@
+# Codex Python SDK
+
+Embed the Codex agent in Python workflows. This SDK shells out to the bundled `codex` CLI, streams
+structured events, and provides strongly-typed helpers for synchronous and streaming turns.
+
+## Status
+
+- Target Python 3.12+.
+- API and packaging are pre-alpha; expect breaking changes.
+- Binaries are bundled under `codex/vendor` for supported triples.
+
+## Quickstart
+
+```python
+from codex import Codex
+
+client = Codex()
+thread = client.start_thread()
+turn = thread.run("Summarize the latest CI failure.")
+
+print(turn.final_response)
+for item in turn.items:
+    print(item)
+```
+
+## Streaming
+
+```python
+from codex import Codex
+
+client = Codex()
+thread = client.start_thread()
+
+stream = thread.run_streamed("Implement the fix.")
+for event in stream:
+    print(event)
+```
+
+## Structured Output
+
+```python
+from codex import Codex, TurnOptions
+
+schema = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "status": {"type": "string", "enum": ["ok", "action_required"]},
+    },
+    "required": ["summary", "status"],
+    "additionalProperties": False,
+}
+
+thread = Codex().start_thread()
+turn = thread.run("Summarize repository status", TurnOptions(output_schema=schema))
+print(turn.final_response)
+```
+
+## Development
+
+- Install dependencies with `uv pip install -e .[dev]`.
+- Run formatting and linting: `uv run ruff check .` and `uv run ruff format .`.
+- Type-check with `uv run mypy`.
+- Tests via `uv run pytest`.
+
+See `docs/bundling.md` (planned) for refreshing CLI binaries.
