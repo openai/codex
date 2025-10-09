@@ -582,6 +582,7 @@ fn render_offset_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::protocol::ReviewDecision;
     use insta::assert_snapshot;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -589,6 +590,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::exec_cell::CommandOutput;
+    use crate::history_cell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
     use codex_core::protocol::FileChange;
@@ -712,10 +714,8 @@ mod tests {
         cells.push(apply_begin_cell);
 
         let apply_end_cell: Arc<dyn HistoryCell> =
-            Arc::new(crate::history_cell::new_user_approval_decision(vec![
-                "✓ Patch applied".green().bold().into(),
-                "src/foo.txt".dim().into(),
-            ]));
+            history_cell::new_approval_decision_cell(vec!["ls".into()], ReviewDecision::Approved)
+                .into();
         cells.push(apply_end_cell);
 
         let mut exec_cell = crate::exec_cell::new_active_exec_command(

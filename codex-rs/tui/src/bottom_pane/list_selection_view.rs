@@ -87,7 +87,7 @@ impl ListSelectionView {
         if params.title.is_some() || params.subtitle.is_some() {
             let title = params.title.map(|title| Line::from(title.bold()));
             let subtitle = params.subtitle.map(|subtitle| Line::from(subtitle.dim()));
-            header = Box::new(ColumnRenderable::new([
+            header = Box::new(ColumnRenderable::with([
                 header,
                 Box::new(title),
                 Box::new(subtitle),

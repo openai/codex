@@ -110,11 +110,22 @@ impl ManagedUnifiedExecSession {
         let buffer_clone = Arc::clone(&output_buffer);
         let notify_clone = Arc::clone(&output_notify);
         let output_task = tokio::spawn(async move {
-            while let Ok(chunk) = receiver.recv().await {
-                let mut guard = buffer_clone.lock().await;
-                guard.push_chunk(chunk);
-                drop(guard);
-                notify_clone.notify_waiters();
+            loop {
+                match receiver.recv().await {
+                    Ok(chunk) => {
+                        let mut guard = buffer_clone.lock().await;
+                        guard.push_chunk(chunk);
+                        drop(guard);
+                        notify_clone.notify_waiters();
+                    }
+                    // If we lag behind the broadcast buffer, skip missed
+                    // messages but keep the task alive to continue streaming.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        continue;
+                    }
+                    // When the sender closes, exit the task.
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
             }
         });
 
