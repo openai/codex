@@ -1,0 +1,7 @@
+[package]
+edition.workspace = true
+name = "codex-utils-string"
+version.workspace = true
+
+[lints]
+workspace = true

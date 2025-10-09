@@ -2,6 +2,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use std::ops::Range;
 use textwrap::Options;
+use textwrap::wrap_algorithms::Penalties;
 
 use crate::render::line_utils::push_owned_lines;
 
@@ -90,7 +91,11 @@ impl<'a> RtOptions<'a> {
             subsequent_indent: Line::default(),
             break_words: true,
             word_separator: textwrap::WordSeparator::new(),
-            wrap_algorithm: textwrap::WrapAlgorithm::new(),
+            wrap_algorithm: textwrap::WrapAlgorithm::OptimalFit(Penalties {
+                // ~infinite overflow penalty, we never want to overflow a line.
+                overflow_penalty: usize::MAX / 4,
+                ..Default::default()
+            }),
             word_splitter: textwrap::WordSplitter::HyphenSplitter,
         }
     }

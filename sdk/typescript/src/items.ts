@@ -6,7 +6,7 @@ export type CommandExecutionStatus = "in_progress" | "completed" | "failed";
 /** A command executed by the agent. */
 export type CommandExecutionItem = {
   id: string;
-  item_type: "command_execution";
+  type: "command_execution";
   /** The command line executed by the agent. */
   command: string;
   /** Aggregated stdout and stderr captured while the command was running. */
@@ -32,7 +32,7 @@ export type PatchApplyStatus = "completed" | "failed";
 /** A set of file changes by the agent. Emitted once the patch succeeds or fails. */
 export type FileChangeItem = {
   id: string;
-  item_type: "file_change";
+  type: "file_change";
   /** Individual file changes that comprise the patch. */
   changes: FileUpdateChange[];
   /** Whether the patch ultimately succeeded or failed. */
@@ -48,7 +48,7 @@ export type McpToolCallStatus = "in_progress" | "completed" | "failed";
  */
 export type McpToolCallItem = {
   id: string;
-  item_type: "mcp_tool_call";
+  type: "mcp_tool_call";
   /** Name of the MCP server handling the request. */
   server: string;
   /** The tool invoked on the MCP server. */
@@ -58,9 +58,9 @@ export type McpToolCallItem = {
 };
 
 /** Response from the agent. Either natural-language text or JSON when structured output is requested. */
-export type AssistantMessageItem = {
+export type AgentMessageItem = {
   id: string;
-  item_type: "assistant_message";
+  type: "agent_message";
   /** Either natural-language text or JSON when structured output is requested. */
   text: string;
 };
@@ -68,21 +68,21 @@ export type AssistantMessageItem = {
 /** Agent's reasoning summary. */
 export type ReasoningItem = {
   id: string;
-  item_type: "reasoning";
+  type: "reasoning";
   text: string;
 };
 
 /** Captures a web search request. Completes when results are returned to the agent. */
 export type WebSearchItem = {
   id: string;
-  item_type: "web_search";
+  type: "web_search";
   query: string;
 };
 
 /** Describes a non-fatal error surfaced as an item. */
 export type ErrorItem = {
   id: string;
-  item_type: "error";
+  type: "error";
   message: string;
 };
 
@@ -98,19 +98,19 @@ export type TodoItem = {
  */
 export type TodoListItem = {
   id: string;
-  item_type: "todo_list";
+  type: "todo_list";
   items: TodoItem[];
 };
 
 export type SessionItem = {
   id: string;
-  item_type: "session";
+  type: "session";
   session_id: string;
 };
 
 /** Canonical union of thread items and their type-specific payloads. */
 export type ThreadItem =
-  | AssistantMessageItem
+  | AgentMessageItem
   | ReasoningItem
   | CommandExecutionItem
   | FileChangeItem

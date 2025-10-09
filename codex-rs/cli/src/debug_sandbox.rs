@@ -73,7 +73,8 @@ async fn run_command_under_sandbox(
             codex_linux_sandbox_exe,
             ..Default::default()
         },
-    )?;
+    )
+    .await?;
 
     // In practice, this should be `std::env::current_dir()` because this CLI
     // does not support `--cwd`, but let's use the config value for consistency.

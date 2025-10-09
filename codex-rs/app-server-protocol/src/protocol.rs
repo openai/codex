@@ -725,6 +725,7 @@ pub struct FuzzyFileSearchParams {
 pub struct FuzzyFileSearchResult {
     pub root: String,
     pub path: String,
+    pub file_name: String,
     pub score: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>,

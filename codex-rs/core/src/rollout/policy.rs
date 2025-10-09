@@ -70,6 +70,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ListCustomPromptsResponse(_)
         | EventMsg::PlanUpdate(_)
         | EventMsg::ShutdownComplete
+        | EventMsg::ViewImageToolCall(_)
         | EventMsg::ConversationPath(_) => false,
     }
 }

@@ -280,6 +280,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::ConversationPath(_)
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
+                    | EventMsg::ViewImageToolCall(_)
                     | EventMsg::EnteredReviewMode(_)
                     | EventMsg::ExitedReviewMode(_) => {
                         // For now, we do not do anything extra for these

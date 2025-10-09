@@ -1,3 +1,4 @@
+use assert_matches::assert_matches;
 use std::sync::Arc;
 use tracing_test::traced_test;
 
@@ -178,7 +179,7 @@ async fn streams_text_without_reasoning() {
         other => panic!("expected terminal message, got {other:?}"),
     }
 
-    assert!(matches!(events[2], ResponseEvent::Completed { .. }));
+    assert_matches!(events[2], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -219,7 +220,7 @@ async fn streams_reasoning_from_string_delta() {
         other => panic!("expected message item, got {other:?}"),
     }
 
-    assert!(matches!(events[4], ResponseEvent::Completed { .. }));
+    assert_matches!(events[4], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -266,7 +267,7 @@ async fn streams_reasoning_from_object_delta() {
         other => panic!("expected message item, got {other:?}"),
     }
 
-    assert!(matches!(events[5], ResponseEvent::Completed { .. }));
+    assert_matches!(events[5], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -293,7 +294,7 @@ async fn streams_reasoning_from_final_message() {
         other => panic!("expected reasoning item, got {other:?}"),
     }
 
-    assert!(matches!(events[2], ResponseEvent::Completed { .. }));
+    assert_matches!(events[2], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -337,7 +338,7 @@ async fn streams_reasoning_before_tool_call() {
         other => panic!("expected function call, got {other:?}"),
     }
 
-    assert!(matches!(events[3], ResponseEvent::Completed { .. }));
+    assert_matches!(events[3], ResponseEvent::Completed { .. });
 }
 
 #[tokio::test]

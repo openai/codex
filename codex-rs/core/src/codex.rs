@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,20 +14,19 @@ use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::MaybeApplyPatchVerified;
-use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
+use futures::future::BoxFuture;
 use futures::prelude::*;
+use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
-use serde::Deserialize;
-use serde::Serialize;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -40,9 +38,6 @@ use tracing::trace;
 use tracing::warn;
 
 use crate::ModelProviderInfo;
-use crate::apply_patch;
-use crate::apply_patch::ApplyPatchExec;
-use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
@@ -53,32 +48,22 @@ use crate::conversation_history::ConversationHistory;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::error::SandboxErr;
-use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::StdoutStream;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
 use crate::exec_command::ExecSessionManager;
-use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
-use crate::exec_env::create_env;
-use crate::executor::ExecutionMode;
 use crate::executor::Executor;
 use crate::executor::ExecutorConfig;
 use crate::executor::normalize_exec_result;
+use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
-use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
-use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
-use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
@@ -93,7 +78,6 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
-use crate::protocol::FileChange;
 use crate::protocol::InputItem;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
@@ -118,6 +102,10 @@ use crate::state::SessionServices;
 use crate::tasks::CompactTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
+use crate::tools::ToolRouter;
+use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::format_exec_output_str;
+use crate::tools::parallel::ToolCallRuntime;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
@@ -129,10 +117,8 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::InitialHistory;
 
 pub mod compact;
@@ -158,19 +144,13 @@ pub struct CodexSpawnOk {
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
 
-// Model-formatting limits: clients get full streams; oonly content sent to the model is truncated.
-pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
-pub(crate) const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
-pub(crate) const MODEL_FORMAT_HEAD_LINES: usize = MODEL_FORMAT_MAX_LINES / 2;
-pub(crate) const MODEL_FORMAT_TAIL_LINES: usize = MODEL_FORMAT_MAX_LINES - MODEL_FORMAT_HEAD_LINES; // 128
-pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
-
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
         conversation_history: InitialHistory,
+        session_source: SessionSource,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -199,6 +179,7 @@ impl Codex {
             auth_manager.clone(),
             tx_event.clone(),
             conversation_history,
+            session_source,
         )
         .await
         .map_err(|e| {
@@ -262,7 +243,7 @@ pub(crate) struct Session {
     tx_event: Sender<Event>,
     state: Mutex<SessionState>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
-    services: SessionServices,
+    pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -285,7 +266,7 @@ pub(crate) struct TurnContext {
 }
 
 impl TurnContext {
-    fn resolve_path(&self, path: Option<String>) -> PathBuf {
+    pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
@@ -333,6 +314,7 @@ impl Session {
         auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
+        session_source: SessionSource,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
         let ConfigureSession {
             provider,
@@ -356,7 +338,11 @@ impl Session {
                 let conversation_id = ConversationId::default();
                 (
                     conversation_id,
-                    RolloutRecorderParams::new(conversation_id, user_instructions.clone()),
+                    RolloutRecorderParams::new(
+                        conversation_id,
+                        user_instructions.clone(),
+                        session_source,
+                    ),
                 )
             }
             InitialHistory::Resumed(resumed_history) => (
@@ -379,6 +365,7 @@ impl Session {
         let mcp_fut = McpConnectionManager::new(
             config.mcp_servers.clone(),
             config.use_experimental_use_rmcp_client,
+            config.mcp_oauth_credentials_store_mode,
         );
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
@@ -523,6 +510,10 @@ impl Session {
         }
 
         Ok((sess, turn_context))
+    }
+
+    pub(crate) fn get_tx_event(&self) -> Sender<Event> {
+        self.tx_event.clone()
     }
 
     fn next_internal_sub_id(&self) -> String {
@@ -797,6 +788,17 @@ impl Session {
         self.send_event(event).await;
     }
 
+    async fn set_total_tokens_full(&self, sub_id: &str, turn_context: &TurnContext) {
+        let context_window = turn_context.client.get_model_context_window();
+        if let Some(context_window) = context_window {
+            {
+                let mut state = self.state.lock().await;
+                state.set_token_usage_full(context_window);
+            }
+            self.send_token_count_event(sub_id).await;
+        }
+    }
+
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
     async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
@@ -822,7 +824,7 @@ impl Session {
 
     async fn on_exec_command_begin(
         &self,
-        turn_diff_tracker: &mut TurnDiffTracker,
+        turn_diff_tracker: SharedTurnDiffTracker,
         exec_command_context: ExecCommandContext,
     ) {
         let ExecCommandContext {
@@ -838,7 +840,10 @@ impl Session {
                 user_explicitly_approved_this_action,
                 changes,
             }) => {
-                turn_diff_tracker.on_patch_begin(&changes);
+                {
+                    let mut tracker = turn_diff_tracker.lock().await;
+                    tracker.on_patch_begin(&changes);
+                }
 
                 EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                     call_id,
@@ -865,7 +870,7 @@ impl Session {
 
     async fn on_exec_command_end(
         &self,
-        turn_diff_tracker: &mut TurnDiffTracker,
+        turn_diff_tracker: SharedTurnDiffTracker,
         sub_id: &str,
         call_id: &str,
         output: &ExecToolCallOutput,
@@ -913,7 +918,10 @@ impl Session {
         // If this is an apply_patch, after we emit the end patch, emit a second event
         // with the full turn diff if there is one.
         if is_apply_patch {
-            let unified_diff = turn_diff_tracker.get_unified_diff();
+            let unified_diff = {
+                let mut tracker = turn_diff_tracker.lock().await;
+                tracker.get_unified_diff()
+            };
             if let Ok(Some(unified_diff)) = unified_diff {
                 let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                 let event = Event {
@@ -928,9 +936,9 @@ impl Session {
     /// command even on error.
     ///
     /// Returns the output of the exec tool call.
-    async fn run_exec_with_events(
+    pub(crate) async fn run_exec_with_events(
         &self,
-        turn_diff_tracker: &mut TurnDiffTracker,
+        turn_diff_tracker: SharedTurnDiffTracker,
         prepared: PreparedExec,
         approval_policy: AskForApproval,
     ) -> Result<ExecToolCallOutput, ExecError> {
@@ -939,7 +947,7 @@ impl Session {
         let sub_id = context.sub_id.clone();
         let call_id = context.call_id.clone();
 
-        self.on_exec_command_begin(turn_diff_tracker, context.clone())
+        self.on_exec_command_begin(turn_diff_tracker.clone(), context.clone())
             .await;
 
         let result = self
@@ -1034,6 +1042,49 @@ impl Session {
             .await
     }
 
+    pub(crate) fn parse_mcp_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
+        self.services
+            .mcp_connection_manager
+            .parse_tool_name(tool_name)
+    }
+
+    pub(crate) async fn handle_exec_command_tool(
+        &self,
+        params: ExecCommandParams,
+    ) -> Result<String, FunctionCallError> {
+        let result = self
+            .services
+            .session_manager
+            .handle_exec_command_request(params)
+            .await;
+        match result {
+            Ok(output) => Ok(output.to_text_output()),
+            Err(err) => Err(FunctionCallError::RespondToModel(err)),
+        }
+    }
+
+    pub(crate) async fn handle_write_stdin_tool(
+        &self,
+        params: WriteStdinParams,
+    ) -> Result<String, FunctionCallError> {
+        self.services
+            .session_manager
+            .handle_write_stdin_request(params)
+            .await
+            .map(|output| output.to_text_output())
+            .map_err(FunctionCallError::RespondToModel)
+    }
+
+    pub(crate) async fn run_unified_exec_request(
+        &self,
+        request: crate::unified_exec::UnifiedExecRequest<'_>,
+    ) -> Result<crate::unified_exec::UnifiedExecResult, crate::unified_exec::UnifiedExecError> {
+        self.services
+            .unified_exec_manager
+            .handle_request(request)
+            .await
+    }
+
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
@@ -1069,23 +1120,6 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.interrupt_task_sync();
     }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ExecCommandContext {
-    pub(crate) sub_id: String,
-    pub(crate) call_id: String,
-    pub(crate) command_for_display: Vec<String>,
-    pub(crate) cwd: PathBuf,
-    pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
-    pub(crate) tool_name: String,
-    pub(crate) otel_event_manager: OtelEventManager,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ApplyPatchCommandContext {
-    pub(crate) user_explicitly_approved_this_action: bool,
-    pub(crate) changes: HashMap<PathBuf, FileChange>,
 }
 
 async fn submission_loop(
@@ -1370,10 +1404,18 @@ async fn submission_loop(
 
                 // This is a cheap lookup from the connection manager's cache.
                 let tools = sess.services.mcp_connection_manager.list_all_tools();
+                let auth_statuses = compute_auth_statuses(
+                    config.mcp_servers.iter(),
+                    config.mcp_oauth_credentials_store_mode,
+                )
+                .await;
                 let event = Event {
                     id: sub_id,
                     msg: EventMsg::McpListToolsResponse(
-                        crate::protocol::McpListToolsResponseEvent { tools },
+                        crate::protocol::McpListToolsResponseEvent {
+                            tools,
+                            auth_statuses,
+                        },
                     ),
                 };
                 sess.send_event(event).await;
@@ -1554,7 +1596,7 @@ async fn spawn_review_thread(
 
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<InputItem> = vec![InputItem::Text {
-        text: format!("{base_instructions}\n\n---\n\nNow, here's your task: {review_prompt}"),
+        text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
 
@@ -1622,7 +1664,7 @@ pub(crate) async fn run_task(
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
-    let mut turn_diff_tracker = TurnDiffTracker::new();
+    let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let mut auto_compact_recently_attempted = false;
 
     loop {
@@ -1670,9 +1712,9 @@ pub(crate) async fn run_task(
             })
             .collect();
         match run_turn(
-            &sess,
-            turn_context.as_ref(),
-            &mut turn_diff_tracker,
+            Arc::clone(&sess),
+            Arc::clone(&turn_context),
+            Arc::clone(&turn_diff_tracker),
             sub_id.clone(),
             turn_input,
         )
@@ -1895,30 +1937,51 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
 }
 
 async fn run_turn(
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    turn_diff_tracker: SharedTurnDiffTracker,
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<TurnRunResult> {
-    let tools = get_openai_tools(
+    let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
+    let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
-        Some(sess.services.mcp_connection_manager.list_all_tools()),
-    );
+        Some(mcp_tools),
+    ));
 
+    let model_supports_parallel = turn_context
+        .client
+        .get_model_family()
+        .supports_parallel_tool_calls;
+    let parallel_tool_calls = model_supports_parallel;
     let prompt = Prompt {
         input,
-        tools,
+        tools: router.specs(),
+        parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
     let mut retries = 0;
     loop {
-        match try_run_turn(sess, turn_context, turn_diff_tracker, &sub_id, &prompt).await {
+        match try_run_turn(
+            Arc::clone(&router),
+            Arc::clone(&sess),
+            Arc::clone(&turn_context),
+            Arc::clone(&turn_diff_tracker),
+            &sub_id,
+            &prompt,
+        )
+        .await
+        {
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
+            Err(e @ CodexErr::Fatal(_)) => return Err(e),
+            Err(e @ CodexErr::ContextWindowExceeded) => {
+                sess.set_total_tokens_full(&sub_id, &turn_context).await;
+                return Err(e);
+            }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
                 if let Some(rate_limits) = rate_limits {
@@ -1965,9 +2028,9 @@ async fn run_turn(
 /// "handled" such that it produces a `ResponseInputItem` that needs to be
 /// sent back to the model on the next turn.
 #[derive(Debug)]
-struct ProcessedResponseItem {
-    item: ResponseItem,
-    response: Option<ResponseInputItem>,
+pub(crate) struct ProcessedResponseItem {
+    pub(crate) item: ResponseItem,
+    pub(crate) response: Option<ResponseInputItem>,
 }
 
 #[derive(Debug)]
@@ -1977,9 +2040,10 @@ struct TurnRunResult {
 }
 
 async fn try_run_turn(
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
+    router: Arc<ToolRouter>,
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    turn_diff_tracker: SharedTurnDiffTracker,
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<TurnRunResult> {
@@ -2049,43 +2113,102 @@ async fn try_run_turn(
     sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
-    let mut output = Vec::new();
+    let tool_runtime = ToolCallRuntime::new(
+        Arc::clone(&router),
+        Arc::clone(&sess),
+        Arc::clone(&turn_context),
+        Arc::clone(&turn_diff_tracker),
+        sub_id.to_string(),
+    );
+    let mut output: FuturesOrdered<BoxFuture<CodexResult<ProcessedResponseItem>>> =
+        FuturesOrdered::new();
 
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
         let event = stream.next().await;
-        let Some(event) = event else {
-            // Channel closed without yielding a final Completed event or explicit error.
-            // Treat as a disconnected stream so the caller can retry.
-            return Err(CodexErr::Stream(
-                "stream closed before response.completed".into(),
-                None,
-            ));
+        let event = match event {
+            Some(res) => res?,
+            None => {
+                return Err(CodexErr::Stream(
+                    "stream closed before response.completed".into(),
+                    None,
+                ));
+            }
         };
 
-        let event = match event {
-            Ok(ev) => ev,
-            Err(e) => {
-                // Propagate the underlying stream error to the caller (run_turn), which
-                // will apply the configured `stream_max_retries` policy.
-                return Err(e);
-            }
+        let add_completed = &mut |response_item: ProcessedResponseItem| {
+            output.push_back(future::ready(Ok(response_item)).boxed());
         };
 
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let response = handle_response_item(
-                    sess,
-                    turn_context,
-                    turn_diff_tracker,
-                    sub_id,
-                    item.clone(),
-                )
-                .await?;
-                output.push(ProcessedResponseItem { item, response });
+                match ToolRouter::build_tool_call(sess.as_ref(), item.clone()) {
+                    Ok(Some(call)) => {
+                        let payload_preview = call.payload.log_payload().into_owned();
+                        tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
+
+                        let response = tool_runtime.handle_tool_call(call);
+
+                        output.push_back(
+                            async move {
+                                Ok(ProcessedResponseItem {
+                                    item,
+                                    response: Some(response.await?),
+                                })
+                            }
+                            .boxed(),
+                        );
+                    }
+                    Ok(None) => {
+                        let response = handle_non_tool_response_item(
+                            Arc::clone(&sess),
+                            Arc::clone(&turn_context),
+                            sub_id,
+                            item.clone(),
+                        )
+                        .await?;
+                        add_completed(ProcessedResponseItem { item, response });
+                    }
+                    Err(FunctionCallError::MissingLocalShellCallId) => {
+                        let msg = "LocalShellCall without call_id or id";
+                        turn_context
+                            .client
+                            .get_otel_event_manager()
+                            .log_tool_failed("local_shell", msg);
+                        error!(msg);
+
+                        let response = ResponseInputItem::FunctionCallOutput {
+                            call_id: String::new(),
+                            output: FunctionCallOutputPayload {
+                                content: msg.to_string(),
+                                success: None,
+                            },
+                        };
+                        add_completed(ProcessedResponseItem {
+                            item,
+                            response: Some(response),
+                        });
+                    }
+                    Err(FunctionCallError::RespondToModel(message)) => {
+                        let response = ResponseInputItem::FunctionCallOutput {
+                            call_id: String::new(),
+                            output: FunctionCallOutputPayload {
+                                content: message,
+                                success: None,
+                            },
+                        };
+                        add_completed(ProcessedResponseItem {
+                            item,
+                            response: Some(response),
+                        });
+                    }
+                    Err(FunctionCallError::Fatal(message)) => {
+                        return Err(CodexErr::Fatal(message));
+                    }
+                }
             }
             ResponseEvent::WebSearchCallBegin { call_id } => {
                 let _ = sess
@@ -2105,10 +2228,15 @@ async fn try_run_turn(
                 response_id: _,
                 token_usage,
             } => {
-                sess.update_token_usage_info(sub_id, turn_context, token_usage.as_ref())
+                sess.update_token_usage_info(sub_id, turn_context.as_ref(), token_usage.as_ref())
                     .await;
 
-                let unified_diff = turn_diff_tracker.get_unified_diff();
+                let processed_items: Vec<ProcessedResponseItem> = output.try_collect().await?;
+
+                let unified_diff = {
+                    let mut tracker = turn_diff_tracker.lock().await;
+                    tracker.get_unified_diff()
+                };
                 if let Ok(Some(unified_diff)) = unified_diff {
                     let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                     let event = Event {
@@ -2119,7 +2247,7 @@ async fn try_run_turn(
                 }
 
                 let result = TurnRunResult {
-                    processed_items: output,
+                    processed_items,
                     total_token_usage: token_usage.clone(),
                 };
 
@@ -2167,184 +2295,18 @@ async fn try_run_turn(
     }
 }
 
-async fn handle_response_item(
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
+async fn handle_non_tool_response_item(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
     sub_id: &str,
     item: ResponseItem,
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
-    let output = match item {
-        ResponseItem::FunctionCall {
-            name,
-            arguments,
-            call_id,
-            ..
-        } => {
-            info!("FunctionCall: {name}({arguments})");
-            if let Some((server, tool_name)) =
-                sess.services.mcp_connection_manager.parse_tool_name(&name)
-            {
-                let resp = handle_mcp_tool_call(
-                    sess,
-                    sub_id,
-                    call_id.clone(),
-                    server,
-                    tool_name,
-                    arguments,
-                )
-                .await;
-                Some(resp)
-            } else {
-                let result = turn_context
-                    .client
-                    .get_otel_event_manager()
-                    .log_tool_result(name.as_str(), call_id.as_str(), arguments.as_str(), || {
-                        handle_function_call(
-                            sess,
-                            turn_context,
-                            turn_diff_tracker,
-                            sub_id.to_string(),
-                            name.to_owned(),
-                            arguments.to_owned(),
-                            call_id.clone(),
-                        )
-                    })
-                    .await;
 
-                let output = match result {
-                    Ok(content) => FunctionCallOutputPayload {
-                        content,
-                        success: Some(true),
-                    },
-                    Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
-                        content: msg,
-                        success: Some(false),
-                    },
-                };
-                Some(ResponseInputItem::FunctionCallOutput { call_id, output })
-            }
-        }
-        ResponseItem::LocalShellCall {
-            id,
-            call_id,
-            status: _,
-            action,
-        } => {
-            let name = "local_shell";
-            let LocalShellAction::Exec(action) = action;
-            tracing::info!("LocalShellCall: {action:?}");
-            let params = ShellToolCallParams {
-                command: action.command,
-                workdir: action.working_directory,
-                timeout_ms: action.timeout_ms,
-                with_escalated_permissions: None,
-                justification: None,
-            };
-            let effective_call_id = match (call_id, id) {
-                (Some(call_id), _) => call_id,
-                (None, Some(id)) => id,
-                (None, None) => {
-                    let error_message = "LocalShellCall without call_id or id";
-
-                    turn_context
-                        .client
-                        .get_otel_event_manager()
-                        .log_tool_failed(name, error_message);
-
-                    error!(error_message);
-                    return Ok(Some(ResponseInputItem::FunctionCallOutput {
-                        call_id: "".to_string(),
-                        output: FunctionCallOutputPayload {
-                            content: error_message.to_string(),
-                            success: None,
-                        },
-                    }));
-                }
-            };
-
-            let exec_params = to_exec_params(params, turn_context);
-            {
-                let result = turn_context
-                    .client
-                    .get_otel_event_manager()
-                    .log_tool_result(
-                        name,
-                        effective_call_id.as_str(),
-                        exec_params.command.join(" ").as_str(),
-                        || {
-                            handle_container_exec_with_params(
-                                name,
-                                exec_params,
-                                sess,
-                                turn_context,
-                                turn_diff_tracker,
-                                sub_id.to_string(),
-                                effective_call_id.clone(),
-                            )
-                        },
-                    )
-                    .await;
-
-                let output = match result {
-                    Ok(content) => FunctionCallOutputPayload {
-                        content,
-                        success: Some(true),
-                    },
-                    Err(FunctionCallError::RespondToModel(msg)) => FunctionCallOutputPayload {
-                        content: msg,
-                        success: Some(false),
-                    },
-                };
-                Some(ResponseInputItem::FunctionCallOutput {
-                    call_id: effective_call_id,
-                    output,
-                })
-            }
-        }
-        ResponseItem::CustomToolCall {
-            id: _,
-            call_id,
-            name,
-            input,
-            status: _,
-        } => {
-            let result = turn_context
-                .client
-                .get_otel_event_manager()
-                .log_tool_result(name.as_str(), call_id.as_str(), input.as_str(), || {
-                    handle_custom_tool_call(
-                        sess,
-                        turn_context,
-                        turn_diff_tracker,
-                        sub_id.to_string(),
-                        name.to_owned(),
-                        input.to_owned(),
-                        call_id.clone(),
-                    )
-                })
-                .await;
-
-            let output = match result {
-                Ok(content) => content,
-                Err(FunctionCallError::RespondToModel(msg)) => msg,
-            };
-            Some(ResponseInputItem::CustomToolCallOutput { call_id, output })
-        }
-        ResponseItem::FunctionCallOutput { .. } => {
-            debug!("unexpected FunctionCallOutput from stream");
-            None
-        }
-        ResponseItem::CustomToolCallOutput { .. } => {
-            debug!("unexpected CustomToolCallOutput from stream");
-            None
-        }
+    match &item {
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => {
-            // In review child threads, suppress assistant message events but
-            // keep reasoning/web search.
             let msgs = match &item {
                 ResponseItem::Message { .. } if turn_context.is_review_mode => {
                     trace!("suppressing assistant Message in review mode");
@@ -2359,523 +2321,14 @@ async fn handle_response_item(
                 };
                 sess.send_event(event).await;
             }
-            None
         }
-        ResponseItem::Other => None,
-    };
-    Ok(output)
-}
-
-async fn handle_unified_exec_tool_call(
-    sess: &Session,
-    session_id: Option<String>,
-    arguments: Vec<String>,
-    timeout_ms: Option<u64>,
-) -> Result<String, FunctionCallError> {
-    let parsed_session_id = if let Some(session_id) = session_id {
-        match session_id.parse::<i32>() {
-            Ok(parsed) => Some(parsed),
-            Err(output) => {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "invalid session_id: {session_id} due to error {output:?}"
-                )));
-            }
+        ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {
+            debug!("unexpected tool output from stream");
         }
-    } else {
-        None
-    };
-
-    let request = crate::unified_exec::UnifiedExecRequest {
-        session_id: parsed_session_id,
-        input_chunks: &arguments,
-        timeout_ms,
-    };
-
-    let value = sess
-        .services
-        .unified_exec_manager
-        .handle_request(request)
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("unified exec failed: {err:?}"))
-        })?;
-
-    #[derive(Serialize)]
-    struct SerializedUnifiedExecResult {
-        session_id: Option<String>,
-        output: String,
+        _ => {}
     }
 
-    serde_json::to_string(&SerializedUnifiedExecResult {
-        session_id: value.session_id.map(|id| id.to_string()),
-        output: value.output,
-    })
-    .map_err(|err| {
-        FunctionCallError::RespondToModel(format!(
-            "failed to serialize unified exec output: {err:?}"
-        ))
-    })
-}
-
-async fn handle_function_call(
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
-    sub_id: String,
-    name: String,
-    arguments: String,
-    call_id: String,
-) -> Result<String, FunctionCallError> {
-    match name.as_str() {
-        "container.exec" | "shell" => {
-            let params = parse_container_exec_arguments(arguments, turn_context, &call_id)?;
-            handle_container_exec_with_params(
-                name.as_str(),
-                params,
-                sess,
-                turn_context,
-                turn_diff_tracker,
-                sub_id,
-                call_id,
-            )
-            .await
-        }
-        "unified_exec" => {
-            #[derive(Deserialize)]
-            struct UnifiedExecArgs {
-                input: Vec<String>,
-                #[serde(default)]
-                session_id: Option<String>,
-                #[serde(default)]
-                timeout_ms: Option<u64>,
-            }
-
-            let args: UnifiedExecArgs = serde_json::from_str(&arguments).map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {err:?}"
-                ))
-            })?;
-
-            handle_unified_exec_tool_call(sess, args.session_id, args.input, args.timeout_ms).await
-        }
-        "view_image" => {
-            #[derive(serde::Deserialize)]
-            struct SeeImageArgs {
-                path: String,
-            }
-            let args: SeeImageArgs = serde_json::from_str(&arguments).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {e:?}"
-                ))
-            })?;
-            let abs = turn_context.resolve_path(Some(args.path));
-            sess.inject_input(vec![InputItem::LocalImage { path: abs }])
-                .await
-                .map_err(|_| {
-                    FunctionCallError::RespondToModel(
-                        "unable to attach image (no active task)".to_string(),
-                    )
-                })?;
-
-            Ok("attached local image path".to_string())
-        }
-        "apply_patch" => {
-            let args: ApplyPatchToolArgs = serde_json::from_str(&arguments).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {e:?}"
-                ))
-            })?;
-            let exec_params = ExecParams {
-                command: vec!["apply_patch".to_string(), args.input.clone()],
-                cwd: turn_context.cwd.clone(),
-                timeout_ms: None,
-                env: HashMap::new(),
-                with_escalated_permissions: None,
-                justification: None,
-            };
-            handle_container_exec_with_params(
-                name.as_str(),
-                exec_params,
-                sess,
-                turn_context,
-                turn_diff_tracker,
-                sub_id,
-                call_id,
-            )
-            .await
-        }
-        "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
-        EXEC_COMMAND_TOOL_NAME => {
-            // TODO(mbolin): Sandbox check.
-            let exec_params: ExecCommandParams = serde_json::from_str(&arguments).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to parse function arguments: {e:?}"
-                ))
-            })?;
-            let result = sess
-                .services
-                .session_manager
-                .handle_exec_command_request(exec_params)
-                .await;
-            match result {
-                Ok(output) => Ok(output.to_text_output()),
-                Err(err) => Err(FunctionCallError::RespondToModel(err)),
-            }
-        }
-        WRITE_STDIN_TOOL_NAME => {
-            let write_stdin_params =
-                serde_json::from_str::<WriteStdinParams>(&arguments).map_err(|e| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to parse function arguments: {e:?}"
-                    ))
-                })?;
-
-            let result = sess
-                .services
-                .session_manager
-                .handle_write_stdin_request(write_stdin_params)
-                .await
-                .map_err(FunctionCallError::RespondToModel)?;
-
-            Ok(result.to_text_output())
-        }
-        _ => Err(FunctionCallError::RespondToModel(format!(
-            "unsupported call: {name}"
-        ))),
-    }
-}
-
-async fn handle_custom_tool_call(
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
-    sub_id: String,
-    name: String,
-    input: String,
-    call_id: String,
-) -> Result<String, FunctionCallError> {
-    info!("CustomToolCall: {name} {input}");
-    match name.as_str() {
-        "apply_patch" => {
-            let exec_params = ExecParams {
-                command: vec!["apply_patch".to_string(), input.clone()],
-                cwd: turn_context.cwd.clone(),
-                timeout_ms: None,
-                env: HashMap::new(),
-                with_escalated_permissions: None,
-                justification: None,
-            };
-
-            handle_container_exec_with_params(
-                name.as_str(),
-                exec_params,
-                sess,
-                turn_context,
-                turn_diff_tracker,
-                sub_id,
-                call_id,
-            )
-            .await
-        }
-        _ => {
-            debug!("unexpected CustomToolCall from stream");
-            Err(FunctionCallError::RespondToModel(format!(
-                "unsupported custom tool call: {name}"
-            )))
-        }
-    }
-}
-
-fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
-    ExecParams {
-        command: params.command,
-        cwd: turn_context.resolve_path(params.workdir.clone()),
-        timeout_ms: params.timeout_ms,
-        env: create_env(&turn_context.shell_environment_policy),
-        with_escalated_permissions: params.with_escalated_permissions,
-        justification: params.justification,
-    }
-}
-
-fn parse_container_exec_arguments(
-    arguments: String,
-    turn_context: &TurnContext,
-    _call_id: &str,
-) -> Result<ExecParams, FunctionCallError> {
-    serde_json::from_str::<ShellToolCallParams>(&arguments)
-        .map(|p| to_exec_params(p, turn_context))
-        .map_err(|e| {
-            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
-        })
-}
-
-async fn handle_container_exec_with_params(
-    tool_name: &str,
-    params: ExecParams,
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
-    sub_id: String,
-    call_id: String,
-) -> Result<String, FunctionCallError> {
-    let otel_event_manager = turn_context.client.get_otel_event_manager();
-
-    if params.with_escalated_permissions.unwrap_or(false)
-        && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
-    {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-            policy = turn_context.approval_policy
-        )));
-    }
-
-    // check if this was a patch, and apply it if so
-    let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
-        MaybeApplyPatchVerified::Body(changes) => {
-            match apply_patch::apply_patch(sess, turn_context, &sub_id, &call_id, changes).await {
-                InternalApplyPatchInvocation::Output(item) => return item,
-                InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
-                    Some(apply_patch_exec)
-                }
-            }
-        }
-        MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
-            // It looks like an invocation of `apply_patch`, but we
-            // could not resolve it into a patch that would apply
-            // cleanly. Return to model for resample.
-            return Err(FunctionCallError::RespondToModel(format!(
-                "error: {parse_error:#?}"
-            )));
-        }
-        MaybeApplyPatchVerified::ShellParseError(error) => {
-            trace!("Failed to parse shell command, {error:?}");
-            None
-        }
-        MaybeApplyPatchVerified::NotApplyPatch => None,
-    };
-
-    let command_for_display = if let Some(exec) = apply_patch_exec.as_ref() {
-        vec!["apply_patch".to_string(), exec.action.patch.clone()]
-    } else {
-        params.command.clone()
-    };
-
-    let exec_command_context = ExecCommandContext {
-        sub_id: sub_id.clone(),
-        call_id: call_id.clone(),
-        command_for_display: command_for_display.clone(),
-        cwd: params.cwd.clone(),
-        apply_patch: apply_patch_exec.as_ref().map(
-            |ApplyPatchExec {
-                 action,
-                 user_explicitly_approved_this_action,
-             }| ApplyPatchCommandContext {
-                user_explicitly_approved_this_action: *user_explicitly_approved_this_action,
-                changes: convert_apply_patch_to_protocol(action),
-            },
-        ),
-        tool_name: tool_name.to_string(),
-        otel_event_manager,
-    };
-
-    let mode = match apply_patch_exec {
-        Some(exec) => ExecutionMode::ApplyPatch(exec),
-        None => ExecutionMode::Shell,
-    };
-
-    sess.services.executor.update_environment(
-        turn_context.sandbox_policy.clone(),
-        turn_context.cwd.clone(),
-    );
-
-    let prepared_exec = PreparedExec::new(
-        exec_command_context,
-        params,
-        command_for_display,
-        mode,
-        Some(StdoutStream {
-            sub_id: sub_id.clone(),
-            call_id: call_id.clone(),
-            tx_event: sess.tx_event.clone(),
-        }),
-        turn_context.shell_environment_policy.use_profile,
-    );
-
-    let output_result = sess
-        .run_exec_with_events(
-            turn_diff_tracker,
-            prepared_exec,
-            turn_context.approval_policy,
-        )
-        .await;
-
-    match output_result {
-        Ok(output) => {
-            let ExecToolCallOutput { exit_code, .. } = &output;
-            let content = format_exec_output(&output);
-            if *exit_code == 0 {
-                Ok(content)
-            } else {
-                Err(FunctionCallError::RespondToModel(content))
-            }
-        }
-        Err(ExecError::Function(err)) => Err(err),
-        Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
-            FunctionCallError::RespondToModel(format_exec_output(&output)),
-        ),
-        Err(ExecError::Codex(err)) => Err(FunctionCallError::RespondToModel(format!(
-            "execution error: {err:?}"
-        ))),
-    }
-}
-
-fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
-    let ExecToolCallOutput {
-        aggregated_output, ..
-    } = exec_output;
-
-    // Head+tail truncation for the model: show the beginning and end with an elision.
-    // Clients still receive full streams; only this formatted summary is capped.
-
-    let mut s = &aggregated_output.text;
-    let prefixed_str: String;
-
-    if exec_output.timed_out {
-        prefixed_str = format!(
-            "command timed out after {} milliseconds\n",
-            exec_output.duration.as_millis()
-        ) + s;
-        s = &prefixed_str;
-    }
-
-    let total_lines = s.lines().count();
-    if s.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
-        return s.to_string();
-    }
-
-    let lines: Vec<&str> = s.lines().collect();
-    let head_take = MODEL_FORMAT_HEAD_LINES.min(lines.len());
-    let tail_take = MODEL_FORMAT_TAIL_LINES.min(lines.len().saturating_sub(head_take));
-    let omitted = lines.len().saturating_sub(head_take + tail_take);
-
-    // Join head and tail blocks (lines() strips newlines; reinsert them)
-    let head_block = lines
-        .iter()
-        .take(head_take)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
-    let tail_block = if tail_take > 0 {
-        lines[lines.len() - tail_take..].join("\n")
-    } else {
-        String::new()
-    };
-    let marker = format!("\n[... omitted {omitted} of {total_lines} lines ...]\n\n");
-
-    // Byte budgets for head/tail around the marker
-    let mut head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
-    let tail_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(head_budget + marker.len());
-    if tail_budget == 0 && marker.len() >= MODEL_FORMAT_MAX_BYTES {
-        // Degenerate case: marker alone exceeds budget; return a clipped marker
-        return take_bytes_at_char_boundary(&marker, MODEL_FORMAT_MAX_BYTES).to_string();
-    }
-    if tail_budget == 0 {
-        // Make room for the marker by shrinking head
-        head_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(marker.len());
-    }
-
-    // Enforce line-count cap by trimming head/tail lines
-    let head_lines_text = head_block;
-    let tail_lines_text = tail_block;
-    // Build final string respecting byte budgets
-    let head_part = take_bytes_at_char_boundary(&head_lines_text, head_budget);
-    let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(s.len()));
-
-    result.push_str(head_part);
-    result.push_str(&marker);
-
-    let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
-    let tail_budget_final = remaining;
-    let tail_part = take_last_bytes_at_char_boundary(&tail_lines_text, tail_budget_final);
-    result.push_str(tail_part);
-
-    result
-}
-
-// Truncate a &str to a byte budget at a char boundary (prefix)
-#[inline]
-fn take_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
-    if s.len() <= maxb {
-        return s;
-    }
-    let mut last_ok = 0;
-    for (i, ch) in s.char_indices() {
-        let nb = i + ch.len_utf8();
-        if nb > maxb {
-            break;
-        }
-        last_ok = nb;
-    }
-    &s[..last_ok]
-}
-
-// Take a suffix of a &str within a byte budget at a char boundary
-#[inline]
-fn take_last_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
-    if s.len() <= maxb {
-        return s;
-    }
-    let mut start = s.len();
-    let mut used = 0usize;
-    for (i, ch) in s.char_indices().rev() {
-        let nb = ch.len_utf8();
-        if used + nb > maxb {
-            break;
-        }
-        start = i;
-        used += nb;
-        if start == 0 {
-            break;
-        }
-    }
-    &s[start..]
-}
-
-/// Exec output is a pre-serialized JSON payload
-fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
-    let ExecToolCallOutput {
-        exit_code,
-        duration,
-        ..
-    } = exec_output;
-
-    #[derive(Serialize)]
-    struct ExecMetadata {
-        exit_code: i32,
-        duration_seconds: f32,
-    }
-
-    #[derive(Serialize)]
-    struct ExecOutput<'a> {
-        output: &'a str,
-        metadata: ExecMetadata,
-    }
-
-    // round to 1 decimal place
-    let duration_seconds = ((duration.as_secs_f32()) * 10.0).round() / 10.0;
-
-    let formatted_output = format_exec_output_str(exec_output);
-
-    let payload = ExecOutput {
-        output: &formatted_output,
-        metadata: ExecMetadata {
-            exit_code: *exit_code,
-            duration_seconds,
-        },
-    };
-
-    #[expect(clippy::expect_used)]
-    serde_json::to_string(&payload).expect("serialize ExecOutput")
+    Ok(None)
 }
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
@@ -2989,6 +2442,8 @@ pub(crate) async fn exit_review_mode(
 
 use crate::executor::errors::ExecError;
 use crate::executor::linkers::PreparedExec;
+use crate::tools::context::ApplyPatchCommandContext;
+use crate::tools::context::ExecCommandContext;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -3004,6 +2459,13 @@ mod tests {
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
+    use crate::tools::MODEL_FORMAT_HEAD_LINES;
+    use crate::tools::MODEL_FORMAT_MAX_BYTES;
+    use crate::tools::MODEL_FORMAT_MAX_LINES;
+    use crate::tools::MODEL_FORMAT_TAIL_LINES;
+    use crate::tools::ToolRouter;
+    use crate::tools::handle_container_exec_with_params;
+    use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -3102,13 +2564,19 @@ mod tests {
 
         let out = format_exec_output_str(&exec);
 
+        // Strip truncation header if present for subsequent assertions
+        let body = out
+            .strip_prefix("Total output lines: ")
+            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
+            .unwrap_or(out.as_str());
+
         // Expect elision marker with correct counts
         let omitted = 400 - MODEL_FORMAT_MAX_LINES; // 144
         let marker = format!("\n[... omitted {omitted} of 400 lines ...]\n\n");
         assert!(out.contains(&marker), "missing marker: {out}");
 
         // Validate head and tail
-        let parts: Vec<&str> = out.split(&marker).collect();
+        let parts: Vec<&str> = body.split(&marker).collect();
         assert_eq!(parts.len(), 2, "expected one marker split");
         let head = parts[0];
         let tail = parts[1];
@@ -3144,14 +2612,19 @@ mod tests {
         };
 
         let out = format_exec_output_str(&exec);
-        assert!(out.len() <= MODEL_FORMAT_MAX_BYTES, "exceeds byte budget");
+        // Keep strict budget on the truncated body (excluding header)
+        let body = out
+            .strip_prefix("Total output lines: ")
+            .and_then(|rest| rest.split_once("\n\n").map(|x| x.1))
+            .unwrap_or(out.as_str());
+        assert!(body.len() <= MODEL_FORMAT_MAX_BYTES, "exceeds byte budget");
         assert!(out.contains("omitted"), "should contain elision marker");
 
         // Ensure head and tail are drawn from the original
-        assert!(full.starts_with(out.chars().take(8).collect::<String>().as_str()));
+        assert!(full.starts_with(body.chars().take(8).collect::<String>().as_str()));
         assert!(
             full.ends_with(
-                out.chars()
+                body.chars()
                     .rev()
                     .take(8)
                     .collect::<String>()
@@ -3495,6 +2968,44 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn fatal_tool_error_stops_turn_and_reports_error() {
+        let (session, turn_context, _rx) = make_session_and_context_with_rx();
+        let router = ToolRouter::from_config(
+            &turn_context.tools_config,
+            Some(session.services.mcp_connection_manager.list_all_tools()),
+        );
+        let item = ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-1".to_string(),
+            name: "shell".to_string(),
+            input: "{}".to_string(),
+        };
+
+        let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
+            .expect("build tool call")
+            .expect("tool call present");
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let err = router
+            .dispatch_tool_call(
+                Arc::clone(&session),
+                Arc::clone(&turn_context),
+                tracker,
+                "sub-id".to_string(),
+                call,
+            )
+            .await
+            .expect_err("expected fatal error");
+
+        match err {
+            FunctionCallError::Fatal(message) => {
+                assert_eq!(message, "tool shell invoked with incompatible payload");
+            }
+            other => panic!("expected FunctionCallError::Fatal, got {other:?}"),
+        }
+    }
+
     fn sample_rollout(
         session: &Session,
         turn_context: &TurnContext,
@@ -3605,9 +3116,11 @@ mod tests {
         use crate::turn_diff_tracker::TurnDiffTracker;
         use std::collections::HashMap;
 
-        let (session, mut turn_context) = make_session_and_context();
+        let (session, mut turn_context_raw) = make_session_and_context();
         // Ensure policy is NOT OnRequest so the early rejection path triggers
-        turn_context.approval_policy = AskForApproval::OnFailure;
+        turn_context_raw.approval_policy = AskForApproval::OnFailure;
+        let session = Arc::new(session);
+        let mut turn_context = Arc::new(turn_context_raw);
 
         let params = ExecParams {
             command: if cfg!(windows) {
@@ -3635,7 +3148,7 @@ mod tests {
             ..params.clone()
         };
 
-        let mut turn_diff_tracker = TurnDiffTracker::new();
+        let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
         let tool_name = "shell";
         let sub_id = "test-sub".to_string();
@@ -3644,9 +3157,9 @@ mod tests {
         let resp = handle_container_exec_with_params(
             tool_name,
             params,
-            &session,
-            &turn_context,
-            &mut turn_diff_tracker,
+            Arc::clone(&session),
+            Arc::clone(&turn_context),
+            Arc::clone(&turn_diff_tracker),
             sub_id,
             call_id,
         )
@@ -3665,14 +3178,16 @@ mod tests {
 
         // Now retry the same command WITHOUT escalated permissions; should succeed.
         // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
-        turn_context.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        Arc::get_mut(&mut turn_context)
+            .expect("unique turn context Arc")
+            .sandbox_policy = SandboxPolicy::DangerFullAccess;
 
         let resp2 = handle_container_exec_with_params(
             tool_name,
             params2,
-            &session,
-            &turn_context,
-            &mut turn_diff_tracker,
+            Arc::clone(&session),
+            Arc::clone(&turn_context),
+            Arc::clone(&turn_diff_tracker),
             "test-sub".to_string(),
             "test-call-2".to_string(),
         )

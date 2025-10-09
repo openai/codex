@@ -11,6 +11,10 @@ use crate::server::ServerOptions;
 use std::io::Write;
 use std::io::{self};
 
+const ANSI_YELLOW: &str = "\x1b[93m";
+const ANSI_BOLD: &str = "\x1b[1m";
+const ANSI_RESET: &str = "\x1b[0m";
+
 #[derive(Deserialize)]
 struct UserCodeResp {
     device_auth_id: String,
@@ -68,9 +72,15 @@ async fn request_user_code(
         .map_err(std::io::Error::other)?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
+        if status == StatusCode::NOT_FOUND {
+            return Err(std::io::Error::other(
+                "device code login is not enabled for this Codex server. Use the browser login or verify the server URL.",
+            ));
+        }
+
         return Err(std::io::Error::other(format!(
-            "device code request failed with status {}",
-            resp.status()
+            "device code request failed with status {status}"
         )));
     }
 
@@ -128,20 +138,13 @@ async fn poll_for_token(
     }
 }
 
-// Helper to print colored text if terminal supports ANSI
 fn print_colored_warning_device_code() {
-    // ANSI escape code for bright yellow
-    const YELLOW: &str = "\x1b[93m";
-    const RESET: &str = "\x1b[0m";
-    let warning = "WARN!!! device code authentication has potential risks and\n\
-        should be used with caution only in cases where browser support \n\
-        is missing. This is prone to attacks.\n\
-        \n\
-        - This code is valid for 15 minutes.\n\
-        - Do not share this code with anyone.\n\
-        ";
     let mut stdout = io::stdout().lock();
-    let _ = write!(stdout, "{YELLOW}{warning}{RESET}");
+    let _ = write!(
+        stdout,
+        "{ANSI_YELLOW}{ANSI_BOLD}Only use device code authentication when browser login is not available.{ANSI_RESET}{ANSI_YELLOW}\n\
+{ANSI_BOLD}Keep the code secret; do not share it.{ANSI_RESET}{ANSI_RESET}\n\n"
+    );
     let _ = stdout.flush();
 }
 
@@ -151,12 +154,11 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{}/api/accounts", opts.issuer.trim_end_matches('/'));
     print_colored_warning_device_code();
-    println!("⏳ Generating a new 9-digit device code for authentication...\n");
     let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
 
     println!(
-        "To authenticate, visit: {}/deviceauth/authorize and enter code: {}",
-        api_base_url, uc.user_code
+        "To authenticate:\n  1. Open in your browser: {ANSI_BOLD}https://auth.openai.com/codex/device{ANSI_RESET}\n  2. Enter the one-time code below within 15 minutes:\n\n     {ANSI_BOLD}{}{ANSI_RESET}\n",
+        uc.user_code
     );
 
     let code_resp = poll_for_token(
@@ -172,7 +174,6 @@ pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
         code_verifier: code_resp.code_verifier,
         code_challenge: code_resp.code_challenge,
     };
-    println!("authorization code received");
     let redirect_uri = format!("{base_url}/deviceauth/callback");
 
     let tokens = crate::server::exchange_code_for_tokens(

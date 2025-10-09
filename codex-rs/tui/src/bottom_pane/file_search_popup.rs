@@ -130,6 +130,7 @@ impl WidgetRef for &FileSearchPopup {
                         .as_ref()
                         .map(|v| v.iter().map(|&i| i as usize).collect()),
                     is_current: false,
+                    display_shortcut: None,
                     description: None,
                 })
                 .collect()

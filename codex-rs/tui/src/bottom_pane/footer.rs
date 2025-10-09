@@ -1,13 +1,15 @@
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
+use crate::render::line_utils::prefix_lines;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
-use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::WidgetRef;
-use std::iter;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
@@ -21,10 +23,10 @@ pub(crate) struct FooterProps {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FooterMode {
     CtrlCReminder,
-    ShortcutPrompt,
+    ShortcutSummary,
     ShortcutOverlay,
     EscHint,
-    Empty,
+    ContextOnly,
 }
 
 pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
@@ -33,7 +35,7 @@ pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> Fo
     }
 
     match current {
-        FooterMode::ShortcutOverlay | FooterMode::CtrlCReminder => FooterMode::ShortcutPrompt,
+        FooterMode::ShortcutOverlay | FooterMode::CtrlCReminder => FooterMode::ShortcutSummary,
         _ => FooterMode::ShortcutOverlay,
     }
 }
@@ -51,7 +53,7 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
         FooterMode::EscHint
         | FooterMode::ShortcutOverlay
         | FooterMode::CtrlCReminder
-        | FooterMode::Empty => FooterMode::ShortcutPrompt,
+        | FooterMode::ContextOnly => FooterMode::ShortcutSummary,
         other => other,
     }
 }
@@ -61,35 +63,38 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
 }
 
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
-    let lines = footer_lines(props);
-    for (idx, line) in lines.into_iter().enumerate() {
-        let y = area.y + idx as u16;
-        if y >= area.y + area.height {
-            break;
-        }
-        let row = Rect::new(area.x, y, area.width, 1);
-        line.render_ref(row, buf);
-    }
+    Paragraph::new(prefix_lines(
+        footer_lines(props),
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+    ))
+    .render(area, buf);
 }
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+    // Show the context indicator on the left, appended after the primary hint
+    // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
+    // the shortcut hint is hidden). Hide it only for the multi-line
+    // ShortcutOverlay.
     match props.mode {
         FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
             is_task_running: props.is_task_running,
         })],
-        FooterMode::ShortcutPrompt => {
-            if props.is_task_running {
-                vec![context_window_line(props.context_window_percent)]
-            } else {
-                vec![dim_line(indent_text("? for shortcuts"))]
-            }
+        FooterMode::ShortcutSummary => {
+            let mut line = context_window_line(props.context_window_percent);
+            line.push_span(" · ".dim());
+            line.extend(vec![
+                key_hint::plain(KeyCode::Char('?')).into(),
+                " for shortcuts".dim(),
+            ]);
+            vec![line]
         }
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
             use_shift_enter_hint: props.use_shift_enter_hint,
             esc_backtrack_hint: props.esc_backtrack_hint,
         }),
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::Empty => Vec::new(),
+        FooterMode::ContextOnly => vec![context_window_line(props.context_window_percent)],
     }
 }
 
@@ -110,27 +115,36 @@ fn ctrl_c_reminder_line(state: CtrlCReminderState) -> Line<'static> {
     } else {
         "quit"
     };
-    let text = format!("ctrl + c again to {action}");
-    dim_line(indent_text(&text))
+    Line::from(vec![
+        key_hint::ctrl(KeyCode::Char('c')).into(),
+        format!(" again to {action}").into(),
+    ])
+    .dim()
 }
 
 fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
-    let text = if esc_backtrack_hint {
-        "esc again to edit previous message"
+    let esc = key_hint::plain(KeyCode::Esc);
+    if esc_backtrack_hint {
+        Line::from(vec![esc.into(), " again to edit previous message".into()]).dim()
     } else {
-        "esc esc to edit previous message"
-    };
-    dim_line(indent_text(text))
+        Line::from(vec![
+            esc.into(),
+            " ".into(),
+            esc.into(),
+            " to edit previous message".into(),
+        ])
+        .dim()
+    }
 }
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
-    let mut commands = String::new();
-    let mut newline = String::new();
-    let mut file_paths = String::new();
-    let mut paste_image = String::new();
-    let mut edit_previous = String::new();
-    let mut quit = String::new();
-    let mut show_transcript = String::new();
+    let mut commands = Line::from("");
+    let mut newline = Line::from("");
+    let mut file_paths = Line::from("");
+    let mut paste_image = Line::from("");
+    let mut edit_previous = Line::from("");
+    let mut quit = Line::from("");
+    let mut show_transcript = Line::from("");
 
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
@@ -153,14 +167,14 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         paste_image,
         edit_previous,
         quit,
-        String::new(),
+        Line::from(""),
         show_transcript,
     ];
 
     build_columns(ordered)
 }
 
-fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
+fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
     if entries.is_empty() {
         return Vec::new();
     }
@@ -174,7 +188,7 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
     let mut entries = entries;
     if entries.len() < target_len {
         entries.extend(std::iter::repeat_n(
-            String::new(),
+            Line::from(""),
             target_len - entries.len(),
         ));
     }
@@ -183,7 +197,7 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
 
     for (idx, entry) in entries.iter().enumerate() {
         let column = idx % COLUMNS;
-        column_widths[column] = column_widths[column].max(entry.len());
+        column_widths[column] = column_widths[column].max(entry.width());
     }
 
     for (idx, width) in column_widths.iter_mut().enumerate() {
@@ -193,45 +207,23 @@ fn build_columns(entries: Vec<String>) -> Vec<Line<'static>> {
     entries
         .chunks(COLUMNS)
         .map(|chunk| {
-            let mut line = String::new();
+            let mut line = Line::from("");
             for (col, entry) in chunk.iter().enumerate() {
-                line.push_str(entry);
+                line.extend(entry.spans.clone());
                 if col < COLUMNS - 1 {
                     let target_width = column_widths[col];
-                    let padding = target_width.saturating_sub(entry.len()) + COLUMN_GAP;
-                    line.push_str(&" ".repeat(padding));
+                    let padding = target_width.saturating_sub(entry.width()) + COLUMN_GAP;
+                    line.push_span(Span::from(" ".repeat(padding)));
                 }
             }
-            let indented = indent_text(&line);
-            dim_line(indented)
+            line.dim()
         })
         .collect()
 }
 
-fn indent_text(text: &str) -> String {
-    let mut indented = String::with_capacity(FOOTER_INDENT_COLS + text.len());
-    indented.extend(iter::repeat_n(' ', FOOTER_INDENT_COLS));
-    indented.push_str(text);
-    indented
-}
-
-fn dim_line(text: String) -> Line<'static> {
-    Line::from(text).dim()
-}
-
 fn context_window_line(percent: Option<u8>) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(indent_text("").into());
-    match percent {
-        Some(percent) => {
-            spans.push(format!("{percent}%").bold());
-            spans.push(" context left".dim());
-        }
-        None => {
-            spans.push("? for shortcuts".dim());
-        }
-    }
-    Line::from(spans)
+    let percent = percent.unwrap_or(100);
+    Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,9 +239,7 @@ enum ShortcutId {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ShortcutBinding {
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    overlay_text: &'static str,
+    key: KeyBinding,
     condition: DisplayCondition,
 }
 
@@ -288,20 +278,24 @@ impl ShortcutDescriptor {
         self.bindings.iter().find(|binding| binding.matches(state))
     }
 
-    fn overlay_entry(&self, state: ShortcutsState) -> Option<String> {
+    fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
         let binding = self.binding_for(state)?;
-        let label = match self.id {
+        let mut line = Line::from(vec![self.prefix.into(), binding.key.into()]);
+        match self.id {
             ShortcutId::EditPrevious => {
                 if state.esc_backtrack_hint {
-                    " again to edit previous message"
+                    line.push_span(" again to edit previous message");
                 } else {
-                    " esc to edit previous message"
+                    line.extend(vec![
+                        " ".into(),
+                        key_hint::plain(KeyCode::Esc).into(),
+                        " to edit previous message".into(),
+                    ]);
                 }
             }
-            _ => self.label,
+            _ => line.push_span(self.label),
         };
-        let text = format!("{}{}{}", self.prefix, binding.overlay_text, label);
-        Some(text)
+        Some(line)
     }
 }
 
@@ -309,9 +303,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::Commands,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('/'),
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "/",
+            key: key_hint::plain(KeyCode::Char('/')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -321,15 +313,11 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         id: ShortcutId::InsertNewline,
         bindings: &[
             ShortcutBinding {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::SHIFT,
-                overlay_text: "shift + enter",
+                key: key_hint::shift(KeyCode::Enter),
                 condition: DisplayCondition::WhenShiftEnterHint,
             },
             ShortcutBinding {
-                code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::CONTROL,
-                overlay_text: "ctrl + j",
+                key: key_hint::ctrl(KeyCode::Char('j')),
                 condition: DisplayCondition::WhenNotShiftEnterHint,
             },
         ],
@@ -339,9 +327,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::FilePaths,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('@'),
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "@",
+            key: key_hint::plain(KeyCode::Char('@')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -350,9 +336,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::PasteImage,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('v'),
-            modifiers: KeyModifiers::CONTROL,
-            overlay_text: "ctrl + v",
+            key: key_hint::ctrl(KeyCode::Char('v')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -361,9 +345,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::EditPrevious,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Esc,
-            modifiers: KeyModifiers::NONE,
-            overlay_text: "esc",
+            key: key_hint::plain(KeyCode::Esc),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -372,9 +354,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::Quit,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('c'),
-            modifiers: KeyModifiers::CONTROL,
-            overlay_text: "ctrl + c",
+            key: key_hint::ctrl(KeyCode::Char('c')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -383,9 +363,7 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     ShortcutDescriptor {
         id: ShortcutId::ShowTranscript,
         bindings: &[ShortcutBinding {
-            code: KeyCode::Char('t'),
-            modifiers: KeyModifiers::CONTROL,
-            overlay_text: "ctrl + t",
+            key: key_hint::ctrl(KeyCode::Char('t')),
             condition: DisplayCondition::Always,
         }],
         prefix: "",
@@ -417,7 +395,7 @@ mod tests {
         snapshot_footer(
             "footer_shortcuts_default",
             FooterProps {
-                mode: FooterMode::ShortcutPrompt,
+                mode: FooterMode::ShortcutSummary,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: false,
@@ -483,7 +461,7 @@ mod tests {
         snapshot_footer(
             "footer_shortcuts_context_running",
             FooterProps {
-                mode: FooterMode::ShortcutPrompt,
+                mode: FooterMode::ShortcutSummary,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,

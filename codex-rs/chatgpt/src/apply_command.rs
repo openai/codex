@@ -29,7 +29,8 @@ pub async fn run_apply_command(
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
         ConfigOverrides::default(),
-    )?;
+    )
+    .await?;
 
     init_chatgpt_token_from_auth(&config.codex_home).await?;
 

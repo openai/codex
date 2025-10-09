@@ -2,7 +2,6 @@ name: 🎁 Feature Request
 description: Propose a new feature for Codex
 labels:
   - enhancement
-  - needs triage
 body:
   - type: markdown
     attributes:
@@ -19,11 +18,6 @@ body:
       label: What feature would you like to see?
     validations:
       required: true
-  - type: textarea
-    id: author
-    attributes:
-      label: Are you interested in implementing this feature?
-      description: Please wait for acknowledgement before implementing or opening a PR.
   - type: textarea
     id: notes
     attributes:

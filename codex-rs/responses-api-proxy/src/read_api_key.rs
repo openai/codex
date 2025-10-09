@@ -1,7 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use std::io::Read;
 use zeroize::Zeroize;
 
 /// Use a generous buffer size to avoid truncation and to allow for longer API
@@ -13,13 +12,66 @@ const AUTH_HEADER_PREFIX: &[u8] = b"Bearer ";
 /// value with the auth token used with `Bearer`. The header value is returned
 /// as a `&'static str` whose bytes are locked in memory to avoid accidental
 /// exposure.
+#[cfg(unix)]
 pub(crate) fn read_auth_header_from_stdin() -> Result<&'static str> {
+    read_auth_header_with(read_from_unix_stdin)
+}
+
+#[cfg(windows)]
+pub(crate) fn read_auth_header_from_stdin() -> Result<&'static str> {
+    use std::io::Read;
+
+    // Use of `stdio::io::stdin()` has the problem mentioned in the docstring on
+    // the UNIX version of `read_from_unix_stdin()`, so this should ultimately
+    // be replaced the low-level Windows equivalent. Because we do not have an
+    // equivalent of mlock() on Windows right now, it is not pressing until we
+    // address that issue.
     read_auth_header_with(|buffer| std::io::stdin().read(buffer))
 }
 
-fn read_auth_header_with<F>(read_fn: F) -> Result<&'static str>
+/// We perform a low-level read with `read(2)` because `stdio::io::stdin()` has
+/// an internal BufReader:
+///
+/// https://github.com/rust-lang/rust/blob/bcbbdcb8522fd3cb4a8dde62313b251ab107694d/library/std/src/io/stdio.rs#L250-L252
+///
+/// that can end up retaining a copy of stdin data in memory with no way to zero
+/// it out, whereas we aim to guarantee there is exactly one copy of the API key
+/// in memory, protected by mlock(2).
+#[cfg(unix)]
+fn read_from_unix_stdin(buffer: &mut [u8]) -> std::io::Result<usize> {
+    use libc::c_void;
+    use libc::read;
+
+    // Perform a single read(2) call into the provided buffer slice.
+    // Looping and newline/EOF handling are managed by the caller.
+    loop {
+        let result = unsafe {
+            read(
+                libc::STDIN_FILENO,
+                buffer.as_mut_ptr().cast::<c_void>(),
+                buffer.len(),
+            )
+        };
+
+        if result == 0 {
+            return Ok(0);
+        }
+
+        if result < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+
+        return Ok(result as usize);
+    }
+}
+
+fn read_auth_header_with<F>(mut read_fn: F) -> Result<&'static str>
 where
-    F: FnOnce(&mut [u8]) -> std::io::Result<usize>,
+    F: FnMut(&mut [u8]) -> std::io::Result<usize>,
 {
     // TAKE CARE WHEN MODIFYING THIS CODE!!!
     //
@@ -31,19 +83,50 @@ where
     let mut buf = [0u8; BUFFER_SIZE];
     buf[..AUTH_HEADER_PREFIX.len()].copy_from_slice(AUTH_HEADER_PREFIX);
 
-    let read = read_fn(&mut buf[AUTH_HEADER_PREFIX.len()..]).inspect_err(|_err| {
-        buf.zeroize();
-    })?;
+    let prefix_len = AUTH_HEADER_PREFIX.len();
+    let capacity = buf.len() - prefix_len;
+    let mut total_read = 0usize; // number of bytes read into the token region
+    let mut saw_newline = false;
+    let mut saw_eof = false;
 
-    if read == buf.len() - AUTH_HEADER_PREFIX.len() {
+    while total_read < capacity {
+        let slice = &mut buf[prefix_len + total_read..];
+        let read = match read_fn(slice) {
+            Ok(n) => n,
+            Err(err) => {
+                buf.zeroize();
+                return Err(err.into());
+            }
+        };
+
+        if read == 0 {
+            saw_eof = true;
+            break;
+        }
+
+        // Search only the newly written region for a newline.
+        let newly_written = &slice[..read];
+        if let Some(pos) = newly_written.iter().position(|&b| b == b'\n') {
+            total_read += pos + 1; // include the newline for trimming below
+            saw_newline = true;
+            break;
+        }
+
+        total_read += read;
+
+        // Continue loop; if buffer fills without newline/EOF we'll error below.
+    }
+
+    // If buffer filled and we did not see newline or EOF, error out.
+    if total_read == capacity && !saw_newline && !saw_eof {
         buf.zeroize();
         return Err(anyhow!(
             "OPENAI_API_KEY is too large to fit in the 512-byte buffer"
         ));
     }
 
-    let mut total = AUTH_HEADER_PREFIX.len() + read;
-    while total > AUTH_HEADER_PREFIX.len() && (buf[total - 1] == b'\n' || buf[total - 1] == b'\r') {
+    let mut total = prefix_len + total_read;
+    while total > prefix_len && (buf[total - 1] == b'\n' || buf[total - 1] == b'\r') {
         total -= 1;
     }
 
@@ -138,13 +221,19 @@ fn validate_auth_header_bytes(key_bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
     use std::io;
 
     #[test]
     fn reads_key_with_no_newlines() {
+        let mut sent = false;
         let result = read_auth_header_with(|buf| {
+            if sent {
+                return Ok(0);
+            }
             let data = b"sk-abc123";
             buf[..data.len()].copy_from_slice(data);
+            sent = true;
             Ok(data.len())
         })
         .unwrap();
@@ -153,10 +242,31 @@ mod tests {
     }
 
     #[test]
+    fn reads_key_with_short_reads() {
+        let mut chunks: VecDeque<&[u8]> =
+            VecDeque::from(vec![b"sk-".as_ref(), b"abc".as_ref(), b"123\n".as_ref()]);
+        let result = read_auth_header_with(|buf| match chunks.pop_front() {
+            Some(chunk) if !chunk.is_empty() => {
+                buf[..chunk.len()].copy_from_slice(chunk);
+                Ok(chunk.len())
+            }
+            _ => Ok(0),
+        })
+        .unwrap();
+
+        assert_eq!(result, "Bearer sk-abc123");
+    }
+
+    #[test]
     fn reads_key_and_trims_newlines() {
+        let mut sent = false;
         let result = read_auth_header_with(|buf| {
+            if sent {
+                return Ok(0);
+            }
             let data = b"sk-abc123\r\n";
             buf[..data.len()].copy_from_slice(data);
+            sent = true;
             Ok(data.len())
         })
         .unwrap();
@@ -194,9 +304,14 @@ mod tests {
 
     #[test]
     fn errors_on_invalid_utf8() {
+        let mut sent = false;
         let err = read_auth_header_with(|buf| {
+            if sent {
+                return Ok(0);
+            }
             let data = b"sk-abc\xff";
             buf[..data.len()].copy_from_slice(data);
+            sent = true;
             Ok(data.len())
         })
         .unwrap_err();
@@ -209,9 +324,14 @@ mod tests {
 
     #[test]
     fn errors_on_invalid_characters() {
+        let mut sent = false;
         let err = read_auth_header_with(|buf| {
+            if sent {
+                return Ok(0);
+            }
             let data = b"sk-abc!23";
             buf[..data.len()].copy_from_slice(data);
+            sent = true;
             Ok(data.len())
         })
         .unwrap_err();

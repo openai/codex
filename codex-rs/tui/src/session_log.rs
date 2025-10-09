@@ -141,7 +141,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
                 "ts": now_ts(),
                 "dir": "to_tui",
                 "kind": "insert_history_cell",
-                "lines": cell.transcript_lines().len(),
+                "lines": cell.transcript_lines(u16::MAX).len(),
             });
             LOGGER.write_json_line(value);
         }

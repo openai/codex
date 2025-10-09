@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use serde_json::Value as JsonValue;
@@ -53,6 +54,10 @@ fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("docs"));
     assert!(stdout.contains("docs-server"));
     assert!(stdout.contains("TOKEN=secret"));
+    assert!(stdout.contains("Status"));
+    assert!(stdout.contains("Auth"));
+    assert!(stdout.contains("enabled"));
+    assert!(stdout.contains("Unsupported"));
 
     let mut list_json_cmd = codex_command(codex_home.path())?;
     let json_output = list_json_cmd.args(["mcp", "list", "--json"]).output()?;
@@ -64,6 +69,7 @@ fn list_and_get_render_expected_output() -> Result<()> {
         json!([
           {
             "name": "docs",
+            "enabled": true,
             "transport": {
               "type": "stdio",
               "command": "docs-server",
@@ -76,7 +82,8 @@ fn list_and_get_render_expected_output() -> Result<()> {
               }
             },
             "startup_timeout_sec": null,
-            "tool_timeout_sec": null
+            "tool_timeout_sec": null,
+            "auth_status": "unsupported"
           }
         ]
         )
@@ -91,6 +98,7 @@ fn list_and_get_render_expected_output() -> Result<()> {
     assert!(stdout.contains("command: docs-server"));
     assert!(stdout.contains("args: --port 4000"));
     assert!(stdout.contains("env: TOKEN=secret"));
+    assert!(stdout.contains("enabled: true"));
     assert!(stdout.contains("remove: codex mcp remove docs"));
 
     let mut get_json_cmd = codex_command(codex_home.path())?;
@@ -98,7 +106,7 @@ fn list_and_get_render_expected_output() -> Result<()> {
         .args(["mcp", "get", "docs", "--json"])
         .assert()
         .success()
-        .stdout(contains("\"name\": \"docs\""));
+        .stdout(contains("\"name\": \"docs\"").and(contains("\"enabled\": true")));
 
     Ok(())
 }

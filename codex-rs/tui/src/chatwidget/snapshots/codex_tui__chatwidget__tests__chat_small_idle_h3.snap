@@ -1,7 +1,8 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 1470
 expression: terminal.backend()
 ---
 "                                        "
-"› Ask Codex to do anything              "
 "                                        "
+"› Ask Codex to do anything              "

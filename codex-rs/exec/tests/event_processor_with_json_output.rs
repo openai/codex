@@ -14,7 +14,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
-use codex_exec::exec_events::AssistantMessageItem;
+use codex_exec::exec_events::AgentMessageItem;
 use codex_exec::exec_events::CommandExecutionItem;
 use codex_exec::exec_events::CommandExecutionStatus;
 use codex_exec::exec_events::ItemCompletedEvent;
@@ -37,6 +37,9 @@ use codex_exec::exec_events::TurnFailedEvent;
 use codex_exec::exec_events::TurnStartedEvent;
 use codex_exec::exec_events::Usage;
 use codex_exec::exec_events::WebSearchItem;
+use codex_protocol::plan_tool::PlanItemArg;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use mcp_types::CallToolResult;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -115,10 +118,6 @@ fn web_search_end_emits_item_completed() {
 
 #[test]
 fn plan_update_emits_todo_list_started_updated_and_completed() {
-    use codex_core::plan_tool::PlanItemArg;
-    use codex_core::plan_tool::StepStatus;
-    use codex_core::plan_tool::UpdatePlanArgs;
-
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
     // First plan update => item.started (todo_list)
@@ -339,10 +338,6 @@ fn mcp_tool_call_failure_sets_failed_status() {
 
 #[test]
 fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
-    use codex_core::plan_tool::PlanItemArg;
-    use codex_core::plan_tool::StepStatus;
-    use codex_core::plan_tool::UpdatePlanArgs;
-
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
     // First turn: start + complete
@@ -410,7 +405,7 @@ fn agent_reasoning_produces_item_completed_reasoning() {
 }
 
 #[test]
-fn agent_message_produces_item_completed_assistant_message() {
+fn agent_message_produces_item_completed_agent_message() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let ev = event(
         "e1",
@@ -424,7 +419,7 @@ fn agent_message_produces_item_completed_assistant_message() {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
             item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ThreadItemDetails::AssistantMessage(AssistantMessageItem {
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem {
                     text: "hello".to_string(),
                 }),
             },

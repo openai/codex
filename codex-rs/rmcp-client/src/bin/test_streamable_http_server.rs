@@ -5,6 +5,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::Request;
+use axum::http::StatusCode;
+use axum::http::header::AUTHORIZATION;
+use axum::middleware;
+use axum::middleware::Next;
+use axum::response::Response;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParam;
@@ -161,7 +169,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     );
 
+    let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
+        let expected = Arc::new(format!("Bearer {token}"));
+        router.layer(middleware::from_fn_with_state(expected, require_bearer))
+    } else {
+        router
+    };
+
     axum::serve(listener, router).await?;
     task::yield_now().await;
     Ok(())
+}
+
+async fn require_bearer(
+    State(expected): State<Arc<String>>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if request
+        .headers()
+        .get(AUTHORIZATION)
+        .is_some_and(|value| value.as_bytes() == expected.as_bytes())
+    {
+        Ok(next.run(request).await)
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
 }

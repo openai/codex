@@ -5,19 +5,15 @@ import { stdin as input, stdout as output } from "node:process";
 
 import { Codex } from "@openai/codex-sdk";
 import type { ThreadEvent, ThreadItem } from "@openai/codex-sdk";
-import path from "node:path";
+import { codexPathOverride } from "./helpers.ts";
 
-const codexPathOverride =
-  process.env.CODEX_EXECUTABLE ??
-  path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
-
-const codex = new Codex({ codexPathOverride });
+const codex = new Codex({ codexPathOverride: codexPathOverride() });
 const thread = codex.startThread();
 const rl = createInterface({ input, output });
 
 const handleItemCompleted = (item: ThreadItem): void => {
-  switch (item.item_type) {
-    case "assistant_message":
+  switch (item.type) {
+    case "agent_message":
       console.log(`Assistant: ${item.text}`);
       break;
     case "reasoning":
@@ -38,7 +34,7 @@ const handleItemCompleted = (item: ThreadItem): void => {
 };
 
 const handleItemUpdated = (item: ThreadItem): void => {
-  switch (item.item_type) {
+  switch (item.type) {
     case "todo_list": {
       console.log(`Todo:`);
       for (const todo of item.items) {

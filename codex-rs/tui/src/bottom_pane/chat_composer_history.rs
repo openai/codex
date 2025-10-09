@@ -59,14 +59,15 @@ impl ChatComposerHistory {
             return;
         }
 
+        self.history_cursor = None;
+        self.last_history_text = None;
+
         // Avoid inserting a duplicate if identical to the previous entry.
         if self.local_history.last().is_some_and(|prev| prev == text) {
             return;
         }
 
         self.local_history.push(text.to_string());
-        self.history_cursor = None;
-        self.last_history_text = None;
     }
 
     /// Should Up/Down key presses be interpreted as history navigation given

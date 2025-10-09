@@ -17,6 +17,7 @@ use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
+use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -131,9 +132,10 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .as_str()
         .unwrap_or_default()
         .to_string();
+    let expected_model = OPENAI_DEFAULT_MODEL;
     let user_turn_1 = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -182,7 +184,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     });
     let compact_1 = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -251,7 +253,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     });
     let user_turn_2_after_compact = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -316,7 +318,7 @@ SUMMARY_ONLY_CONTEXT"
     });
     let usert_turn_3_after_resume = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -401,7 +403,7 @@ SUMMARY_ONLY_CONTEXT"
     });
     let user_turn_3_after_fork = json!(
     {
-      "model": "gpt-5-codex",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
