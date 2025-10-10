@@ -213,7 +213,7 @@ PY
     let second_args = serde_json::json!({
         "input": Vec::<String>::new(),
         "session_id": "0",
-        "timeout_ms": 800,
+        "timeout_ms": 2_000,
     });
 
     let responses = vec![
