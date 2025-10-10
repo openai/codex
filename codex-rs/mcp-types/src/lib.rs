@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::convert::TryFrom;
 
+use schemars::JsonSchema;
 use ts_rs::TS;
 
 pub const MCP_SCHEMA_VERSION: &str = "2025-06-18";
