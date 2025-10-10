@@ -36,6 +36,7 @@ indexmap = { workspace = true }
 libc = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
+paste = { workspace = true }
 portable-pty = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
@@ -45,6 +46,7 @@ serde_json = { workspace = true }
 sha1 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
+strum = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
