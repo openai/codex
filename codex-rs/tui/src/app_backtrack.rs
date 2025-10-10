@@ -389,10 +389,21 @@ fn user_positions_iter(
     let user_type = TypeId::of::<UserHistoryCell>();
     let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
 
-    let start = cells
-        .iter()
-        .rposition(|cell| type_of(cell) == header_type)
-        .map_or(0, |idx| idx + 1);
+    let is_header_cell = |cell: &Arc<dyn crate::history_cell::HistoryCell>| {
+        type_of(cell) == header_type
+            && cell
+                .as_any()
+                .downcast_ref::<CompositeHistoryCell>()
+                .is_some_and(CompositeHistoryCell::is_header)
+    };
+
+    let mut start = cells.iter().take_while(|cell| is_header_cell(cell)).count();
+
+    for (idx, cell) in cells.iter().enumerate().skip(start) {
+        if is_header_cell(cell) {
+            start = idx + 1;
+        }
+    }
 
     cells
         .iter()
@@ -406,6 +417,7 @@ mod tests {
     use super::*;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use crate::history_cell::PlainHistoryCell;
     use ratatui::prelude::Line;
     use std::sync::Arc;
 
@@ -499,5 +511,50 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(between_text, "  between");
+    }
+
+    #[test]
+    fn user_positions_skip_only_leading_composites() {
+        let header = CompositeHistoryCell::new_header(vec![Box::new(PlainHistoryCell::new(vec![
+            Line::from("session header"),
+        ]))]);
+        let status =
+            CompositeHistoryCell::new(vec![Box::new(PlainHistoryCell::new(vec![Line::from(
+                "/status output",
+            )]))]);
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(header) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(status) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        let positions: Vec<usize> = user_positions_iter(&cells).collect();
+        assert_eq!(positions, vec![1, 3]);
+    }
+
+    #[test]
+    fn user_positions_reset_after_empty_composite_boundary() {
+        let header = CompositeHistoryCell::new_header(vec![Box::new(PlainHistoryCell::new(vec![
+            Line::from("session header"),
+        ]))]);
+        let boundary = CompositeHistoryCell::new_header(Vec::new());
+        let cells: Vec<Arc<dyn HistoryCell>> = vec![
+            Arc::new(header) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "first".to_string(),
+            }) as Arc<dyn HistoryCell>,
+            Arc::new(boundary) as Arc<dyn HistoryCell>,
+            Arc::new(UserHistoryCell {
+                message: "second".to_string(),
+            }) as Arc<dyn HistoryCell>,
+        ];
+
+        let positions: Vec<usize> = user_positions_iter(&cells).collect();
+        assert_eq!(positions, vec![3]);
     }
 }

@@ -546,23 +546,19 @@ pub(crate) fn new_session_info(
             ]),
         ];
 
-        CompositeHistoryCell {
-            parts: vec![
-                Box::new(header),
-                Box::new(PlainHistoryCell { lines: help_lines }),
-            ],
-        }
+        CompositeHistoryCell::new_header(vec![
+            Box::new(header),
+            Box::new(PlainHistoryCell { lines: help_lines }),
+        ])
     } else if config.model == model {
-        CompositeHistoryCell { parts: vec![] }
+        CompositeHistoryCell::new_header(Vec::new())
     } else {
         let lines = vec![
             "model changed:".magenta().bold().into(),
             format!("requested: {}", config.model).into(),
             format!("used: {model}").into(),
         ];
-        CompositeHistoryCell {
-            parts: vec![Box::new(PlainHistoryCell { lines })],
-        }
+        CompositeHistoryCell::new_header(vec![Box::new(PlainHistoryCell { lines })])
     }
 }
 
@@ -686,14 +682,35 @@ impl HistoryCell for SessionHeaderHistoryCell {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompositeHistoryCellKind {
+    Header,
+    General,
+}
+
 #[derive(Debug)]
 pub(crate) struct CompositeHistoryCell {
     parts: Vec<Box<dyn HistoryCell>>,
+    kind: CompositeHistoryCellKind,
 }
 
 impl CompositeHistoryCell {
     pub(crate) fn new(parts: Vec<Box<dyn HistoryCell>>) -> Self {
-        Self { parts }
+        Self {
+            parts,
+            kind: CompositeHistoryCellKind::General,
+        }
+    }
+
+    pub(crate) fn new_header(parts: Vec<Box<dyn HistoryCell>>) -> Self {
+        Self {
+            parts,
+            kind: CompositeHistoryCellKind::Header,
+        }
+    }
+
+    pub(crate) fn is_header(&self) -> bool {
+        matches!(self.kind, CompositeHistoryCellKind::Header)
     }
 }
 
