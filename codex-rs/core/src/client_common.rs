@@ -1,4 +1,5 @@
 use crate::client_common::tools::ToolSpec;
+use crate::config_types::ServiceTier;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::protocol::RateLimitSnapshot;
@@ -277,6 +278,9 @@ pub(crate) struct ResponsesApiRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) service_tier: Option<ServiceTier>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) text: Option<TextControls>,
 }
 
@@ -464,6 +468,7 @@ mod tests {
             stream: true,
             include: vec![],
             prompt_cache_key: None,
+            service_tier: None,
             text: Some(TextControls {
                 verbosity: Some(OpenAiVerbosity::Low),
                 format: None,
@@ -541,6 +546,7 @@ mod tests {
             stream: true,
             include: vec![],
             prompt_cache_key: None,
+            service_tier: None,
             text: None,
         };
 

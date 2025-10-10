@@ -56,6 +56,10 @@ pub struct Cli {
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,
 
+    /// OpenAI service tier for API requests. Options: auto (default), flex (50% cheaper, higher latency), priority (faster, Enterprise only).
+    #[arg(long = "service-tier", value_name = "TIER")]
+    pub service_tier: Option<String>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 

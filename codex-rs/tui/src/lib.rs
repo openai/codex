@@ -17,6 +17,7 @@ use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::find_conversation_path_by_id_str;
+use codex_core::config_types::ServiceTier;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -133,6 +134,23 @@ pub async fn run_main(
     // canonicalize the cwd
     let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
 
+    // Parse service tier from CLI flag
+    let service_tier = cli
+        .service_tier
+        .as_ref()
+        .map(|s| match s.to_lowercase().as_str() {
+            "auto" => ServiceTier::Auto,
+            "flex" => ServiceTier::Flex,
+            "priority" => ServiceTier::Priority,
+            #[allow(clippy::print_stderr)]
+            _ => {
+                eprintln!(
+                    "Invalid service tier '{s}'. Valid options: auto, flex, priority"
+                );
+                std::process::exit(1);
+            }
+        });
+
     let overrides = ConfigOverrides {
         model,
         review_model: None,
@@ -148,6 +166,7 @@ pub async fn run_main(
         include_view_image_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
+        service_tier,
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };

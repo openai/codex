@@ -35,6 +35,7 @@ use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::default_client::create_client;
+use crate::config_types::ServiceTier;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::UsageLimitReachedError;
@@ -221,6 +222,46 @@ impl ModelClient {
         // For Azure, we send `store: true` and preserve reasoning item IDs.
         let azure_workaround = self.provider.is_azure_responses_endpoint();
 
+        // Determine service_tier to include in the payload based on config and model support
+        let service_tier = match self.config.model_service_tier {
+            ServiceTier::Auto => None,
+            ServiceTier::Flex => {
+                // Flex is only available for o3, o4-mini, and gpt-5 families
+                let fam = self.config.model_family.family.as_str();
+                if matches!(fam, "o3" | "o4-mini" | "gpt-5") {
+                    warn!(
+                        "Using Flex service tier: may be slower and can return 429/timeouts; ideal for non-prod workloads"
+                    );
+                    Some(ServiceTier::Flex)
+                } else {
+                    warn!(
+                        "serviceTier=flex not supported for model family '{}'; falling back to auto",
+                        fam
+                    );
+                    None
+                }
+            }
+            ServiceTier::Priority => {
+                // Priority available for: gpt-5, o3, o4-mini, and some gpt-4 variants; exclude gpt-5-nano specifically
+                let fam = self.config.model_family.family.as_str();
+                let slug = self.config.model_family.slug.as_str();
+                if slug.contains("gpt-5-nano") {
+                    warn!(
+                        "serviceTier=priority is not supported for gpt-5-nano; falling back to auto"
+                    );
+                    None
+                } else if matches!(fam, "gpt-5" | "o3" | "o4-mini") || fam.starts_with("gpt-4") {
+                    Some(ServiceTier::Priority)
+                } else {
+                    warn!(
+                        "serviceTier=priority not supported for model family '{}'; falling back to auto",
+                        fam
+                    );
+                    None
+                }
+            }
+        };
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
@@ -233,6 +274,7 @@ impl ModelClient {
             stream: true,
             include,
             prompt_cache_key: Some(self.conversation_id.to_string()),
+            service_tier,
             text,
         };
 

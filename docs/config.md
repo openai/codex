@@ -268,6 +268,45 @@ model_verbosity = "low"
 
 Note: This applies only to providers using the Responses API. Chat Completions providers are unaffected.
 
+## service_tier
+
+Controls the OpenAI API service tier for requests made via the Responses API. Values:
+
+- "auto" (default): Standard processing with automatic tier selection.
+- "flex": 50% cheaper processing with increased latency (beta). Ideal for non‑production, evaluations, enrichment, and async workloads.
+  - Available for: o3, o4-mini, and gpt-5 models
+  - Uses Batch API pricing with prompt caching discounts; may return 429s or timeouts (10 min default)
+- "priority": Faster processing for Enterprise users
+  - Available for: gpt-4, gpt-5, gpt-5-mini, o3, o4-mini
+  - Not supported for: gpt-5-nano
+
+Example:
+
+```toml
+# top-level setting
+service_tier = "flex"
+
+# or in a profile
+[profiles.eval]
+model = "o3"
+service_tier = "flex"
+```
+
+You can also override the service tier from the command line:
+
+```bash
+# Use flex tier for this session
+codex --service-tier flex "Analyze this code"
+
+# Use priority tier with exec mode
+codex exec --service-tier priority "Generate unit tests"
+```
+
+Notes:
+
+- `service_tier` is sent only when using providers configured with the Responses API. Chat Completions providers ignore this setting.
+- If an unsupported model/tier combination is configured, Codex logs a warning and falls back to `auto`.
+
 ## model_supports_reasoning_summaries
 
 By default, `reasoning` is only set on requests to OpenAI models that are known to support them. To force `reasoning` to set on requests to the current model, you can force this behavior by setting the following in `config.toml`:
@@ -774,6 +813,7 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 
 ## Config reference
 
+ 
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
 | ------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `model`                                          | string                                                            | Model to use (e.g., `gpt-5-codex`).                                                                                        |

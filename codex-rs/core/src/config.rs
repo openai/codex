@@ -13,6 +13,7 @@ use crate::config_types::OtelConfigToml;
 use crate::config_types::OtelExporterKind;
 use crate::config_types::ReasoningSummaryFormat;
 use crate::config_types::SandboxWorkspaceWrite;
+use crate::config_types::ServiceTier;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
@@ -192,6 +193,8 @@ pub struct Config {
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
+    /// Controls the OpenAI service tier for API requests (Responses API). Defaults to "auto".
+    pub model_service_tier: ServiceTier,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
@@ -817,6 +820,11 @@ pub struct ConfigToml {
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
+
+    /// Controls the OpenAI service tier for API requests.
+    /// Accepts: "auto" (default), "flex", "priority".
+    #[serde(rename = "service_tier", alias = "serviceTier")]
+    pub service_tier: Option<ServiceTier>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -957,6 +965,7 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub service_tier: Option<ServiceTier>,
 }
 
 impl Config {
@@ -985,6 +994,7 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            service_tier: override_service_tier,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1087,6 +1097,12 @@ impl Config {
                 .as_ref()
                 .and_then(|info| info.auto_compact_token_limit)
         });
+
+        // Resolve the configured service tier from CLI override, profile, or root config; default to Auto.
+        let model_service_tier: ServiceTier = override_service_tier
+            .or(config_profile.service_tier)
+            .or(cfg.service_tier)
+            .unwrap_or_default();
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -1198,6 +1214,7 @@ impl Config {
                     exporter,
                 }
             },
+            model_service_tier,
         };
         Ok(config)
     }
@@ -2125,6 +2142,7 @@ model_verbosity = "high"
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 otel: OtelConfig::default(),
+                model_service_tier: ServiceTier::Auto,
             },
             o3_profile_config
         );
@@ -2188,6 +2206,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
+            model_service_tier: ServiceTier::Auto,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -2266,6 +2285,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
+            model_service_tier: ServiceTier::Auto,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
