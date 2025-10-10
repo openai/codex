@@ -56,6 +56,8 @@ pub(crate) struct SelectionViewParams {
     pub header: Box<dyn Renderable>,
     /// Optional action to invoke when user presses Enter (global confirm).
     pub on_enter_event: Option<SelectionAction>,
+    /// Optional action to invoke when the view is dismissed with Esc.
+    pub on_cancel_event: Option<SelectionAction>,
 }
 
 impl Default for SelectionViewParams {
@@ -69,6 +71,7 @@ impl Default for SelectionViewParams {
             search_placeholder: None,
             header: Box::new(()),
             on_enter_event: None,
+            on_cancel_event: None,
         }
     }
 }
@@ -86,6 +89,7 @@ pub(crate) struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     on_enter_event: Option<SelectionAction>,
+    on_cancel_event: Option<SelectionAction>,
 }
 
 impl ListSelectionView {
@@ -117,6 +121,7 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             header,
             on_enter_event: params.on_enter_event,
+            on_cancel_event: params.on_cancel_event,
         };
         s.apply_filter();
         s
@@ -256,6 +261,22 @@ impl ListSelectionView {
         }
     }
 
+    pub(crate) fn update_item_name(&mut self, actual_idx: usize, new_name: String) {
+        if let Some(item) = self.items.get_mut(actual_idx) {
+            item.name = new_name;
+        } else {
+            return;
+        }
+        if let Some(selected_actual) = self
+            .state
+            .selected_idx
+            .and_then(|visible| self.filtered_indices.get(visible).copied())
+        {
+            self.last_selected_actual_idx = Some(selected_actual);
+        }
+        self.apply_filter();
+    }
+
     #[cfg(test)]
     pub(crate) fn set_search_query(&mut self, query: String) {
         self.search_query = query;
@@ -268,6 +289,9 @@ impl ListSelectionView {
 }
 
 impl BottomPaneView for ListSelectionView {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -318,15 +342,25 @@ impl BottomPaneView for ListSelectionView {
                     self.accept();
                 }
             }
-            KeyEvent { code: KeyCode::Char(' '), .. } => self.accept(),
-            KeyEvent { code: KeyCode::Enter, modifiers: KeyModifiers::NONE, .. } => {
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                ..
+            } => self.accept(),
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
                 if let Some(ref act) = self.on_enter_event {
                     (act)(&self.app_event_tx);
                 } else {
                     self.accept();
                 }
             }
-            KeyEvent { code: KeyCode::Delete, .. } => self.accept_delete(),
+            KeyEvent {
+                code: KeyCode::Delete,
+                ..
+            } => self.accept_delete(),
             _ => {}
         }
     }
@@ -336,6 +370,9 @@ impl BottomPaneView for ListSelectionView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
+        if let Some(ref act) = self.on_cancel_event {
+            act(&self.app_event_tx);
+        }
         self.complete = true;
         CancellationEvent::Handled
     }

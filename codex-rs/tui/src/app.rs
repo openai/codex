@@ -388,6 +388,9 @@ impl App {
             AppEvent::OpenPruneManual => {
                 self.chat_widget.open_prune_manual_menu();
             }
+            AppEvent::PruneAdvancedClosed => {
+                self.chat_widget.on_prune_advanced_closed();
+            }
             AppEvent::ToggleKeepIndex { idx } => {
                 self.chat_widget.toggle_keep_index(idx);
             }

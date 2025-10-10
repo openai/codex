@@ -46,7 +46,7 @@ impl SlashCommand {
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
-            SlashCommand::Prune => "open advanced context prune",
+            SlashCommand::Prune => "open the context prune menu (advanced/manual/restore)",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",

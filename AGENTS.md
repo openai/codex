@@ -116,3 +116,21 @@ GitHub + Docs
 Repository Hygiene
 - Before any commit, ensure no irrelevant artifacts or vendor directories are tracked (e.g., `target/`, `node_modules/`, `dist/`, `build/`, `.cache/`, `coverage/`, `.DS_Store`, `*.log`, `tmp/`).
 - Keep these paths in `.gitignore` and never commit them; remove from index with `git rm --cached` if needed (avoid destructive cleanup commands).
+
+Git Ignore & Attributes
+- .gitignore policy
+  - Keep a single root `.gitignore`; add per-app overrides only when necessary in monorepos.
+  - Ignore OS/editor files: `.DS_Store`, `Thumbs.db`, `*.swp`, `.idea/`, `.vscode/`.
+  - Ignore dependency/build outputs: `node_modules/`, `.yarn/`, `.pnpm-store/`, `dist/`, `build/`, `coverage/`, `.cache/`, `.turbo/`, `.vite/`, `.parcel-cache/`, `target/`, `.gradle/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`, `.tox/`, `.next/`, `.nuxt/`.
+  - Ignore logs/temp: `*.log`, `*.pid`, `tmp/`, `.tmp/`.
+  - Secrets: `.env`, `.env.local`, `.env.*.local`, `*.pem`, `*.key`, `*.p12`, `*.crt`. Commit only templates like `.env.example`.
+  - If tracking inside ignored dirs is truly needed, use `!` negation sparingly and document why.
+- .gitattributes baseline
+  - `* text=auto eol=lf`
+  - `*.sh text eol=lf`, `*.bat text eol=crlf`
+  - Binary assets: `*.png binary`, `*.jpg binary`, `*.jpeg binary`, `*.gif binary`, `*.webp binary`, `*.pdf binary`, `*.zip binary`, `*.tar.gz binary`, `*.mp4 binary`
+  - Lockfiles as text (no special merge strategy): `package-lock.json text`, `pnpm-lock.yaml text`, `yarn.lock text`, `Cargo.lock text`, `Pipfile.lock text`, `composer.lock text`
+- Optional GitHub linguist hints: `docs/** linguist-documentation`, `**/dist/** linguist-generated`, `vendor/** linguist-vendored`
+
+Plan First
+- Always present the intended solution to the user before implementation.

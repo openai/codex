@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::ContextItemSummary;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -42,7 +44,6 @@ use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
-use codex_core::protocol::ContextItemSummary;
 use codex_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
@@ -263,9 +264,10 @@ pub(crate) struct ChatWidget {
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Advanced prune state
     last_context_items: Option<Vec<ContextItemSummary>>,
-    prune_keep_indices: std::collections::HashSet<usize>,
-    prune_delete_indices: std::collections::HashSet<usize>,
+    prune_keep_indices: HashSet<usize>,
+    prune_delete_indices: HashSet<usize>,
     pending_prune_advanced: bool,
+    advanced_index_map: HashMap<usize, usize>,
 }
 
 struct UserMessage {
@@ -291,6 +293,21 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    fn advanced_marker_for(&self, item: &ContextItemSummary) -> &'static str {
+        if self.prune_delete_indices.contains(&item.index) {
+            "[D]"
+        } else if self.prune_keep_indices.contains(&item.index) {
+            "[x]"
+        } else {
+            "[ ]"
+        }
+    }
+
+    fn advanced_item_label(&self, item: &ContextItemSummary) -> String {
+        let marker = self.advanced_marker_for(item);
+        let name = format!("{} {} {:?}", item.index, marker, item.category);
+        name
+    }
     fn model_description_for(slug: &str) -> Option<&'static str> {
         if slug.starts_with("gpt-5-codex") {
             Some("Optimized for coding tasks with many tools.")
@@ -317,24 +334,6 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
-        // Update footer model and directory/account if available
-        self.bottom_pane
-            .set_footer_model_label(Some(model_for_header.clone()));
-        let dir = self.config.cwd.display().to_string();
-        self.bottom_pane.set_footer_directory(Some(dir));
-        // Try to read auth info to show account/email in footer.
-        if let Ok(auth_file) = std::panic::catch_unwind(|| codex_core::auth::get_auth_file(&self.config.codex_home))
-            && let Ok(auth) = codex_core::auth::try_read_auth_json(&auth_file) {
-                if let Some(tokens) = auth.tokens.as_ref() {
-                    let email = tokens.id_token.email.clone();
-                    self.bottom_pane.set_footer_account_email(email);
-                } else if let Some(key) = auth.openai_api_key
-                    && !key.is_empty()
-                {
-                    self.bottom_pane
-                        .set_footer_account_email(Some("api key".to_string()));
-                }
-            }
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
@@ -465,16 +464,6 @@ impl ChatWidget {
 
             let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
             self.rate_limit_snapshot = Some(display);
-            // Update footer limits (primary/weekly used%)
-            let primary = snapshot
-                .primary
-                .as_ref()
-                .map(|w| w.used_percent.round() as u8);
-            let weekly = snapshot
-                .secondary
-                .as_ref()
-                .map(|w| w.used_percent.round() as u8);
-            self.bottom_pane.set_footer_limits(primary, weekly);
 
             if !warnings.is_empty() {
                 for warning in warnings {
@@ -973,9 +962,10 @@ impl ChatWidget {
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             last_context_items: None,
-            prune_keep_indices: std::collections::HashSet::new(),
-            prune_delete_indices: std::collections::HashSet::new(),
+            prune_keep_indices: HashSet::new(),
+            prune_delete_indices: HashSet::new(),
             pending_prune_advanced: false,
+            advanced_index_map: HashMap::new(),
         }
     }
 
@@ -1040,9 +1030,10 @@ impl ChatWidget {
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
             last_context_items: None,
-            prune_keep_indices: std::collections::HashSet::new(),
-            prune_delete_indices: std::collections::HashSet::new(),
+            prune_keep_indices: HashSet::new(),
+            prune_delete_indices: HashSet::new(),
             pending_prune_advanced: false,
+            advanced_index_map: HashMap::new(),
         }
     }
 
@@ -1589,6 +1580,11 @@ impl ChatWidget {
         self.submit_op(Op::GetContextItems);
     }
 
+    pub(crate) fn on_prune_advanced_closed(&mut self) {
+        self.pending_prune_advanced = false;
+        self.advanced_index_map.clear();
+    }
+
     pub(crate) fn toggle_keep_index(&mut self, idx: usize) {
         if self.prune_keep_indices.contains(&idx) {
             self.prune_keep_indices.remove(&idx);
@@ -1613,8 +1609,19 @@ impl ChatWidget {
         self.update_advanced_item_marker(idx);
     }
 
-    fn update_advanced_item_marker(&mut self, _idx: usize) {
-        // No-op: the list will refresh on next ContextItems fetch.
+    fn update_advanced_item_marker(&mut self, idx: usize) {
+        if let Some(item) = self
+            .last_context_items
+            .as_ref()
+            .and_then(|list| list.iter().find(|it| it.index == idx))
+            .cloned()
+            && let Some(&row_idx) = self.advanced_index_map.get(&item.index)
+        {
+            let new_name = self.advanced_item_label(&item);
+            self.bottom_pane.with_active_list_selection_mut(|view| {
+                view.update_item_name(row_idx, new_name);
+            });
+        }
         self.request_redraw();
     }
 
@@ -1670,6 +1677,9 @@ impl ChatWidget {
         use ratatui::style::Stylize;
         let mut items: Vec<SelectionItem> = Vec::new();
 
+        // reset index map for this render
+        self.advanced_index_map.clear();
+
         // Control actions
         items.push(SelectionItem {
             name: "Refresh list".to_string(),
@@ -1692,17 +1702,12 @@ impl ChatWidget {
                 if it.category == PC::UserInstructions || it.category == PC::EnvironmentContext {
                     continue;
                 }
-                let marker = if self.prune_delete_indices.contains(&it.index) {
-                    "[D]"
-                } else if self.prune_keep_indices.contains(&it.index) {
-                    "[x]"
-                } else {
-                    "[ ]"
-                };
-                let name = format!("{} {} {:?}", it.index, marker, it.category);
+                let name = self.advanced_item_label(it);
                 let desc = it.preview.clone();
                 let idx = it.index;
                 // Actions on space/delete only update local state; Enter is handled by on_enter_event
+                let selection_idx = items.len();
+                self.advanced_index_map.insert(it.index, selection_idx);
                 items.push(SelectionItem {
                     name,
                     display_shortcut: None,
@@ -1735,13 +1740,13 @@ impl ChatWidget {
             on_enter_event: Some(Box::new(|tx: &AppEventSender| {
                 tx.send(AppEvent::ConfirmAdvancedChanges);
             })),
+            on_cancel_event: None,
         });
     }
 
-    /// Open the prune menu with common actions: advanced, manual by category, and fix context.
+    /// Open the prune menu with common actions: advanced, manual by category, and restore.
     fn open_prune_menu(&mut self) {
         use codex_core::protocol::Op;
-        
 
         let mut items: Vec<SelectionItem> = Vec::new();
 
@@ -1761,7 +1766,20 @@ impl ChatWidget {
         items.push(SelectionItem {
             name: "Manual prune".to_string(),
             description: Some("Prune by category".to_string()),
-            actions: vec![Box::new(|tx: &AppEventSender| tx.send(AppEvent::OpenPruneManual))],
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenPruneManual)
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        // Restore full context (from rollout backup)
+        items.push(SelectionItem {
+            name: "Restore full context".to_string(),
+            description: Some("Rebuild history from rollout backup".to_string()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::CodexOp(Op::RestoreFullContext));
+            })],
             dismiss_on_select: true,
             ..Default::default()
         });
@@ -1770,14 +1788,13 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Prune Context".to_string()),
             subtitle: None,
-            footer_hint: Some(ratatui::text::Line::from(
-                "enter: select | esc: back",
-            )),
+            footer_hint: Some(ratatui::text::Line::from("enter: select | esc: back")),
             items,
             is_searchable: false,
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select an action")),
             on_enter_event: None,
+            on_cancel_event: None,
         });
     }
 
@@ -1829,6 +1846,7 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select categories to prune")),
             on_enter_event: None,
+            on_cancel_event: None,
         });
     }
 

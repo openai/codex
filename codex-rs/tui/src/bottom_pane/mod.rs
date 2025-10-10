@@ -118,6 +118,19 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn with_active_list_selection_mut<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut list_selection_view::ListSelectionView),
+    {
+        if let Some(view) = self.view_stack.last_mut()
+            && let Some(list) = view
+                .as_any_mut()
+                .downcast_mut::<list_selection_view::ListSelectionView>()
+        {
+            f(list);
+        }
+    }
+
     pub fn desired_height(&self, width: u16) -> u16 {
         // Always reserve one blank row above the pane for visual spacing.
         let top_margin = 1;
@@ -357,26 +370,6 @@ impl BottomPane {
 
         self.context_window_percent = percent;
         self.composer.set_context_window_percent(percent);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_footer_model_label(&mut self, label: Option<String>) {
-        self.composer.set_footer_model_label(label);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_footer_directory(&mut self, directory: Option<String>) {
-        self.composer.set_footer_directory(directory);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_footer_account_email(&mut self, email: Option<String>) {
-        self.composer.set_footer_account_email(email);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_footer_limits(&mut self, primary: Option<u8>, weekly: Option<u8>) {
-        self.composer.set_footer_limits(primary, weekly);
         self.request_redraw();
     }
 
