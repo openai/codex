@@ -17,8 +17,8 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::git_info::get_git_repo_root;
 use codex_core::config_types::ServiceTier;
+use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -166,20 +166,17 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     // Parse service tier from CLI flag
-    let service_tier =
-        service_tier_cli_arg
-            .as_ref()
-            .map(|s| match s.to_lowercase().as_str() {
-                "auto" => ServiceTier::Auto,
-                "flex" => ServiceTier::Flex,
-                "priority" => ServiceTier::Priority,
-                _ => {
-                    eprintln!(
-                        "Invalid service tier '{s}'. Valid options: auto, flex, priority"
-                    );
-                    std::process::exit(1);
-                }
-            });
+    let service_tier = service_tier_cli_arg
+        .as_ref()
+        .map(|s| match s.to_lowercase().as_str() {
+            "auto" => ServiceTier::Auto,
+            "flex" => ServiceTier::Flex,
+            "priority" => ServiceTier::Priority,
+            _ => {
+                eprintln!("Invalid service tier '{s}'. Valid options: auto, flex, priority");
+                std::process::exit(1);
+            }
+        });
 
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {

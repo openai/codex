@@ -16,8 +16,8 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::find_conversation_path_by_id_str;
 use codex_core::config_types::ServiceTier;
+use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -144,9 +144,7 @@ pub async fn run_main(
             "priority" => ServiceTier::Priority,
             #[allow(clippy::print_stderr)]
             _ => {
-                eprintln!(
-                    "Invalid service tier '{s}'. Valid options: auto, flex, priority"
-                );
+                eprintln!("Invalid service tier '{s}'. Valid options: auto, flex, priority");
                 std::process::exit(1);
             }
         });
