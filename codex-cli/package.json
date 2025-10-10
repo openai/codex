@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "echo 'Building codex-cli...' && npm run prepare",
-    "prepare": "echo 'Codex CLI prepared'",
+    "prepare": "cp bin/codex.js dist/codex.js",
     "test": "echo 'Running codex-cli tests...'",
     "lint": "prettier --check *.js bin/*.js",
     "codex:local": "echo 'Codex CLI local setup complete'",
