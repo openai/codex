@@ -26,6 +26,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
@@ -329,9 +330,9 @@ struct CachedRenderable {
 }
 
 impl CachedRenderable {
-    fn new(renderable: Box<dyn Renderable>) -> Self {
+    fn new(renderable: impl Into<Box<dyn Renderable>>) -> Self {
         Self {
-            renderable,
+            renderable: renderable.into(),
             height: std::cell::Cell::new(None),
             last_width: std::cell::Cell::new(None),
         }
@@ -400,19 +401,19 @@ impl TranscriptOverlay {
             .flat_map(|(i, c)| {
                 let mut v: Vec<Box<dyn Renderable>> = Vec::new();
                 let mut cell_renderable = if c.as_any().is::<UserHistoryCell>() {
-                    Box::new(CachedRenderable::new(Box::new(CellRenderable {
+                    Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
                         style: if highlight_cell == Some(i) {
                             user_message_style().reversed()
                         } else {
                             user_message_style()
                         },
-                    }))) as Box<dyn Renderable>
+                    })) as Box<dyn Renderable>
                 } else {
-                    Box::new(CachedRenderable::new(Box::new(CellRenderable {
+                    Box::new(CachedRenderable::new(CellRenderable {
                         cell: c.clone(),
                         style: Style::default(),
-                    }))) as Box<dyn Renderable>
+                    })) as Box<dyn Renderable>
                 };
                 if !c.is_stream_continuation() && i > 0 {
                     cell_renderable = Box::new(InsetRenderable::new(
@@ -496,12 +497,8 @@ pub(crate) struct StaticOverlay {
 
 impl StaticOverlay {
     pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
-        Self::with_renderables(
-            vec![Box::new(CachedRenderable::new(Box::new(Paragraph::new(
-                Text::from(lines),
-            ))))],
-            title,
-        )
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+        Self::with_renderables(vec![Box::new(CachedRenderable::new(paragraph))], title)
     }
 
     pub(crate) fn with_renderables(renderables: Vec<Box<dyn Renderable>>, title: String) -> Self {
@@ -582,6 +579,7 @@ fn render_offset_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::protocol::ReviewDecision;
     use insta::assert_snapshot;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -589,6 +587,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::exec_cell::CommandOutput;
+    use crate::history_cell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
     use codex_core::protocol::FileChange;
@@ -712,10 +711,8 @@ mod tests {
         cells.push(apply_begin_cell);
 
         let apply_end_cell: Arc<dyn HistoryCell> =
-            Arc::new(crate::history_cell::new_user_approval_decision(vec![
-                "✓ Patch applied".green().bold().into(),
-                "src/foo.txt".dim().into(),
-            ]));
+            history_cell::new_approval_decision_cell(vec!["ls".into()], ReviewDecision::Approved)
+                .into();
         cells.push(apply_end_cell);
 
         let mut exec_cell = crate::exec_cell::new_active_exec_command(
@@ -807,6 +804,18 @@ mod tests {
             "S T A T I C".to_string(),
         );
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn static_overlay_wraps_long_lines() {
+        let mut overlay = StaticOverlay::with_title(
+            vec!["a very long line that should wrap when rendered within a narrow pager overlay width".into()],
+            "S T A T I C".to_string(),
+        );
+        let mut term = Terminal::new(TestBackend::new(24, 8)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
