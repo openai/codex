@@ -2350,6 +2350,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
+            model_service_tier: ServiceTier::Auto,
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

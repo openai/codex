@@ -510,6 +510,7 @@ mod tests {
             stream: true,
             include: vec![],
             prompt_cache_key: None,
+            service_tier: None,
             text: Some(text_controls),
         };
 
