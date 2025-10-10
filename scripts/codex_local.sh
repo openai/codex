@@ -36,7 +36,7 @@ echo "  Port: $CODEX_LOCAL_PORT"
 echo "  Debug: $CODEX_DEBUG"
 
 # Initialize local Codex components
-echo "🏗️  Initializing local Codex components..."
+echo "Building local Codex components..."
 
 # Check Rust toolchain
 if ! command -v cargo >/dev/null 2>&1; then
