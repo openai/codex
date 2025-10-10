@@ -9,7 +9,7 @@ use anyhow::Result;
 use base64::Engine;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
-use core_test_support::non_sandbox_test;
+use core_test_support::skip_if_no_network;
 use tempfile::tempdir;
 
 // See spawn.rs for details
@@ -78,7 +78,7 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
 
 #[tokio::test]
 async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
-    non_sandbox_test!(result);
+    skip_if_no_network!(Ok(()));
 
     let (issuer_addr, issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
@@ -147,7 +147,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
 
 #[tokio::test]
 async fn creates_missing_codex_home_dir() -> Result<()> {
-    non_sandbox_test!(result);
+    skip_if_no_network!(Ok(()));
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
@@ -187,7 +187,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
-    non_sandbox_test!(result);
+    skip_if_no_network!(Ok(()));
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());

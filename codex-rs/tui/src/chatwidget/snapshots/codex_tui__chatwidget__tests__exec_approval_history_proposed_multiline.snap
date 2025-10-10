@@ -1,7 +1,0 @@
----
-source: tui/src/chatwidget/tests.rs
-expression: lines_to_single_string(&proposed_multi)
----
-• Proposed Command
-  └ echo line1
-    echo line2
