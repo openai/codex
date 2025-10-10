@@ -93,7 +93,12 @@ async fn model_selects_expected_tools() {
     let codex_tools = collect_tool_identifiers_for_model("codex-mini-latest").await;
     assert_eq!(
         codex_tools,
-        vec!["local_shell".to_string()],
+        vec![
+            "local_shell".to_string(),
+            "create_session".to_string(),
+            "wait_session".to_string(),
+            "cancel_session".to_string(),
+        ],
         "codex-mini-latest should expose the local shell tool",
     );
 
@@ -107,7 +112,21 @@ async fn model_selects_expected_tools() {
     let gpt5_codex_tools = collect_tool_identifiers_for_model("gpt-5-codex").await;
     assert_eq!(
         gpt5_codex_tools,
-        vec!["shell".to_string(), "apply_patch".to_string(),],
+        vec!["shell".to_string(), "apply_patch".to_string()],
         "gpt-5-codex should expose the apply_patch tool",
+    );
+
+    let test_codex_tools = collect_tool_identifiers_for_model("test-gpt-5-codex").await;
+    assert_eq!(
+        test_codex_tools,
+        vec![
+            "shell".to_string(),
+            "create_session".to_string(),
+            "wait_session".to_string(),
+            "cancel_session".to_string(),
+            "read_file".to_string(),
+            "test_sync_tool".to_string(),
+        ],
+        "test-gpt-5-codex should expose subsession helpers along with test utilities",
     );
 }

@@ -2,8 +2,10 @@ use crate::RolloutRecorder;
 use crate::exec_command::ExecSessionManager;
 use crate::executor::Executor;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::subsessions::SubsessionManager;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_notification::UserNotifier;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub(crate) struct SessionServices {
@@ -15,4 +17,5 @@ pub(crate) struct SessionServices {
     pub(crate) user_shell: crate::shell::Shell,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) executor: Executor,
+    pub(crate) subsessions: Arc<SubsessionManager>,
 }
