@@ -43,7 +43,11 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, Value>> {
                 if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
                     let content = extract_output_text(item)
                         .ok_or_else(|| anyhow::anyhow!("missing tool output content"))?;
-                    let parsed: Value = serde_json::from_str(content)?;
+                    let trimmed = content.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let parsed: Value = serde_json::from_str(trimmed)?;
                     outputs.insert(call_id.to_string(), parsed);
                 }
             }
