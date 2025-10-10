@@ -303,7 +303,6 @@ pub(crate) struct ChatWidget {
     ghost_snapshots_disabled: bool,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
-
     last_rendered_width: std::cell::Cell<Option<usize>>,
 }
 
@@ -447,8 +446,9 @@ impl ChatWidget {
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
+        let response_for_notification = last_agent_message.clone().unwrap_or_default();
         self.notify(Notification::AgentTurnComplete {
-            response: last_agent_message.unwrap_or_default(),
+            response: response_for_notification,
         });
     }
 
@@ -1198,6 +1198,9 @@ impl ChatWidget {
             SlashCommand::GlobalPrompt => {
                 self.open_global_prompt_editor();
             }
+            SlashCommand::Alarm => {
+                self.open_alarm_script_editor();
+            }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
@@ -1940,6 +1943,13 @@ impl ChatWidget {
         self.config.global_prompt = prompt;
     }
 
+    pub(crate) fn set_alarm_script(&mut self, script: Option<String>) {
+        self.config.alarm_script = script.clone();
+        self.config.notify = script
+            .as_ref()
+            .map(|value| Config::alarm_script_to_notify_command(value));
+    }
+
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
@@ -2187,6 +2197,32 @@ impl ChatWidget {
                         user_facing_hint: trimmed,
                     },
                 }));
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_alarm_script_editor(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let initial_text = self.config.alarm_script.clone();
+        let view = CustomPromptView::new(
+            "Set alarm script".to_string(),
+            "Enter a command to run when Codex finishes a turn (blank to disable)".to_string(),
+            Some(
+                "Runs with `/bin/sh -c <script>`; use `$request` / `$response` (or CODEX_ALARM_LAST_REQUEST/RESPONSE)."
+                    .to_string(),
+            ),
+            initial_text,
+            true,
+            Box::new(move |input: String| {
+                let trimmed = input.trim();
+                if trimmed.is_empty() {
+                    tx.send(AppEvent::PersistAlarmScript { script: None });
+                } else {
+                    tx.send(AppEvent::PersistAlarmScript {
+                        script: Some(trimmed.to_string()),
+                    });
+                }
             }),
         );
         self.bottom_pane.show_view(Box::new(view));

@@ -17,6 +17,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::config::persist_alarm_script;
 use codex_core::config::persist_global_prompt;
 use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
@@ -428,6 +429,43 @@ impl App {
                         tracing::error!(error = %err, "failed to persist global prompt");
                         self.chat_widget
                             .add_error_message(format!("Failed to update global prompt: {err}"));
+                    }
+                }
+            }
+            AppEvent::PersistAlarmScript { script } => {
+                match persist_alarm_script(&self.config.codex_home, script.as_deref()).await {
+                    Ok(()) => {
+                        self.config.alarm_script = script.clone();
+                        self.config.notify = script
+                            .as_ref()
+                            .map(|value| Config::alarm_script_to_notify_command(value));
+                        self.chat_widget.set_alarm_script(script.clone());
+
+                        let (message, hint) = if let Some(value) = script.as_ref() {
+                            let mut preview: String = value.chars().take(80).collect();
+                            if value.chars().count() > preview.chars().count() {
+                                preview.push('…');
+                            }
+                            (
+                                "Alarm script updated".to_string(),
+                                Some(format!("Will run via `sh -c`: {preview}")),
+                            )
+                        } else {
+                            (
+                                "Alarm script disabled".to_string(),
+                                Some(
+                                    "Codex will no longer run a script after each turn."
+                                        .to_string(),
+                                ),
+                            )
+                        };
+
+                        self.chat_widget.add_info_message(message, hint);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist alarm script");
+                        self.chat_widget
+                            .add_error_message(format!("Failed to update alarm script: {err}"));
                     }
                 }
             }

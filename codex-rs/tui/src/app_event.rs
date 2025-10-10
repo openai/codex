@@ -66,6 +66,11 @@ pub(crate) enum AppEvent {
         prompt: Option<String>,
     },
 
+    /// Persist the alarm script that should run after each completed turn.
+    PersistAlarmScript {
+        script: Option<String>,
+    },
+
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: String,

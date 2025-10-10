@@ -15,6 +15,7 @@ pub enum SlashCommand {
     Model,
     Approvals,
     GlobalPrompt,
+    Alarm,
     Review,
     New,
     Init,
@@ -46,6 +47,7 @@ impl SlashCommand {
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::GlobalPrompt => "set or clear the prompt sent at session start",
+            SlashCommand::Alarm => "run a custom script after each Codex response",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
@@ -75,6 +77,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Mcp
             | SlashCommand::GlobalPrompt
+            | SlashCommand::Alarm
             | SlashCommand::Quit => true,
 
             #[cfg(debug_assertions)]

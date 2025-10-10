@@ -363,7 +363,17 @@ def extract_archive(
 
 def _load_manifest(manifest_path: Path) -> dict:
     cmd = ["dotslash", "--", "parse", str(manifest_path)]
-    stdout = subprocess.check_output(cmd, text=True)
+    try:
+        stdout = subprocess.check_output(cmd, text=True)
+    except FileNotFoundError:
+        file_contents = manifest_path.read_text(encoding="utf-8")
+        lines = file_contents.splitlines()
+        if lines and lines[0].startswith("#!"):
+            file_contents = "\n".join(lines[1:])
+        stdout = file_contents
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Failed to parse DotSlash manifest {manifest_path}") from exc
+
     try:
         manifest = json.loads(stdout)
     except json.JSONDecodeError as exc:

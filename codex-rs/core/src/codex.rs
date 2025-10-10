@@ -1701,14 +1701,19 @@ pub(crate) async fn run_task(
         let turn_input_messages: Vec<String> = turn_input
             .iter()
             .filter_map(|item| match item {
-                ResponseItem::Message { content, .. } => Some(content),
+                ResponseItem::Message { role, content, .. } if role == "user" => {
+                    let mut buf = String::new();
+                    for part in content {
+                        if let ContentItem::OutputText { text } = part {
+                            if !buf.is_empty() {
+                                buf.push('\n');
+                            }
+                            buf.push_str(text);
+                        }
+                    }
+                    Some(buf)
+                }
                 _ => None,
-            })
-            .flat_map(|content| {
-                content.iter().filter_map(|item| match item {
-                    ContentItem::OutputText { text } => Some(text.clone()),
-                    _ => None,
-                })
             })
             .collect();
         match run_turn(

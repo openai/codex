@@ -62,6 +62,7 @@ pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
+pub(crate) const ALARM_NOTIFY_SENTINEL_ARG: &str = "codex-alarm";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,6 +114,11 @@ pub struct Config {
 
     /// Optional text prepended to the first user message of every session.
     pub global_prompt: Option<String>,
+
+    /// Optional shell script that Codex should run when a turn completes.
+    /// When set, Codex spawns `/bin/sh -c <script>` and exports the last
+    /// assistant reply via the `CODEX_ALARM_LAST_RESPONSE` environment variable.
+    pub alarm_script: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -237,6 +243,46 @@ pub struct Config {
 }
 
 impl Config {
+    /// Build the notify command vector used to spawn the alarm script.
+    pub fn alarm_script_to_notify_command(script: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            script.to_string(),
+            ALARM_NOTIFY_SENTINEL_ARG.to_string(),
+        ]
+    }
+
+    fn script_from_notify_command(command: &[String]) -> Option<String> {
+        if command.len() < 3 {
+            return None;
+        }
+        let is_shell = matches!(command[0].as_str(), "sh" | "/bin/sh" | "bash" | "/bin/bash");
+        let is_shell_flag = matches!(command[1].as_str(), "-c" | "-lc");
+        if is_shell && is_shell_flag {
+            Some(command[2].clone())
+        } else {
+            None
+        }
+    }
+
+    fn resolve_alarm_settings(
+        notify: Option<Vec<String>>,
+        alarm_script: Option<String>,
+    ) -> (Option<Vec<String>>, Option<String>) {
+        match (notify, alarm_script) {
+            (Some(command), Some(script)) => (Some(command), Some(script)),
+            (Some(command), None) => {
+                let script = Self::script_from_notify_command(&command);
+                (Some(command), script)
+            }
+            (None, Some(script)) => {
+                let notify_command = Self::alarm_script_to_notify_command(&script);
+                (Some(notify_command), Some(script))
+            }
+            (None, None) => (None, None),
+        }
+    }
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
         overrides: ConfigOverrides,
@@ -639,6 +685,94 @@ pub async fn persist_global_prompt(codex_home: &Path, prompt: Option<&str>) -> a
     Ok(())
 }
 
+pub async fn persist_alarm_script(codex_home: &Path, script: Option<&str>) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    let trimmed_script = script.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    let existing_alarm_script = doc
+        .as_table()
+        .get("alarm_script")
+        .and_then(|item| item.as_str())
+        .map(str::to_string);
+    let existing_notify_command = doc
+        .as_table()
+        .get("notify")
+        .and_then(notify_command_from_item);
+
+    match trimmed_script {
+        Some(value) => {
+            doc["alarm_script"] = toml_edit::value(value.clone());
+            let notify_command = Config::alarm_script_to_notify_command(&value);
+            let mut notify_array = TomlArray::new();
+            for arg in notify_command {
+                notify_array.push(arg);
+            }
+            doc["notify"] = toml_edit::value(notify_array);
+        }
+        None => {
+            doc.as_table_mut().remove("alarm_script");
+            if existing_alarm_script
+                .as_ref()
+                .and_then(|expected| {
+                    existing_notify_command
+                        .as_ref()
+                        .and_then(|cmd| Config::script_from_notify_command(cmd))
+                        .filter(|script| script == expected)
+                })
+                .is_some()
+                || existing_notify_command.as_ref().is_some_and(|cmd| {
+                    cmd.last().map(String::as_str) == Some(ALARM_NOTIFY_SENTINEL_ARG)
+                })
+            {
+                doc.as_table_mut().remove("notify");
+            }
+        }
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+fn notify_command_from_item(item: &TomlItem) -> Option<Vec<String>> {
+    let array = item.as_array()?;
+    let mut command = Vec::with_capacity(array.len());
+    for value in array.iter() {
+        command.push(value.as_str()?.to_string());
+    }
+    Some(command)
+}
+
 pub async fn persist_model_selection(
     codex_home: &Path,
     active_profile: Option<&str>,
@@ -777,6 +911,9 @@ pub struct ConfigToml {
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Optional shell script spawned through `/bin/sh -c` when a turn completes.
+    pub alarm_script: Option<String>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -1170,6 +1307,19 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
+        let explicit_alarm_script = cfg.alarm_script.as_ref().and_then(|script| {
+            let trimmed = script.trim();
+            if trimmed.is_empty() {
+                None
+            } else if trimmed.len() == script.len() {
+                Some(script.clone())
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let (notify, alarm_script) =
+            Self::resolve_alarm_settings(cfg.notify.clone(), explicit_alarm_script);
+
         let config = Self {
             model,
             review_model,
@@ -1186,7 +1336,8 @@ impl Config {
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
             shell_environment_policy,
-            notify: cfg.notify,
+            alarm_script,
+            notify,
             user_instructions,
             base_instructions,
             global_prompt,
@@ -2048,6 +2199,50 @@ global_prompt = "Reply in Korean."
         Ok(())
     }
 
+    #[tokio::test]
+    async fn persist_alarm_script_sets_value() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_alarm_script(codex_home.path(), Some(" echo done ")).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.alarm_script.as_deref(), Some("echo done"));
+        assert_eq!(
+            parsed.notify,
+            Some(Config::alarm_script_to_notify_command("echo done"))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_alarm_script_clears_matching_notify() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+alarm_script = "echo hi"
+notify = ["sh", "-c", "echo hi", "codex-alarm"]
+"#,
+        )
+        .await?;
+
+        persist_alarm_script(codex_home.path(), None).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert!(parsed.alarm_script.is_none());
+        assert!(parsed.notify.is_none());
+
+        Ok(())
+    }
+
     struct PrecedenceTestFixture {
         cwd: TempDir,
         codex_home: TempDir,
@@ -2200,6 +2395,7 @@ model_verbosity = "high"
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
+                alarm_script: None,
                 notify: None,
                 cwd: fixture.cwd(),
                 mcp_servers: HashMap::new(),
@@ -2264,6 +2460,7 @@ model_verbosity = "high"
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
+            alarm_script: None,
             notify: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
@@ -2343,6 +2540,7 @@ model_verbosity = "high"
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
+            alarm_script: None,
             notify: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
@@ -2408,6 +2606,7 @@ model_verbosity = "high"
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
+            alarm_script: None,
             notify: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
