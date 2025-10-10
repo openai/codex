@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_core::protocol::Op;
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -14,10 +15,10 @@ use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
-use crate::ui_consts::LIVE_PREFIX_COLS;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
@@ -34,7 +35,7 @@ pub(crate) struct StatusIndicatorWidget {
 
 // Format elapsed seconds into a compact human-friendly form used by the status line.
 // Examples: 0s, 59s, 1m 00s, 59m 59s, 1h 00m 00s, 2h 03m 09s
-fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
+pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     if elapsed_secs < 60 {
         return format!("{elapsed_secs}s");
     }
@@ -102,6 +103,11 @@ impl StatusIndicatorWidget {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn header(&self) -> &str {
+        &self.header
+    }
+
     /// Replace the queued messages displayed beneath the header.
     pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
         self.queued_messages = queued;
@@ -134,15 +140,19 @@ impl StatusIndicatorWidget {
         self.frame_requester.schedule_frame();
     }
 
-    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+    fn elapsed_duration_at(&self, now: Instant) -> Duration {
         let mut elapsed = self.elapsed_running;
         if !self.is_paused {
             elapsed += now.saturating_duration_since(self.last_resume_at);
         }
-        elapsed.as_secs()
+        elapsed
     }
 
-    fn elapsed_seconds(&self) -> u64 {
+    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+        self.elapsed_duration_at(now).as_secs()
+    }
+
+    pub fn elapsed_seconds(&self) -> u64 {
         self.elapsed_seconds_at(Instant::now())
     }
 }
@@ -156,16 +166,19 @@ impl WidgetRef for StatusIndicatorWidget {
         // Schedule next animation frame.
         self.frame_requester
             .schedule_frame_in(Duration::from_millis(32));
-        let elapsed = self.elapsed_seconds();
-        let pretty_elapsed = fmt_elapsed_compact(elapsed);
+        let now = Instant::now();
+        let elapsed_duration = self.elapsed_duration_at(now);
+        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];
+        let mut spans = Vec::with_capacity(5);
+        spans.push(spinner(Some(self.last_resume_at)));
+        spans.push(" ".into());
         spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),
             format!("({pretty_elapsed} • ").dim(),
-            "Esc".dim().bold(),
+            key_hint::plain(KeyCode::Esc).into(),
             " to interrupt)".dim(),
         ]);
 
@@ -189,8 +202,14 @@ impl WidgetRef for StatusIndicatorWidget {
             }
         }
         if !self.queued_messages.is_empty() {
-            let shortcut = key_hint::alt("↑");
-            lines.push(Line::from(vec!["   ".into(), shortcut, " edit".into()]).dim());
+            lines.push(
+                Line::from(vec![
+                    "   ".into(),
+                    key_hint::alt(KeyCode::Up).into(),
+                    " edit".into(),
+                ])
+                .dim(),
+            );
         }
 
         let paragraph = Paragraph::new(lines);

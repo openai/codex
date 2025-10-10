@@ -8,7 +8,6 @@
 //! model-visible history matches the expected sequence of messages.
 
 use super::compact::FIRST_REPLY;
-use super::compact::SUMMARIZE_TRIGGER;
 use super::compact::SUMMARY_TEXT;
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
@@ -16,7 +15,9 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
+use codex_core::codex::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
+use codex_core::config::OPENAI_DEFAULT_MODEL;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -25,7 +26,7 @@ use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -131,9 +132,10 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .as_str()
         .unwrap_or_default()
         .to_string();
+    let expected_model = OPENAI_DEFAULT_MODEL;
     let user_turn_1 = json!(
     {
-      "model": "gpt-5",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -182,12 +184,8 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     });
     let compact_1 = json!(
     {
-      "model": "gpt-5",
-      "instructions": "You have exceeded the maximum number of tokens, please stop coding and instead write a short memento message for the next agent. Your note should:
-- Summarize what you finished and what still needs work. If there was a recent update_plan call, repeat its steps verbatim.
-- List outstanding TODOs with file paths / line numbers so they're easy to find.
-- Flag code that needs more tests (edge cases, performance, integration, etc.).
-- Record any open bugs, quirks, or setup steps that will make it easier for the next agent to pick up where you left off.",
+      "model": expected_model,
+      "instructions": prompt,
       "input": [
         {
           "type": "message",
@@ -235,7 +233,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": "Start Summarization"
+              "text": SUMMARIZATION_PROMPT
             }
           ]
         }
@@ -255,7 +253,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     });
     let user_turn_2_after_compact = json!(
     {
-      "model": "gpt-5",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -320,7 +318,7 @@ SUMMARY_ONLY_CONTEXT"
     });
     let usert_turn_3_after_resume = json!(
     {
-      "model": "gpt-5",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -405,7 +403,7 @@ SUMMARY_ONLY_CONTEXT"
     });
     let user_turn_3_after_fork = json!(
     {
-      "model": "gpt-5",
+      "model": expected_model,
       "instructions": prompt,
       "input": [
         {
@@ -488,13 +486,14 @@ SUMMARY_ONLY_CONTEXT"
       ],
       "prompt_cache_key": fork_prompt_cache_key
     });
-    let expected = json!([
+    let mut expected = json!([
         user_turn_1,
         compact_1,
         user_turn_2_after_compact,
         usert_turn_3_after_resume,
         user_turn_3_after_fork
     ]);
+    normalize_line_endings(&mut expected);
     assert_eq!(requests.len(), 5);
     assert_eq!(json!(requests), expected);
 }
@@ -580,7 +579,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         .unwrap_or_default()
         .to_string();
 
-    let expected = json!([
+    let mut expected = json!([
       {
         "instructions": prompt,
         "input": [
@@ -637,6 +636,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         ],
       }
     ]);
+    normalize_line_endings(&mut expected);
     let last_request_after_2_compacts = json!([{
         "instructions": requests[requests.len() -1]["instructions"],
         "input": requests[requests.len() -1]["input"],
@@ -698,18 +698,19 @@ async fn mount_initial_flow(server: &MockServer) {
     let match_first = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"hello world\"")
-            && !body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
+            && !body.contains("You have exceeded the maximum number of tokens")
+            && !body.contains(&format!("\"text\":\"{SUMMARY_TEXT}\""))
             && !body.contains("\"text\":\"AFTER_COMPACT\"")
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once(server, match_first, sse1).await;
+    mount_sse_once_match(server, match_first, sse1).await;
 
     let match_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
+        body.contains("You have exceeded the maximum number of tokens")
     };
-    mount_sse_once(server, match_compact, sse2).await;
+    mount_sse_once_match(server, match_compact, sse2).await;
 
     let match_after_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
@@ -717,19 +718,19 @@ async fn mount_initial_flow(server: &MockServer) {
             && !body.contains("\"text\":\"AFTER_RESUME\"")
             && !body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once(server, match_after_compact, sse3).await;
+    mount_sse_once_match(server, match_after_compact, sse3).await;
 
     let match_after_resume = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"AFTER_RESUME\"")
     };
-    mount_sse_once(server, match_after_resume, sse4).await;
+    mount_sse_once_match(server, match_after_resume, sse4).await;
 
     let match_after_fork = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("\"text\":\"AFTER_FORK\"")
     };
-    mount_sse_once(server, match_after_fork, sse5).await;
+    mount_sse_once_match(server, match_after_fork, sse5).await;
 }
 
 async fn mount_second_compact_flow(server: &MockServer) {
@@ -741,15 +742,16 @@ async fn mount_second_compact_flow(server: &MockServer) {
 
     let match_second_compact = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\"")) && body.contains("AFTER_FORK")
+        body.contains("You have exceeded the maximum number of tokens")
+            && body.contains("AFTER_FORK")
     };
-    mount_sse_once(server, match_second_compact, sse6).await;
+    mount_sse_once_match(server, match_second_compact, sse6).await;
 
     let match_after_second_resume = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
     };
-    mount_sse_once(server, match_after_second_resume, sse7).await;
+    mount_sse_once_match(server, match_after_second_resume, sse7).await;
 }
 
 async fn start_test_conversation(

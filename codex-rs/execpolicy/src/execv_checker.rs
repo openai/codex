@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
@@ -108,7 +109,7 @@ fn ensure_absolute_path(path: &str, cwd: &Option<OsString>) -> Result<PathBuf> {
         file.absolutize()
     };
     result
-        .map(|path| path.into_owned())
+        .map(Cow::into_owned)
         .map_err(|error| CannotCanonicalizePath {
             file: path.to_string(),
             error: error.kind(),
@@ -145,6 +146,8 @@ mod tests {
     use super::*;
     use crate::MatchedArg;
     use crate::PolicyParser;
+    use anyhow::Result;
+    use anyhow::anyhow;
 
     fn setup(fake_cp: &Path) -> ExecvChecker {
         let source = format!(
@@ -163,7 +166,7 @@ system_path=[{fake_cp:?}]
 
     #[test]
     fn test_check_valid_input_files() -> Result<()> {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
 
         // Create an executable file that can be used with the system_path arg.
         let fake_cp = temp_dir.path().join("cp");
@@ -171,14 +174,14 @@ system_path=[{fake_cp:?}]
         {
             use std::os::unix::fs::PermissionsExt;
 
-            let fake_cp_file = std::fs::File::create(&fake_cp).unwrap();
-            let mut permissions = fake_cp_file.metadata().unwrap().permissions();
+            let fake_cp_file = std::fs::File::create(&fake_cp)?;
+            let mut permissions = fake_cp_file.metadata()?.permissions();
             permissions.set_mode(0o755);
-            std::fs::set_permissions(&fake_cp, permissions).unwrap();
+            std::fs::set_permissions(&fake_cp, permissions)?;
         }
         #[cfg(windows)]
         {
-            std::fs::File::create(&fake_cp).unwrap();
+            std::fs::File::create(&fake_cp)?;
         }
 
         // Create root_path and reference to files under the root.
@@ -198,7 +201,7 @@ system_path=[{fake_cp:?}]
             program: "cp".into(),
             args: vec![source, dest.clone()],
         };
-        let valid_exec = match checker.r#match(&exec_call)? {
+        let valid_exec = match checker.r#match(&exec_call).map_err(|e| anyhow!("{e:?}"))? {
             MatchedExec::Match { exec } => exec,
             unexpected => panic!("Expected a safe exec but got {unexpected:?}"),
         };
@@ -243,7 +246,10 @@ system_path=[{fake_cp:?}]
             program: "cp".into(),
             args: vec![root.clone(), root],
         };
-        let valid_exec_call_folders_as_args = match checker.r#match(&exec_call_folders_as_args)? {
+        let valid_exec_call_folders_as_args = match checker
+            .r#match(&exec_call_folders_as_args)
+            .map_err(|e| anyhow!("{e:?}"))?
+        {
             MatchedExec::Match { exec } => exec,
             _ => panic!("Expected a safe exec"),
         };
@@ -265,8 +271,9 @@ system_path=[{fake_cp:?}]
                     0,
                     ArgType::ReadableFile,
                     root_path.parent().unwrap().to_str().unwrap(),
-                )?,
-                MatchedArg::new(1, ArgType::WriteableFile, &dest)?,
+                )
+                .map_err(|e| anyhow!("{e:?}"))?,
+                MatchedArg::new(1, ArgType::WriteableFile, &dest).map_err(|e| anyhow!("{e:?}"))?,
             ],
             ..Default::default()
         };

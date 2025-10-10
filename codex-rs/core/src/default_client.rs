@@ -1,6 +1,8 @@
+use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -18,19 +20,26 @@ use std::sync::Mutex;
 /// The full user agent string is returned from the mcp initialize response.
 /// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
-
+pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
-
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
     pub header_value: HeaderValue,
 }
+static ORIGINATOR: OnceLock<Originator> = OnceLock::new();
 
-pub static ORIGINATOR: LazyLock<Originator> = LazyLock::new(|| {
-    let default = "codex_cli_rs";
+#[derive(Debug)]
+pub enum SetOriginatorError {
+    InvalidHeaderValue,
+    AlreadyInitialized,
+}
+
+fn get_originator_value(provided: Option<String>) -> Originator {
     let value = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
-        .unwrap_or_else(|_| default.to_string());
+        .ok()
+        .or(provided)
+        .unwrap_or(DEFAULT_ORIGINATOR.to_string());
 
     match HeaderValue::from_str(&value) {
         Ok(header_value) => Originator {
@@ -40,19 +49,30 @@ pub static ORIGINATOR: LazyLock<Originator> = LazyLock::new(|| {
         Err(e) => {
             tracing::error!("Unable to turn originator override {value} into header value: {e}");
             Originator {
-                value: default.to_string(),
-                header_value: HeaderValue::from_static(default),
+                value: DEFAULT_ORIGINATOR.to_string(),
+                header_value: HeaderValue::from_static(DEFAULT_ORIGINATOR),
             }
         }
     }
-});
+}
+
+pub fn set_default_originator(value: String) -> Result<(), SetOriginatorError> {
+    let originator = get_originator_value(Some(value));
+    ORIGINATOR
+        .set(originator)
+        .map_err(|_| SetOriginatorError::AlreadyInitialized)
+}
+
+pub fn originator() -> &'static Originator {
+    ORIGINATOR.get_or_init(|| get_originator_value(None))
+}
 
 pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
     let prefix = format!(
         "{}/{build_version} ({} {}; {}) {}",
-        ORIGINATOR.value.as_str(),
+        originator().value.as_str(),
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
@@ -100,7 +120,7 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
         tracing::warn!(
             "Falling back to default Codex originator because base user agent string is invalid"
         );
-        ORIGINATOR.value.clone()
+        originator().value.clone()
     }
 }
 
@@ -109,20 +129,28 @@ pub fn create_client() -> reqwest::Client {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
-    headers.insert("originator", ORIGINATOR.header_value.clone());
+    headers.insert("originator", originator().header_value.clone());
     let ua = get_codex_user_agent();
 
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
-        .default_headers(headers)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .default_headers(headers);
+    if is_sandboxed() {
+        builder = builder.no_proxy();
+    }
+
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+}
+
+fn is_sandboxed() -> bool {
+    std::env::var(CODEX_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_test_support::skip_if_no_network;
 
     #[test]
     fn test_get_codex_user_agent() {
@@ -132,6 +160,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_client_sets_default_headers() {
+        skip_if_no_network!();
+
         use wiremock::Mock;
         use wiremock::MockServer;
         use wiremock::ResponseTemplate;

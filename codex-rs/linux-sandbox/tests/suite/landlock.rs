@@ -38,7 +38,7 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
-        command: cmd.iter().map(|elm| elm.to_string()).collect(),
+        command: cmd.iter().copied().map(str::to_owned).collect(),
         cwd,
         timeout_ms: Some(timeout_ms),
         env: create_env_from_core_vars(),
@@ -138,7 +138,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
-        command: cmd.iter().map(|s| s.to_string()).collect(),
+        command: cmd.iter().copied().map(str::to_owned).collect(),
         cwd,
         // Give the tool a generous 2-second timeout so even slow DNS timeouts
         // do not stall the suite.

@@ -183,7 +183,7 @@ impl PasteBurst {
         let start_byte = retro_start_index(before, retro_chars);
         let grabbed = before[start_byte..].to_string();
         let looks_pastey =
-            grabbed.chars().any(|c| c.is_whitespace()) || grabbed.chars().count() >= 16;
+            grabbed.chars().any(char::is_whitespace) || grabbed.chars().count() >= 16;
         if looks_pastey {
             // Note: caller is responsible for removing this slice from UI text.
             self.begin_with_retro_grabbed(grabbed.clone(), now);

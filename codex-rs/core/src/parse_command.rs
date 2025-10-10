@@ -40,7 +40,7 @@ impl From<ParsedCommand> for codex_protocol::parse_command::ParsedCommand {
 }
 
 fn shlex_join(tokens: &[String]) -> String {
-    shlex_try_join(tokens.iter().map(|s| s.as_str()))
+    shlex_try_join(tokens.iter().map(String::as_str))
         .unwrap_or_else(|_| "<command included NUL byte>".to_string())
 }
 
@@ -72,13 +72,14 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
 /// Tests are at the top to encourage using TDD + Codex to fix the implementation.
 mod tests {
     use super::*;
+    use std::string::ToString;
 
     fn shlex_split_safe(s: &str) -> Vec<String> {
-        shlex_split(s).unwrap_or_else(|| s.split_whitespace().map(|s| s.to_string()).collect())
+        shlex_split(s).unwrap_or_else(|| s.split_whitespace().map(ToString::to_string).collect())
     }
 
     fn vec_str(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| s.to_string()).collect()
+        args.iter().map(ToString::to_string).collect()
     }
 
     fn assert_parsed(args: &[String], expected: Vec<ParsedCommand>) {
@@ -894,7 +895,7 @@ fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
 
     // echo ... && ...rest => ...rest
     if let ParsedCommand::Unknown { cmd } = &commands[0]
-        && shlex_split(cmd).is_some_and(|t| t.first().map(|s| s.as_str()) == Some("echo"))
+        && shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("echo"))
     {
         return Some(commands[1..].to_vec());
     }
@@ -902,7 +903,7 @@ fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
     // cd foo && [any command] => [any command] (keep non-cd when a cd is followed by something)
     if let Some(idx) = commands.iter().position(|pc| match pc {
         ParsedCommand::Unknown { cmd } => {
-            shlex_split(cmd).is_some_and(|t| t.first().map(|s| s.as_str()) == Some("cd"))
+            shlex_split(cmd).is_some_and(|t| t.first().map(String::as_str) == Some("cd"))
         }
         _ => false,
     }) && commands.len() > idx + 1
@@ -1035,7 +1036,7 @@ fn short_display_path(path: &str) -> String {
     });
     parts
         .next()
-        .map(|s| s.to_string())
+        .map(str::to_string)
         .unwrap_or_else(|| trimmed.to_string())
 }
 
@@ -1190,8 +1191,8 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                         if had_connectors {
                             let has_pipe = script_tokens.iter().any(|t| t == "|");
                             let has_sed_n = script_tokens.windows(2).any(|w| {
-                                w.first().map(|s| s.as_str()) == Some("sed")
-                                    && w.get(1).map(|s| s.as_str()) == Some("-n")
+                                w.first().map(String::as_str) == Some("sed")
+                                    && w.get(1).map(String::as_str) == Some("-n")
                             });
                             if has_pipe && has_sed_n {
                                 ParsedCommand::Read {
@@ -1271,7 +1272,7 @@ fn is_small_formatting_command(tokens: &[String]) -> bool {
             // Keep `sed -n <range> file` (treated as a file read elsewhere);
             // otherwise consider it a formatting helper in a pipeline.
             tokens.len() < 4
-                || !(tokens[1] == "-n" && is_valid_sed_n_arg(tokens.get(2).map(|s| s.as_str())))
+                || !(tokens[1] == "-n" && is_valid_sed_n_arg(tokens.get(2).map(String::as_str)))
         }
         _ => false,
     }
@@ -1318,7 +1319,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 (None, non_flags.first().map(|s| short_display_path(s)))
             } else {
                 (
-                    non_flags.first().cloned().map(|s| s.to_string()),
+                    non_flags.first().cloned().map(String::from),
                     non_flags.get(1).map(|s| short_display_path(s)),
                 )
             };
@@ -1353,7 +1354,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 .collect();
             // Do not shorten the query: grep patterns may legitimately contain slashes
             // and should be preserved verbatim. Only paths should be shortened.
-            let query = non_flags.first().cloned().map(|s| s.to_string());
+            let query = non_flags.first().cloned().map(String::from);
             let path = non_flags.get(1).map(|s| short_display_path(s));
             ParsedCommand::Search {
                 cmd: shlex_join(main_cmd),
@@ -1363,7 +1364,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
         }
         Some((head, tail)) if head == "cat" => {
             // Support both `cat <file>` and `cat -- <file>` forms.
-            let effective_tail: &[String] = if tail.first().map(|s| s.as_str()) == Some("--") {
+            let effective_tail: &[String] = if tail.first().map(String::as_str) == Some("--") {
                 &tail[1..]
             } else {
                 tail
@@ -1479,7 +1480,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
             if head == "sed"
                 && tail.len() >= 3
                 && tail[0] == "-n"
-                && is_valid_sed_n_arg(tail.get(1).map(|s| s.as_str())) =>
+                && is_valid_sed_n_arg(tail.get(1).map(String::as_str)) =>
         {
             if let Some(path) = tail.get(2) {
                 let name = short_display_path(path);

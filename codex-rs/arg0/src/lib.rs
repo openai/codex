@@ -54,7 +54,7 @@ where
 
     let argv1 = args.next().unwrap_or_default();
     if argv1 == CODEX_APPLY_PATCH_ARG1 {
-        let patch_arg = args.next().and_then(|s| s.to_str().map(|s| s.to_owned()));
+        let patch_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
         let exit_code = match patch_arg {
             Some(patch_arg) => {
                 let mut stdout = std::io::stdout();
