@@ -16,7 +16,7 @@ jobs:
     outputs:
       codex_output: ${{ steps.codex.outputs.final-message }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Prepare Codex inputs
         env:
