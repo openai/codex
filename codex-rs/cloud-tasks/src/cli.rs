@@ -22,7 +22,7 @@ pub enum Command {
 pub struct ExecCommand {
     /// Task prompt to run in Codex Cloud.
     #[arg(value_name = "QUERY")]
-    pub query: String,
+    pub query: Option<String>,
 
     /// Target environment identifier (see `codex cloud` to browse).
     #[arg(long = "env", value_name = "ENV_ID")]

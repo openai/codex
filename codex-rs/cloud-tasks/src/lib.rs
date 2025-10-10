@@ -9,6 +9,7 @@ pub use cli::Cli;
 
 use anyhow::anyhow;
 use std::io::IsTerminal;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,15 +100,21 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
 }
 
 async fn run_exec_command(args: crate::cli::ExecCommand) -> anyhow::Result<()> {
+    let crate::cli::ExecCommand {
+        query,
+        environment,
+        attempts,
+    } = args;
     let ctx = init_backend("codex_cloud_tasks_exec").await?;
-    let env_id = resolve_environment_id(&ctx, &args.environment).await?;
+    let prompt = resolve_query_input(query)?;
+    let env_id = resolve_environment_id(&ctx, &environment).await?;
     let created = codex_cloud_tasks_client::CloudBackend::create_task(
         &*ctx.backend,
         &env_id,
-        &args.query,
+        &prompt,
         "main",
         false,
-        args.attempts,
+        attempts,
     )
     .await?;
     let url = util::task_url(&ctx.base_url, &created.id.0);
@@ -156,6 +163,33 @@ async fn resolve_environment_id(ctx: &BackendContext, requested: &str) -> anyhow
                     "environment label '{trimmed}' is ambiguous; run `codex cloud` to pick the desired environment id"
                 ))
             }
+        }
+    }
+}
+
+fn resolve_query_input(query_arg: Option<String>) -> anyhow::Result<String> {
+    match query_arg {
+        Some(q) if q != "-" => Ok(q),
+        maybe_dash => {
+            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
+            if std::io::stdin().is_terminal() && !force_stdin {
+                return Err(anyhow!(
+                    "no query provided. Pass one as an argument or pipe it via stdin."
+                ));
+            }
+            if !force_stdin {
+                eprintln!("Reading query from stdin...");
+            }
+            let mut buffer = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buffer)
+                .map_err(|e| anyhow!("failed to read query from stdin: {e}"))?;
+            if buffer.trim().is_empty() {
+                return Err(anyhow!(
+                    "no query provided via stdin (received empty input)."
+                ));
+            }
+            Ok(buffer)
         }
     }
 }
