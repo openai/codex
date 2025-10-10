@@ -81,6 +81,14 @@ pub(crate) struct BottomPaneParams {
 }
 
 impl BottomPane {
+    /// For global handlers, accept reverse search selection when appropriate
+    /// for the given key event. Returns true if it accepted.
+    pub(crate) fn accept_reverse_search_for_key(
+        &mut self,
+        key_event: &crossterm::event::KeyEvent,
+    ) -> bool {
+        self.composer.accept_reverse_search_for_key(key_event)
+    }
     const BOTTOM_PAD_LINES: u16 = 0;
     pub fn new(params: BottomPaneParams) -> Self {
         let enhanced_keys_supported = params.enhanced_keys_supported;
@@ -203,6 +211,9 @@ impl BottomPane {
                 && self.is_task_running
                 && let Some(status) = &self.status
             {
+                // Accept any reverse-i-search selection before handling Esc so
+                // the chosen prompt is preserved.
+                let _ = self.composer.accept_reverse_search_line_end();
                 // Send Op::Interrupt
                 status.interrupt();
                 self.request_redraw();
@@ -222,6 +233,9 @@ impl BottomPane {
     /// Handle Ctrl-C in the bottom pane. If a modal view is active it gets a
     /// chance to consume the event (e.g. to dismiss itself).
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
+        // If reverse-i-search is active, accept it before applying Ctrl+C
+        // semantics so behavior mirrors normal editing.
+        let _ = self.composer.accept_reverse_search_line_end();
         if let Some(view) = self.view_stack.last_mut() {
             let event = view.on_ctrl_c();
             if matches!(event, CancellationEvent::Handled) {
