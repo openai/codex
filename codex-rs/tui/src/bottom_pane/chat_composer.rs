@@ -985,9 +985,7 @@ impl ChatComposer {
                         })
                         .unwrap_or(false);
                     if !is_builtin && !is_known_prompt {
-                        let message = format!(
-                            "Unrecognized command '/{name}'."
-                        );
+                        let message = format!("Unrecognized command '/{name}'.");
                         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                             history_cell::new_error_event(message),
                         )));
