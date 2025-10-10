@@ -80,6 +80,32 @@ function getUpdatedPath(newDirs) {
   return updatedPath;
 }
 
+function detectPackageManager() {
+  const userAgent = process.env.npm_config_user_agent || "";
+  if (/\bbun\//.test(userAgent)) {
+    return "bun";
+  }
+
+  const execPath = process.env.npm_execpath || "";
+  if (execPath.includes("bun")) {
+    return "bun";
+  }
+
+  if (
+    process.env.BUN_INSTALL ||
+    process.env.BUN_INSTALL_GLOBAL_DIR ||
+    process.env.BUN_INSTALL_BIN_DIR
+  ) {
+    return "bun";
+  }
+
+  if (userAgent) {
+    return "npm";
+  }
+
+  return null;
+}
+
 const additionalDirs = [];
 const pathDir = path.join(archRoot, "path");
 if (existsSync(pathDir)) {
@@ -87,9 +113,17 @@ if (existsSync(pathDir)) {
 }
 const updatedPath = getUpdatedPath(additionalDirs);
 
+const env = { ...process.env, PATH: updatedPath };
+const packageManager = detectPackageManager();
+if (packageManager === "bun") {
+  env.CODEX_MANAGED_BY_BUN = "1";
+} else {
+  env.CODEX_MANAGED_BY_NPM = "1";
+}
+
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
-  env: { ...process.env, PATH: updatedPath, CODEX_MANAGED_BY_NPM: "1" },
+  env,
 });
 
 child.on("error", (err) => {
