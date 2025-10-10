@@ -971,6 +971,32 @@ impl ChatComposer {
                 // If there is neither text nor attachments, suppress submission entirely.
                 let has_attachments = !self.attached_images.is_empty();
                 text = text.trim().to_string();
+                if let Some((name, _rest)) = parse_slash_name(&text) {
+                    let is_builtin = built_in_slash_commands()
+                        .into_iter()
+                        .any(|(command_name, _)| command_name == name);
+                    let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+                    let is_known_prompt = name
+                        .strip_prefix(&prompt_prefix)
+                        .map(|prompt_name| {
+                            self.custom_prompts
+                                .iter()
+                                .any(|prompt| prompt.name == prompt_name)
+                        })
+                        .unwrap_or(false);
+                    if !is_builtin && !is_known_prompt {
+                        let message = format!(
+                            "Unrecognized command '/{name}'."
+                        );
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(message),
+                        )));
+                        self.textarea.set_text(&original_input);
+                        self.textarea.set_cursor(original_input.len());
+                        return (InputResult::None, true);
+                    }
+                }
+
                 let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
                     Ok(expanded) => expanded,
                     Err(err) => {
