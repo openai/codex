@@ -161,20 +161,38 @@ impl CommandPopup {
             .into_iter()
             .map(|(item, indices, _)| {
                 let (name, description) = match item {
-                    CommandItem::Builtin(cmd) => {
-                        (format!("/{}", cmd.command()), cmd.description().to_string())
-                    }
-                    CommandItem::UserPrompt(i) => (
-                        format!("/{PROMPTS_CMD_PREFIX}:{}", self.prompts[i].name),
-                        "send saved prompt".to_string(),
+                    CommandItem::Builtin(cmd) => (
+                        format!("/{}", cmd.command()),
+                        Some(cmd.description().to_string()),
                     ),
+                    CommandItem::UserPrompt(i) => {
+                        let prompt = &self.prompts[i];
+                        let name = format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name);
+                        let desc = prompt
+                            .description
+                            .as_ref()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty());
+                        let hint = prompt
+                            .argument_hint
+                            .as_ref()
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty());
+                        let description = match (desc, hint) {
+                            (None, None) => Some("send saved prompt".to_string()),
+                            (Some(d), None) => Some(d.to_string()),
+                            (None, Some(h)) => Some(h.to_string()),
+                            (Some(d), Some(h)) => Some(format!("{d}  {h}")),
+                        };
+                        (name, description)
+                    }
                 };
                 GenericDisplayRow {
                     name,
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     is_current: false,
                     display_shortcut: None,
-                    description: Some(description),
+                    description,
                 }
             })
             .collect()
@@ -320,6 +338,27 @@ mod tests {
         assert!(
             !has_collision_prompt,
             "prompt with builtin name should be ignored"
+        );
+    }
+
+    #[test]
+    fn prompt_description_and_hint_are_displayed() {
+        let prompts = vec![CustomPrompt {
+            name: "bug-triage".to_string(),
+            path: "/tmp/bug-triage.md".to_string().into(),
+            content: "body".to_string(),
+            description: Some("Draft a quick bug triage summary".to_string()),
+            argument_hint: Some("<issue-url> \"<owner>\" \"<severity>\"".to_string()),
+        }];
+        let popup = CommandPopup::new(prompts);
+        let rows = popup.rows_from_matches(popup.filtered());
+        let prompt_row = rows
+            .into_iter()
+            .find(|row| row.name == "/prompts:bug-triage")
+            .expect("custom prompt row missing");
+        assert_eq!(
+            prompt_row.description.as_deref(),
+            Some("Draft a quick bug triage summary  <issue-url> \"<owner>\" \"<severity>\"")
         );
     }
 }
