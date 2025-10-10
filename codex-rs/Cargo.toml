@@ -212,18 +212,24 @@ walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
 wildmatch = "2.5.0"
-windows = { version = "0.61.3", default-features = false, features = [
+
+windows = { version = "0.56", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
-    "Win32_Security_Isolation",
-    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
     "Win32_System_Console",
     "Win32_System_Com",
-    "Win32_System_JobObjects",
-    "Win32_System_Memory",
-    "Win32_System_Threading",
     "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_Networking_WinSock",
+    "Win32_System_Environment",
+    "Win32_Security_Credentials",
+    "Win32_System_SystemServices",
+    "Win32_System_Memory",
+    "Win32_Storage_FileSystem",
+    "Win32_NetworkManagement_NetManagement",
+    "Win32_System_UserEnv",
 ] }
 wiremock = "0.6"
 zeroize = "1.8.1"
