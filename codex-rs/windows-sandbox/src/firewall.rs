@@ -2,6 +2,7 @@ use crate::temp_user::EphemeralUser;
 use anyhow::Context;
 use anyhow::Result;
 use windows::Win32::Foundation::HLOCAL;
+use windows::Win32::Foundation::PSID;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule3;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_ACTION_BLOCK;
@@ -36,7 +37,9 @@ impl Drop for OutboundBlockGuard {
 
 pub fn install_for_user(user: &EphemeralUser) -> Result<OutboundBlockGuard> {
     unsafe {
-        CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .context("CoInitializeEx")?;
     }
     unsafe {
         let policy: INetFwPolicy2 = CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER)?;
@@ -45,11 +48,8 @@ pub fn install_for_user(user: &EphemeralUser) -> Result<OutboundBlockGuard> {
 
         // SID → "S-1-5-21-..."
         let mut pwstr = windows::core::PWSTR::null();
-        ConvertSidToStringSidW(
-            windows::Win32::Security::PSID(user.sid.as_ptr() as *mut _),
-            &mut pwstr,
-        )
-        .ok()?;
+        ConvertSidToStringSidW(PSID(user.sid.as_ptr() as *mut _), &mut pwstr)
+            .context("ConvertSidToStringSidW")?;
         let sid_str = if pwstr.is_null() {
             String::new()
         } else {
@@ -60,7 +60,7 @@ pub fn install_for_user(user: &EphemeralUser) -> Result<OutboundBlockGuard> {
             String::from_utf16_lossy(std::slice::from_raw_parts(pwstr.0, len))
         };
         if !pwstr.is_null() {
-            let _ = windows::Win32::Foundation::LocalFree(Some(HLOCAL(pwstr.0.cast())));
+            let _ = windows::Win32::Foundation::LocalFree(HLOCAL(pwstr.0.cast()));
         }
 
         let rule_name = format!("codex-sbx-block-{}", user.username);

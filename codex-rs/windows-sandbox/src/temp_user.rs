@@ -1,19 +1,18 @@
 use anyhow::Context;
 use anyhow::Result;
 use rand::Rng;
-use rand::distributions::Alphanumeric;
-use std::ffi::OsString;
-use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Foundation::PWSTR;
+use rand::distr::Alphanumeric;
+use windows::Win32::Foundation::PSID;
+use windows::Win32::NetworkManagement::NetManagement::NERR_Success;
 use windows::Win32::NetworkManagement::NetManagement::NetUserAdd;
 use windows::Win32::NetworkManagement::NetManagement::UF_NORMAL_ACCOUNT;
+use windows::Win32::NetworkManagement::NetManagement::USER_ACCOUNT_FLAGS;
 use windows::Win32::NetworkManagement::NetManagement::USER_INFO_1;
 use windows::Win32::NetworkManagement::NetManagement::USER_PRIV_USER;
 use windows::Win32::Security::LookupAccountNameW;
-use windows::Win32::Security::PSID;
-use windows::Win32::Security::SidNameUse;
-use windows::core::BSTR;
+use windows::Win32::Security::SID_NAME_USE;
 use windows::core::PCWSTR;
+use windows::core::PWSTR;
 
 pub struct EphemeralUser {
     pub username: String,
@@ -30,19 +29,29 @@ impl EphemeralUser {
             // Create local user
             let uname = widestring::U16CString::from_str(&username)?;
             let pwd = widestring::U16CString::from_str(&password)?;
-            let mut ui = USER_INFO_1 {
-                usri1_name: PWSTR(uname.as_ptr() as _),
-                usri1_password: PWSTR(pwd.as_ptr() as _),
+            let ui = USER_INFO_1 {
+                usri1_name: PWSTR(uname.as_ptr() as *mut _),
+                usri1_password: PWSTR(pwd.as_ptr() as *mut _),
+                usri1_password_age: 0,
                 usri1_priv: USER_PRIV_USER,
                 usri1_home_dir: PWSTR(std::ptr::null_mut()),
                 usri1_comment: PWSTR(std::ptr::null_mut()),
-                usri1_flags: UF_NORMAL_ACCOUNT,
+                usri1_flags: USER_ACCOUNT_FLAGS(UF_NORMAL_ACCOUNT),
                 usri1_script_path: PWSTR(std::ptr::null_mut()),
             };
             let mut param_err: u32 = 0;
-            NetUserAdd(None, 1, &mut ui as *mut _ as _, &mut param_err)
-                .ok()
-                .with_context(|| format!("NetUserAdd({username}) param_err={param_err}"))?;
+            let param_err_ptr = &mut param_err as *mut u32;
+            let status = NetUserAdd(
+                PCWSTR::null(),
+                1,
+                (&ui as *const USER_INFO_1).cast(),
+                Some(param_err_ptr),
+            );
+            if status != NERR_Success {
+                anyhow::bail!(
+                    "NetUserAdd({username}) failed with status {status} param_err={param_err}"
+                );
+            }
         }
 
         // Resolve SID
@@ -60,37 +69,37 @@ fn lookup_sid(name: &str) -> Result<Vec<u8>> {
     unsafe {
         let mut sid_len = 0u32;
         let mut dom_len = 0u32;
-        let mut use_type = SidNameUse(0);
+        let mut use_type = SID_NAME_USE(0);
         let wname = widestring::U16CString::from_str(name)?;
+        let account = PCWSTR(wname.as_ptr());
         let _ = LookupAccountNameW(
-            None,
-            wname.as_pwstr(),
+            PCWSTR::null(),
+            account,
             PSID::default(),
             &mut sid_len,
-            PWSTR(std::ptr::null_mut()),
+            PWSTR::null(),
             &mut dom_len,
             &mut use_type,
         );
         let mut sid = vec![0u8; sid_len as usize];
         let mut dom = vec![0u16; dom_len as usize];
         LookupAccountNameW(
-            None,
-            wname.as_pwstr(),
+            PCWSTR::null(),
+            account,
             PSID(sid.as_mut_ptr() as _),
             &mut sid_len,
             PWSTR(dom.as_mut_ptr()),
             &mut dom_len,
             &mut use_type,
         )
-        .ok()
         .context("LookupAccountNameW(second)")?;
         Ok(sid)
     }
 }
 
 fn rand_id(n: usize) -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
+    rand::rng()
+        .sample_iter(Alphanumeric)
         .take(n)
         .map(char::from)
         .collect()

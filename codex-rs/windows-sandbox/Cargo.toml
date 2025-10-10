@@ -22,6 +22,9 @@ clap = { workspace = true, features = ["derive"] }
 codex-protocol = { workspace = true }
 tracing = { workspace = true }
 windows = { workspace = true }
+anyhow = { workspace = true }
+rand = { workspace = true }
+widestring = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies.serde_json]
 workspace = true

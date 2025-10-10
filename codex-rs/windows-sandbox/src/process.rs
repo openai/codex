@@ -1,17 +1,17 @@
+use crate::sandbox::StdioPolicy;
 use crate::temp_user::EphemeralUser;
 use anyhow::Context;
 use anyhow::Result;
 use std::collections::HashMap;
+use std::os::windows::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
-use windows::Win32::Foundation::WIN32_ERROR;
-use windows::Win32::Security::ConvertStringSidToSidW;
+use windows::Win32::Foundation::PSID;
+use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows::Win32::Security::DuplicateTokenEx;
-use windows::Win32::Security::PSID;
-use windows::Win32::Security::SE_GROUP_INTEGRITY;
 use windows::Win32::Security::SID_AND_ATTRIBUTES;
 use windows::Win32::Security::SecurityImpersonation;
 use windows::Win32::Security::SetTokenInformation;
@@ -35,6 +35,7 @@ use windows::Win32::System::JobObjects::CreateJobObjectW;
 use windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 use windows::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
 use windows::Win32::System::JobObjects::SetInformationJobObject;
+use windows::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
 use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows::Win32::System::Threading::CreateProcessAsUserW;
 use windows::Win32::System::Threading::GetExitCodeProcess;
@@ -49,7 +50,7 @@ pub fn spawn_as_user_low_il(
     user: &EphemeralUser,
     command: Vec<String>,
     cwd: PathBuf,
-    _stdio: super::StdioPolicy,
+    _stdio: StdioPolicy,
     env_map: HashMap<String, String>,
 ) -> Result<ExitStatus> {
     unsafe {
@@ -59,9 +60,12 @@ pub fn spawn_as_user_low_il(
         set_integrity_low(primary).context("SetTokenInformation(TokenIntegrityLevel)")?;
 
         // 2) STARTUPINFO with inherited stdio
-        let stdin = inherit(GetStdHandle(STD_INPUT_HANDLE)?)?;
-        let stdout = inherit(GetStdHandle(STD_OUTPUT_HANDLE)?)?;
-        let stderr = inherit(GetStdHandle(STD_ERROR_HANDLE)?)?;
+        let stdin =
+            inherit(GetStdHandle(STD_INPUT_HANDLE).context("GetStdHandle(STD_INPUT_HANDLE)")?)?;
+        let stdout =
+            inherit(GetStdHandle(STD_OUTPUT_HANDLE).context("GetStdHandle(STD_OUTPUT_HANDLE)")?)?;
+        let stderr =
+            inherit(GetStdHandle(STD_ERROR_HANDLE).context("GetStdHandle(STD_ERROR_HANDLE)")?)?;
         let mut si = STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOW>() as u32,
             ..Default::default()
@@ -76,14 +80,14 @@ pub fn spawn_as_user_low_il(
 
         // 4) Command line
         let mut cmdline = encode_cmdline(&command);
-        let mut wcwd = wide(&cwd);
+        let mut wcwd = wide(cwd.as_os_str());
 
         // 5) Spawn
         let mut pi = PROCESS_INFORMATION::default();
         CreateProcessAsUserW(
-            Some(primary),
+            primary,
             PCWSTR::null(),
-            Some(PWSTR(cmdline.as_mut_ptr())),
+            PWSTR(cmdline.as_mut_ptr()),
             None,
             None,
             true,
@@ -97,18 +101,15 @@ pub fn spawn_as_user_low_il(
             &si,
             &mut pi,
         )
-        .ok()
         .context("CreateProcessAsUserW")?;
         // handles in si are inherited; we close the local copies
         let _ = CloseHandle(si.hStdInput);
         let _ = CloseHandle(si.hStdOutput);
         let _ = CloseHandle(si.hStdError);
-        let _ = DestroyEnvironmentBlock(env_block.as_mut_ptr().cast());
+        // env_block is a Vec; nothing to destroy beyond dropping it
 
         // 6) Job object guarding the tree
-        let job = CreateJobObjectW(None, PCWSTR::null())
-            .ok()
-            .context("CreateJobObjectW")?;
+        let job = CreateJobObjectW(None, PCWSTR::null()).context("CreateJobObjectW")?;
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         SetInformationJobObject(
@@ -117,16 +118,13 @@ pub fn spawn_as_user_low_il(
             &limits as *const _ as _,
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         )
-        .ok()
         .context("SetInformationJobObject")?;
-        AssignProcessToJobObject(job, pi.hProcess)
-            .ok()
-            .context("AssignProcessToJobObject")?;
+        AssignProcessToJobObject(job, pi.hProcess).context("AssignProcessToJobObject")?;
 
         // 7) Wait and return status
         WaitForSingleObject(pi.hProcess, u32::MAX);
         let mut code = 0u32;
-        GetExitCodeProcess(pi.hProcess, &mut code).ok()?;
+        GetExitCodeProcess(pi.hProcess, &mut code).context("GetExitCodeProcess")?;
         let _ = CloseHandle(pi.hThread);
         let _ = CloseHandle(pi.hProcess);
         let _ = CloseHandle(job);
@@ -135,59 +133,69 @@ pub fn spawn_as_user_low_il(
 }
 
 unsafe fn logon_interactive(user: &str, pass: &str) -> Result<HANDLE> {
-    use windows::Win32::Security::Credentials::LOGON32_LOGON_INTERACTIVE;
-    use windows::Win32::Security::Credentials::LOGON32_PROVIDER_DEFAULT;
-    use windows::Win32::Security::Credentials::LogonUserW;
+    use windows::Win32::Security::LOGON32_LOGON_INTERACTIVE;
+    use windows::Win32::Security::LOGON32_PROVIDER_DEFAULT;
+    use windows::Win32::Security::LogonUserW;
+    let user_w = widestring::U16CString::from_str(user)?;
+    let domain_w = widestring::U16CString::from_str(".")?;
+    let pass_w = widestring::U16CString::from_str(pass)?;
     let mut h = HANDLE::default();
-    LogonUserW(
-        &widestring::U16CString::from_str(user)?.as_pwstr(),
-        &widestring::U16CString::from_str(".")?.as_pwstr(), // local machine
-        &widestring::U16CString::from_str(pass)?.as_pwstr(),
-        LOGON32_LOGON_INTERACTIVE,
-        LOGON32_PROVIDER_DEFAULT,
-        &mut h,
-    )
-    .ok()?;
+    unsafe {
+        LogonUserW(
+            PCWSTR(user_w.as_ptr()),
+            PCWSTR(domain_w.as_ptr()),
+            PCWSTR(pass_w.as_ptr()),
+            LOGON32_LOGON_INTERACTIVE,
+            LOGON32_PROVIDER_DEFAULT,
+            &mut h,
+        )
+        .context("LogonUserW")?;
+    }
     Ok(h)
 }
 
 unsafe fn duplicate_primary(h: HANDLE) -> Result<HANDLE> {
     let mut dup = HANDLE::default();
-    DuplicateTokenEx(
-        h,
-        TOKEN_ACCESS_MASK(
-            TOKEN_DUPLICATE.0
-                | TOKEN_QUERY.0
-                | TOKEN_ASSIGN_PRIMARY.0
-                | TOKEN_ADJUST_DEFAULT.0
-                | TOKEN_ADJUST_SESSIONID.0,
-        ),
-        None,
-        SecurityImpersonation,
-        TokenPrimary,
-        &mut dup,
-    )
-    .ok()?;
+    unsafe {
+        DuplicateTokenEx(
+            h,
+            TOKEN_ACCESS_MASK(
+                TOKEN_DUPLICATE.0
+                    | TOKEN_QUERY.0
+                    | TOKEN_ASSIGN_PRIMARY.0
+                    | TOKEN_ADJUST_DEFAULT.0
+                    | TOKEN_ADJUST_SESSIONID.0,
+            ),
+            None,
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut dup,
+        )
+        .context("DuplicateTokenEx")?;
+    }
     Ok(dup)
 }
 
 // S-1-16-4096 == Low IL
 unsafe fn set_integrity_low(token: HANDLE) -> Result<()> {
     let mut sid = PSID::default();
-    ConvertStringSidToSidW(
-        &widestring::U16CString::from_str("S-1-16-4096")?.as_pcwstr(),
-        &mut sid,
-    )
-    .ok()?;
+    let sid_text = widestring::U16CString::from_str("S-1-16-4096")?;
+    unsafe {
+        ConvertStringSidToSidW(PCWSTR(sid_text.as_ptr()), &mut sid)
+            .context("ConvertStringSidToSidW")?;
+    }
     let tml = TOKEN_MANDATORY_LABEL {
         Label: SID_AND_ATTRIBUTES {
             Sid: sid,
-            Attributes: SE_GROUP_INTEGRITY,
+            Attributes: SE_GROUP_INTEGRITY as u32,
         },
     };
     let size = std::mem::size_of::<TOKEN_MANDATORY_LABEL>() as u32
-        + windows::Win32::Security::GetLengthSid(sid) as u32;
-    SetTokenInformation(token, TokenIntegrityLevel, &tml as *const _ as _, size).ok()?;
+        + unsafe { windows::Win32::Security::GetLengthSid(sid) as u32 };
+    unsafe {
+        SetTokenInformation(token, TokenIntegrityLevel, &tml as *const _ as _, size)
+            .context("SetTokenInformation")?;
+    }
     Ok(())
 }
 
@@ -246,12 +254,11 @@ fn encode_cmdline(args: &[String]) -> Vec<u16> {
     wide(std::ffi::OsStr::new(&s))
 }
 fn build_env_block(env: &HashMap<String, String>, cwd: &PathBuf) -> Result<Vec<u16>> {
-    use windows::Win32::System::Environment::CreateEnvironmentBlock;
-    use windows::Win32::System::Environment::DestroyEnvironmentBlock;
     // Start with a basic block from the user profile and append overrides
     let mut block_ptr: *mut core::ffi::c_void = std::ptr::null_mut();
     unsafe {
-        CreateEnvironmentBlock(&mut block_ptr, None, false.into()).ok()?;
+        CreateEnvironmentBlock(&mut block_ptr, HANDLE::default(), false)
+            .context("CreateEnvironmentBlock")?;
     }
     // Serialize our own
     let mut pairs: Vec<(String, String)> =
@@ -271,6 +278,11 @@ fn build_env_block(env: &HashMap<String, String>, cwd: &PathBuf) -> Result<Vec<u
         out.push(0);
     }
     out.push(0);
+    unsafe {
+        if !block_ptr.is_null() {
+            DestroyEnvironmentBlock(block_ptr).context("DestroyEnvironmentBlock")?;
+        }
+    }
     Ok(out)
 }
 
@@ -278,11 +290,13 @@ unsafe fn inherit(h: HANDLE) -> Result<HANDLE> {
     if h == INVALID_HANDLE_VALUE || h.is_invalid() {
         anyhow::bail!("invalid handle");
     }
-    windows::Win32::Foundation::SetHandleInformation(
-        h,
-        windows::Win32::Foundation::HANDLE_FLAG_INHERIT.0,
-        windows::Win32::Foundation::HANDLE_FLAG_INHERIT,
-    )
-    .ok()?;
+    unsafe {
+        windows::Win32::Foundation::SetHandleInformation(
+            h,
+            windows::Win32::Foundation::HANDLE_FLAG_INHERIT.0,
+            windows::Win32::Foundation::HANDLE_FLAG_INHERIT,
+        )
+        .context("SetHandleInformation")?;
+    }
     Ok(h)
 }

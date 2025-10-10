@@ -12,21 +12,21 @@
 // thiserror = "1"
 // tracing = "0.1"
 
+use crate::low_integrity;
+use crate::process;
+use crate::temp_user;
 use anyhow::Context;
 use anyhow::Result;
+use clap::Parser;
 use codex_protocol::protocol::SandboxPolicy;
 use std::collections::HashMap;
+use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
-mod firewall;
-mod low_integrity;
-mod process;
-mod temp_user;
-
 #[derive(Debug, Clone, Copy)]
-enum StdioPolicy {
+pub(crate) enum StdioPolicy {
     Inherit,
 }
 
@@ -118,14 +118,19 @@ pub fn spawn_command_under_windows_low_il(
         temp_user::EphemeralUser::create().context("failed to create ephemeral sandbox user")?;
 
     // 3) Network isolation (skip if policy says full network)
-    let _fw_guard = if wants_network {
+    let _fw_guard: Option<crate::firewall::OutboundBlockGuard> = if wants_network {
         None
     } else {
-        Some(
-            firewall::OutboundBlockGuard::install_for_user(&user)
-                .context("failed to install per-user firewall block rule")?,
-        )
+        // Temporarily disable firewall installation while investigating setup failures.
+        // Some(
+        //     firewall::install_for_user(&user)
+        //         .context("failed to install per-user firewall block rule")?,
+        // )
+        None
     };
+
+    low_integrity::enable_required_privileges()
+        .context("failed to enable SeSecurityPrivilege for integrity adjustments")?;
 
     // 4) Mark allowed roots Low-Integrity (writeable by Low-IL)
     for root in writable_roots.iter() {

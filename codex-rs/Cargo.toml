@@ -212,8 +212,9 @@ walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
 wildmatch = "2.5.0"
+widestring = "1.1.0"
 
-windows = { version = "0.56", features = [
+windows = { version = "0.56.0", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
@@ -229,7 +230,6 @@ windows = { version = "0.56", features = [
     "Win32_System_Memory",
     "Win32_Storage_FileSystem",
     "Win32_NetworkManagement_NetManagement",
-    "Win32_System_UserEnv",
 ] }
 wiremock = "0.6"
 zeroize = "1.8.1"
