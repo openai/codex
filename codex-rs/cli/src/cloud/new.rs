@@ -81,6 +81,10 @@ pub(crate) async fn resolve_env_id(ctx: &CloudContext, env_arg: &str) -> Result<
 }
 
 fn resolve_env_id_from_list(envs: &[EnvironmentSummary], env_arg: &str) -> Result<String> {
+    if let Some(env) = envs.iter().find(|env| env.id == env_arg) {
+        return Ok(env.id.clone());
+    }
+
     let matches: Vec<_> = envs
         .iter()
         .filter(|env| {
@@ -129,6 +133,10 @@ mod tests {
                 label: Some("L1nuxOne/ade".to_string()),
             },
             EnvironmentSummary {
+                id: "env-A".to_string(),
+                label: Some("OrgA/dev".to_string()),
+            },
+            EnvironmentSummary {
                 id: "env_prod999".to_string(),
                 label: Some("OrgB/prod".to_string()),
             },
@@ -147,6 +155,13 @@ mod tests {
         let envs = sample_envs();
         let resolved = resolve_env_id_from_list(&envs, "qa").expect("suffix");
         pretty_assertions::assert_eq!(resolved, "env_def456");
+    }
+
+    #[test]
+    fn resolves_exact_env_id_even_without_env_prefix() {
+        let envs = sample_envs();
+        let resolved = resolve_env_id_from_list(&envs, "env-A").expect("id");
+        pretty_assertions::assert_eq!(resolved, "env-A");
     }
 
     #[test]
