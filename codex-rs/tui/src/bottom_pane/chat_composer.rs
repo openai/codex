@@ -1372,18 +1372,22 @@ impl ChatComposer {
             .map(|items| if items.is_empty() { 0 } else { 1 })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_footer_model_label(&mut self, label: Option<String>) {
         self.footer_model_label = label;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_footer_directory(&mut self, directory: Option<String>) {
         self.footer_directory = directory;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_footer_account_email(&mut self, email: Option<String>) {
         self.footer_account_email = email;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_footer_limits(&mut self, primary: Option<u8>, weekly: Option<u8>) {
         self.footer_primary_limit_percent = primary;
         self.footer_weekly_limit_percent = weekly;

@@ -75,6 +75,11 @@ pub(crate) enum AppEvent {
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
+    /// Resume the conversation from the backup rollout (\*.bak).
+    RestoreContextFromBackup,
+    /// On shutdown, back up and rewrite the current rollout file according to the
+    /// current prune mask so the next resume starts from a pruned file.
+    FinalizePruneOnShutdown,
 
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
@@ -88,8 +93,15 @@ pub(crate) enum AppEvent {
     // --- Advanced Prune (experimental) ---
     /// Open the non-destructive advanced prune view.
     OpenPruneAdvanced,
+    /// Open the root prune menu (advanced/manual/restore).
+    OpenPruneRoot,
     /// Open the manual prune submenu (by category).
     OpenPruneManual,
+    /// Open a confirmation dialog for manual prune of a specific category.
+    OpenPruneManualConfirm {
+        category: codex_core::protocol::PruneCategory,
+        label: String,
+    },
     /// Close the advanced prune view.
     PruneAdvancedClosed,
     /// Toggle keep marker for an index in the advanced list.
@@ -102,6 +114,11 @@ pub(crate) enum AppEvent {
     },
     /// Apply staged inclusion/deletion changes.
     ConfirmAdvancedChanges,
+    /// Apply staged advanced prune after user confirmation.
+    ApplyAdvancedPrune,
+
+    /// Show an informational toast/message in the transcript.
+    ShowInfoMessage(String),
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),

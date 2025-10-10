@@ -279,6 +279,7 @@ fn make_chatwidget_manual() -> (
         conversation_id: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
+        current_rollout_path: None,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
@@ -291,6 +292,7 @@ fn make_chatwidget_manual() -> (
         prune_keep_indices: std::collections::HashSet::new(),
         prune_delete_indices: std::collections::HashSet::new(),
         pending_prune_advanced: false,
+        pending_advanced_plan: None,
         advanced_index_map: HashMap::new(),
     };
     (widget, rx, op_rx)

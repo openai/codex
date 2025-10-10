@@ -55,6 +55,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::prelude::Stylize;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
@@ -243,6 +244,8 @@ pub(crate) struct ChatWidget {
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
     conversation_id: Option<ConversationId>,
+    // Rollout file path for the current conversation (from SessionConfiguredEvent)
+    current_rollout_path: Option<PathBuf>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -268,6 +271,16 @@ pub(crate) struct ChatWidget {
     prune_delete_indices: HashSet<usize>,
     pending_prune_advanced: bool,
     advanced_index_map: HashMap<usize, usize>,
+    pending_advanced_plan: Option<AdvancedPendingPlan>,
+}
+
+#[derive(Clone, Default)]
+struct AdvancedPendingPlan {
+    to_include: Vec<usize>,
+    to_exclude: Vec<usize>,
+    to_delete: Vec<usize>,
+    before_count: usize,
+    after_count: usize,
 }
 
 struct UserMessage {
@@ -331,6 +344,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
+        self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -632,7 +646,8 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
-        self.app_event_tx.send(AppEvent::ExitRequest);
+        // Finalize prune by rewriting rollout on shutdown before exiting
+        self.app_event_tx.send(AppEvent::FinalizePruneOnShutdown);
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
@@ -952,6 +967,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             conversation_id: None,
+            current_rollout_path: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
@@ -966,6 +982,7 @@ impl ChatWidget {
             prune_delete_indices: HashSet::new(),
             pending_prune_advanced: false,
             advanced_index_map: HashMap::new(),
+            pending_advanced_plan: None,
         }
     }
 
@@ -987,8 +1004,11 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
-        let codex_op_tx =
-            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+        let codex_op_tx = spawn_agent_from_existing(
+            conversation,
+            session_configured.clone(),
+            app_event_tx.clone(),
+        );
 
         Self {
             app_event_tx: app_event_tx.clone(),
@@ -1020,6 +1040,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             conversation_id: None,
+            current_rollout_path: Some(session_configured.rollout_path),
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
@@ -1034,6 +1055,7 @@ impl ChatWidget {
             prune_delete_indices: HashSet::new(),
             pending_prune_advanced: false,
             advanced_index_map: HashMap::new(),
+            pending_advanced_plan: None,
         }
     }
 
@@ -1626,14 +1648,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn confirm_advanced_changes(&mut self) {
-        // Ensure advanced view does not auto-reopen while we're processing the result.
+        // Build plan and show confirmation dialog.
         self.pending_prune_advanced = false;
-        // Apply staged inclusion toggles and, if present, prune deletions after confirmation.
-        // Compute inclusion diffs once so we can apply them together with deletions.
         let mut to_include: Vec<usize> = Vec::new();
         let mut to_exclude: Vec<usize> = Vec::new();
+        let mut before_count: usize = 0;
         if let Some(list) = &self.last_context_items {
-            for it in list.iter() {
+            for it in list {
+                if it.included {
+                    before_count += 1;
+                }
                 let desired = self.prune_keep_indices.contains(&it.index);
                 if desired != it.included {
                     if desired {
@@ -1644,30 +1668,104 @@ impl ChatWidget {
                 }
             }
         }
+        let to_delete: Vec<usize> = self.prune_delete_indices.iter().copied().collect();
+        let after_count = self
+            .included_indices_after_toggles()
+            .map(|s| s.len())
+            .unwrap_or(before_count);
+        self.pending_advanced_plan = Some(AdvancedPendingPlan {
+            to_include,
+            to_exclude,
+            to_delete,
+            before_count,
+            after_count,
+        });
+        self.show_advanced_confirm_prompt();
+    }
 
-        // Apply inclusion changes first
-        if !to_include.is_empty() {
-            self.app_event_tx
-                .send(AppEvent::CodexOp(Op::SetContextInclusion {
-                    indices: to_include,
-                    included: true,
-                }));
+    fn show_advanced_confirm_prompt(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let mut freed_pct: u8 = 0;
+        if let Some(plan) = &self.pending_advanced_plan {
+            let before = plan.before_count as u32;
+            let after = plan.after_count as u32;
+            let freed = before.saturating_sub(after);
+            freed_pct = if before > 0 {
+                ((freed * 100) / before) as u8
+            } else {
+                0
+            };
         }
-        if !to_exclude.is_empty() {
-            self.app_event_tx
-                .send(AppEvent::CodexOp(Op::SetContextInclusion {
-                    indices: to_exclude,
-                    included: false,
-                }));
+        let header = format!("Estimated context freed: ~{freed_pct}%");
+        items.push(SelectionItem {
+            name: "No, go back".to_string(),
+            description: Some("Return to advanced view".to_string()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenPruneAdvanced);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
+            name: "Yes, apply prune".to_string(),
+            description: Some("Apply keep/delete and inclusion changes".to_string()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::ApplyAdvancedPrune);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Confirm Prune".to_string()),
+            subtitle: None,
+            footer_hint: Some(ratatui::text::Line::from("enter: select | esc: back")),
+            items,
+            is_searchable: false,
+            search_placeholder: None,
+            header: Box::new(ratatui::text::Line::from(header).dim()),
+            on_enter_event: None,
+            on_cancel_event: None,
+            space_triggers_action: false,
+        });
+    }
+
+    pub(crate) fn apply_advanced_prune(&mut self) {
+        if let Some(plan) = self.pending_advanced_plan.take() {
+            let inc_len = plan.to_include.len();
+            let exc_len = plan.to_exclude.len();
+            let del_len = plan.to_delete.len();
+            if inc_len > 0 {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::SetContextInclusion {
+                        indices: plan.to_include,
+                        included: true,
+                    }));
+            }
+            if exc_len > 0 {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::SetContextInclusion {
+                        indices: plan.to_exclude,
+                        included: false,
+                    }));
+            }
+            if del_len > 0 {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::PruneContextByIndices {
+                        indices: plan.to_delete,
+                    }));
+            }
+            self.submit_op(Op::GetContextItems);
+            let freed = plan.before_count.saturating_sub(plan.after_count);
+            let pct = if plan.before_count > 0 {
+                ((freed as u32 * 100) / plan.before_count as u32) as u8
+            } else {
+                0
+            };
+            let msg = format!(
+                "Applied advanced prune: include +{inc_len}, exclude -{exc_len}, delete ×{del_len} (freed ~{pct}% of context)"
+            );
+            self.add_info_message(msg, None);
         }
-        // Then prune deletions (destructive)
-        if !self.prune_delete_indices.is_empty() {
-            let indices: Vec<usize> = self.prune_delete_indices.iter().copied().collect();
-            self.app_event_tx
-                .send(AppEvent::CodexOp(Op::PruneContextByIndices { indices }));
-        }
-        // Refresh listing and close popup.
-        self.submit_op(Op::GetContextItems);
     }
 
     /// Render the advanced prune view listing context items with toggles.
@@ -1740,15 +1838,23 @@ impl ChatWidget {
             on_enter_event: Some(Box::new(|tx: &AppEventSender| {
                 tx.send(AppEvent::ConfirmAdvancedChanges);
             })),
-            on_cancel_event: None,
+            on_cancel_event: Some(Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::PruneAdvancedClosed);
+                tx.send(AppEvent::OpenPruneRoot);
+            })),
+            space_triggers_action: true,
         });
     }
 
     /// Open the prune menu with common actions: advanced, manual by category, and restore.
-    fn open_prune_menu(&mut self) {
+    pub(crate) fn open_prune_menu(&mut self) {
         use codex_core::protocol::Op;
 
         let mut items: Vec<SelectionItem> = Vec::new();
+
+        // If an advanced-prune session was pending/open, mark it closed before opening the root menu.
+        // Switching to the root menu should not cause Advanced to reopen on the next context refresh.
+        self.on_prune_advanced_closed();
 
         // Advanced prune (non-destructive by default)
         items.push(SelectionItem {
@@ -1773,12 +1879,12 @@ impl ChatWidget {
             ..Default::default()
         });
 
-        // Restore full context (from rollout backup)
+        // Restore full context (from backup) — handled purely in TUI by resuming from .bak
         items.push(SelectionItem {
             name: "Restore full context".to_string(),
-            description: Some("Rebuild history from rollout backup".to_string()),
+            description: Some("Resume from rollout .bak backup".to_string()),
             actions: vec![Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::CodexOp(Op::RestoreFullContext));
+                tx.send(AppEvent::RestoreContextFromBackup);
             })],
             dismiss_on_select: true,
             ..Default::default()
@@ -1795,47 +1901,36 @@ impl ChatWidget {
             header: Box::new(ratatui::text::Line::from("Select an action")),
             on_enter_event: None,
             on_cancel_event: None,
+            space_triggers_action: false,
         });
     }
 
     /// Manual prune submenu (por categoria).
     pub(crate) fn open_prune_manual_menu(&mut self) {
-        use codex_core::protocol::Op;
         use codex_core::protocol::PruneCategory as PC;
+        // Close Advanced state if it was pending/open before switching to manual submenu.
+        self.on_prune_advanced_closed();
         let mut items: Vec<SelectionItem> = Vec::new();
 
-        let mut push_prune = |label: &str, cat: PC| {
+        let mut push_prune = |label: String, cat: PC| {
             items.push(SelectionItem {
                 name: format!("Prune {label}"),
                 description: Some("Remove matching items from context".to_string()),
                 actions: vec![Box::new(move |tx: &AppEventSender| {
-                    tx.send(AppEvent::CodexOp(Op::PruneContext {
-                        categories: vec![cat.clone()],
-                        range: codex_core::protocol::PruneRange::All,
-                    }));
-                    tx.send(AppEvent::CodexOp(Op::GetContextItems));
+                    tx.send(AppEvent::OpenPruneManualConfirm { category: cat.clone(), label: label.clone() });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
             });
         };
         // Order: outputs, calls, reasoning, user, assistant
-        push_prune("tool outputs", PC::ToolOutput);
-        push_prune("tool calls", PC::ToolCall);
-        push_prune("reasoning", PC::Reasoning);
-        push_prune("user messages", PC::UserMessage);
-        push_prune("assistant messages", PC::AssistantMessage);
+        push_prune("tool outputs".to_string(), PC::ToolOutput);
+        push_prune("tool calls".to_string(), PC::ToolCall);
+        push_prune("reasoning".to_string(), PC::Reasoning);
+        push_prune("user messages".to_string(), PC::UserMessage);
+        push_prune("assistant messages".to_string(), PC::AssistantMessage);
 
-        // Restore full context
-        items.push(SelectionItem {
-            name: "Restore full context".to_string(),
-            description: Some("Rebuild history from rollout file".to_string()),
-            actions: vec![Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::CodexOp(Op::RestoreFullContext));
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        });
+        // (Restore is available in the root prune menu only.)
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Manual Prune".to_string()),
@@ -1847,7 +1942,66 @@ impl ChatWidget {
             header: Box::new(ratatui::text::Line::from("Select categories to prune")),
             on_enter_event: None,
             on_cancel_event: None,
+            space_triggers_action: false,
         });
+    }
+
+    pub(crate) fn open_prune_manual_confirm(
+        &mut self,
+        category: codex_core::protocol::PruneCategory,
+        label: String,
+    ) {
+        use codex_core::protocol::Op;
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let header = format!(
+            "Confirm prune: remove all {label} from the current context?"
+        );
+
+        // No — go back to the manual menu
+        items.push(SelectionItem {
+            name: "No, go back".to_string(),
+            description: Some("Return to manual prune menu".to_string()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenPruneManual);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        // Yes — apply prune for the selected category
+        let label_clone = label.clone();
+        items.push(SelectionItem {
+            name: format!("Yes, prune {label}"),
+            description: Some("Remove matching items and refresh context".to_string()),
+            actions: vec![Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::CodexOp(Op::PruneContext {
+                    categories: vec![category.clone()],
+                    range: codex_core::protocol::PruneRange::All,
+                }));
+                tx.send(AppEvent::CodexOp(Op::GetContextItems));
+                tx.send(AppEvent::ShowInfoMessage(format!(
+                    "Pruned {label_clone} from context"
+                )));
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Confirm Prune".to_string()),
+            subtitle: None,
+            footer_hint: Some(ratatui::text::Line::from("enter: select | esc: back")),
+            items,
+            is_searchable: false,
+            search_placeholder: None,
+            header: Box::new(ratatui::text::Line::from(header)),
+            on_enter_event: None,
+            on_cancel_event: Some(Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenPruneManual);
+            })),
+            space_triggers_action: false,
+        });
+        // No immediate user feedback here; the confirm selection posts a toast.
     }
 
     fn notify(&mut self, notification: Notification) {
@@ -2443,6 +2597,38 @@ impl ChatWidget {
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
+    }
+}
+
+impl ChatWidget {
+    pub(crate) fn current_rollout_path(&self) -> Option<PathBuf> {
+        self.current_rollout_path.clone()
+    }
+
+    pub(crate) fn frame_requester(&self) -> FrameRequester {
+        self.frame_requester.clone()
+    }
+
+    /// Compute included indices after applying local toggles to the last known list.
+    pub(crate) fn included_indices_after_toggles(
+        &self,
+    ) -> Option<std::collections::BTreeSet<usize>> {
+        let list = self.last_context_items.as_ref()?;
+        let mut included = std::collections::BTreeSet::new();
+        for it in list.iter() {
+            let idx = it.index;
+            let keep = if self.prune_delete_indices.contains(&idx) {
+                false
+            } else if self.prune_keep_indices.contains(&idx) {
+                true
+            } else {
+                it.included
+            };
+            if keep {
+                included.insert(idx);
+            }
+        }
+        Some(included)
     }
 }
 

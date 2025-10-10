@@ -29,6 +29,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -385,8 +386,14 @@ impl App {
             AppEvent::OpenPruneAdvanced => {
                 self.chat_widget.open_prune_advanced();
             }
+            AppEvent::OpenPruneRoot => {
+                self.chat_widget.open_prune_menu();
+            }
             AppEvent::OpenPruneManual => {
                 self.chat_widget.open_prune_manual_menu();
+            }
+            AppEvent::OpenPruneManualConfirm { category, label } => {
+                self.chat_widget.open_prune_manual_confirm(category, label);
             }
             AppEvent::PruneAdvancedClosed => {
                 self.chat_widget.on_prune_advanced_closed();
@@ -399,6 +406,16 @@ impl App {
             }
             AppEvent::ConfirmAdvancedChanges => {
                 self.chat_widget.confirm_advanced_changes();
+            }
+            AppEvent::ApplyAdvancedPrune => {
+                self.chat_widget.apply_advanced_prune();
+            }
+            AppEvent::FinalizePruneOnShutdown => self.finalize_prune_on_shutdown().await,
+            AppEvent::RestoreContextFromBackup => {
+                self.restore_context_from_backup().await;
+            }
+            AppEvent::ShowInfoMessage(msg) => {
+                self.chat_widget.add_info_message(msg, None);
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
@@ -489,6 +506,171 @@ impl App {
                 // Ignore Release key events.
             }
         };
+    }
+
+    async fn finalize_prune_on_shutdown(&mut self) {
+        use codex_protocol::protocol::RolloutItem;
+        use codex_protocol::protocol::RolloutLine;
+        // Attempt to persist prune, but never block exit on failure.
+        if let Some(rollout_path) = self.chat_widget.current_rollout_path() {
+            if let Some(included) = self.chat_widget.included_indices_after_toggles() {
+                // Paths: backup alongside original; write to temp and rename.
+                let backup_path = rollout_path.with_extension("bak");
+                let tmp_path = rollout_path.with_extension("jsonl.tmp");
+
+                // Best-effort backup and rewrite; on any failure, report and continue to exit.
+                if let Err(_e) = std::fs::copy(&rollout_path, &backup_path) {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to create backup at {}",
+                        backup_path.display()
+                    ));
+                } else if let Ok(input) = std::fs::read_to_string(&rollout_path) {
+                    if let Ok(mut out) = std::fs::File::create(&tmp_path) {
+                        // Copy first SessionMeta and TurnContext as-is; then keep included ResponseItem lines.
+                        let mut seen_meta = false;
+                        let mut seen_context = false;
+                        let mut resp_idx: usize = 0;
+                        for line in input.lines() {
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
+                            if let Ok(rl) = parsed {
+                                match rl.item {
+                                    RolloutItem::SessionMeta(_) => {
+                                        if !seen_meta {
+                                            let _ = writeln!(out, "{trimmed}");
+                                            seen_meta = true;
+                                        }
+                                    }
+                                    RolloutItem::TurnContext(_) => {
+                                        if !seen_context {
+                                            let _ = writeln!(out, "{trimmed}");
+                                            seen_context = true;
+                                        }
+                                    }
+                                    RolloutItem::ResponseItem(_) => {
+                                        if included.contains(&resp_idx) {
+                                            let _ = writeln!(out, "{trimmed}");
+                                        }
+                                        resp_idx = resp_idx.saturating_add(1);
+                                    }
+                                    _ => {
+                                        // Preserve other lines as-is to avoid breaking formats we don't know about.
+                                        let _ = writeln!(out, "{trimmed}");
+                                    }
+                                }
+                            }
+                        }
+                        // Replace original file atomically; ignore failure and proceed to exit.
+                        let _ = std::fs::rename(&tmp_path, &rollout_path);
+                    } else {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to create pruned file {}",
+                            tmp_path.display(),
+                        ));
+                    }
+                } else {
+                    self.chat_widget
+                        .add_error_message("Failed to read rollout".to_string());
+                }
+            } else {
+                // No context list was ever loaded; nothing to persist. This is normal when the user
+                // never opened the prune UI in this session; do not surface an error.
+                tracing::debug!(
+                    "FinalizePruneOnShutdown: no context items loaded; skipping persistence"
+                );
+            }
+        } else {
+            // No rollout path (e.g., never resumed a session); still allow exit.
+            self.chat_widget.add_error_message(
+                "Cannot persist prune: unknown rollout path (resume a session first)".to_string(),
+            );
+        }
+
+        // Always request application exit after attempting persistence.
+        self.app_event_tx.send(AppEvent::ExitRequest);
+    }
+
+    async fn restore_context_from_backup(&mut self) {
+        let path = match self.chat_widget.current_rollout_path() {
+            Some(p) => p,
+            None => {
+                self.chat_widget
+                    .add_error_message("Cannot restore: unknown rollout path".to_string());
+                return;
+            }
+        };
+        let backup = path.with_extension("bak");
+        if !backup.exists() {
+            self.chat_widget
+                .add_error_message(format!("Backup not found: {}", backup.display()));
+            return;
+        }
+        // Safety: ensure the .bak belongs to this session by matching ConversationId in SessionMeta.
+        if let Some(cur_id) = self.chat_widget.conversation_id()
+            && let Ok(text) = std::fs::read_to_string(&backup)
+        {
+            let mut matched = false;
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Ok(rl) =
+                    serde_json::from_str::<codex_protocol::protocol::RolloutLine>(trimmed)
+                    && let codex_protocol::protocol::RolloutItem::SessionMeta(sm) = rl.item
+                {
+                    if sm.meta.id != cur_id {
+                        self.chat_widget.add_error_message(format!(
+                            "Backup does not belong to this session (expected {}, found {})",
+                            cur_id, sm.meta.id,
+                        ));
+                        return;
+                    }
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                self.chat_widget.add_error_message(
+                    "Backup missing SessionMeta; cannot validate session".to_string(),
+                );
+                return;
+            }
+        }
+        let cfg = self.chat_widget.config_ref().clone();
+        let auth = self.auth_manager.clone();
+        match self
+            .server
+            .resume_conversation_from_rollout(cfg.clone(), backup.clone(), auth)
+            .await
+        {
+            Ok(new_conv) => {
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: cfg,
+                    frame_requester: self.chat_widget.frame_requester(),
+                    app_event_tx: self.app_event_tx.clone(),
+                    initial_prompt: None,
+                    initial_images: Vec::new(),
+                    enhanced_keys_supported: self.enhanced_keys_supported,
+                    auth_manager: self.auth_manager.clone(),
+                };
+                self.chat_widget = crate::chatwidget::ChatWidget::new_from_existing(
+                    init,
+                    new_conv.conversation,
+                    new_conv.session_configured,
+                );
+                self.chat_widget.add_info_message(
+                    format!("Restored full context from {}", backup.display()),
+                    None,
+                );
+            }
+            Err(e) => self
+                .chat_widget
+                .add_error_message(format!("Failed to restore from backup: {e:#}")),
+        }
     }
 }
 

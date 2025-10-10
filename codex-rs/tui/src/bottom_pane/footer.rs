@@ -21,10 +21,15 @@ pub(crate) struct FooterProps {
     // The fields below exist in this branch but the upstream footer renderer
     // does not use them. Keep them here to avoid broader refactors while
     // rendering exactly like upstream.
+    #[allow(dead_code)]
     pub(crate) model_label: Option<String>,
+    #[allow(dead_code)]
     pub(crate) directory: Option<String>,
+    #[allow(dead_code)]
     pub(crate) account_email: Option<String>,
+    #[allow(dead_code)]
     pub(crate) primary_limit_percent: Option<u8>,
+    #[allow(dead_code)]
     pub(crate) weekly_limit_percent: Option<u8>,
 }
 

@@ -155,3 +155,4 @@ tmp/
 # Misc
 .nyc_output/
 coverage-final.json
+codex-rs/codex-rs/

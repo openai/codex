@@ -1,0 +1,42 @@
+# Standard attributes baseline (added by Codex)
+
+* text=auto eol=lf
+
+# Scripts
+*.sh text eol=lf
+*.bat text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.tar.gz binary
+*.tgz binary
+*.mp4 binary
+*.mov binary
+*.mp3 binary
+*.wav binary
+
+# Text assets
+*.svg text
+
+# Lockfiles
+package-lock.json text
+pnpm-lock.yaml text
+yarn.lock text
+Cargo.lock text
+Pipfile.lock text
+poetry.lock text
+composer.lock text
+
+# GitHub linguist hints (optional)
+docs/** linguist-documentation
+**/dist/** linguist-generated
+vendor/** linguist-vendored
+*.min.js linguist-generated
+*.min.css linguist-generated

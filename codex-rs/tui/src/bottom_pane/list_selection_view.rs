@@ -58,6 +58,9 @@ pub(crate) struct SelectionViewParams {
     pub on_enter_event: Option<SelectionAction>,
     /// Optional action to invoke when the view is dismissed with Esc.
     pub on_cancel_event: Option<SelectionAction>,
+    /// If true, pressing Space triggers the selected item's action even in searchable lists.
+    /// Default is false, so Space contributes to the search query when `is_searchable` is true.
+    pub space_triggers_action: bool,
 }
 
 impl Default for SelectionViewParams {
@@ -72,6 +75,7 @@ impl Default for SelectionViewParams {
             header: Box::new(()),
             on_enter_event: None,
             on_cancel_event: None,
+            space_triggers_action: false,
         }
     }
 }
@@ -90,6 +94,7 @@ pub(crate) struct ListSelectionView {
     header: Box<dyn Renderable>,
     on_enter_event: Option<SelectionAction>,
     on_cancel_event: Option<SelectionAction>,
+    space_triggers_action: bool,
 }
 
 impl ListSelectionView {
@@ -122,6 +127,7 @@ impl ListSelectionView {
             header,
             on_enter_event: params.on_enter_event,
             on_cancel_event: params.on_cancel_event,
+            space_triggers_action: params.space_triggers_action,
         };
         s.apply_filter();
         s
@@ -313,6 +319,18 @@ impl BottomPaneView for ListSelectionView {
             } => {
                 self.on_ctrl_c();
             }
+            // Spacebar behavior: in searchable lists, optionally trigger action; otherwise append to filter.
+            KeyEvent { code: KeyCode::Char(' '), modifiers, .. } if self.is_searchable
+                && !modifiers.contains(KeyModifiers::CONTROL)
+                && !modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if self.space_triggers_action {
+                    self.accept();
+                } else {
+                    self.search_query.push(' ');
+                    self.apply_filter();
+                }
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -342,10 +360,7 @@ impl BottomPaneView for ListSelectionView {
                     self.accept();
                 }
             }
-            KeyEvent {
-                code: KeyCode::Char(' '),
-                ..
-            } => self.accept(),
+            KeyEvent { code: KeyCode::Char(' '), .. } => self.accept(),
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
