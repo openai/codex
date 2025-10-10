@@ -147,42 +147,112 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
-    // Track last assistant text we emitted to avoid duplicate assistant messages
-    // in the outbound Chat Completions payload (can happen if a final
-    // aggregated assistant message was recorded alongside an earlier partial).
-    let mut last_assistant_text: Option<String> = None;
+    #[derive(Default)]
+    struct PendingAssistant {
+        content: Option<String>,
+        reasoning: Option<String>,
+        tool_calls: Vec<serde_json::Value>,
+    }
+
+    impl PendingAssistant {
+        fn is_empty(&self) -> bool {
+            self.content.is_none() && self.reasoning.is_none() && self.tool_calls.is_empty()
+        }
+
+        fn set_content(&mut self, text: String) {
+            self.content = Some(text);
+        }
+
+        fn push_tool_call(&mut self, tool_call: serde_json::Value) {
+            self.tool_calls.push(tool_call);
+        }
+
+        fn add_reasoning(&mut self, reasoning: String) {
+            match &mut self.reasoning {
+                Some(existing) => existing.push_str(&reasoning),
+                None => self.reasoning = Some(reasoning),
+            }
+        }
+    }
+
+    fn flush_pending_assistant(
+        pending: &mut Option<PendingAssistant>,
+        messages: &mut Vec<serde_json::Value>,
+    ) {
+        if let Some(mut pending) = pending.take() {
+            if pending.is_empty() {
+                return;
+            }
+
+            let mut obj = serde_json::Map::new();
+            obj.insert(
+                "role".to_string(),
+                serde_json::Value::String("assistant".to_string()),
+            );
+            match pending.content.take() {
+                Some(content) => {
+                    obj.insert("content".to_string(), serde_json::Value::String(content));
+                }
+                None => {
+                    obj.insert("content".to_string(), serde_json::Value::Null);
+                }
+            }
+
+            if !pending.tool_calls.is_empty() {
+                obj.insert(
+                    "tool_calls".to_string(),
+                    serde_json::Value::Array(pending.tool_calls),
+                );
+            }
+
+            if let Some(reasoning) = pending.reasoning.take() {
+                obj.insert(
+                    "reasoning".to_string(),
+                    serde_json::Value::String(reasoning),
+                );
+            }
+
+            messages.push(serde_json::Value::Object(obj));
+        }
+    }
+
+    let mut pending_assistant: Option<PendingAssistant> = None;
 
     for (idx, item) in input.iter().enumerate() {
         match item {
-            ResponseItem::Message { role, content, .. } => {
+            ResponseItem::Message { role, content, .. } if role == "assistant" => {
+                flush_pending_assistant(&mut pending_assistant, &mut messages);
+
+                let mut pending = PendingAssistant::default();
                 let mut text = String::new();
                 for c in content {
                     match c {
                         ContentItem::InputText { text: t }
-                        | ContentItem::OutputText { text: t } => {
-                            text.push_str(t);
-                        }
+                        | ContentItem::OutputText { text: t } => text.push_str(t),
                         _ => {}
                     }
                 }
-                // Skip exact-duplicate assistant messages.
-                if role == "assistant" {
-                    if let Some(prev) = &last_assistant_text
-                        && prev == &text
-                    {
-                        continue;
-                    }
-                    last_assistant_text = Some(text.clone());
+                pending.set_content(text);
+
+                if let Some(reasoning) = reasoning_by_anchor_index.remove(&idx) {
+                    pending.add_reasoning(reasoning);
                 }
 
-                let mut msg = json!({"role": role, "content": text});
-                if role == "assistant"
-                    && let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
-                    && let Some(obj) = msg.as_object_mut()
-                {
-                    obj.insert("reasoning".to_string(), json!(reasoning));
+                pending_assistant = Some(pending);
+            }
+            ResponseItem::Message { role, content, .. } => {
+                flush_pending_assistant(&mut pending_assistant, &mut messages);
+
+                let mut text = String::new();
+                for c in content {
+                    match c {
+                        ContentItem::InputText { text: t }
+                        | ContentItem::OutputText { text: t } => text.push_str(t),
+                        _ => {}
+                    }
                 }
-                messages.push(msg);
+
+                messages.push(json!({"role": role, "content": text}));
             }
             ResponseItem::FunctionCall {
                 name,
@@ -190,24 +260,20 @@ pub(crate) async fn stream_chat_completions(
                 call_id,
                 ..
             } => {
-                let mut msg = json!({
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": arguments,
-                        }
-                    }]
-                });
-                if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
-                    && let Some(obj) = msg.as_object_mut()
-                {
-                    obj.insert("reasoning".to_string(), json!(reasoning));
+                let pending = pending_assistant.get_or_insert_with(PendingAssistant::default);
+
+                pending.push_tool_call(json!({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": arguments,
+                    }
+                }));
+
+                if let Some(reasoning) = reasoning_by_anchor_index.remove(&idx) {
+                    pending.add_reasoning(reasoning);
                 }
-                messages.push(msg);
             }
             ResponseItem::LocalShellCall {
                 id,
@@ -215,25 +281,22 @@ pub(crate) async fn stream_chat_completions(
                 status,
                 action,
             } => {
-                // Confirm with API team.
-                let mut msg = json!({
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": id.clone().unwrap_or_else(|| "".to_string()),
-                        "type": "local_shell_call",
-                        "status": status,
-                        "action": action,
-                    }]
-                });
-                if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
-                    && let Some(obj) = msg.as_object_mut()
-                {
-                    obj.insert("reasoning".to_string(), json!(reasoning));
+                let pending = pending_assistant.get_or_insert_with(PendingAssistant::default);
+
+                pending.push_tool_call(json!({
+                    "id": id.clone().unwrap_or_default(),
+                    "type": "local_shell_call",
+                    "status": status,
+                    "action": action,
+                }));
+
+                if let Some(reasoning) = reasoning_by_anchor_index.remove(&idx) {
+                    pending.add_reasoning(reasoning);
                 }
-                messages.push(msg);
             }
             ResponseItem::FunctionCallOutput { call_id, output } => {
+                flush_pending_assistant(&mut pending_assistant, &mut messages);
+
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
@@ -247,20 +310,24 @@ pub(crate) async fn stream_chat_completions(
                 input,
                 status: _,
             } => {
-                messages.push(json!({
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": id,
-                        "type": "custom",
-                        "custom": {
-                            "name": name,
-                            "input": input,
-                        }
-                    }]
+                let pending = pending_assistant.get_or_insert_with(PendingAssistant::default);
+
+                pending.push_tool_call(json!({
+                    "id": id,
+                    "type": "custom",
+                    "custom": {
+                        "name": name,
+                        "input": input,
+                    }
                 }));
+
+                if let Some(reasoning) = reasoning_by_anchor_index.remove(&idx) {
+                    pending.add_reasoning(reasoning);
+                }
             }
             ResponseItem::CustomToolCallOutput { call_id, output } => {
+                flush_pending_assistant(&mut pending_assistant, &mut messages);
+
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
@@ -270,11 +337,12 @@ pub(crate) async fn stream_chat_completions(
             ResponseItem::Reasoning { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::Other => {
-                // Omit these items from the conversation history.
                 continue;
             }
         }
     }
+
+    flush_pending_assistant(&mut pending_assistant, &mut messages);
 
     let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
     let payload = json!({
@@ -587,6 +655,19 @@ async fn process_chat_sse<S>(
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
 
+                        // Then finalize any streamed assistant text before emitting
+                        // the tool call so turn order is preserved.
+                        if !assistant_text.is_empty() {
+                            let item = ResponseItem::Message {
+                                role: "assistant".to_string(),
+                                content: vec![ContentItem::OutputText {
+                                    text: std::mem::take(&mut assistant_text),
+                                }],
+                                id: None,
+                            };
+                            let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
+                        }
+
                         // Then emit the FunctionCall response item.
                         let item = ResponseItem::FunctionCall {
                             id: None,
@@ -739,7 +820,86 @@ where
                         }
                     }
 
-                    // Not an assistant message – forward immediately.
+                    // For non-assistant items (tool calls, reasoning, etc.), drain buffered
+                    // output in the correct order before forwarding the item itself.
+                    let is_reasoning_item =
+                        matches!(item, codex_protocol::models::ResponseItem::Reasoning { .. });
+
+                    if is_reasoning_item {
+                        if !this.cumulative_reasoning.is_empty() {
+                            let reasoning = std::mem::take(&mut this.cumulative_reasoning);
+                            if !reasoning.is_empty() {
+                                this.pending.push_back(ResponseEvent::OutputItemDone(
+                                    codex_protocol::models::ResponseItem::Reasoning {
+                                        id: String::new(),
+                                        summary: Vec::new(),
+                                        content: Some(vec![
+                                            codex_protocol::models::ReasoningItemContent::ReasoningText {
+                                                text: reasoning,
+                                            },
+                                        ]),
+                                        encrypted_content: None,
+                                    },
+                                ));
+                                if let Some(ev) = this.pending.pop_front() {
+                                    return Poll::Ready(Some(Ok(ev)));
+                                } else {
+                                    continue;
+                                }
+                            }
+                        }
+
+                        return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
+                    }
+
+                    let mut drained_any = false;
+
+                    if !this.cumulative_reasoning.is_empty() {
+                        let reasoning = std::mem::take(&mut this.cumulative_reasoning);
+                        if !reasoning.is_empty() {
+                            this.pending.push_back(ResponseEvent::OutputItemDone(
+                                codex_protocol::models::ResponseItem::Reasoning {
+                                    id: String::new(),
+                                    summary: Vec::new(),
+                                    content: Some(vec![
+                                        codex_protocol::models::ReasoningItemContent::ReasoningText {
+                                            text: reasoning,
+                                        },
+                                    ]),
+                                    encrypted_content: None,
+                                },
+                            ));
+                            drained_any = true;
+                        }
+                    }
+
+                    if !this.cumulative.is_empty() {
+                        let message = std::mem::take(&mut this.cumulative);
+                        if !message.is_empty() {
+                            this.pending.push_back(ResponseEvent::OutputItemDone(
+                                codex_protocol::models::ResponseItem::Message {
+                                    id: None,
+                                    role: "assistant".to_string(),
+                                    content: vec![
+                                        codex_protocol::models::ContentItem::OutputText {
+                                            text: message,
+                                        },
+                                    ],
+                                },
+                            ));
+                            drained_any = true;
+                        }
+                    }
+
+                    if drained_any {
+                        this.pending.push_back(ResponseEvent::OutputItemDone(item));
+                        if let Some(ev) = this.pending.pop_front() {
+                            return Poll::Ready(Some(Ok(ev)));
+                        } else {
+                            continue;
+                        }
+                    }
+
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
