@@ -15,9 +15,12 @@ fi
 # Load environment variables if .env exists
 if [[ -f ".env" ]]; then
     echo "📄 Loading environment from .env"
-    set -a
-    source .env
-    set +a
+    # Only export required variables from .env
+    for var in CODEX_MODE CODEX_RESONANCE CODEX_LOCAL_PORT CODEX_DEBUG; do
+        if grep -q "^$var=" .env; then
+            export "$var=$(grep "^$var=" .env | tail -n 1 | cut -d '=' -f2-)"
+        fi
+    done
 fi
 
 # Set default values for Codex configuration
