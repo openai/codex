@@ -1075,16 +1075,6 @@ impl Session {
             .map_err(FunctionCallError::RespondToModel)
     }
 
-    pub(crate) async fn run_unified_exec_request(
-        &self,
-        request: crate::unified_exec::UnifiedExecRequest<'_>,
-    ) -> Result<crate::unified_exec::UnifiedExecResult, crate::unified_exec::UnifiedExecError> {
-        self.services
-            .unified_exec_manager
-            .handle_request(request)
-            .await
-    }
-
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;

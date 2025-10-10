@@ -5,14 +5,99 @@ use crate::executor::ExecutionMode;
 use crate::executor::ExecutionRequest;
 use crate::executor::ExecutorConfig;
 use crate::executor::errors::ExecError;
+use crate::landlock::create_linux_sandbox_command_args;
+use crate::protocol::SandboxPolicy;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_patch_safety;
+use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+use crate::seatbelt::create_seatbelt_command_args;
+use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_otel::otel_event_manager::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
+use thiserror::Error;
+
+#[derive(Debug)]
+pub(crate) struct SandboxLaunch {
+    pub program: String,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum SandboxLaunchError {
+    #[error("missing command line for sandbox launch")]
+    MissingCommandLine,
+    #[error("missing codex-linux-sandbox executable path")]
+    MissingLinuxSandboxExecutable,
+}
+
+pub(crate) fn build_launch_for_sandbox(
+    sandbox: SandboxType,
+    command: &[String],
+    sandbox_policy: &SandboxPolicy,
+    sandbox_policy_cwd: &Path,
+    codex_linux_sandbox_exe: Option<&PathBuf>,
+) -> Result<SandboxLaunch, SandboxLaunchError> {
+    let mut env = HashMap::new();
+    if !sandbox_policy.has_full_network_access() {
+        env.insert(
+            CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
+            "1".to_string(),
+        );
+    }
+
+    match sandbox {
+        SandboxType::None => {
+            let (program, args) = command
+                .split_first()
+                .ok_or(SandboxLaunchError::MissingCommandLine)?;
+            Ok(SandboxLaunch {
+                program: program.clone(),
+                args: args.to_vec(),
+                env,
+            })
+        }
+        SandboxType::MacosSeatbelt => {
+            env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
+            let args =
+                create_seatbelt_command_args(command.to_vec(), sandbox_policy, sandbox_policy_cwd);
+            Ok(SandboxLaunch {
+                program: MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string(),
+                args,
+                env,
+            })
+        }
+        SandboxType::LinuxSeccomp => {
+            let exe =
+                codex_linux_sandbox_exe.ok_or(SandboxLaunchError::MissingLinuxSandboxExecutable)?;
+            let args = create_linux_sandbox_command_args(
+                command.to_vec(),
+                sandbox_policy,
+                sandbox_policy_cwd,
+            );
+            Ok(SandboxLaunch {
+                program: exe.to_string_lossy().to_string(),
+                args,
+                env,
+            })
+        }
+    }
+}
+
+pub(crate) struct RetrySandboxContext<'a> {
+    pub sub_id: &'a str,
+    pub call_id: &'a str,
+    pub tool_name: &'a str,
+    pub otel_event_manager: &'a OtelEventManager,
+}
 
 /// Sandbox placement options selected for an execution run, including whether
 /// to escalate after failures and whether approvals should persist.
@@ -48,6 +133,53 @@ fn should_escalate_on_failure(approval: AskForApproval, sandbox: SandboxType) ->
             SandboxType::MacosSeatbelt | SandboxType::LinuxSeccomp
         )
     )
+}
+
+pub(crate) async fn request_retry_without_sandbox(
+    session: &Session,
+    failure_message: impl Into<String>,
+    command: &[String],
+    cwd: PathBuf,
+    ctx: RetrySandboxContext<'_>,
+) -> Option<ReviewDecision> {
+    session
+        .notify_background_event(ctx.sub_id, failure_message.into())
+        .await;
+
+    let approval_command = command.to_vec();
+    let decision = session
+        .request_command_approval(
+            ctx.sub_id.to_string(),
+            ctx.call_id.to_string(),
+            approval_command.clone(),
+            cwd,
+            Some("command failed; retry without sandbox?".to_string()),
+        )
+        .await;
+
+    ctx.otel_event_manager.tool_decision(
+        ctx.tool_name,
+        ctx.call_id,
+        decision,
+        ToolDecisionSource::User,
+    );
+
+    match decision {
+        ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
+            if matches!(decision, ReviewDecision::ApprovedForSession) {
+                session
+                    .services
+                    .executor
+                    .record_session_approval(approval_command);
+            }
+
+            session
+                .notify_background_event(ctx.sub_id, "retrying command without sandbox")
+                .await;
+            Some(decision)
+        }
+        ReviewDecision::Denied | ReviewDecision::Abort => None,
+    }
 }
 
 /// Determines how a command should be sandboxed, prompting the user when

@@ -40,7 +40,7 @@ where
 }
 
 /// Converts the sandbox policy into the CLI invocation for `codex-linux-sandbox`.
-fn create_linux_sandbox_command_args(
+pub(crate) fn create_linux_sandbox_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
