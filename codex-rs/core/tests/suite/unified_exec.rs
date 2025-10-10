@@ -47,7 +47,9 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, Value>> {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    let parsed: Value = serde_json::from_str(trimmed)?;
+                    let parsed: Value = serde_json::from_str(trimmed).map_err(|err| {
+                        anyhow::anyhow!("failed to parse tool output content {trimmed:?}: {err}")
+                    })?;
                     outputs.insert(call_id.to_string(), parsed);
                 }
             }
@@ -181,6 +183,7 @@ async fn unified_exec_streams_after_lagged_output() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
     });
     let TestCodex {
         codex,
