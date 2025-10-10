@@ -21,6 +21,8 @@ pub(crate) async fn handle_mcp_tool_call(
     tool_name: String,
     arguments: String,
 ) -> ResponseInputItem {
+    // Ensure core pre-tool readiness (e.g., ghost snapshot) before the first tool call.
+    sess.ensure_pretool_ready().await;
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
     // is not.
     let arguments_value = if arguments.trim().is_empty() {

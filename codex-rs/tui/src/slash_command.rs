@@ -85,13 +85,7 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
     let show_beta_features = beta_features_enabled();
 
     SlashCommand::iter()
-        .filter(|cmd| {
-            if *cmd == SlashCommand::Undo {
-                show_beta_features
-            } else {
-                true
-            }
-        })
+        .filter(|cmd| show_beta_features || *cmd != SlashCommand::Undo)
         .map(|c| (c.command(), c))
         .collect()
 }
