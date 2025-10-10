@@ -179,20 +179,22 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
         let mut schema_value = serde_json::to_value(schema)?;
         if let Value::Object(ref mut obj) = schema_value {
             if let Some(defs) = obj.remove("definitions")
-                && let Value::Object(defs_obj) = defs {
-                    for (def_name, def_schema) in defs_obj {
-                        if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
-                            definitions.insert(def_name, def_schema);
-                        }
+                && let Value::Object(defs_obj) = defs
+            {
+                for (def_name, def_schema) in defs_obj {
+                    if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
+                        definitions.insert(def_name, def_schema);
                     }
                 }
+            }
 
             if let Some(Value::Array(one_of)) = obj.get_mut("oneOf") {
                 for variant in one_of.iter_mut() {
                     if let Some(variant_name) = variant_definition_name(&name, variant)
-                        && let Value::Object(variant_obj) = variant {
-                            variant_obj.insert("title".into(), Value::String(variant_name));
-                        }
+                        && let Value::Object(variant_obj) = variant
+                    {
+                        variant_obj.insert("title".into(), Value::String(variant_name));
+                    }
                 }
             }
         }
@@ -280,18 +282,20 @@ fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
         }
 
         if props.len() == 1
-            && let Some(key) = props.keys().next() {
-                let pascal = to_pascal_case(key);
-                return Some(format!("{pascal}{base}"));
-            }
+            && let Some(key) = props.keys().next()
+        {
+            let pascal = to_pascal_case(key);
+            return Some(format!("{pascal}{base}"));
+        }
     }
 
     if let Some(required) = variant.get("required").and_then(Value::as_array)
         && required.len() == 1
-            && let Some(key) = required[0].as_str() {
-                let pascal = to_pascal_case(key);
-                return Some(format!("{pascal}{base}"));
-            }
+        && let Some(key) = required[0].as_str()
+    {
+        let pascal = to_pascal_case(key);
+        return Some(format!("{pascal}{base}"));
+    }
 
     None
 }
