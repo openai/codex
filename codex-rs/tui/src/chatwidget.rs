@@ -53,6 +53,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
@@ -81,6 +83,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
+use crate::render::renderable::ColumnRenderable;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
@@ -1718,6 +1721,9 @@ impl ChatWidget {
         } else {
             default_choice
         };
+        let show_high_effort_warning = choices
+            .iter()
+            .any(|choice| choice.display == ReasoningEffortConfig::High);
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
@@ -1777,9 +1783,19 @@ impl ChatWidget {
             });
         }
 
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Select Reasoning Level".bold()));
+        header.push(Line::from(
+            format!("Reasoning for model {model_slug}").dim(),
+        ));
+        if show_high_effort_warning {
+            header.push(Line::from(
+                "⚠ High reasoning effort can quickly consume Plus plan rate limits.".red(),
+            ));
+        }
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Reasoning Level".to_string()),
-            subtitle: Some(format!("Reasoning for model {model_slug}")),
+            header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
