@@ -133,6 +133,22 @@ impl App {
                     resumed.session_configured,
                 )
             }
+            ResumeSelection::Fork(path) => {
+                let forked = conversation_manager
+                    .fork_conversation_from_rollout(config.clone(), path.clone())
+                    .await
+                    .wrap_err_with(|| format!("Failed to fork session from {}", path.display()))?;
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
+                };
+                ChatWidget::new_from_existing(init, forked.conversation, forked.session_configured)
+            }
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());

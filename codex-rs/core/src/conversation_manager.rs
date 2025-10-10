@@ -39,6 +39,13 @@ pub struct ConversationManager {
     session_source: SessionSource,
 }
 
+fn sanitize_rollout_items_for_fork(items: Vec<RolloutItem>) -> Vec<RolloutItem> {
+    items
+        .into_iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .collect()
+}
+
 impl ConversationManager {
     pub fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
         Self {
@@ -171,6 +178,34 @@ impl ConversationManager {
 
         self.finalize_spawn(codex, conversation_id).await
     }
+
+    /// Fork an entire conversation without truncating any history. This creates
+    /// a new session that continues from the latest turn while preserving the
+    /// original session.
+    pub async fn fork_conversation_from_rollout(
+        &self,
+        config: Config,
+        path: PathBuf,
+    ) -> CodexResult<NewConversation> {
+        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let fork_history = match history {
+            InitialHistory::Resumed(resumed) => {
+                InitialHistory::Forked(sanitize_rollout_items_for_fork(resumed.history))
+            }
+            InitialHistory::Forked(items) => {
+                InitialHistory::Forked(sanitize_rollout_items_for_fork(items))
+            }
+            InitialHistory::New => InitialHistory::New,
+        };
+
+        let auth_manager = self.auth_manager.clone();
+        let CodexSpawnOk {
+            codex,
+            conversation_id,
+        } = Codex::spawn(config, auth_manager, fork_history, self.session_source).await?;
+
+        self.finalize_spawn(codex, conversation_id).await
+    }
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message
@@ -198,6 +233,7 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
     // Cut strictly before the nth user message (do not keep the nth itself).
     let cut_idx = user_positions[n];
     let rolled: Vec<RolloutItem> = items.into_iter().take(cut_idx).collect();
+    let rolled = sanitize_rollout_items_for_fork(rolled);
 
     if rolled.is_empty() {
         InitialHistory::New

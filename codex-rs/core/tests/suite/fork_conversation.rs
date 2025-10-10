@@ -28,6 +28,52 @@ fn sse_completed(id: &str) -> String {
     core_test_support::load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
 }
 
+fn read_rollout_items(path: &std::path::Path) -> Vec<RolloutItem> {
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read rollout file {path:?}: {e}"));
+    let mut items: Vec<RolloutItem> = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("jsonl line parse error: {e}"));
+        let rl: RolloutLine =
+            serde_json::from_value(v).unwrap_or_else(|e| panic!("rollout line parse error: {e}"));
+        items.push(rl.item);
+    }
+    items
+}
+
+fn read_rollout_items_without_meta(path: &std::path::Path) -> Vec<RolloutItem> {
+    read_rollout_items(path)
+        .into_iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .collect()
+}
+
+fn count_session_meta_entries(path: &std::path::Path) -> usize {
+    read_rollout_items(path)
+        .into_iter()
+        .filter(|item| matches!(item, RolloutItem::SessionMeta(_)))
+        .count()
+}
+
+fn user_input_texts(items: &[RolloutItem]) -> Vec<String> {
+    let mut texts = Vec::new();
+    for item in items {
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
+            && role == "user"
+            && content_items_to_text(content).is_some_and(|text| !is_session_prefix_message(&text))
+        {
+            if let Some(text) = content_items_to_text(content) {
+                texts.push(text.to_string());
+            }
+        }
+    }
+    texts
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_conversation_twice_drops_to_first_message() {
     skip_if_no_network!();
@@ -91,27 +137,9 @@ async fn fork_conversation_twice_drops_to_first_message() {
 
     // GetHistory flushes before returning the path; no wait needed.
 
-    // Helper: read rollout items (excluding SessionMeta) from a JSONL path.
-    let read_items = |p: &std::path::Path| -> Vec<RolloutItem> {
-        let text = std::fs::read_to_string(p).expect("read rollout file");
-        let mut items: Vec<RolloutItem> = Vec::new();
-        for line in text.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
-            let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
-            match rl.item {
-                RolloutItem::SessionMeta(_) => {}
-                other => items.push(other),
-            }
-        }
-        items
-    };
-
     // Compute expected prefixes after each fork by truncating base rollout
     // strictly before the nth user input (0-based).
-    let base_items = read_items(&base_path);
+    let base_items = read_rollout_items_without_meta(&base_path);
     let find_user_input_positions = |items: &[RolloutItem]| -> Vec<usize> {
         let mut pos = Vec::new();
         for (i, it) in items.iter().enumerate() {
@@ -160,10 +188,10 @@ async fn fork_conversation_twice_drops_to_first_message() {
     };
 
     // GetHistory on fork1 flushed; the file is ready.
-    let fork1_items = read_items(&fork1_path);
+    let fork1_items = read_rollout_items_without_meta(&fork1_path);
     pretty_assertions::assert_eq!(
-        serde_json::to_value(&fork1_items).unwrap(),
-        serde_json::to_value(&expected_after_first).unwrap()
+        user_input_texts(&fork1_items),
+        user_input_texts(&expected_after_first),
     );
 
     // Fork again with n=0 → drops the (new) last user message, leaving only the first.
@@ -185,16 +213,99 @@ async fn fork_conversation_twice_drops_to_first_message() {
         _ => panic!("expected ConversationHistory event after second fork"),
     };
     // GetHistory on fork2 flushed; the file is ready.
-    let fork1_items = read_items(&fork1_path);
-    let fork1_user_inputs = find_user_input_positions(&fork1_items);
+    let fork1_items_full = read_rollout_items(&fork1_path);
+    let fork1_user_inputs = find_user_input_positions(&fork1_items_full);
     let cut_last_on_fork1 = fork1_user_inputs
         .get(fork1_user_inputs.len().saturating_sub(1))
         .copied()
         .unwrap_or(0);
-    let expected_after_second: Vec<RolloutItem> = fork1_items[..cut_last_on_fork1].to_vec();
-    let fork2_items = read_items(&fork2_path);
+    let expected_after_second: Vec<RolloutItem> = fork1_items_full[..cut_last_on_fork1].to_vec();
+    let fork2_items = read_rollout_items_without_meta(&fork2_path);
     pretty_assertions::assert_eq!(
-        serde_json::to_value(&fork2_items).unwrap(),
-        serde_json::to_value(&expected_after_second).unwrap()
+        user_input_texts(&fork2_items),
+        user_input_texts(&expected_after_second),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fork_conversation_from_rollout_preserves_full_history() {
+    skip_if_no_network!();
+
+    // Set up a mock server that completes two turns.
+    let server = MockServer::start().await;
+    let sse = sse_completed("resp");
+    let response = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse.clone(), "text/event-stream");
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(response)
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider.clone();
+    let config_for_fork = config.clone();
+
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create conversation");
+
+    for text in ["alpha", "beta"] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![InputItem::Text {
+                    text: text.to_string(),
+                }],
+            })
+            .await
+            .unwrap();
+        let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    }
+
+    codex.submit(Op::GetPath).await.unwrap();
+    let base_history =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
+    let base_path = match &base_history {
+        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path.clone(),
+        _ => panic!("expected ConversationHistory event"),
+    };
+
+    // Fork the full conversation.
+    let forked = conversation_manager
+        .fork_conversation_from_rollout(config_for_fork, base_path.clone())
+        .await
+        .expect("fork entire conversation");
+
+    forked.conversation.submit(Op::GetPath).await.unwrap();
+    let fork_history = wait_for_event(&forked.conversation, |ev| {
+        matches!(ev, EventMsg::ConversationPath(_))
+    })
+    .await;
+    let fork_path = match &fork_history {
+        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path.clone(),
+        _ => panic!("expected ConversationPath event for forked conversation"),
+    };
+
+    assert_eq!(count_session_meta_entries(&fork_path), 1);
+
+    let base_items = read_rollout_items_without_meta(&base_path);
+    let fork_items = read_rollout_items_without_meta(&fork_path);
+
+    pretty_assertions::assert_eq!(
+        serde_json::to_value(&fork_items).unwrap(),
+        serde_json::to_value(&base_items).unwrap()
     );
 }
