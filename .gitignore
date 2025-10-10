@@ -81,3 +81,16 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
+# Local cargo caches (must never be committed)
+codex-rs/.cargo-home/
+codex-rs/.cargo/
+codex-rs/.cgh/
+
+# Rust workspace build output (must never be committed)
+codex-rs/target/
+
+# Insta pending snapshots (temporary files, never commit)
+**/*.snap.new
+
+# Workspace-local caches
+codex-rs/.cache/

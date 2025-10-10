@@ -98,3 +98,21 @@ If you don’t have the tool:
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+## Operational Safety Rules (Agent)
+
+- If you encounter a `Permission denied` error for any command or action, immediately pause the current task and ask the user for guidance. Do not attempt workarounds (e.g., re-running with different flags, installing tools, or changing directories) without explicit approval — this prevents wasted tokens and unexpected side effects.
+
+- Before performing any `git commit` (or staging changes), verify that Cargo- or build-generated artifacts are not being tracked. Concretely: ensure `target/` and other transient Cargo outputs are ignored, and run `git status --porcelain` to confirm you are only committing intended source files (no large auto-generated file sets).
+
+- When running Cargo commands, always ensure they operate locally within the workspace. Set `CARGO_HOME` to a workspace path (e.g., `codex-rs/.cargo-home`) and `CARGO_TARGET_DIR` to `codex-rs/target` so downloads, caches, and build outputs remain inside the workspace and do not touch user-wide directories.
+
+---
+
+GitHub + Docs
+- Use the GitHub CLI `gh` for all GitHub interactions (PRs, issues, merges, remote branch management). Do not use raw `git` for remote state changes.
+- All documentation must always be written in English.
+
+Repository Hygiene
+- Before any commit, ensure no irrelevant artifacts or vendor directories are tracked (e.g., `target/`, `node_modules/`, `dist/`, `build/`, `.cache/`, `coverage/`, `.DS_Store`, `*.log`, `tmp/`).
+- Keep these paths in `.gitignore` and never commit them; remove from index with `git rm --cached` if needed (avoid destructive cleanup commands).
