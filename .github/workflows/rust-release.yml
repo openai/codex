@@ -72,6 +72,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
+          # actionlint: disable-next-line runner-label
           - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
 
@@ -209,6 +210,7 @@ jobs:
       - name: Stage artifacts
         shell: bash
         run: |
+          # shellcheck disable=SC2193
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
@@ -228,6 +230,7 @@ jobs:
       - name: Compress artifacts
         shell: bash
         run: |
+          # shellcheck disable=SC2193
           # Path that contains the uncompressed binaries for the current
           # ${{ matrix.target }}
           dest="dist/${{ matrix.target }}"
@@ -325,7 +328,7 @@ jobs:
           # Extract the version from the tag name, which is in the format
           # "rust-v0.1.0".
           version="${GITHUB_REF_NAME#rust-v}"
-          echo "name=${version}" >> $GITHUB_OUTPUT
+          echo "name=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Determine npm publish settings
         id: npm_publish_settings
@@ -333,6 +336,7 @@ jobs:
           VERSION: ${{ steps.release_name.outputs.name }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2153
           version="${VERSION}"
 
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -470,7 +474,7 @@ jobs:
         run: |
           set -euo pipefail
           gh api \
-            repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli \
+            "repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli" \
             -X PATCH \
             -f sha="${GITHUB_SHA}" \
             -F force=true

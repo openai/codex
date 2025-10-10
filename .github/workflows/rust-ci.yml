@@ -120,6 +120,7 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             profile: dev
+          # actionlint: disable-next-line runner-label
           - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             profile: dev
@@ -137,6 +138,7 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             profile: release
+          # actionlint: disable-next-line runner-label
           - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             profile: release
@@ -177,6 +179,7 @@ jobs:
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release' }}
         continue-on-error: true
         run: |
+          # shellcheck disable=SC2016
           find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 \
             | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo check --profile ${{ matrix.profile }}'
 
