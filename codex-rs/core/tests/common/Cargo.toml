@@ -15,3 +15,5 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 wiremock = { workspace = true }
+notify = "6"
+walkdir = { workspace = true }
