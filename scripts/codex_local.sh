@@ -63,11 +63,11 @@ fi
 # Build Node.js components
 echo "📦 Building Node.js components..."
 cd codex-cli
-if npm install --legacy-peer-deps 2>/dev/null; then
+if npm install 2>/dev/null; then
     echo "✅ Node.js dependencies installed successfully"
 else
-    echo "⚠️  Warning: Some Node.js dependencies failed to install (network issues)"
-    echo "   Continuing with available packages..."
+    echo "⚠️  Warning: Some Node.js dependencies failed to install (network issues or dependency conflicts)"
+    echo "   Please resolve any peer dependency conflicts in package.json."
 fi
 npm run build 2>/dev/null || echo "Warning: npm build script not found, skipping"
 cd ..
