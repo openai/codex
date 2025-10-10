@@ -677,6 +677,18 @@ fn streaming_final_answer_keeps_task_running_state() {
 }
 
 #[test]
+fn ctrl_c_shutdown_ignores_caps_lock() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
+
+    match op_rx.try_recv() {
+        Ok(Op::Shutdown) => {}
+        other => panic!("expected Op::Shutdown, got {other:?}"),
+    }
+}
+
+#[test]
 fn exec_history_cell_shows_working_then_completed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
