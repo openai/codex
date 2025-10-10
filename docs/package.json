@@ -6,7 +6,7 @@
   "scripts": {
     "build": "echo 'Building documentation...'",
     "test": "echo 'Testing documentation...'",
-    "lint": "echo 'Linting documentation...'",
+    "lint": "prettier --check .",
     "codex:local": "echo 'Docs local setup complete'",
     "codex:cloud": "echo 'Docs cloud setup complete'"
   }
