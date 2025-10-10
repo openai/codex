@@ -59,16 +59,17 @@ async fn approve_all_auto_accepts_exec() -> Result<()> {
     let requests = mock.requests();
     assert!(requests.len() >= 2, "expected at least two responses POSTs");
     let item = requests[1].function_call_output(call_id);
-    let output_json: Value = serde_json::from_str(
-        item.get("output")
-            .and_then(Value::as_str)
-            .expect("function_call_output.output should be a string"),
-    )?;
-
-    assert_eq!(
-        output_json["metadata"]["exit_code"].as_i64(),
-        Some(0),
-        "expected exit code 0 for approved exec"
+    let output_str = item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function_call_output.output should be a string");
+    assert!(
+        output_str.contains("Exit code: 0"),
+        "expected Exit code: 0 in output: {output_str}"
+    );
+    assert!(
+        output_str.contains("approve-all-ok"),
+        "expected command output in response: {output_str}"
     );
 
     Ok(())
