@@ -65,7 +65,15 @@ if [[ ! -f "package.json" ]]; then
 fi
 
 echo "📦 Installing cloud dependencies..."
-npm install --legacy-peer-deps
+if npm install; then
+    echo "✅ Dependencies installed successfully."
+else
+    echo "⚠️  npm install failed. There may be peer dependency conflicts."
+    echo "   Please review the error above and resolve any conflicts in package.json."
+    echo "   If you are aware of the risks and want to proceed anyway, you can run:"
+    echo "     npm install --legacy-peer-deps"
+    exit 1
+fi
 
 # Check for cloud-specific Rust features
 cd ../codex-rs
