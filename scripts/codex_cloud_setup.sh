@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-echo "☁️  Starting cloud Codex setup..."
+echo "[CLOUD] Starting cloud Codex setup..."
 
 # Check if we're in the right directory
 if [[ ! -f "package.json" ]] || [[ ! -d "codex-rs" ]]; then
