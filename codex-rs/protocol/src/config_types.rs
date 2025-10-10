@@ -33,6 +33,18 @@ pub enum ReasoningSummary {
     None,
 }
 
+/// Controls output length/detail on GPT-5 models via the Responses API.
+/// Serialized with lowercase values to match the OpenAI API.
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum Verbosity {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display, TS)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]

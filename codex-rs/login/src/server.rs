@@ -1,21 +1,31 @@
 use std::io::Cursor;
+use std::io::Read;
+use std::io::Write;
 use std::io::{self};
+use std::net::SocketAddr;
+use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
-use crate::AuthDotJson;
-use crate::get_auth_file;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
+use codex_core::auth::AuthDotJson;
+use codex_core::auth::get_auth_file;
+use codex_core::default_client::originator;
+use codex_core::token_data::TokenData;
+use codex_core::token_data::parse_id_token;
 use rand::RngCore;
+use serde_json::Value as JsonValue;
 use tiny_http::Header;
 use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
+use tiny_http::StatusCode;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
@@ -34,7 +44,7 @@ impl ServerOptions {
     pub fn new(codex_home: PathBuf, client_id: String) -> Self {
         Self {
             codex_home,
-            client_id: client_id.to_string(),
+            client_id,
             issuer: DEFAULT_ISSUER.to_string(),
             port: DEFAULT_PORT,
             open_browser: true,
@@ -81,7 +91,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
-    let server = Server::http(format!("127.0.0.1:{}", opts.port)).map_err(io::Error::other)?;
+    let server = bind_server(opts.port)?;
     let actual_port = match server.server_addr().to_ip() {
         Some(addr) => addr.port(),
         None => {
@@ -118,7 +128,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let shutdown_notify = Arc::new(tokio::sync::Notify::new());
     let server_handle = {
         let shutdown_notify = shutdown_notify.clone();
-        let server = server.clone();
+        let server = server;
         tokio::spawn(async move {
             let result = loop {
                 tokio::select! {
@@ -134,19 +144,31 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
                         let response =
                             process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
 
-                        let is_login_complete = matches!(response, HandledRequest::ResponseAndExit(_));
-                        match response {
-                            HandledRequest::Response(r) | HandledRequest::ResponseAndExit(r) => {
-                                let _ = tokio::task::spawn_blocking(move || req.respond(r)).await;
+                        let exit_result = match response {
+                            HandledRequest::Response(response) => {
+                                let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
+                                None
+                            }
+                            HandledRequest::ResponseAndExit {
+                                headers,
+                                body,
+                                result,
+                            } => {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    send_response_with_disconnect(req, headers, body)
+                                })
+                                .await;
+                                Some(result)
                             }
                             HandledRequest::RedirectWithHeader(header) => {
                                 let redirect = Response::empty(302).with_header(header);
                                 let _ = tokio::task::spawn_blocking(move || req.respond(redirect)).await;
+                                None
                             }
-                        }
+                        };
 
-                        if is_login_complete {
-                            break Ok(());
+                        if let Some(result) = exit_result {
+                            break result;
                         }
                     }
                 }
@@ -170,7 +192,11 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
 enum HandledRequest {
     Response(Response<Cursor<Vec<u8>>>),
     RedirectWithHeader(Header),
-    ResponseAndExit(Response<Cursor<Vec<u8>>>),
+    ResponseAndExit {
+        headers: Vec<Header>,
+        body: Vec<u8>,
+        result: io::Result<()>,
+    },
 }
 
 async fn process_request(
@@ -222,8 +248,8 @@ async fn process_request(
                         &opts.codex_home,
                         api_key.clone(),
                         tokens.id_token.clone(),
-                        Some(tokens.access_token.clone()),
-                        Some(tokens.refresh_token.clone()),
+                        tokens.access_token.clone(),
+                        tokens.refresh_token.clone(),
                     )
                     .await
                     {
@@ -258,17 +284,72 @@ async fn process_request(
         }
         "/success" => {
             let body = include_str!("assets/success.html");
-            let mut resp = Response::from_data(body.as_bytes());
-            if let Ok(h) = tiny_http::Header::from_bytes(
-                &b"Content-Type"[..],
-                &b"text/html; charset=utf-8"[..],
-            ) {
-                resp.add_header(h);
+            HandledRequest::ResponseAndExit {
+                headers: match Header::from_bytes(
+                    &b"Content-Type"[..],
+                    &b"text/html; charset=utf-8"[..],
+                ) {
+                    Ok(header) => vec![header],
+                    Err(_) => Vec::new(),
+                },
+                body: body.as_bytes().to_vec(),
+                result: Ok(()),
             }
-            HandledRequest::ResponseAndExit(resp)
         }
+        "/cancel" => HandledRequest::ResponseAndExit {
+            headers: Vec::new(),
+            body: b"Login cancelled".to_vec(),
+            result: Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Login cancelled",
+            )),
+        },
         _ => HandledRequest::Response(Response::from_string("Not Found").with_status_code(404)),
     }
+}
+
+/// tiny_http filters `Connection` headers out of `Response` objects, so using
+/// `req.respond` never informs the client (or the library) that a keep-alive
+/// socket should be closed. That leaves the per-connection worker parked in a
+/// loop waiting for more requests, which in turn causes the next login attempt
+/// to hang on the old connection. This helper bypasses tiny_http’s response
+/// machinery: it extracts the raw writer, prints the HTTP response manually,
+/// and always appends `Connection: close`, ensuring the socket is closed from
+/// the server side. Ideally, tiny_http would provide an API to control
+/// server-side connection persistence, but it does not.
+fn send_response_with_disconnect(
+    req: Request,
+    mut headers: Vec<Header>,
+    body: Vec<u8>,
+) -> io::Result<()> {
+    let status = StatusCode(200);
+    let mut writer = req.into_writer();
+    let reason = status.default_reason_phrase();
+    write!(writer, "HTTP/1.1 {} {}\r\n", status.0, reason)?;
+    headers.retain(|h| !h.field.equiv("Connection"));
+    if let Ok(close_header) = Header::from_bytes(&b"Connection"[..], &b"close"[..]) {
+        headers.push(close_header);
+    }
+
+    let content_length_value = format!("{}", body.len());
+    if let Ok(content_length_header) =
+        Header::from_bytes(&b"Content-Length"[..], content_length_value.as_bytes())
+    {
+        headers.push(content_length_header);
+    }
+
+    for header in headers {
+        write!(
+            writer,
+            "{}: {}\r\n",
+            header.field.as_str(),
+            header.value.as_str()
+        )?;
+    }
+
+    writer.write_all(b"\r\n")?;
+    writer.write_all(&body)?;
+    writer.flush()
 }
 
 fn build_authorize_url(
@@ -288,6 +369,7 @@ fn build_authorize_url(
         ("id_token_add_organizations", "true"),
         ("codex_cli_simplified_flow", "true"),
         ("state", state),
+        ("originator", originator().value.as_str()),
     ];
     let qs = query
         .into_iter()
@@ -299,17 +381,79 @@ fn build_authorize_url(
 
 fn generate_state() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-struct ExchangedTokens {
-    id_token: String,
-    access_token: String,
-    refresh_token: String,
+fn send_cancel_request(port: u16) -> io::Result<()> {
+    let addr: SocketAddr = format!("127.0.0.1:{port}")
+        .parse()
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+
+    stream.write_all(b"GET /cancel HTTP/1.1\r\n")?;
+    stream.write_all(format!("Host: 127.0.0.1:{port}\r\n").as_bytes())?;
+    stream.write_all(b"Connection: close\r\n\r\n")?;
+
+    let mut buf = [0u8; 64];
+    let _ = stream.read(&mut buf);
+    Ok(())
 }
 
-async fn exchange_code_for_tokens(
+fn bind_server(port: u16) -> io::Result<Server> {
+    let bind_address = format!("127.0.0.1:{port}");
+    let mut cancel_attempted = false;
+    let mut attempts = 0;
+    const MAX_ATTEMPTS: u32 = 10;
+    const RETRY_DELAY: Duration = Duration::from_millis(200);
+
+    loop {
+        match Server::http(&bind_address) {
+            Ok(server) => return Ok(server),
+            Err(err) => {
+                attempts += 1;
+                let is_addr_in_use = err
+                    .downcast_ref::<io::Error>()
+                    .map(|io_err| io_err.kind() == io::ErrorKind::AddrInUse)
+                    .unwrap_or(false);
+
+                // If the address is in use, there is probably another instance of the login server
+                // running. Attempt to cancel it and retry.
+                if is_addr_in_use {
+                    if !cancel_attempted {
+                        cancel_attempted = true;
+                        if let Err(cancel_err) = send_cancel_request(port) {
+                            eprintln!("Failed to cancel previous login server: {cancel_err}");
+                        }
+                    }
+
+                    thread::sleep(RETRY_DELAY);
+
+                    if attempts >= MAX_ATTEMPTS {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AddrInUse,
+                            format!("Port {bind_address} is already in use"),
+                        ));
+                    }
+
+                    continue;
+                }
+
+                return Err(io::Error::other(err));
+            }
+        }
+    }
+}
+
+pub(crate) struct ExchangedTokens {
+    pub id_token: String,
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
+pub(crate) async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -353,12 +497,12 @@ async fn exchange_code_for_tokens(
     })
 }
 
-async fn persist_tokens_async(
+pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
+    access_token: String,
+    refresh_token: String,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
@@ -370,43 +514,27 @@ async fn persist_tokens_async(
             std::fs::create_dir_all(parent).map_err(io::Error::other)?;
         }
 
-        let mut auth = read_or_default(&auth_file);
-        if let Some(key) = api_key {
-            auth.openai_api_key = Some(key);
-        }
-        let tokens = auth
-            .tokens
-            .get_or_insert_with(crate::token_data::TokenData::default);
-        tokens.id_token = crate::token_data::parse_id_token(&id_token).map_err(io::Error::other)?;
-        // Persist chatgpt_account_id if present in claims
+        let mut tokens = TokenData {
+            id_token: parse_id_token(&id_token).map_err(io::Error::other)?,
+            access_token,
+            refresh_token,
+            account_id: None,
+        };
         if let Some(acc) = jwt_auth_claims(&id_token)
             .get("chatgpt_account_id")
             .and_then(|v| v.as_str())
         {
             tokens.account_id = Some(acc.to_string());
         }
-        if let Some(at) = access_token {
-            tokens.access_token = at;
-        }
-        if let Some(rt) = refresh_token {
-            tokens.refresh_token = rt;
-        }
-        auth.last_refresh = Some(Utc::now());
-        super::write_auth_json(&auth_file, &auth)
+        let auth = AuthDotJson {
+            openai_api_key: api_key,
+            tokens: Some(tokens),
+            last_refresh: Some(Utc::now()),
+        };
+        codex_core::auth::write_auth_json(&auth_file, &auth)
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
-}
-
-fn read_or_default(path: &Path) -> AuthDotJson {
-    match super::try_read_auth_json(path) {
-        Ok(auth) => auth,
-        Err(_) => AuthDotJson {
-            openai_api_key: None,
-            tokens: None,
-            last_refresh: None,
-        },
-    }
 }
 
 fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &str) -> String {
@@ -423,11 +551,11 @@ fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &s
         .unwrap_or("");
     let completed_onboarding = token_claims
         .get("completed_platform_onboarding")
-        .and_then(|v| v.as_bool())
+        .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let is_org_owner = token_claims
         .get("is_org_owner")
-        .and_then(|v| v.as_bool())
+        .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     let needs_setup = (!completed_onboarding) && is_org_owner;
     let plan_type = access_claims
@@ -488,7 +616,11 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
 }
 
-async fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<String> {
+pub(crate) async fn obtain_api_key(
+    issuer: &str,
+    client_id: &str,
+    id_token: &str,
+) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
     struct ExchangeResp {

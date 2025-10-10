@@ -1,18 +1,29 @@
+use crate::exec::ExecToolCallOutput;
+use crate::token_data::KnownPlan;
+use crate::token_data::PlanType;
+use crate::truncate::truncate_middle;
+use codex_protocol::ConversationId;
+use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinError;
-use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
+
+/// Limit UI error messages to a reasonable size while keeping useful context.
+const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 4 KiB
 
 #[derive(Error, Debug)]
 pub enum SandboxErr {
     /// Error from sandbox execution
-    #[error("sandbox denied exec error, exit code: {0}, stdout: {1}, stderr: {2}")]
-    Denied(i32, String, String),
+    #[error(
+        "sandbox denied exec error, exit code: {}, stdout: {}, stderr: {}",
+        .output.exit_code, .output.stdout.text, .output.stderr.text
+    )]
+    Denied { output: Box<ExecToolCallOutput> },
 
     /// Error from linux seccomp filter setup
     #[cfg(target_os = "linux")]
@@ -26,7 +37,7 @@ pub enum SandboxErr {
 
     /// Command timed out
     #[error("command timed out")]
-    Timeout,
+    Timeout { output: Box<ExecToolCallOutput> },
 
     /// Command was killed by a signal
     #[error("command was killed by a signal")]
@@ -48,8 +59,13 @@ pub enum CodexErr {
     #[error("stream disconnected before completion: {0}")]
     Stream(String, Option<Duration>),
 
+    #[error(
+        "Codex ran out of room in the model's context window. Start a new conversation or clear earlier history before retrying."
+    )]
+    ContextWindowExceeded,
+
     #[error("no conversation with id: {0}")]
-    ConversationNotFound(Uuid),
+    ConversationNotFound(ConversationId),
 
     #[error("session configured event was not the first event in the stream")]
     SessionConfiguredNotFirstEvent,
@@ -69,8 +85,8 @@ pub enum CodexErr {
     Interrupted,
 
     /// Unexpected HTTP status code.
-    #[error("unexpected status {0}: {1}")]
-    UnexpectedStatus(StatusCode, String),
+    #[error("{0}")]
+    UnexpectedStatus(UnexpectedResponseError),
 
     #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
@@ -84,8 +100,8 @@ pub enum CodexErr {
     InternalServerError,
 
     /// Retry limit exceeded.
-    #[error("exceeded retry limit, last status: {0}")]
-    RetryLimit(StatusCode),
+    #[error("{0}")]
+    RetryLimit(RetryLimitReachedError),
 
     /// Agent loop died unexpectedly
     #[error("internal error; agent loop died unexpectedly")]
@@ -97,6 +113,12 @@ pub enum CodexErr {
 
     #[error("codex-linux-sandbox was required but not provided")]
     LandlockSandboxExecutableNotProvided,
+
+    #[error("unsupported operation: {0}")]
+    UnsupportedOperation(String),
+
+    #[error("Fatal error: {0}")]
+    Fatal(String),
 
     // -----------------------------------------------------------------
     // Automatic conversions for common external error types
@@ -126,39 +148,103 @@ pub enum CodexErr {
 }
 
 #[derive(Debug)]
+pub struct UnexpectedResponseError {
+    pub status: StatusCode,
+    pub body: String,
+    pub request_id: Option<String>,
+}
+
+impl std::fmt::Display for UnexpectedResponseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unexpected status {}: {}{}",
+            self.status,
+            self.body,
+            self.request_id
+                .as_ref()
+                .map(|id| format!(", request id: {id}"))
+                .unwrap_or_default()
+        )
+    }
+}
+
+impl std::error::Error for UnexpectedResponseError {}
+#[derive(Debug)]
+pub struct RetryLimitReachedError {
+    pub status: StatusCode,
+    pub request_id: Option<String>,
+}
+
+impl std::fmt::Display for RetryLimitReachedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "exceeded retry limit, last status: {}{}",
+            self.status,
+            self.request_id
+                .as_ref()
+                .map(|id| format!(", request id: {id}"))
+                .unwrap_or_default()
+        )
+    }
+}
+
+#[derive(Debug)]
 pub struct UsageLimitReachedError {
-    pub plan_type: Option<String>,
-    pub resets_in_seconds: Option<u64>,
+    pub(crate) plan_type: Option<PlanType>,
+    pub(crate) resets_in_seconds: Option<u64>,
+    pub(crate) rate_limits: Option<RateLimitSnapshot>,
 }
 
 impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Base message differs slightly for legacy ChatGPT Plus plan users.
-        if let Some(plan_type) = &self.plan_type
-            && plan_type == "plus"
-        {
-            write!(
-                f,
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again"
-            )?;
-            if let Some(secs) = self.resets_in_seconds {
-                let reset_duration = format_reset_duration(secs);
-                write!(f, " in {reset_duration}.")?;
-            } else {
-                write!(f, " later.")?;
+        let message = match self.plan_type.as_ref() {
+            Some(PlanType::Known(KnownPlan::Plus)) => format!(
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing){}",
+                retry_suffix_after_or(self.resets_in_seconds)
+            ),
+            Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
+                format!(
+                    "You've hit your usage limit. To get more access now, send a request to your admin{}",
+                    retry_suffix_after_or(self.resets_in_seconds)
+                )
             }
-        } else {
-            write!(f, "You've hit your usage limit.")?;
-
-            if let Some(secs) = self.resets_in_seconds {
-                let reset_duration = format_reset_duration(secs);
-                write!(f, " Try again in {reset_duration}.")?;
-            } else {
-                write!(f, " Try again later.")?;
+            Some(PlanType::Known(KnownPlan::Free)) => {
+                "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
+                    .to_string()
             }
-        }
+            Some(PlanType::Known(KnownPlan::Pro))
+            | Some(PlanType::Known(KnownPlan::Enterprise))
+            | Some(PlanType::Known(KnownPlan::Edu)) => format!(
+                "You've hit your usage limit.{}",
+                retry_suffix(self.resets_in_seconds)
+            ),
+            Some(PlanType::Unknown(_)) | None => format!(
+                "You've hit your usage limit.{}",
+                retry_suffix(self.resets_in_seconds)
+            ),
+        };
 
-        Ok(())
+        write!(f, "{message}")
+    }
+}
+
+fn retry_suffix(resets_in_seconds: Option<u64>) -> String {
+    if let Some(secs) = resets_in_seconds {
+        let reset_duration = format_reset_duration(secs);
+        format!(" Try again in {reset_duration}.")
+    } else {
+        " Try again later.".to_string()
+    }
+}
+
+fn retry_suffix_after_or(resets_in_seconds: Option<u64>) -> String {
+    if let Some(secs) = resets_in_seconds {
+        let reset_duration = format_reset_duration(secs);
+        format!(" or try again in {reset_duration}.")
+    } else {
+        " or try again later.".to_string()
     }
 }
 
@@ -170,15 +256,15 @@ fn format_reset_duration(total_secs: u64) -> String {
     let mut parts: Vec<String> = Vec::new();
     if days > 0 {
         let unit = if days == 1 { "day" } else { "days" };
-        parts.push(format!("{} {}", days, unit));
+        parts.push(format!("{days} {unit}"));
     }
     if hours > 0 {
         let unit = if hours == 1 { "hour" } else { "hours" };
-        parts.push(format!("{} {}", hours, unit));
+        parts.push(format!("{hours} {unit}"));
     }
     if minutes > 0 {
         let unit = if minutes == 1 { "minute" } else { "minutes" };
-        parts.push(format!("{} {}", minutes, unit));
+        parts.push(format!("{minutes} {unit}"));
     }
 
     if parts.is_empty() {
@@ -222,23 +308,66 @@ impl CodexErr {
 }
 
 pub fn get_error_message_ui(e: &CodexErr) -> String {
-    match e {
-        CodexErr::Sandbox(SandboxErr::Denied(_, _, stderr)) => stderr.to_string(),
+    let message = match e {
+        CodexErr::Sandbox(SandboxErr::Denied { output }) => {
+            let aggregated = output.aggregated_output.text.trim();
+            if !aggregated.is_empty() {
+                output.aggregated_output.text.clone()
+            } else {
+                let stderr = output.stderr.text.trim();
+                let stdout = output.stdout.text.trim();
+                match (stderr.is_empty(), stdout.is_empty()) {
+                    (false, false) => format!("{stderr}\n{stdout}"),
+                    (false, true) => output.stderr.text.clone(),
+                    (true, false) => output.stdout.text.clone(),
+                    (true, true) => format!(
+                        "command failed inside sandbox with exit code {}",
+                        output.exit_code
+                    ),
+                }
+            }
+        }
         // Timeouts are not sandbox errors from a UX perspective; present them plainly
-        CodexErr::Sandbox(SandboxErr::Timeout) => "error: command timed out".to_string(),
+        CodexErr::Sandbox(SandboxErr::Timeout { output }) => {
+            format!(
+                "error: command timed out after {} ms",
+                output.duration.as_millis()
+            )
+        }
         _ => e.to_string(),
-    }
+    };
+
+    truncate_middle(&message, ERROR_MESSAGE_UI_MAX_BYTES).0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exec::StreamOutput;
+    use codex_protocol::protocol::RateLimitWindow;
+    use pretty_assertions::assert_eq;
+
+    fn rate_limit_snapshot() -> RateLimitSnapshot {
+        RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 50.0,
+                window_minutes: Some(60),
+                resets_in_seconds: Some(3600),
+            }),
+            secondary: Some(RateLimitWindow {
+                used_percent: 30.0,
+                window_minutes: Some(120),
+                resets_in_seconds: Some(7200),
+            }),
+        }
+    }
 
     #[test]
     fn usage_limit_reached_error_formats_plus_plan() {
         let err = UsageLimitReachedError {
-            plan_type: Some("plus".to_string()),
+            plan_type: Some(PlanType::Known(KnownPlan::Plus)),
             resets_in_seconds: None,
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -247,10 +376,91 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_denied_uses_aggregated_output_when_stderr_empty() {
+        let output = ExecToolCallOutput {
+            exit_code: 77,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new("aggregate detail".to_string()),
+            duration: Duration::from_millis(10),
+            timed_out: false,
+        };
+        let err = CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(output),
+        });
+        assert_eq!(get_error_message_ui(&err), "aggregate detail");
+    }
+
+    #[test]
+    fn sandbox_denied_reports_both_streams_when_available() {
+        let output = ExecToolCallOutput {
+            exit_code: 9,
+            stdout: StreamOutput::new("stdout detail".to_string()),
+            stderr: StreamOutput::new("stderr detail".to_string()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::from_millis(10),
+            timed_out: false,
+        };
+        let err = CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(output),
+        });
+        assert_eq!(get_error_message_ui(&err), "stderr detail\nstdout detail");
+    }
+
+    #[test]
+    fn sandbox_denied_reports_stdout_when_no_stderr() {
+        let output = ExecToolCallOutput {
+            exit_code: 11,
+            stdout: StreamOutput::new("stdout only".to_string()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::from_millis(8),
+            timed_out: false,
+        };
+        let err = CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(output),
+        });
+        assert_eq!(get_error_message_ui(&err), "stdout only");
+    }
+
+    #[test]
+    fn sandbox_denied_reports_exit_code_when_no_output_available() {
+        let output = ExecToolCallOutput {
+            exit_code: 13,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(String::new()),
+            duration: Duration::from_millis(5),
+            timed_out: false,
+        };
+        let err = CodexErr::Sandbox(SandboxErr::Denied {
+            output: Box::new(output),
+        });
+        assert_eq!(
+            get_error_message_ui(&err),
+            "command failed inside sandbox with exit code 13"
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_free_plan() {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Free)),
+            resets_in_seconds: Some(3600),
+            rate_limits: Some(rate_limit_snapshot()),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://openai.com/chatgpt/pricing)."
+        );
+    }
+
+    #[test]
     fn usage_limit_reached_error_formats_default_when_none() {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: None,
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -259,10 +469,37 @@ mod tests {
     }
 
     #[test]
+    fn usage_limit_reached_error_formats_team_plan() {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Team)),
+            resets_in_seconds: Some(3600),
+            rate_limits: Some(rate_limit_snapshot()),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. To get more access now, send a request to your admin or try again in 1 hour."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_business_plan_without_reset() {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Business)),
+            resets_in_seconds: None,
+            rate_limits: Some(rate_limit_snapshot()),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
+        );
+    }
+
+    #[test]
     fn usage_limit_reached_error_formats_default_for_other_plans() {
         let err = UsageLimitReachedError {
-            plan_type: Some("pro".to_string()),
+            plan_type: Some(PlanType::Known(KnownPlan::Pro)),
             resets_in_seconds: None,
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -275,6 +512,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: Some(5 * 60),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -285,8 +523,9 @@ mod tests {
     #[test]
     fn usage_limit_reached_includes_hours_and_minutes() {
         let err = UsageLimitReachedError {
-            plan_type: Some("plus".to_string()),
+            plan_type: Some(PlanType::Known(KnownPlan::Plus)),
             resets_in_seconds: Some(3 * 3600 + 32 * 60),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -299,6 +538,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: Some(2 * 86_400 + 3 * 3600 + 5 * 60),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),
@@ -311,6 +551,7 @@ mod tests {
         let err = UsageLimitReachedError {
             plan_type: None,
             resets_in_seconds: Some(30),
+            rate_limits: Some(rate_limit_snapshot()),
         };
         assert_eq!(
             err.to_string(),

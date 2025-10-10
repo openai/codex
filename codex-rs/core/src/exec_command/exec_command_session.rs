@@ -24,6 +24,9 @@ pub(crate) struct ExecCommandSession {
 
     /// JoinHandle for the child wait task.
     wait_handle: StdMutex<Option<JoinHandle<()>>>,
+
+    /// Tracks whether the underlying process has exited.
+    exit_status: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ExecCommandSession {
@@ -34,15 +37,21 @@ impl ExecCommandSession {
         reader_handle: JoinHandle<()>,
         writer_handle: JoinHandle<()>,
         wait_handle: JoinHandle<()>,
-    ) -> Self {
-        Self {
-            writer_tx,
-            output_tx,
-            killer: StdMutex::new(Some(killer)),
-            reader_handle: StdMutex::new(Some(reader_handle)),
-            writer_handle: StdMutex::new(Some(writer_handle)),
-            wait_handle: StdMutex::new(Some(wait_handle)),
-        }
+        exit_status: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> (Self, broadcast::Receiver<Vec<u8>>) {
+        let initial_output_rx = output_tx.subscribe();
+        (
+            Self {
+                writer_tx,
+                output_tx,
+                killer: StdMutex::new(Some(killer)),
+                reader_handle: StdMutex::new(Some(reader_handle)),
+                writer_handle: StdMutex::new(Some(writer_handle)),
+                wait_handle: StdMutex::new(Some(wait_handle)),
+                exit_status,
+            },
+            initial_output_rx,
+        )
     }
 
     pub(crate) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
@@ -51,6 +60,10 @@ impl ExecCommandSession {
 
     pub(crate) fn output_receiver(&self) -> broadcast::Receiver<Vec<u8>> {
         self.output_tx.subscribe()
+    }
+
+    pub(crate) fn has_exited(&self) -> bool {
+        self.exit_status.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

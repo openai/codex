@@ -2,6 +2,7 @@
 
 use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::SandboxMode;
+use codex_utils_json_to_toml::json_to_toml;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
 use schemars::JsonSchema;
@@ -10,8 +11,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-use crate::json_to_toml::json_to_toml;
 
 /// Client-supplied configuration for a `codex` tool-call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -133,7 +132,7 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
 impl CodexToolCallParam {
     /// Returns the initial user prompt to start the Codex conversation and the
     /// effective Config object generated from the supplied parameters.
-    pub fn into_config(
+    pub async fn into_config(
         self,
         codex_linux_sandbox_exe: Option<PathBuf>,
     ) -> std::io::Result<(String, codex_core::config::Config)> {
@@ -152,6 +151,7 @@ impl CodexToolCallParam {
         // Build the `ConfigOverrides` recognized by codex-core.
         let overrides = codex_core::config::ConfigOverrides {
             model,
+            review_model: None,
             config_profile: profile,
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy.map(Into::into),
@@ -161,7 +161,7 @@ impl CodexToolCallParam {
             base_instructions,
             include_plan_tool,
             include_apply_patch_tool: None,
-            disable_response_storage: None,
+            include_view_image_tool: None,
             show_raw_agent_reasoning: None,
             tools_web_search_request: None,
         };
@@ -172,7 +172,8 @@ impl CodexToolCallParam {
             .map(|(k, v)| (k, json_to_toml(v)))
             .collect();
 
-        let cfg = codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
+        let cfg =
+            codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides).await?;
 
         Ok((prompt, cfg))
     }
@@ -181,8 +182,8 @@ impl CodexToolCallParam {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexToolCallReplyParam {
-    /// The *session id* for this conversation.
-    pub session_id: String,
+    /// The conversation id for this Codex session.
+    pub conversation_id: String,
 
     /// The *next user prompt* to continue the Codex conversation.
     pub prompt: String,
@@ -213,7 +214,8 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
         input_schema: tool_input_schema,
         output_schema: None,
         description: Some(
-            "Continue a Codex session by providing the session id and prompt.".to_string(),
+            "Continue a Codex conversation by providing the conversation id and prompt."
+                .to_string(),
         ),
         annotations: None,
     }
@@ -308,21 +310,21 @@ mod tests {
         let tool = create_tool_for_codex_tool_call_reply_param();
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
-          "description": "Continue a Codex session by providing the session id and prompt.",
+          "description": "Continue a Codex conversation by providing the conversation id and prompt.",
           "inputSchema": {
             "properties": {
+              "conversationId": {
+                "description": "The conversation id for this Codex session.",
+                "type": "string"
+              },
               "prompt": {
                 "description": "The *next user prompt* to continue the Codex conversation.",
                 "type": "string"
               },
-              "sessionId": {
-                "description": "The *session id* for this conversation.",
-                "type": "string"
-              },
             },
             "required": [
+              "conversationId",
               "prompt",
-              "sessionId",
             ],
             "type": "object",
           },

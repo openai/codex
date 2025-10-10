@@ -6,6 +6,24 @@ use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use regex_lite::Regex;
+
+#[cfg(target_os = "linux")]
+use assert_cmd::cargo::cargo_bin;
+
+pub mod responses;
+pub mod test_codex;
+pub mod test_codex_exec;
+
+#[track_caller]
+pub fn assert_regex_match<'s>(pattern: &str, actual: &'s str) -> regex_lite::Captures<'s> {
+    let regex = Regex::new(pattern).unwrap_or_else(|err| {
+        panic!("failed to compile regex {pattern:?}: {err}");
+    });
+    regex
+        .captures(actual)
+        .unwrap_or_else(|| panic!("regex {pattern:?} did not match {actual:?}"))
+}
 
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
@@ -13,10 +31,23 @@ use codex_core::config::ConfigToml;
 pub fn load_default_config_for_test(codex_home: &TempDir) -> Config {
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
-        ConfigOverrides::default(),
+        default_test_overrides(),
         codex_home.path().to_path_buf(),
     )
     .expect("defaults for test should always succeed")
+}
+
+#[cfg(target_os = "linux")]
+fn default_test_overrides() -> ConfigOverrides {
+    ConfigOverrides {
+        codex_linux_sandbox_exe: Some(cargo_bin("codex-linux-sandbox")),
+        ..ConfigOverrides::default()
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn default_test_overrides() -> ConfigOverrides {
+    ConfigOverrides::default()
 }
 
 /// Builds an SSE stream body from a JSON fixture.
@@ -123,4 +154,58 @@ where
             return ev.msg;
         }
     }
+}
+
+pub fn sandbox_env_var() -> &'static str {
+    codex_core::spawn::CODEX_SANDBOX_ENV_VAR
+}
+
+pub fn sandbox_network_env_var() -> &'static str {
+    codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+}
+
+#[macro_export]
+macro_rules! skip_if_sandbox {
+    () => {{
+        if ::std::env::var($crate::sandbox_env_var())
+            == ::core::result::Result::Ok("seatbelt".to_string())
+        {
+            eprintln!(
+                "{} is set to 'seatbelt', skipping test.",
+                $crate::sandbox_env_var()
+            );
+            return;
+        }
+    }};
+    ($return_value:expr $(,)?) => {{
+        if ::std::env::var($crate::sandbox_env_var())
+            == ::core::result::Result::Ok("seatbelt".to_string())
+        {
+            eprintln!(
+                "{} is set to 'seatbelt', skipping test.",
+                $crate::sandbox_env_var()
+            );
+            return $return_value;
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! skip_if_no_network {
+    () => {{
+        if ::std::env::var($crate::sandbox_network_env_var()).is_ok() {
+            println!(
+                "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            );
+            return;
+        }
+    }};
+    ($return_value:expr $(,)?) => {{
+        if ::std::env::var($crate::sandbox_network_env_var()).is_ok() {
+            println!(
+                "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            );
+            return $return_value;
+        }
+    }};
 }

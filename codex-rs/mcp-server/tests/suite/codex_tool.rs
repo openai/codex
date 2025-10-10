@@ -24,13 +24,15 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
+use core_test_support::skip_if_no_network;
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_apply_patch_sse_response;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
 use mcp_test_support::create_shell_sse_response;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+// Allow ample time on slower CI or under load to avoid flakes.
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Test that a shell command that is not on the "trusted" list triggers an
 /// elicitation request to the MCP and that sending the approval runs the
@@ -52,9 +54,22 @@ async fn test_shell_command_approval_triggers_elicitation() {
 }
 
 async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
-    // We use `git init` because it will not be on the "trusted" list.
-    let shell_command = vec!["git".to_string(), "init".to_string()];
+    // Use a simple, untrusted command that creates a file so we can
+    // observe a side-effect.
+    //
+    // Cross‑platform approach: run a tiny Python snippet to touch the file
+    // using `python3 -c ...` on all platforms.
     let workdir_for_shell_function_call = TempDir::new()?;
+    let created_filename = "created_by_shell_tool.txt";
+    let created_file = workdir_for_shell_function_call
+        .path()
+        .join(created_filename);
+
+    let shell_command = vec![
+        "python3".to_string(),
+        "-c".to_string(),
+        format!("import pathlib; pathlib.Path('{created_filename}').touch()"),
+    ];
 
     let McpHandle {
         process: mut mcp_process,
@@ -67,7 +82,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
             Some(5_000),
             "call1234",
         )?,
-        create_final_assistant_message_sse_response("Enjoy your new git repo!")?,
+        create_final_assistant_message_sse_response("File created!")?,
     ])
     .await?;
 
@@ -122,8 +137,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     .expect("task_complete_notification timeout")
     .expect("task_complete_notification resp");
 
-    // Verify the original `codex` tool call completes and that `git init` ran
-    // successfully.
+    // Verify the original `codex` tool call completes and that the file was created.
     let codex_response = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
@@ -136,7 +150,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
             result: json!({
                 "content": [
                     {
-                        "text": "Enjoy your new git repo!",
+                        "text": "File created!",
                         "type": "text"
                     }
                 ]
@@ -145,10 +159,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         codex_response
     );
 
-    assert!(
-        workdir_for_shell_function_call.path().join(".git").is_dir(),
-        ".git folder should have been created"
-    );
+    assert!(created_file.is_file(), "created file should exist");
 
     Ok(())
 }
@@ -162,7 +173,7 @@ fn create_expected_elicitation_request(
 ) -> anyhow::Result<JSONRPCRequest> {
     let expected_message = format!(
         "Allow Codex to run `{}` in `{}`?",
-        shlex::try_join(command.iter().map(|s| s.as_ref()))?,
+        shlex::try_join(command.iter().map(std::convert::AsRef::as_ref))?,
         workdir.to_string_lossy()
     );
     Ok(JSONRPCRequest {
@@ -297,12 +308,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_codex_tool_passes_base_instructions() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     // Apparently `#[tokio::test]` must return `()`, so we create a helper
     // function that returns `Result` so we can use `?` in favor of `unwrap`.

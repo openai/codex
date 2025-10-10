@@ -3,6 +3,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
+use crate::render::Insets;
+use crate::render::RectExt;
+
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
@@ -127,16 +130,25 @@ impl WidgetRef for &FileSearchPopup {
                         .as_ref()
                         .map(|v| v.iter().map(|&i| i as usize).collect()),
                     is_current: false,
+                    display_shortcut: None,
                     description: None,
                 })
                 .collect()
         };
 
-        if self.waiting && rows_all.is_empty() {
-            // Render a minimal waiting stub using the shared renderer (no rows -> "no matches").
-            render_rows(area, buf, &[], &self.state, MAX_POPUP_ROWS, false);
+        let empty_message = if self.waiting {
+            "loading..."
         } else {
-            render_rows(area, buf, &rows_all, &self.state, MAX_POPUP_ROWS, false);
-        }
+            "no matches"
+        };
+
+        render_rows(
+            area.inset(Insets::tlbr(0, 2, 0, 0)),
+            buf,
+            &rows_all,
+            &self.state,
+            MAX_POPUP_ROWS,
+            empty_message,
+        );
     }
 }

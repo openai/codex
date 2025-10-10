@@ -129,10 +129,7 @@ impl McpClient {
                                 error!("failed to write newline to child stdin");
                                 break;
                             }
-                            if stdin.flush().await.is_err() {
-                                error!("failed to flush child stdin");
-                                break;
-                            }
+                            // No explicit flush needed on a pipe; write_all is sufficient.
                         }
                         Err(e) => error!("failed to serialize JSONRPCMessage: {e}"),
                     }
@@ -277,8 +274,7 @@ impl McpClient {
                 err.error.code, err.error.message
             ))),
             other => Err(anyhow!(format!(
-                "unexpected message variant received in reply path: {:?}",
-                other
+                "unexpected message variant received in reply path: {other:?}"
             ))),
         }
     }
@@ -318,13 +314,12 @@ impl McpClient {
     pub async fn initialize(
         &self,
         initialize_params: InitializeRequestParams,
-        initialize_notification_params: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<mcp_types::InitializeResult> {
         let response = self
             .send_request::<InitializeRequest>(initialize_params, timeout)
             .await?;
-        self.send_notification::<InitializedNotification>(initialize_notification_params)
+        self.send_notification::<InitializedNotification>(None)
             .await?;
         Ok(response)
     }
@@ -365,7 +360,11 @@ impl McpClient {
             }
         };
 
-        if let Some(tx) = pending.lock().await.remove(&id) {
+        let tx_opt = {
+            let mut guard = pending.lock().await;
+            guard.remove(&id)
+        };
+        if let Some(tx) = tx_opt {
             // Ignore send errors – the receiver might have been dropped.
             let _ = tx.send(JSONRPCMessage::Response(resp));
         } else {
@@ -383,7 +382,11 @@ impl McpClient {
             RequestId::String(_) => return, // see comment above
         };
 
-        if let Some(tx) = pending.lock().await.remove(&id) {
+        let tx_opt = {
+            let mut guard = pending.lock().await;
+            guard.remove(&id)
+        };
+        if let Some(tx) = tx_opt {
             let _ = tx.send(JSONRPCMessage::Error(err));
         }
     }

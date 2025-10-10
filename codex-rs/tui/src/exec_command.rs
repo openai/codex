@@ -1,10 +1,11 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use dirs::home_dir;
 use shlex::try_join;
 
 pub(crate) fn escape_command(command: &[String]) -> String {
-    try_join(command.iter().map(|s| s.as_str())).unwrap_or_else(|_| command.join(" "))
+    try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
 
 pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
@@ -27,13 +28,9 @@ where
         return None;
     }
 
-    if let Some(home_dir) = std::env::var_os("HOME").map(PathBuf::from)
-        && let Ok(rel) = path.strip_prefix(&home_dir)
-    {
-        return Some(rel.to_path_buf());
-    }
-
-    None
+    let home_dir = home_dir()?;
+    let rel = path.strip_prefix(&home_dir).ok()?;
+    Some(rel.to_path_buf())
 }
 
 #[cfg(test)]

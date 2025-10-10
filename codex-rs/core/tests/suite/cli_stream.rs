@@ -1,5 +1,7 @@
 use assert_cmd::Command as AssertCommand;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::RolloutRecorder;
+use codex_core::protocol::GitInfo;
+use core_test_support::skip_if_no_network;
 use std::time::Duration;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -19,12 +21,7 @@ use wiremock::matchers::path;
 /// 4. Ensures the response is received exactly once and contains "hi"
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_mode_stream_cli() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let server = MockServer::start().await;
     let sse = concat!(
@@ -77,6 +74,22 @@ async fn chat_mode_stream_cli() {
     assert_eq!(hi_lines, 1, "Expected exactly one line with 'hi'");
 
     server.verify().await;
+
+    // Verify a new session rollout was created and is discoverable via list_conversations
+    let page = RolloutRecorder::list_conversations(home.path(), 10, None, &[])
+        .await
+        .expect("list conversations");
+    assert!(
+        !page.items.is_empty(),
+        "expected at least one session to be listed"
+    );
+    // First line of head must be the SessionMeta payload (id/timestamp)
+    let head0 = page.items[0].head.first().expect("missing head record");
+    assert!(head0.get("id").is_some(), "head[0] missing id");
+    assert!(
+        head0.get("timestamp").is_some(),
+        "head[0] missing timestamp"
+    );
 }
 
 /// Verify that passing `-c experimental_instructions_file=...` to the CLI
@@ -84,12 +97,7 @@ async fn chat_mode_stream_cli() {
 /// received by a mock OpenAI Responses endpoint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_cli_applies_experimental_instructions_file() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     // Start mock server which will capture the request and return a minimal
     // SSE stream for a single turn.
@@ -98,16 +106,12 @@ async fn exec_cli_applies_experimental_instructions_file() {
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
     );
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(sse, "text/event-stream"),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock = core_test_support::responses::mount_sse_once_match(
+        &server,
+        path("/v1/responses"),
+        sse.to_string(),
+    )
+    .await;
 
     // Create a temporary instructions file with a unique marker we can assert
     // appears in the outbound request payload.
@@ -156,8 +160,8 @@ async fn exec_cli_applies_experimental_instructions_file() {
 
     // Inspect the captured request and verify our custom base instructions were
     // included in the `instructions` field.
-    let request = &server.received_requests().await.unwrap()[0];
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let body = request.body_json();
     let instructions = body
         .get("instructions")
         .and_then(|v| v.as_str())
@@ -177,12 +181,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
 /// 4. Ensures the fixture content is correctly streamed through the CLI
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_api_stream_cli() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
@@ -214,12 +213,7 @@ async fn responses_api_stream_cli() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integration_creates_and_checks_session_file() {
     // Honor sandbox network restrictions for CI parity with the other tests.
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    skip_if_no_network!();
 
     // 1. Temp home so we read/write isolated session files.
     let home = TempDir::new().unwrap();
@@ -297,8 +291,10 @@ async fn integration_creates_and_checks_session_file() {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if item.get("type").and_then(|t| t.as_str()) == Some("message")
-                    && let Some(c) = item.get("content")
+                if item.get("type").and_then(|t| t.as_str()) == Some("response_item")
+                    && let Some(payload) = item.get("payload")
+                    && payload.get("type").and_then(|t| t.as_str()) == Some("message")
+                    && let Some(c) = payload.get("content")
                     && c.to_string().contains(&marker)
                 {
                     matching_path = Some(path.to_path_buf());
@@ -361,9 +357,16 @@ async fn integration_creates_and_checks_session_file() {
         .unwrap_or_else(|_| panic!("missing session meta line"));
     let meta: serde_json::Value = serde_json::from_str(meta_line)
         .unwrap_or_else(|_| panic!("Failed to parse session meta line as JSON"));
-    assert!(meta.get("id").is_some(), "SessionMeta missing id");
+    assert_eq!(
+        meta.get("type").and_then(|v| v.as_str()),
+        Some("session_meta")
+    );
+    let payload = meta
+        .get("payload")
+        .unwrap_or_else(|| panic!("Missing payload in meta line"));
+    assert!(payload.get("id").is_some(), "SessionMeta missing id");
     assert!(
-        meta.get("timestamp").is_some(),
+        payload.get("timestamp").is_some(),
         "SessionMeta missing timestamp"
     );
 
@@ -375,8 +378,10 @@ async fn integration_creates_and_checks_session_file() {
         let Ok(item) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if item.get("type").and_then(|t| t.as_str()) == Some("message")
-            && let Some(c) = item.get("content")
+        if item.get("type").and_then(|t| t.as_str()) == Some("response_item")
+            && let Some(payload) = item.get("payload")
+            && payload.get("type").and_then(|t| t.as_str()) == Some("message")
+            && let Some(c) = payload.get("content")
             && c.to_string().contains(&marker)
         {
             found_message = true;
@@ -388,16 +393,9 @@ async fn integration_creates_and_checks_session_file() {
         "No message found in session file containing the marker"
     );
 
-    // Second run: resume and append.
-    let orig_len = content.lines().count();
+    // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    // Cross‑platform safe resume override.  On Windows, backslashes in a TOML string must be escaped
-    // or the parse will fail and the raw literal (including quotes) may be preserved all the way down
-    // to Config, which in turn breaks resume because the path is invalid. Normalize to forward slashes
-    // to sidestep the issue.
-    let resume_path_str = path.to_string_lossy().replace('\\', "/");
-    let resume_override = format!("experimental_resume=\"{resume_path_str}\"");
     let mut cmd2 = AssertCommand::new("cargo");
     cmd2.arg("run")
         .arg("-p")
@@ -406,11 +404,11 @@ async fn integration_creates_and_checks_session_file() {
         .arg("--")
         .arg("exec")
         .arg("--skip-git-repo-check")
-        .arg("-c")
-        .arg(&resume_override)
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
-        .arg(&prompt2);
+        .arg(&prompt2)
+        .arg("resume")
+        .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
@@ -419,31 +417,50 @@ async fn integration_creates_and_checks_session_file() {
     let output2 = cmd2.output().unwrap();
     assert!(output2.status.success(), "resume codex-cli run failed");
 
-    // The rollout writer runs on a background async task; give it a moment to flush.
-    let mut new_len = orig_len;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut content2 = String::new();
-    while Instant::now() < deadline {
-        if let Ok(c) = std::fs::read_to_string(&path) {
-            let count = c.lines().count();
-            if count > orig_len {
-                content2 = c;
-                new_len = count;
+    // Find the new session file containing the resumed marker.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut resumed_path: Option<std::path::PathBuf> = None;
+    while Instant::now() < deadline && resumed_path.is_none() {
+        for entry in WalkDir::new(&sessions_dir) {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if !entry.file_name().to_string_lossy().ends_with(".jsonl") {
+                continue;
+            }
+            let p = entry.path();
+            let Ok(c) = std::fs::read_to_string(p) else {
+                continue;
+            };
+            if c.contains(&marker2) {
+                resumed_path = Some(p.to_path_buf());
                 break;
             }
         }
-        std::thread::sleep(Duration::from_millis(50));
+        if resumed_path.is_none() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
-    if content2.is_empty() {
-        // last attempt
-        content2 = std::fs::read_to_string(&path).unwrap();
-        new_len = content2.lines().count();
-    }
-    assert!(new_len > orig_len, "rollout file did not grow after resume");
-    assert!(content2.contains(&marker), "rollout lost original marker");
+
+    let resumed_path = resumed_path.expect("No resumed session file found containing the marker2");
+    // Resume should write to the existing log file.
+    assert_eq!(
+        resumed_path, path,
+        "resume should create a new session file"
+    );
+
+    let resumed_content = std::fs::read_to_string(&resumed_path).unwrap();
     assert!(
-        content2.contains(&marker2),
-        "rollout missing resumed marker"
+        resumed_content.contains(&marker),
+        "resumed file missing original marker"
+    );
+    assert!(
+        resumed_content.contains(&marker2),
+        "resumed file missing resumed marker"
     );
 }
 
@@ -571,7 +588,7 @@ async fn integration_git_info_unit_test() {
 
     // 5. Test serialization to ensure it works in SessionMeta
     let serialized = serde_json::to_string(&git_info).unwrap();
-    let deserialized: codex_core::git_info::GitInfo = serde_json::from_str(&serialized).unwrap();
+    let deserialized: GitInfo = serde_json::from_str(&serialized).unwrap();
 
     assert_eq!(git_info.commit_hash, deserialized.commit_hash);
     assert_eq!(git_info.branch, deserialized.branch);

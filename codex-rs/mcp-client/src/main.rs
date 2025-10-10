@@ -64,14 +64,14 @@ async fn main() -> Result<()> {
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             title: Some("Codex".to_string()),
+            // This field is used by Codex when it is an MCP server: it should
+            // not be used when Codex is an MCP client.
+            user_agent: None,
         },
         protocol_version: MCP_SCHEMA_VERSION.to_owned(),
     };
-    let initialize_notification_params = None;
     let timeout = Some(Duration::from_secs(10));
-    let response = client
-        .initialize(params, initialize_notification_params, timeout)
-        .await?;
+    let response = client.initialize(params, timeout).await?;
     eprintln!("initialize response: {response:?}");
 
     // Issue `tools/list` request (no params).

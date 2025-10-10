@@ -151,7 +151,13 @@ pub fn run(
     // Use the same tree-walker library that ripgrep uses. We use it directly so
     // that we can leverage the parallelism it provides.
     let mut walk_builder = WalkBuilder::new(search_directory);
-    walk_builder.threads(num_walk_builder_threads);
+    walk_builder
+        .threads(num_walk_builder_threads)
+        // Allow hidden entries.
+        .hidden(false)
+        // Don't require git to be present to apply to apply git-related ignore rules.
+        .require_git(false);
+
     if !exclude.is_empty() {
         let mut override_builder = OverrideBuilder::new(search_directory);
         for exclude in exclude {
@@ -281,10 +287,27 @@ pub fn run(
 
 /// Sort matches in-place by descending score, then ascending path.
 fn sort_matches(matches: &mut [(u32, String)]) {
-    matches.sort_by(|a, b| match b.0.cmp(&a.0) {
-        std::cmp::Ordering::Equal => a.1.cmp(&b.1),
+    matches.sort_by(cmp_by_score_desc_then_path_asc::<(u32, String), _, _>(
+        |t| t.0,
+        |t| t.1.as_str(),
+    ));
+}
+
+/// Returns a comparator closure suitable for `slice.sort_by(...)` that orders
+/// items by descending score and then ascending path using the provided accessors.
+pub fn cmp_by_score_desc_then_path_asc<T, FScore, FPath>(
+    score_of: FScore,
+    path_of: FPath,
+) -> impl FnMut(&T, &T) -> std::cmp::Ordering
+where
+    FScore: Fn(&T) -> u32,
+    FPath: Fn(&T) -> &str,
+{
+    use std::cmp::Ordering;
+    move |a, b| match score_of(b).cmp(&score_of(a)) {
+        Ordering::Equal => path_of(a).cmp(path_of(b)),
         other => other,
-    });
+    }
 }
 
 /// Maintains the `max_count` best matches for a given pattern.
