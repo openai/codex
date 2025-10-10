@@ -349,12 +349,14 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     let request_conversation_id = request.headers.get("conversation_id").unwrap();
     let request_authorization = request.headers.get("authorization").unwrap();
     let request_originator = request.headers.get("originator").unwrap();
+    let turn_kind = request.headers.get("action_kind").unwrap();
 
     assert_eq!(
         request_conversation_id.to_str().unwrap(),
         conversation_id.to_string()
     );
     assert_eq!(request_originator.to_str().unwrap(), "codex_cli_rs");
+    assert_eq!(turn_kind.to_str().unwrap(), "turn");
     assert_eq!(
         request_authorization.to_str().unwrap(),
         "Bearer Test API Key"

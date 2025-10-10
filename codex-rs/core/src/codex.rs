@@ -42,6 +42,7 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::client_common::TurnType;
 use crate::config::Config;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
@@ -1943,6 +1944,13 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<TurnRunResult> {
+    fn resolve_turn_type(turn_context: &TurnContext) -> TurnType {
+        if turn_context.is_review_mode {
+            TurnType::Review
+        } else {
+            TurnType::Regular
+        }
+    }
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
@@ -1960,6 +1968,7 @@ async fn run_turn(
         parallel_tool_calls,
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
+        turn_type: resolve_turn_type(&turn_context),
     };
 
     let mut retries = 0;

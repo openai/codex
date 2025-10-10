@@ -338,6 +338,78 @@ async fn review_uses_custom_review_model_from_config() {
     server.verify().await;
 }
 
+/// Ensure the client marks review turns with `action_kind: review` on the
+/// outbound Responses API request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_sends_action_kind_header() {
+    skip_if_no_network!();
+
+    // Minimal stream: just a completed event
+    let sse_raw = r#"[
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"#;
+    // Expect 2 requests total: first the review thread, then a follow-up turn.
+    let server = start_responses_server_with_sse(sse_raw, 2).await;
+    let codex_home = TempDir::new().unwrap();
+    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+
+    codex
+        .submit(Op::Review {
+            review_request: ReviewRequest {
+                prompt: "check action_kind header".to_string(),
+                user_facing_hint: "check action_kind header".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    // Wait for completion to ensure the request was sent.
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // Assert the outbound request included the correct header for the review request.
+    let mut requests = server.received_requests().await.unwrap();
+    assert!(
+        !requests.is_empty(),
+        "expected at least one request (review)"
+    );
+    let review_req = &requests[0];
+    let review_kind = review_req.headers.get("action_kind");
+    assert!(
+        review_kind.is_some(),
+        "expected action_kind header on review"
+    );
+    assert_eq!(review_kind.unwrap().to_str().unwrap(), "review");
+
+    // Now send a normal follow-up turn and ensure its header is "turn".
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "follow-up after review".to_string(),
+            }],
+        })
+        .await
+        .unwrap();
+    let _complete2 = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected 2 requests (review + follow-up)"
+    );
+    let follow_req = &requests[1];
+    let follow_kind = follow_req.headers.get("action_kind");
+    assert!(
+        follow_kind.is_some(),
+        "expected action_kind header on follow-up"
+    );
+    assert_eq!(follow_kind.unwrap().to_str().unwrap(), "turn");
+
+    server.verify().await;
+}
+
 /// When a review session begins, it must not prepend prior chat history from
 /// the parent session. The request `input` should contain only the review
 /// prompt from the user.
