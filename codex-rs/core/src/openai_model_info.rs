@@ -29,7 +29,10 @@ impl ModelInfo {
 }
 
 pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
-    let slug = model_family.slug.as_str();
+    let slug = match model_family.slug.strip_prefix("openai/") {
+        Some(stripped) => stripped,
+        None => model_family.slug.as_str(),
+    };
     match slug {
         // OSS models have a 128k shared token pool.
         // Arbitrarily splitting it: 3/4 input context, 1/4 output.
