@@ -27,6 +27,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -39,6 +40,8 @@ const NUM_FILE_SEARCH_THREADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 const FILE_SEARCH_DEBOUNCE: Duration = Duration::from_millis(100);
 
 const ACTIVE_SEARCH_COMPLETE_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const SEARCH_MANAGER_TICK_TIMEOUT: Duration = Duration::from_millis(16);
+const SEARCH_MANAGER_FIRST_RESULT_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// State machine for file-search orchestration.
 pub(crate) struct FileSearchManager {
@@ -47,6 +50,59 @@ pub(crate) struct FileSearchManager {
 
     search_dir: PathBuf,
     app_tx: AppEventSender,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use std::time::Instant;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn file_search_manager_emits_results() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let nested = temp_dir.path().join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("gamma.rs"), "fn main() {}").unwrap();
+
+        let (tx, mut rx) = unbounded_channel();
+        let manager =
+            FileSearchManager::new(temp_dir.path().to_path_buf(), AppEventSender::new(tx));
+        manager.on_user_query("gam".to_string());
+
+        let start = Instant::now();
+        let mut saw_match = false;
+
+        let mut captured: Vec<String> = Vec::new();
+        while start.elapsed() < Duration::from_secs(2) {
+            while let Ok(event) = rx.try_recv() {
+                if let AppEvent::FileSearchResult { matches, .. } = &event {
+                    if matches.iter().any(|m| m.path.ends_with("gamma.rs")) {
+                        saw_match = true;
+                        captured.push(format!("{event:?}"));
+                        break;
+                    }
+                }
+                captured.push(format!("{event:?}"));
+            }
+            if saw_match {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        if !saw_match {
+            while let Ok(event) = rx.try_recv() {
+                captured.push(format!("{event:?}"));
+            }
+        }
+
+        assert!(
+            saw_match,
+            "file search did not emit expected result; captured events: {captured:?}"
+        );
+    }
 }
 
 struct SearchState {
@@ -63,6 +119,29 @@ struct SearchState {
 struct ActiveSearch {
     query: String,
     cancellation_token: Arc<AtomicBool>,
+}
+
+struct ActiveSearchGuard {
+    state: Arc<Mutex<SearchState>>,
+    token: Arc<AtomicBool>,
+}
+
+impl ActiveSearchGuard {
+    fn new(state: Arc<Mutex<SearchState>>, token: Arc<AtomicBool>) -> Self {
+        Self { state, token }
+    }
+}
+
+impl Drop for ActiveSearchGuard {
+    fn drop(&mut self) {
+        #[expect(clippy::unwrap_used)]
+        let mut st = self.state.lock().unwrap();
+        if let Some(active_search) = &st.active_search
+            && Arc::ptr_eq(&active_search.cancellation_token, &self.token)
+        {
+            st.active_search = None;
+        }
+    }
 }
 
 impl FileSearchManager {
@@ -164,33 +243,88 @@ impl FileSearchManager {
     ) {
         let compute_indices = true;
         std::thread::spawn(move || {
-            let matches = file_search::run(
+            let _guard = ActiveSearchGuard::new(search_state.clone(), cancellation_token.clone());
+            let notify_flag = Arc::new(AtomicBool::new(false));
+            let notify = {
+                let flag = notify_flag.clone();
+                Arc::new(move || {
+                    flag.store(true, Ordering::Release);
+                })
+            };
+
+            let mut manager = match file_search::SearchManager::new(
                 &query,
                 MAX_FILE_SEARCH_RESULTS,
                 &search_dir,
                 Vec::new(),
                 NUM_FILE_SEARCH_THREADS,
-                cancellation_token.clone(),
                 compute_indices,
-            )
-            .map(|res| res.matches)
-            .unwrap_or_default();
+                notify,
+            ) {
+                Ok(manager) => manager,
+                Err(err) => {
+                    tracing::error!("file search initialization failed: {err:?}");
+                    tx.send(AppEvent::FileSearchResult {
+                        query: query.clone(),
+                        matches: Vec::new(),
+                    });
+                    return;
+                }
+            };
 
-            let is_cancelled = cancellation_token.load(Ordering::Relaxed);
-            if !is_cancelled {
-                tx.send(AppEvent::FileSearchResult { query, matches });
-            }
+            let mut last_sent_paths: Vec<String> = Vec::new();
+            let mut sent_once = false;
+            let start = Instant::now();
+            let mut last_progress = start;
 
-            // Reset the active search state. Do a pointer comparison to verify
-            // that we are clearing the ActiveSearch that corresponds to the
-            // cancellation token we were given.
-            {
-                #[expect(clippy::unwrap_used)]
-                let mut st = search_state.lock().unwrap();
-                if let Some(active_search) = &st.active_search
-                    && Arc::ptr_eq(&active_search.cancellation_token, &cancellation_token)
-                {
-                    st.active_search = None;
+            loop {
+                if cancellation_token.load(Ordering::Relaxed) {
+                    manager.cancel();
+                }
+
+                let status = manager.tick(SEARCH_MANAGER_TICK_TIMEOUT);
+                let flag_was_set = notify_flag.swap(false, Ordering::AcqRel);
+                let results = manager.current_results();
+                let matches = results.matches;
+                let paths: Vec<String> = matches.iter().map(|m| m.path.clone()).collect();
+
+                let paths_changed = paths != last_sent_paths;
+                let timeout_elapsed = start.elapsed() >= SEARCH_MANAGER_FIRST_RESULT_TIMEOUT;
+
+                let should_emit = !cancellation_token.load(Ordering::Relaxed)
+                    && (paths_changed
+                        || (!sent_once
+                            && (flag_was_set
+                                || status.changed
+                                || !status.running
+                                || timeout_elapsed)));
+
+                if should_emit {
+                    tx.send(AppEvent::FileSearchResult {
+                        query: query.clone(),
+                        matches: matches.clone(),
+                    });
+                    sent_once = true;
+                    last_sent_paths = paths;
+                    last_progress = Instant::now();
+                }
+
+                if cancellation_token.load(Ordering::Relaxed) && sent_once {
+                    break;
+                }
+
+                if !status.running && !flag_was_set {
+                    if sent_once {
+                        if last_progress.elapsed() >= SEARCH_MANAGER_FIRST_RESULT_TIMEOUT {
+                            break;
+                        }
+                    } else if timeout_elapsed {
+                        tx.send(AppEvent::FileSearchResult {
+                            query: query.clone(),
+                            matches,
+                        });
+                        break;
+                    }
                 }
             }
         });
