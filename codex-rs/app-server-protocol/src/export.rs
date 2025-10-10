@@ -178,23 +178,21 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
     for (name, schema) in bundle {
         let mut schema_value = serde_json::to_value(schema)?;
         if let Value::Object(ref mut obj) = schema_value {
-            if let Some(defs) = obj.remove("definitions") {
-                if let Value::Object(defs_obj) = defs {
+            if let Some(defs) = obj.remove("definitions")
+                && let Value::Object(defs_obj) = defs {
                     for (def_name, def_schema) in defs_obj {
                         if !SPECIAL_DEFINITIONS.contains(&def_name.as_str()) {
                             definitions.insert(def_name, def_schema);
                         }
                     }
                 }
-            }
 
             if let Some(Value::Array(one_of)) = obj.get_mut("oneOf") {
                 for variant in one_of.iter_mut() {
-                    if let Some(variant_name) = variant_definition_name(&name, variant) {
-                        if let Value::Object(variant_obj) = variant {
+                    if let Some(variant_name) = variant_definition_name(&name, variant)
+                        && let Value::Object(variant_obj) = variant {
                             variant_obj.insert("title".into(), Value::String(variant_name));
                         }
-                    }
                 }
             }
         }
@@ -259,44 +257,41 @@ fn variant_definition_name(base: &str, variant: &Value) -> Option<String> {
         if let Some(method_literal) = literal_from_property(props, "method") {
             let pascal = to_pascal_case(method_literal);
             return Some(match base {
-                "ClientRequest" | "ServerRequest" => format!("{}Request", pascal),
-                "ClientNotification" | "ServerNotification" => format!("{}Notification", pascal),
-                _ => format!("{}{}", pascal, base),
+                "ClientRequest" | "ServerRequest" => format!("{pascal}Request"),
+                "ClientNotification" | "ServerNotification" => format!("{pascal}Notification"),
+                _ => format!("{pascal}{base}"),
             });
         }
 
         if let Some(type_literal) = literal_from_property(props, "type") {
             let pascal = to_pascal_case(type_literal);
             return Some(match base {
-                "EventMsg" => format!("{}EventMsg", pascal),
-                _ => format!("{}{}", pascal, base),
+                "EventMsg" => format!("{pascal}EventMsg"),
+                _ => format!("{pascal}{base}"),
             });
         }
 
         if let Some(mode_literal) = literal_from_property(props, "mode") {
             let pascal = to_pascal_case(mode_literal);
             return Some(match base {
-                "SandboxPolicy" => format!("{}SandboxPolicy", pascal),
-                _ => format!("{}{}", pascal, base),
+                "SandboxPolicy" => format!("{pascal}SandboxPolicy"),
+                _ => format!("{pascal}{base}"),
             });
         }
 
-        if props.len() == 1 {
-            if let Some(key) = props.keys().next() {
+        if props.len() == 1
+            && let Some(key) = props.keys().next() {
                 let pascal = to_pascal_case(key);
-                return Some(format!("{}{}", pascal, base));
+                return Some(format!("{pascal}{base}"));
             }
-        }
     }
 
-    if let Some(required) = variant.get("required").and_then(Value::as_array) {
-        if required.len() == 1 {
-            if let Some(key) = required[0].as_str() {
+    if let Some(required) = variant.get("required").and_then(Value::as_array)
+        && required.len() == 1
+            && let Some(key) = required[0].as_str() {
                 let pascal = to_pascal_case(key);
-                return Some(format!("{}{}", pascal, base));
+                return Some(format!("{pascal}{base}"));
             }
-        }
-    }
 
     None
 }
@@ -306,7 +301,7 @@ fn literal_from_property<'a>(props: &'a Map<String, Value>, key: &str) -> Option
         .get(key)
         .and_then(|value| value.get("enum"))
         .and_then(Value::as_array)
-        .and_then(|arr| arr.get(0))
+        .and_then(|arr| arr.first())
         .and_then(Value::as_str)
 }
 
