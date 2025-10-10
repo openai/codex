@@ -2069,7 +2069,6 @@ fn stream_error_updates_status_indicator() {
     assert_eq!(status.header(), msg);
 }
 
-
 #[test]
 fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
