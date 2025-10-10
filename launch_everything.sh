@@ -73,19 +73,20 @@ print_info "  Parallel Build: $CODEX_BUILD_PARALLEL"
 print_status "Running pre-flight checks..."
 
 # Check required tools
-missing_tools=()
-command -v pnpm >/dev/null 2>&1 || missing_tools+=("pnpm")
-command -v cargo >/dev/null 2>&1 || missing_tools+=("cargo")
-command -v npm >/dev/null 2>&1 || missing_tools+=("npm")
+check_tools() {
+    local missing_tools=()
+    for tool in "$@"; do
+        command -v "$tool" >/dev/null 2>&1 || missing_tools+=("$tool")
+    done
+    if [[ ${#missing_tools[@]} -gt 0 ]]; then
+        print_error "Missing required tools: ${missing_tools[*]}"
+        print_info "Please install the missing tools and try again"
+        exit 1
+    fi
+    print_success "All required tools available"
+}
 
-if [[ ${#missing_tools[@]} -gt 0 ]]; then
-    print_error "Missing required tools: ${missing_tools[*]}"
-    print_info "Please install the missing tools and try again"
-    exit 1
-fi
-
-print_success "All required tools available"
-
+check_tools pnpm cargo npm
 # Initialize Codex components based on mode
 print_status "Initializing Codex components..."
 
