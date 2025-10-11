@@ -165,9 +165,8 @@ impl ChatComposer {
             .unwrap_or_else(|| footer_height(footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
-        self.textarea.desired_height(width.saturating_sub(
-            LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
-        )) + 2
+        const COLS_WITH_MARGIN = LIVE_PREFIX_COLS + 1;
+        self.textarea.desired_height(width.saturating_sub(COLS_WITH_MARGIN)) + 2
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
