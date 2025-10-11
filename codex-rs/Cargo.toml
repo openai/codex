@@ -17,6 +17,7 @@ members = [
     "file-search",
     "git-tooling",
     "linux-sandbox",
+    "windows-sandbox",
     "login",
     "mcp-client",
     "mcp-server",
@@ -73,6 +74,7 @@ codex-tui = { path = "tui" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
+codex-windows-sandbox = { path = "windows-sandbox" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -83,8 +85,8 @@ ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = "3"
 askama = "0.12"
-assert_matches = "1.5.0"
 assert_cmd = "2"
+assert_matches = "1.5.0"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
@@ -189,6 +191,25 @@ walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
 wildmatch = "2.5.0"
+widestring = "1.1.0"
+
+windows = { version = "0.56.0", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Console",
+    "Win32_System_Com",
+    "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_Networking_WinSock",
+    "Win32_System_Environment",
+    "Win32_Security_Credentials",
+    "Win32_System_SystemServices",
+    "Win32_System_Memory",
+    "Win32_Storage_FileSystem",
+    "Win32_NetworkManagement_NetManagement",
+] }
 wiremock = "0.6"
 zeroize = "1.8.1"
 
