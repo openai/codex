@@ -319,16 +319,25 @@ impl BottomPaneView for ListSelectionView {
             } => {
                 self.on_ctrl_c();
             }
-            // Spacebar behavior: in searchable lists, optionally trigger action; otherwise append to filter.
-            KeyEvent { code: KeyCode::Char(' '), modifiers, .. } if self.is_searchable
-                && !modifiers.contains(KeyModifiers::CONTROL)
-                && !modifiers.contains(KeyModifiers::ALT) =>
-            {
-                if self.space_triggers_action {
-                    self.accept();
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                modifiers,
+                ..
+            } => {
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    || modifiers.contains(KeyModifiers::ALT)
+                {
+                    return;
+                }
+                if self.is_searchable {
+                    if self.space_triggers_action {
+                        self.accept();
+                    } else {
+                        self.search_query.push(' ');
+                        self.apply_filter();
+                    }
                 } else {
-                    self.search_query.push(' ');
-                    self.apply_filter();
+                    self.accept();
                 }
             }
             KeyEvent {
@@ -360,7 +369,6 @@ impl BottomPaneView for ListSelectionView {
                     self.accept();
                 }
             }
-            KeyEvent { code: KeyCode::Char(' '), .. } => self.accept(),
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -605,5 +613,51 @@ mod tests {
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
         );
+    }
+    #[test]
+    fn space_action_respects_flag_in_searchable_view() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let make_item = |count: &Arc<AtomicUsize>| SelectionItem {
+            name: "Toggle".to_string(),
+            actions: vec![Box::new({
+                let count = Arc::clone(count);
+                move |_| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            })],
+            dismiss_on_select: false,
+            ..Default::default()
+        };
+
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![make_item(&counter)],
+                is_searchable: true,
+                space_triggers_action: false,
+                ..Default::default()
+            },
+            tx.clone(),
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+        counter.store(0, Ordering::SeqCst);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![make_item(&counter)],
+                is_searchable: true,
+                space_triggers_action: true,
+                ..Default::default()
+            },
+            tx,
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 }

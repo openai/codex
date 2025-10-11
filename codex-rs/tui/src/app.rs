@@ -386,9 +386,6 @@ impl App {
             AppEvent::OpenPruneAdvanced => {
                 self.chat_widget.open_prune_advanced();
             }
-            AppEvent::OpenPruneRoot => {
-                self.chat_widget.open_prune_menu();
-            }
             AppEvent::OpenPruneManual => {
                 self.chat_widget.open_prune_manual_menu();
             }
@@ -396,7 +393,10 @@ impl App {
                 self.chat_widget.open_prune_manual_confirm(category, label);
             }
             AppEvent::PruneAdvancedClosed => {
-                self.chat_widget.on_prune_advanced_closed();
+                self.chat_widget.handle_prune_advanced_escape();
+            }
+            AppEvent::PruneRootClosed => {
+                self.chat_widget.on_prune_root_closed();
             }
             AppEvent::ToggleKeepIndex { idx } => {
                 self.chat_widget.toggle_keep_index(idx);

@@ -93,8 +93,6 @@ pub(crate) enum AppEvent {
     // --- Advanced Prune (experimental) ---
     /// Open the non-destructive advanced prune view.
     OpenPruneAdvanced,
-    /// Open the root prune menu (advanced/manual/restore).
-    OpenPruneRoot,
     /// Open the manual prune submenu (by category).
     OpenPruneManual,
     /// Open a confirmation dialog for manual prune of a specific category.
@@ -104,6 +102,8 @@ pub(crate) enum AppEvent {
     },
     /// Close the advanced prune view.
     PruneAdvancedClosed,
+    /// Root prune menu dismissed (via Esc or completion).
+    PruneRootClosed,
     /// Toggle keep marker for an index in the advanced list.
     ToggleKeepIndex {
         idx: usize,

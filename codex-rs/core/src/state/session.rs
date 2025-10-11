@@ -1,7 +1,7 @@
 //! Session-wide mutable state.
 
-use std::collections::HashMap;
 use codex_protocol::models::ResponseItem;
+use std::collections::HashMap;
 
 use crate::conversation_history::ConversationHistory;
 use crate::protocol::RateLimitSnapshot;
@@ -29,7 +29,11 @@ pub(crate) struct SessionState {
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
     pub(crate) fn new() -> Self {
-        Self { history: ConversationHistory::new(), pinned_tail_turns: 1, ..Default::default() }
+        Self {
+            history: ConversationHistory::new(),
+            pinned_tail_turns: 1,
+            ..Default::default()
+        }
     }
 
     // History helpers
@@ -51,7 +55,9 @@ impl SessionState {
                 ResponseItem::CustomToolCall { call_id, .. } => {
                     self.call_registry.insert(call_id.clone(), (*item).clone());
                 }
-                ResponseItem::LocalShellCall { call_id: Some(id), .. } => {
+                ResponseItem::LocalShellCall {
+                    call_id: Some(id), ..
+                } => {
                     self.call_registry.insert(id.clone(), (*item).clone());
                 }
                 ResponseItem::FunctionCallOutput { call_id, .. }

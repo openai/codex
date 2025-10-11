@@ -270,6 +270,7 @@ pub(crate) struct ChatWidget {
     prune_keep_indices: HashSet<usize>,
     prune_delete_indices: HashSet<usize>,
     pending_prune_advanced: bool,
+    prune_root_active: bool,
     advanced_index_map: HashMap<usize, usize>,
     pending_advanced_plan: Option<AdvancedPendingPlan>,
 }
@@ -981,6 +982,7 @@ impl ChatWidget {
             prune_keep_indices: HashSet::new(),
             prune_delete_indices: HashSet::new(),
             pending_prune_advanced: false,
+            prune_root_active: false,
             advanced_index_map: HashMap::new(),
             pending_advanced_plan: None,
         }
@@ -1054,6 +1056,7 @@ impl ChatWidget {
             prune_keep_indices: HashSet::new(),
             prune_delete_indices: HashSet::new(),
             pending_prune_advanced: false,
+            prune_root_active: false,
             advanced_index_map: HashMap::new(),
             pending_advanced_plan: None,
         }
@@ -1598,13 +1601,26 @@ impl ChatWidget {
     /// User requested the non-destructive advanced prune view. Set a pending flag
     /// so that when the ContextItems event arrives, we render the view.
     pub(crate) fn open_prune_advanced(&mut self) {
+        self.prune_root_active = false;
         self.pending_prune_advanced = true;
         self.submit_op(Op::GetContextItems);
     }
 
     pub(crate) fn on_prune_advanced_closed(&mut self) {
         self.pending_prune_advanced = false;
+        self.pending_advanced_plan = None;
         self.advanced_index_map.clear();
+    }
+
+    pub(crate) fn on_prune_root_closed(&mut self) {
+        self.prune_root_active = false;
+    }
+
+    pub(crate) fn handle_prune_advanced_escape(&mut self) {
+        self.on_prune_advanced_closed();
+        if !self.prune_root_active {
+            self.open_prune_menu();
+        }
     }
 
     pub(crate) fn toggle_keep_index(&mut self, idx: usize) {
@@ -1840,7 +1856,6 @@ impl ChatWidget {
             })),
             on_cancel_event: Some(Box::new(|tx: &AppEventSender| {
                 tx.send(AppEvent::PruneAdvancedClosed);
-                tx.send(AppEvent::OpenPruneRoot);
             })),
             space_triggers_action: true,
         });
@@ -1855,12 +1870,14 @@ impl ChatWidget {
         // If an advanced-prune session was pending/open, mark it closed before opening the root menu.
         // Switching to the root menu should not cause Advanced to reopen on the next context refresh.
         self.on_prune_advanced_closed();
+        self.prune_root_active = true;
 
         // Advanced prune (non-destructive by default)
         items.push(SelectionItem {
             name: "Advanced prune".to_string(),
             description: Some("Toggle keep/delete per item; apply with Enter".to_string()),
             actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::PruneRootClosed);
                 tx.send(AppEvent::OpenPruneAdvanced);
                 tx.send(AppEvent::CodexOp(Op::GetContextItems));
             })],
@@ -1873,6 +1890,7 @@ impl ChatWidget {
             name: "Manual prune".to_string(),
             description: Some("Prune by category".to_string()),
             actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::PruneRootClosed);
                 tx.send(AppEvent::OpenPruneManual)
             })],
             dismiss_on_select: true,
@@ -1884,6 +1902,7 @@ impl ChatWidget {
             name: "Restore full context".to_string(),
             description: Some("Resume from rollout .bak backup".to_string()),
             actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::PruneRootClosed);
                 tx.send(AppEvent::RestoreContextFromBackup);
             })],
             dismiss_on_select: true,
@@ -1900,7 +1919,9 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select an action")),
             on_enter_event: None,
-            on_cancel_event: None,
+            on_cancel_event: Some(Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::PruneRootClosed);
+            })),
             space_triggers_action: false,
         });
     }
@@ -1908,27 +1929,69 @@ impl ChatWidget {
     /// Manual prune submenu (por categoria).
     pub(crate) fn open_prune_manual_menu(&mut self) {
         use codex_core::protocol::PruneCategory as PC;
+        use std::collections::HashMap;
         // Close Advanced state if it was pending/open before switching to manual submenu.
         self.on_prune_advanced_closed();
+        self.prune_root_active = false;
         let mut items: Vec<SelectionItem> = Vec::new();
 
-        let mut push_prune = |label: String, cat: PC| {
+        let (included_total, included_counts): (usize, HashMap<PC, usize>) =
+            if let Some(list) = &self.last_context_items {
+                let mut counts: HashMap<PC, usize> = HashMap::new();
+                let mut total = 0usize;
+                for item in list.iter().filter(|it| it.included) {
+                    total = total.saturating_add(1);
+                    counts
+                        .entry(item.category.clone())
+                        .and_modify(|c| *c = c.saturating_add(1))
+                        .or_insert(1);
+                }
+                (total, counts)
+            } else {
+                (0, HashMap::new())
+            };
+
+        let mut push_prune = |label: &str, cat: PC| {
+            let count = included_counts.get(&cat).copied().unwrap_or(0);
+            let pct = if included_total > 0 {
+                ((count as u32 * 100) / included_total as u32) as u8
+            } else {
+                0
+            };
+            let description = if included_total == 0 {
+                "No retained context items available yet".to_string()
+            } else if count == 0 {
+                "No retained items match this category".to_string()
+            } else {
+                let mut pretty_label = label.to_string();
+                if let Some(first) = pretty_label.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                }
+                format!(
+                    "{pretty_label} currently consume ~{pct}% of included context ({count} items)"
+                )
+            };
+            let label_owned = label.to_string();
+
             items.push(SelectionItem {
                 name: format!("Prune {label}"),
-                description: Some("Remove matching items from context".to_string()),
+                description: Some(description),
                 actions: vec![Box::new(move |tx: &AppEventSender| {
-                    tx.send(AppEvent::OpenPruneManualConfirm { category: cat.clone(), label: label.clone() });
+                    tx.send(AppEvent::OpenPruneManualConfirm {
+                        category: cat.clone(),
+                        label: label_owned.clone(),
+                    });
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
             });
         };
         // Order: outputs, calls, reasoning, user, assistant
-        push_prune("tool outputs".to_string(), PC::ToolOutput);
-        push_prune("tool calls".to_string(), PC::ToolCall);
-        push_prune("reasoning".to_string(), PC::Reasoning);
-        push_prune("user messages".to_string(), PC::UserMessage);
-        push_prune("assistant messages".to_string(), PC::AssistantMessage);
+        push_prune("tool outputs", PC::ToolOutput);
+        push_prune("tool calls", PC::ToolCall);
+        push_prune("reasoning", PC::Reasoning);
+        push_prune("user messages", PC::UserMessage);
+        push_prune("assistant messages", PC::AssistantMessage);
 
         // (Restore is available in the root prune menu only.)
 
@@ -1952,10 +2015,9 @@ impl ChatWidget {
         label: String,
     ) {
         use codex_core::protocol::Op;
+        self.prune_root_active = false;
         let mut items: Vec<SelectionItem> = Vec::new();
-        let header = format!(
-            "Confirm prune: remove all {label} from the current context?"
-        );
+        let header = format!("Confirm prune: remove all {label} from the current context?");
 
         // No — go back to the manual menu
         items.push(SelectionItem {

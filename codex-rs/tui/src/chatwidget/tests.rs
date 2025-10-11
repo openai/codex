@@ -292,6 +292,7 @@ fn make_chatwidget_manual() -> (
         prune_keep_indices: std::collections::HashSet::new(),
         prune_delete_indices: std::collections::HashSet::new(),
         pending_prune_advanced: false,
+        prune_root_active: false,
         pending_advanced_plan: None,
         advanced_index_map: HashMap::new(),
     };
