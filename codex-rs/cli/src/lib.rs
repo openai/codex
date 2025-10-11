@@ -1,7 +1,9 @@
+pub mod agent_create_cmd;
 pub mod debug_sandbox;
 pub mod delegate_cmd;
 mod exit_status;
 pub mod login;
+pub mod parallel_delegate_cmd;
 pub mod research_cmd;
 
 use clap::Parser;

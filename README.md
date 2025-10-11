@@ -21,17 +21,18 @@
 Delegate specialized tasks to AI sub-agents with fine-grained permissions:
 
 ```bash
-# Code review
+# Single agent execution
 codex delegate code-reviewer --scope ./src --budget 40000
 
-# Test generation
-codex delegate test-gen --scope ./src/auth --budget 30000
+# Parallel execution (NEW!)
+codex delegate-parallel code-reviewer,test-gen,sec-audit \
+  --goals "Review code,Generate tests,Security audit" \
+  --scopes ./src,./tests,./package.json \
+  --budgets 40000,30000,20000
 
-# Security audit
-codex delegate sec-audit --budget 50000
-
-# Research
-codex delegate researcher --goal "React Server Components best practices"
+# Custom agent from prompt (NEW!)
+codex agent-create "Find all TODO comments and create a summary report" \
+  --budget 50000
 ```
 
 #### Available Sub-Agents
@@ -43,7 +44,13 @@ codex delegate researcher --goal "React Server Components best practices"
 | `sec-audit` | CVE scanning, dependency audit, patch recommendations | 50,000 |
 | `researcher` | Deep research with citations and cross-validation | 60,000 |
 
-**Quick Start**: See [SUBAGENTS_QUICKSTART.md](SUBAGENTS_QUICKSTART.md)
+#### New Capabilities
+
+- **Parallel Execution**: Run multiple agents simultaneously for 3x faster completion
+- **Custom Agents**: Create agents from natural language prompts with LLM-powered generation
+- **Process Isolation**: Each agent runs in a separate process for enhanced security
+
+**Quick Start**: See [SUBAGENTS_QUICKSTART.md](SUBAGENTS_QUICKSTART.md) and [PARALLEL_CUSTOM_AGENT_GUIDE.md](PARALLEL_CUSTOM_AGENT_GUIDE.md)
 
 ---
 

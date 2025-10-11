@@ -90,6 +90,321 @@ impl AgentRuntime {
         }
     }
 
+    /// 複数エージェントを並列実行
+    pub async fn delegate_parallel(
+        &self,
+        agents: Vec<(String, String, HashMap<String, String>, Option<usize>)>, // (agent_name, goal, inputs, budget)
+        _deadline: Option<u64>,
+    ) -> Result<Vec<AgentResult>> {
+        info!("Starting parallel delegation of {} agents", agents.len());
+
+        // 各エージェントをtokio::spawnで並列起動
+        let mut handles = Vec::new();
+
+        for (agent_name, goal, inputs, budget) in agents {
+            let runtime_clone = Arc::new(self.clone_for_parallel());
+            let agent_name_clone = agent_name.clone();
+
+            let handle = tokio::spawn(async move {
+                runtime_clone
+                    .delegate(&agent_name_clone, &goal, inputs, budget, None)
+                    .await
+            });
+
+            handles.push((agent_name, handle));
+        }
+
+        // 全エージェントの完了を待機
+        let mut results = Vec::new();
+        for (agent_name, handle) in handles {
+            match handle.await {
+                Ok(Ok(result)) => {
+                    info!("Agent '{}' completed successfully", agent_name);
+                    results.push(result);
+                }
+                Ok(Err(e)) => {
+                    error!("Agent '{}' failed: {}", agent_name, e);
+                    // エラーでも続行して他のエージェントの結果を収集
+                    results.push(AgentResult {
+                        agent_name: agent_name.clone(),
+                        status: AgentStatus::Failed,
+                        artifacts: vec![],
+                        tokens_used: 0,
+                        duration_secs: 0.0,
+                        error: Some(e.to_string()),
+                    });
+                }
+                Err(e) => {
+                    error!("Agent '{}' task panicked: {}", agent_name, e);
+                    results.push(AgentResult {
+                        agent_name: agent_name.clone(),
+                        status: AgentStatus::Failed,
+                        artifacts: vec![],
+                        tokens_used: 0,
+                        duration_secs: 0.0,
+                        error: Some(format!("Task panicked: {}", e)),
+                    });
+                }
+            }
+        }
+
+        info!(
+            "Parallel delegation completed: {}/{} agents succeeded",
+            results
+                .iter()
+                .filter(|r| matches!(r.status, AgentStatus::Completed))
+                .count(),
+            results.len()
+        );
+
+        Ok(results)
+    }
+
+    /// プロンプトからカスタムエージェントを作成して実行
+    pub async fn create_and_run_custom_agent(
+        &self,
+        prompt: &str,
+        budget: Option<usize>,
+    ) -> Result<AgentResult> {
+        info!("Creating custom agent from prompt");
+
+        // LLMを使ってプロンプトからエージェント定義を生成
+        let agent_def = self.generate_agent_from_prompt(prompt).await?;
+
+        info!("Generated custom agent: {}", agent_def.name);
+
+        // カスタムエージェントをメモリ上で実行（YAML保存不要）
+        self.execute_custom_agent_inline(agent_def, budget).await
+    }
+
+    /// プロンプトからエージェント定義を生成
+    async fn generate_agent_from_prompt(&self, prompt: &str) -> Result<AgentDefinition> {
+        let system_prompt = r#"You are an AI agent definition generator. 
+Given a user prompt, generate a complete agent definition in the following JSON format:
+
+{
+  "name": "agent-name",
+  "goal": "Clear description of the agent's purpose",
+  "tools": {
+    "mcp": ["codex_read_file", "codex_grep"],
+    "shell": []
+  },
+  "policies": {
+    "context": {
+      "max_tokens": 40000
+    },
+    "permissions": {
+      "filesystem": [],
+      "network": []
+    }
+  },
+  "success_criteria": [
+    "Clear criterion 1",
+    "Clear criterion 2"
+  ],
+  "artifacts": [
+    "artifacts/output.md"
+  ]
+}
+
+Guidelines:
+- name: Use kebab-case (e.g., "code-reviewer", "test-generator")
+- goal: Be specific and actionable
+- tools.mcp: Choose from [codex_read_file, codex_grep, codex_codebase_search, codex_apply_patch]
+- tools.mcp: Do NOT include codex_shell unless explicitly requested (security)
+- max_tokens: 40000 for simple tasks, 60000 for complex tasks
+- success_criteria: 3-5 measurable criteria
+- artifacts: Specify expected output files
+
+Only output the JSON, no explanation."#;
+
+        let user_message = format!("Generate an agent definition for this task:\n\n{}", prompt);
+
+        let input_items = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text: user_message }],
+        }];
+
+        let llm_prompt = Prompt {
+            input: input_items,
+            tools: vec![],
+            parallel_tool_calls: false,
+            base_instructions_override: Some(system_prompt.to_string()),
+            output_schema: None,
+        };
+
+        // LLM呼び出し
+        let model_client = ModelClient::new(
+            self.config.clone(),
+            self.auth_manager.clone(),
+            self.otel_manager.clone(),
+            self.provider.clone(),
+            Some(ReasoningEffort::Medium),
+            ReasoningSummary::Concise,
+            self.conversation_id,
+        );
+
+        let mut response_stream = model_client
+            .stream(&llm_prompt)
+            .await
+            .context("Failed to generate agent definition")?;
+
+        // レスポンスを収集
+        let mut full_response = String::new();
+        while let Some(event) = response_stream.next().await {
+            match event? {
+                ResponseEvent::OutputItemDone(item) => {
+                    if let ResponseItem::Message { content, .. } = item {
+                        for content_item in content {
+                            if let ContentItem::OutputText { text } = content_item {
+                                full_response.push_str(&text);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // JSONを抽出（コードブロック内の可能性があるため）
+        let json_str = if let Some(start) = full_response.find('{') {
+            if let Some(end) = full_response.rfind('}') {
+                &full_response[start..=end]
+            } else {
+                &full_response
+            }
+        } else {
+            &full_response
+        };
+
+        // JSONをパース
+        let agent_def: AgentDefinition =
+            serde_json::from_str(json_str).context("Failed to parse generated agent definition")?;
+
+        info!(
+            "Successfully generated agent definition: {}",
+            agent_def.name
+        );
+
+        Ok(agent_def)
+    }
+
+    /// カスタムエージェントをインラインで実行（YAML保存なし）
+    async fn execute_custom_agent_inline(
+        &self,
+        agent_def: AgentDefinition,
+        budget: Option<usize>,
+    ) -> Result<AgentResult> {
+        let agent_name = &agent_def.name;
+        info!("Executing custom agent '{}' inline", agent_name);
+
+        // 予算設定
+        let effective_budget = budget.unwrap_or(agent_def.policies.context.max_tokens);
+        self.budgeter
+            .set_agent_limit(agent_name, effective_budget)?;
+
+        // 実行ステータス更新
+        {
+            let mut running = self.running_agents.write().await;
+            running.insert(agent_name.to_string(), AgentStatus::Running);
+        }
+
+        let start_time = Instant::now();
+        let start_timestamp = chrono::Utc::now().to_rfc3339();
+
+        // エージェント実行
+        let result = match self
+            .execute_agent(&agent_def, &agent_def.goal, HashMap::new(), None)
+            .await
+        {
+            Ok(artifacts) => {
+                let duration_secs = start_time.elapsed().as_secs_f64();
+                let tokens_used = self.budgeter.get_agent_usage(agent_name);
+
+                // 監査ログ: 成功
+                let _ = log_audit_event(AuditEvent::new(
+                    agent_name.to_string(),
+                    AuditEventType::AgentExecution(AgentExecutionEvent {
+                        agent_name: agent_name.to_string(),
+                        status: ExecutionStatus::Completed,
+                        goal: agent_def.goal.clone(),
+                        start_time: start_timestamp.clone(),
+                        end_time: Some(chrono::Utc::now().to_rfc3339()),
+                        duration_secs: Some(duration_secs),
+                        tokens_used,
+                        artifacts: artifacts.clone(),
+                        error: None,
+                    }),
+                ));
+
+                AgentResult {
+                    agent_name: agent_name.to_string(),
+                    status: AgentStatus::Completed,
+                    artifacts,
+                    tokens_used,
+                    duration_secs,
+                    error: None,
+                }
+            }
+            Err(e) => {
+                let duration_secs = start_time.elapsed().as_secs_f64();
+                let tokens_used = self.budgeter.get_agent_usage(agent_name);
+
+                error!("Custom agent '{}' failed: {}", agent_name, e);
+
+                // 監査ログ: 失敗
+                let _ = log_audit_event(AuditEvent::new(
+                    agent_name.to_string(),
+                    AuditEventType::AgentExecution(AgentExecutionEvent {
+                        agent_name: agent_name.to_string(),
+                        status: ExecutionStatus::Failed,
+                        goal: agent_def.goal.clone(),
+                        start_time: start_timestamp,
+                        end_time: Some(chrono::Utc::now().to_rfc3339()),
+                        duration_secs: Some(duration_secs),
+                        tokens_used,
+                        artifacts: vec![],
+                        error: Some(e.to_string()),
+                    }),
+                ));
+
+                AgentResult {
+                    agent_name: agent_name.to_string(),
+                    status: AgentStatus::Failed,
+                    artifacts: vec![],
+                    tokens_used,
+                    duration_secs,
+                    error: Some(e.to_string()),
+                }
+            }
+        };
+
+        // 実行ステータス更新
+        {
+            let mut running = self.running_agents.write().await;
+            running.insert(agent_name.to_string(), result.status.clone());
+        }
+
+        Ok(result)
+    }
+
+    /// 並列実行用にクローン
+    fn clone_for_parallel(&self) -> Self {
+        Self {
+            loader: self.loader.clone(),
+            budgeter: self.budgeter.clone(),
+            running_agents: Arc::new(RwLock::new(HashMap::new())),
+            workspace_dir: self.workspace_dir.clone(),
+            config: self.config.clone(),
+            auth_manager: self.auth_manager.clone(),
+            otel_manager: self.otel_manager.clone(),
+            provider: self.provider.clone(),
+            conversation_id: self.conversation_id,
+            codex_binary_path: self.codex_binary_path.clone(),
+        }
+    }
+
     /// エージェントを委任実行
     pub async fn delegate(
         &self,
@@ -291,7 +606,7 @@ impl AgentRuntime {
 
         // 6. LLM呼び出し
         let mut stream = client.stream(&prompt).await?;
-        let mut response_text = String::new();
+        let response_text = String::new();
         let mut total_tokens = 0;
 
         while let Some(event) = stream.next().await {

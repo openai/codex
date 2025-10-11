@@ -97,6 +97,14 @@ enum Subcommand {
     /// [EXPERIMENTAL] Delegate task to a sub-agent.
     Delegate(DelegateCommand),
 
+    /// [EXPERIMENTAL] Delegate tasks to multiple agents in parallel
+    #[clap(name = "delegate-parallel")]
+    DelegateParallel(DelegateParallelCommand),
+
+    /// [EXPERIMENTAL] Create and run a custom agent from a prompt
+    #[clap(name = "agent-create")]
+    AgentCreate(AgentCreateCommand),
+
     /// [EXPERIMENTAL] Conduct deep research on a topic.
     Research(ResearchCommand),
 
@@ -151,6 +159,58 @@ struct DelegateCommand {
     /// Deadline in minutes
     #[arg(long, value_name = "MINUTES")]
     deadline: Option<u64>,
+
+    /// Output file for the result
+    #[arg(short, long, value_name = "FILE")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct DelegateParallelCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    /// Comma-separated agent names
+    #[arg(value_name = "AGENTS", value_delimiter = ',')]
+    agents: Vec<String>,
+
+    /// Comma-separated goals (must match number of agents)
+    #[arg(long, value_delimiter = ',')]
+    goals: Vec<String>,
+
+    /// Comma-separated scope paths (optional, must match number of agents if provided)
+    #[arg(long, value_delimiter = ',')]
+    scopes: Vec<PathBuf>,
+
+    /// Comma-separated budgets (optional, must match number of agents if provided)
+    #[arg(long, value_delimiter = ',')]
+    budgets: Vec<usize>,
+
+    /// Deadline in minutes (applies to all agents)
+    #[arg(long, value_name = "MINUTES")]
+    deadline: Option<u64>,
+
+    /// Output file for combined results
+    #[arg(short, long, value_name = "FILE")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct AgentCreateCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    /// Prompt describing the agent's purpose and tasks
+    #[arg(value_name = "PROMPT")]
+    prompt: String,
+
+    /// Token budget for the custom agent
+    #[arg(long, value_name = "TOKENS")]
+    budget: Option<usize>,
+
+    /// Save the generated agent definition to .codex/agents/
+    #[arg(long, default_value = "false")]
+    save: bool,
 
     /// Output file for the result
     #[arg(short, long, value_name = "FILE")]
@@ -431,6 +491,48 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 delegate_cmd.budget,
                 delegate_cmd.deadline,
                 delegate_cmd.out,
+            )
+            .await?;
+        }
+        Some(Subcommand::DelegateParallel(mut parallel_cmd)) => {
+            prepend_config_flags(
+                &mut parallel_cmd.config_overrides,
+                root_config_overrides.clone(),
+            );
+
+            // clap handles value_delimiter, so we get Vec<T> directly
+            let agents = parallel_cmd.agents;
+            let goals = parallel_cmd.goals;
+
+            // Convert Vec<PathBuf> to Vec<Option<PathBuf>>
+            let scopes: Vec<Option<PathBuf>> = parallel_cmd.scopes.into_iter().map(Some).collect();
+
+            // Convert Vec<usize> to Vec<Option<usize>>
+            let budgets: Vec<Option<usize>> = parallel_cmd.budgets.into_iter().map(Some).collect();
+
+            codex_cli::parallel_delegate_cmd::run_parallel_delegate_command(
+                agents,
+                goals,
+                scopes,
+                budgets,
+                parallel_cmd.deadline,
+                parallel_cmd.out,
+                parallel_cmd.config_overrides,
+            )
+            .await?;
+        }
+        Some(Subcommand::AgentCreate(mut agent_create_cmd)) => {
+            prepend_config_flags(
+                &mut agent_create_cmd.config_overrides,
+                root_config_overrides.clone(),
+            );
+
+            codex_cli::agent_create_cmd::run_agent_create_command(
+                agent_create_cmd.prompt,
+                agent_create_cmd.budget,
+                agent_create_cmd.save,
+                agent_create_cmd.out,
+                agent_create_cmd.config_overrides,
             )
             .await?;
         }
