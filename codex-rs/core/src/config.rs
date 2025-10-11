@@ -29,6 +29,7 @@ use crate::protocol::SandboxPolicy;
 use anyhow::Context;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_protocol::config_types::AutoCompactMode;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -82,6 +83,9 @@ pub struct Config {
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
+
+    /// Control for automatic conversation compaction.
+    pub auto_compact_mode: AutoCompactMode,
 
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
@@ -589,6 +593,29 @@ fn ensure_profile_table<'a>(
     Ok(profile_table)
 }
 
+fn ensure_table_entry<'a>(parent: &'a mut toml_edit::Table, key: &str) -> &'a mut toml_edit::Table {
+    if !parent.contains_key(key) || parent[key].as_table().is_none() {
+        parent[key] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let table = parent
+        .get_mut(key)
+        .and_then(|item| item.as_table_mut())
+        .expect("table should exist after insertion");
+    table.set_implicit(false);
+    table
+}
+
+fn remove_threshold_tokens(parent: &mut toml_edit::Table) {
+    if let Some(auto_item) = parent.get_mut("auto_compact") {
+        if let Some(auto_table) = auto_item.as_table_mut() {
+            auto_table.remove("threshold_tokens");
+            if auto_table.is_empty() {
+                parent.remove("auto_compact");
+            }
+        }
+    }
+}
+
 // TODO(jif) refactor config persistence.
 pub async fn persist_model_selection(
     codex_home: &Path,
@@ -634,6 +661,66 @@ pub async fn persist_model_selection(
     }
 
     // TODO(jif) refactor the home creation
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_auto_compact_limit(
+    codex_home: &Path,
+    active_profile: Option<&str>,
+    limit: Option<i64>,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if let Some(profile_name) = active_profile {
+        let profile_table = ensure_profile_table(&mut doc, profile_name)?;
+        match limit {
+            Some(value) => {
+                let auto_table = ensure_table_entry(profile_table, "auto_compact");
+                auto_table["threshold_tokens"] = toml_edit::value(value);
+            }
+            None => {
+                remove_threshold_tokens(profile_table);
+            }
+        }
+    } else {
+        let root = doc.as_table_mut();
+        match limit {
+            Some(value) => {
+                let auto_table = ensure_table_entry(root, "auto_compact");
+                auto_table["threshold_tokens"] = toml_edit::value(value);
+                root["model_auto_compact_token_limit"] = toml_edit::value(value);
+            }
+            None => {
+                remove_threshold_tokens(root);
+                root.remove("model_auto_compact_token_limit");
+            }
+        }
+    }
+
     tokio::fs::create_dir_all(codex_home)
         .await
         .with_context(|| {
@@ -712,6 +799,10 @@ pub struct ConfigToml {
 
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
+
+    /// Nested table for auto-compaction controls.
+    #[serde(default)]
+    pub auto_compact: Option<AutoCompactToml>,
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
@@ -817,6 +908,13 @@ pub struct ConfigToml {
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct AutoCompactToml {
+    pub mode: Option<AutoCompactMode>,
+    #[serde(rename = "threshold_tokens")]
+    pub threshold_tokens: Option<i64>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -957,6 +1055,8 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub auto_compact_mode: Option<AutoCompactMode>,
+    pub auto_compact_threshold_tokens: Option<i64>,
 }
 
 impl Config {
@@ -985,6 +1085,8 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            auto_compact_mode,
+            auto_compact_threshold_tokens,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1082,11 +1184,23 @@ impl Config {
                 .as_ref()
                 .map(|info| info.max_output_tokens)
         });
-        let model_auto_compact_token_limit = cfg.model_auto_compact_token_limit.or_else(|| {
-            openai_model_info
+        let auto_compact_cfg = cfg.auto_compact.clone();
+        let auto_compact_profile = config_profile.auto_compact.clone();
+        let auto_compact_mode = auto_compact_mode
+            .or(auto_compact_profile.as_ref().and_then(|ac| ac.mode))
+            .or(auto_compact_cfg.as_ref().and_then(|ac| ac.mode))
+            .unwrap_or_default();
+        let model_auto_compact_token_limit = auto_compact_threshold_tokens
+            .or(auto_compact_profile
                 .as_ref()
-                .and_then(|info| info.auto_compact_token_limit)
-        });
+                .and_then(|ac| ac.threshold_tokens))
+            .or(auto_compact_cfg.as_ref().and_then(|ac| ac.threshold_tokens))
+            .or(cfg.model_auto_compact_token_limit)
+            .or_else(|| {
+                openai_model_info
+                    .as_ref()
+                    .map(|info| info.auto_compact_token_limit)
+            });
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -1111,6 +1225,7 @@ impl Config {
             model_context_window,
             model_max_output_tokens,
             model_auto_compact_token_limit,
+            auto_compact_mode,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -1943,6 +2058,82 @@ model = "gpt-5-codex"
         Ok(())
     }
 
+    #[tokio::test]
+    async fn persist_auto_compact_limit_updates_defaults() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_compact_limit(codex_home.path(), None, Some(200_000)).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.model_auto_compact_token_limit, Some(200_000));
+        let threshold = parsed
+            .auto_compact
+            .as_ref()
+            .and_then(|ac| ac.threshold_tokens);
+        assert_eq!(threshold, Some(200_000));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_compact_limit_clears_defaults() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+model_auto_compact_token_limit = 150000
+
+[auto_compact]
+threshold_tokens = 150000
+"#,
+        )
+        .await?;
+
+        persist_auto_compact_limit(codex_home.path(), None, None).await?;
+
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.model_auto_compact_token_limit, None);
+        assert!(
+            parsed
+                .auto_compact
+                .as_ref()
+                .and_then(|ac| ac.threshold_tokens)
+                .is_none()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_auto_compact_limit_updates_profile() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_auto_compact_limit(codex_home.path(), Some("dev"), Some(180_000)).await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+        let profile = parsed
+            .profiles
+            .get("dev")
+            .expect("profile should be created");
+
+        let threshold = profile
+            .auto_compact
+            .as_ref()
+            .and_then(|ac| ac.threshold_tokens);
+        assert_eq!(threshold, Some(180_000));
+
+        Ok(())
+    }
+
     struct PrecedenceTestFixture {
         cwd: TempDir,
         codex_home: TempDir,
@@ -2089,6 +2280,7 @@ model_verbosity = "high"
                 model_context_window: Some(200_000),
                 model_max_output_tokens: Some(100_000),
                 model_auto_compact_token_limit: None,
+                auto_compact_mode: AutoCompactMode::Auto,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
@@ -2152,6 +2344,7 @@ model_verbosity = "high"
             model_context_window: Some(16_385),
             model_max_output_tokens: Some(4_096),
             model_auto_compact_token_limit: None,
+            auto_compact_mode: AutoCompactMode::Auto,
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
@@ -2230,6 +2423,7 @@ model_verbosity = "high"
             model_context_window: Some(200_000),
             model_max_output_tokens: Some(100_000),
             model_auto_compact_token_limit: None,
+            auto_compact_mode: AutoCompactMode::Auto,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
@@ -2294,6 +2488,7 @@ model_verbosity = "high"
             model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
             model_auto_compact_token_limit: None,
+            auto_compact_mode: AutoCompactMode::Auto,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,

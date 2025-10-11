@@ -12,6 +12,7 @@ pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, Stri
         ("approval", config.approval_policy.to_string()),
         ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
     ];
+    entries.push(("auto-compact", config.auto_compact_mode.to_string()));
     if config.model_provider.wire_api == WireApi::Responses
         && config.model_family.supports_reasoning_summaries
     {

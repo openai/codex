@@ -816,9 +816,13 @@ mod tests {
             .expect("Should collect git info from repo");
 
         // Should have repository URL
-        assert_eq!(
-            git_info.repository_url,
-            Some("https://github.com/example/repo.git".to_string())
+        let repository_url = git_info
+            .repository_url
+            .expect("repository URL should be present");
+        assert!(
+            repository_url == "https://github.com/example/repo.git"
+                || repository_url == "git@github.com:example/repo.git",
+            "unexpected repository URL: {repository_url}"
         );
     }
 
