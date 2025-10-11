@@ -1,5 +1,8 @@
 use std::fmt::Display;
 
+use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::Schema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
@@ -54,6 +57,16 @@ impl<'de> Deserialize<'de> for ConversationId {
         let value = String::deserialize(deserializer)?;
         let uuid = Uuid::parse_str(&value).map_err(serde::de::Error::custom)?;
         Ok(Self { uuid })
+    }
+}
+
+impl JsonSchema for ConversationId {
+    fn schema_name() -> String {
+        "ConversationId".to_string()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        <String>::json_schema(generator)
     }
 }
 
