@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Confirm Full Access?
+  Full access removes sandbox protections and comes with increased risk of
+  data loss. Please confirm you understand the risks.
+
+› 1. Accept Full Access          Apply full access for this session
+  2. Accept and don't ask again  Enable full access and remember this choice
+  3. Deny                        Go back without enabling full access
+
+  Press enter to confirm or esc to go back

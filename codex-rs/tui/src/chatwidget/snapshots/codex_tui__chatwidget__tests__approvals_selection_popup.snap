@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Select Approval Mode
+
+› 1. Read Only (current)  Codex can read files and answer questions. Codex
+                          requires approval to make edits, run commands, or
+                          access network
+  2. Auto                 Codex can read files, make edits, and run commands
+                          in the workspace. Codex requires approval to work
+                          outside the workspace or access network
+  3. Full Access          Codex can read files, make edits, and run commands
+                          with network access, without approval. Exercise
+                          caution
+
+  Press enter to confirm or esc to go back
