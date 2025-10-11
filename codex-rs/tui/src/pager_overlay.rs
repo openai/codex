@@ -80,12 +80,8 @@ const KEY_J: KeyBinding = key_hint::plain(KeyCode::Char('j'));
 const KEY_K: KeyBinding = key_hint::plain(KeyCode::Char('k'));
 const KEY_G: KeyBinding = key_hint::plain(KeyCode::Char('g'));
 const KEY_SHIFT_G: KeyBinding = key_hint::shift(KeyCode::Char('g'));
-const KEY_CTRL_F: KeyBinding = key_hint::ctrl(KeyCode::Char('f'));
-const KEY_CTRL_B: KeyBinding = key_hint::ctrl(KeyCode::Char('b'));
 const KEY_CTRL_D: KeyBinding = key_hint::ctrl(KeyCode::Char('d'));
 const KEY_CTRL_U: KeyBinding = key_hint::ctrl(KeyCode::Char('u'));
-const KEY_CTRL_E: KeyBinding = key_hint::ctrl(KeyCode::Char('e'));
-const KEY_CTRL_Y: KeyBinding = key_hint::ctrl(KeyCode::Char('y'));
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS_EMACS: &[(&[KeyBinding], &str)] = &[
@@ -96,8 +92,7 @@ const PAGER_KEY_HINTS_EMACS: &[(&[KeyBinding], &str)] = &[
 
 const PAGER_KEY_HINTS_VIM: &[(&[KeyBinding], &str)] = &[
     (&[KEY_J, KEY_K], "to scroll"),
-    (&[KEY_CTRL_F, KEY_CTRL_B], "to page"),
-    (&[KEY_CTRL_D, KEY_CTRL_U], "half page"),
+    (&[KEY_CTRL_D, KEY_CTRL_U], "to page"),
     (&[KEY_G, KEY_G], "to top"),
     (&[KEY_SHIFT_G], "to bottom"),
 ];
@@ -184,12 +179,6 @@ impl PagerView {
 
     fn page_step(area: Rect) -> usize {
         usize::from(area.height.max(1))
-    }
-
-    fn half_page_step(area: Rect) -> usize {
-        let height = area.height.max(1);
-        let half = std::cmp::max(1, height / 2);
-        usize::from(half)
     }
 
     fn content_height(&self, width: u16) -> usize {
@@ -306,28 +295,12 @@ impl PagerView {
                 let lower = ch.to_ascii_lowercase();
                 let area = self.content_area(tui.terminal.viewport_area);
                 handled = match lower {
-                    'f' => {
+                    'd' => {
                         self.scroll_lines(Self::page_step(area) as isize);
                         true
                     }
-                    'b' => {
-                        self.scroll_lines(-(Self::page_step(area) as isize));
-                        true
-                    }
-                    'd' => {
-                        self.scroll_lines(Self::half_page_step(area) as isize);
-                        true
-                    }
                     'u' => {
-                        self.scroll_lines(-(Self::half_page_step(area) as isize));
-                        true
-                    }
-                    'e' => {
-                        self.scroll_lines(1);
-                        true
-                    }
-                    'y' => {
-                        self.scroll_lines(-1);
+                        self.scroll_lines(-(Self::page_step(area) as isize));
                         true
                     }
                     _ => false,
@@ -604,9 +577,6 @@ impl TranscriptOverlay {
             vec![(&[KEY_Q], "to quit"), (&[KEY_ESC], "to edit prev")];
         if self.highlight_cell.is_some() {
             pairs.push((&[KEY_ENTER], "to edit message"));
-        }
-        if self.view.keybinding_mode() == KeybindingMode::Vim {
-            pairs.push((&[KEY_CTRL_E, KEY_CTRL_Y], "line scroll"));
         }
         render_key_hints(line2, buf, &pairs);
     }
