@@ -12,6 +12,7 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use urlencoding::decode;
 
+use crate::OAuthCredentialsStoreMode;
 use crate::StoredOAuthTokens;
 use crate::WrappedOAuthTokenResponse;
 use crate::save_oauth_tokens;
@@ -26,7 +27,11 @@ impl Drop for CallbackServerGuard {
     }
 }
 
-pub async fn perform_oauth_login(server_name: &str, server_url: &str) -> Result<()> {
+pub async fn perform_oauth_login(
+    server_name: &str,
+    server_url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<()> {
     let server = Arc::new(Server::http("127.0.0.1:0").map_err(|err| anyhow!(err))?);
     let guard = CallbackServerGuard {
         server: Arc::clone(&server),
@@ -47,7 +52,9 @@ pub async fn perform_oauth_login(server_name: &str, server_url: &str) -> Result<
     spawn_callback_server(server, tx);
 
     let mut oauth_state = OAuthState::new(server_url, None).await?;
-    oauth_state.start_authorization(&[], &redirect_uri).await?;
+    oauth_state
+        .start_authorization(&[], &redirect_uri, Some("Codex"))
+        .await?;
     let auth_url = oauth_state.get_authorization_url().await?;
 
     println!("Authorize `{server_name}` by opening this URL in your browser:\n{auth_url}\n");
@@ -79,7 +86,7 @@ pub async fn perform_oauth_login(server_name: &str, server_url: &str) -> Result<
         client_id,
         token_response: WrappedOAuthTokenResponse(credentials),
     };
-    save_oauth_tokens(server_name, &stored)?;
+    save_oauth_tokens(server_name, &stored, store_mode)?;
 
     drop(guard);
     Ok(())

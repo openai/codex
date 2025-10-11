@@ -80,6 +80,7 @@ pub mod test_backend;
 mod updates;
 
 use crate::onboarding::TrustDirectorySelection;
+use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
@@ -87,6 +88,7 @@ pub use cli::Cli;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
+use std::io::Write as _;
 
 // (tests access modules directly within the crate)
 
@@ -364,11 +366,18 @@ async fn run_ratatui_app(
 
     let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
     let login_status = get_login_status(&config);
-    let should_show_onboarding =
-        should_show_onboarding(login_status, &config, should_show_trust_screen);
+    let should_show_windows_wsl_screen =
+        cfg!(target_os = "windows") && !config.windows_wsl_setup_acknowledged;
+    let should_show_onboarding = should_show_onboarding(
+        login_status,
+        &config,
+        should_show_trust_screen,
+        should_show_windows_wsl_screen,
+    );
     if should_show_onboarding {
-        let directory_trust_decision = run_onboarding_app(
+        let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
+                show_windows_wsl_screen: should_show_windows_wsl_screen,
                 show_login_screen: should_show_login_screen(login_status, &config),
                 show_trust_screen: should_show_trust_screen,
                 login_status,
@@ -378,7 +387,22 @@ async fn run_ratatui_app(
             &mut tui,
         )
         .await?;
-        if let Some(TrustDirectorySelection::Trust) = directory_trust_decision {
+        if onboarding_result.windows_install_selected {
+            restore();
+            session_log::log_session_end();
+            let _ = tui.terminal.clear();
+            if let Err(err) = writeln!(std::io::stdout(), "{WSL_INSTRUCTIONS}") {
+                tracing::error!("Failed to write WSL instructions: {err}");
+            }
+            return Ok(AppExitInfo {
+                token_usage: codex_core::protocol::TokenUsage::default(),
+                conversation_id: None,
+            });
+        }
+        if should_show_windows_wsl_screen {
+            config.windows_wsl_setup_acknowledged = true;
+        }
+        if let Some(TrustDirectorySelection::Trust) = onboarding_result.directory_trust_decision {
             config.approval_policy = AskForApproval::OnRequest;
             config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
         }
@@ -521,7 +545,12 @@ fn should_show_onboarding(
     login_status: LoginStatus,
     config: &Config,
     show_trust_screen: bool,
+    show_windows_wsl_screen: bool,
 ) -> bool {
+    if show_windows_wsl_screen {
+        return true;
+    }
+
     if show_trust_screen {
         return true;
     }

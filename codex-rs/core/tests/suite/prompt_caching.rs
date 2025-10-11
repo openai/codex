@@ -180,16 +180,16 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     let cwd = TempDir::new().unwrap();
     let codex_home = TempDir::new().unwrap();
+
     let mut config = load_default_config_for_test(&codex_home);
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
-    config.include_apply_patch_tool = true;
     config.include_plan_tool = true;
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let expected_instructions = config.model_family.base_instructions.clone();
+    let base_instructions = config.model_family.base_instructions.clone();
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -222,19 +222,10 @@ async fn prompt_tools_are_consistent_across_requests() {
     // our internal implementation is responsible for keeping tools in sync
     // with the OpenAI schema, so we just verify the tool presence here
     let tools_by_model: HashMap<&'static str, Vec<&'static str>> = HashMap::from([
-        (
-            "gpt-5",
-            vec!["shell", "update_plan", "apply_patch", "view_image"],
-        ),
+        ("gpt-5", vec!["shell", "update_plan", "view_image"]),
         (
             "gpt-5-codex",
-            vec![
-                "shell",
-                "update_plan",
-                "apply_patch",
-                "read_file",
-                "view_image",
-            ],
+            vec!["shell", "update_plan", "apply_patch", "view_image"],
         ),
     ]);
     let expected_tools_names = tools_by_model
@@ -242,6 +233,17 @@ async fn prompt_tools_are_consistent_across_requests() {
         .unwrap_or_else(|| panic!("expected tools to be defined for model {OPENAI_DEFAULT_MODEL}"))
         .as_slice();
     let body0 = requests[0].body_json::<serde_json::Value>().unwrap();
+
+    let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
+        base_instructions
+    } else {
+        [
+            base_instructions.clone(),
+            include_str!("../../../apply-patch/apply_patch_tool_instructions.md").to_string(),
+        ]
+        .join("\n")
+    };
+
     assert_eq!(
         body0["instructions"],
         serde_json::json!(expected_instructions),
