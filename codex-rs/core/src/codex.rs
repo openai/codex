@@ -442,6 +442,13 @@ impl Session {
             model_reasoning_summary,
             conversation_id,
         );
+
+        // Set the model client in the MCP connection manager's sampling handler
+        // so that MCP servers can make LLM requests.
+        mcp_connection_manager
+            .set_model_client(Arc::new(client.clone()))
+            .await;
+
         let turn_context = TurnContext {
             client,
             tools_config: ToolsConfig::new(&ToolsConfigParams {

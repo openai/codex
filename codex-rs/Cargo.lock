@@ -1064,6 +1064,7 @@ dependencies = [
  "rand 0.9.2",
  "regex-lite",
  "reqwest",
+ "rmcp",
  "seccompiler",
  "serde",
  "serde_json",
@@ -1351,6 +1352,7 @@ name = "codex-rmcp-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "codex-protocol",
  "dirs",

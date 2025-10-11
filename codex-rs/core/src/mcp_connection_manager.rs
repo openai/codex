@@ -32,6 +32,7 @@ use tracing::warn;
 
 use crate::config_types::McpServerConfig;
 use crate::config_types::McpServerTransportConfig;
+use crate::mcp_sampling_handler::CodexSamplingHandler;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -109,9 +110,12 @@ impl McpClientAdapter {
         env: Option<HashMap<String, String>>,
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
+        sampling_handler: Option<Arc<CodexSamplingHandler>>,
     ) -> Result<Self> {
         if use_rmcp_client {
-            let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
+            let handler: Option<Arc<dyn codex_rmcp_client::SamplingHandler>> =
+                sampling_handler.map(|h| h as Arc<dyn codex_rmcp_client::SamplingHandler>);
+            let client = Arc::new(RmcpClient::new_stdio_client(program, args, env, handler).await?);
             client.initialize(params, Some(startup_timeout)).await?;
             Ok(McpClientAdapter::Rmcp(client))
         } else {
@@ -128,10 +132,19 @@ impl McpClientAdapter {
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
         store_mode: OAuthCredentialsStoreMode,
+        sampling_handler: Option<Arc<CodexSamplingHandler>>,
     ) -> Result<Self> {
+        let handler: Option<Arc<dyn codex_rmcp_client::SamplingHandler>> =
+            sampling_handler.map(|h| h as Arc<dyn codex_rmcp_client::SamplingHandler>);
         let client = Arc::new(
-            RmcpClient::new_streamable_http_client(&server_name, &url, bearer_token, store_mode)
-                .await?,
+            RmcpClient::new_streamable_http_client(
+                &server_name,
+                &url,
+                bearer_token,
+                store_mode,
+                handler,
+            )
+            .await?,
         );
         client.initialize(params, Some(startup_timeout)).await?;
         Ok(McpClientAdapter::Rmcp(client))
@@ -172,6 +185,9 @@ pub(crate) struct McpConnectionManager {
 
     /// Fully qualified tool name -> tool instance.
     tools: HashMap<String, ToolInfo>,
+
+    /// Sampling handler shared across all MCP clients for LLM requests.
+    sampling_handler: Option<Arc<CodexSamplingHandler>>,
 }
 
 impl McpConnectionManager {
@@ -188,9 +204,23 @@ impl McpConnectionManager {
         use_rmcp_client: bool,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<(Self, ClientStartErrors)> {
+        // Create sampling handler if using rmcp client
+        let sampling_handler = if use_rmcp_client {
+            Some(Arc::new(CodexSamplingHandler::new()))
+        } else {
+            None
+        };
+
         // Early exit if no servers are configured.
         if mcp_servers.is_empty() {
-            return Ok((Self::default(), ClientStartErrors::default()));
+            return Ok((
+                Self {
+                    clients: HashMap::new(),
+                    tools: HashMap::new(),
+                    sampling_handler,
+                },
+                ClientStartErrors::default(),
+            ));
         }
 
         // Launch all configured servers concurrently.
@@ -222,13 +252,15 @@ impl McpConnectionManager {
                 _ => Ok(None),
             };
 
+            let sampling_handler = sampling_handler.clone();
+
             join_set.spawn(async move {
                 let McpServerConfig { transport, .. } = cfg;
                 let params = mcp_types::InitializeRequestParams {
                     capabilities: ClientCapabilities {
                         experimental: None,
                         roots: None,
-                        sampling: None,
+                        sampling: Some(json!({})),
                         // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
                         // indicates this should be an empty object.
                         elicitation: Some(json!({})),
@@ -256,6 +288,7 @@ impl McpConnectionManager {
                             env,
                             params,
                             startup_timeout,
+                            sampling_handler.clone(),
                         )
                         .await
                     }
@@ -267,6 +300,7 @@ impl McpConnectionManager {
                             params,
                             startup_timeout,
                             store_mode,
+                            sampling_handler,
                         )
                         .await
                     }
@@ -315,7 +349,24 @@ impl McpConnectionManager {
 
         let tools = qualify_tools(all_tools);
 
-        Ok((Self { clients, tools }, errors))
+        Ok((
+            Self {
+                clients,
+                tools,
+                sampling_handler,
+            },
+            errors,
+        ))
+    }
+
+    /// Set the ModelClient for the sampling handler.
+    ///
+    /// This must be called after the ModelClient is created to enable
+    /// MCP servers to make LLM sampling requests.
+    pub async fn set_model_client(&self, client: Arc<crate::client::ModelClient>) {
+        if let Some(handler) = &self.sampling_handler {
+            handler.set_model_client(client).await;
+        }
     }
 
     /// Returns a single map that contains **all** tools. Each key is the

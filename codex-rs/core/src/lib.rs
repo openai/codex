@@ -34,6 +34,7 @@ pub mod git_info;
 pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
+mod mcp_sampling_handler;
 mod mcp_tool_call;
 mod message_history;
 mod model_provider_info;
