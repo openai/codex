@@ -277,7 +277,6 @@ impl Tui {
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
-        let _ = crate::terminal_palette::terminal_palette();
         let _ = crate::terminal_palette::default_colors();
 
         Self {
@@ -362,6 +361,8 @@ impl Tui {
                             }
                             Event::FocusGained => {
                                 terminal_focused.store(true, Ordering::Relaxed);
+                                crate::terminal_palette::requery_default_colors();
+                                yield TuiEvent::Draw;
                             }
                             Event::FocusLost => {
                                 terminal_focused.store(false, Ordering::Relaxed);

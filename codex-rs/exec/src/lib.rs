@@ -1,3 +1,9 @@
+// - In the default output mode, it is paramount that the only thing written to
+//   stdout is the final message (if any).
+// - In --json mode, stdout must be valid JSONL, one event per line.
+// For both modes, any other output must be written to stderr.
+#![deny(clippy::print_stdout)]
+
 mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
@@ -42,7 +48,7 @@ use codex_core::default_client::set_default_originator;
 use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
-    if let Err(err) = set_default_originator("codex_exec") {
+    if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
 
@@ -185,7 +191,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 
