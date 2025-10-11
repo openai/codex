@@ -71,6 +71,10 @@ codex completion zsh
 codex completion fish
 ```
 
+### Headless Codex Cloud
+
+`codex cloud` mirrors the Cloud TUI so you can use the same workflows from a shell. It reuses your ChatGPT sign-in. Run `codex cloud --help` (and each subcommand's `--help`) for usage details. For offline experiments, set `CODEX_CLOUD_TASKS_MODE=mock` to use the built-in stub service.
+
 ### Experimenting with the Codex Sandbox
 
 To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:

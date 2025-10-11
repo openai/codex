@@ -34,6 +34,10 @@ codex-responses-api-proxy = { workspace = true }
 codex-tui = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
+codex-cloud-tasks-client = { path = "../cloud-tasks-client" }
+codex-backend-client = { path = "../backend-client" }
+chrono = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 ctor = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }
@@ -45,6 +49,8 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+
+uuid = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
