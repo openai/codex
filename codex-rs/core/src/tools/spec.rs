@@ -6,6 +6,7 @@ use crate::tools::handlers::apply_patch::ApplyPatchToolType;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::registry::ToolRegistryBuilder;
+use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -36,6 +37,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) include_plan_tool: bool,
     pub(crate) include_apply_patch_tool: bool,
     pub(crate) include_web_search_request: bool,
+    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
@@ -48,10 +50,13 @@ impl ToolsConfig {
             include_plan_tool,
             include_apply_patch_tool,
             include_web_search_request,
+            reasoning_effort,
             use_streamable_shell_tool,
             include_view_image_tool,
             experimental_unified_exec_tool,
         } = params;
+        let allow_web_search = *include_web_search_request
+            && reasoning_effort.as_ref() != Some(&ReasoningEffortConfig::Minimal);
         let shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::Streamable
         } else if model_family.uses_local_shell_tool {
@@ -76,7 +81,7 @@ impl ToolsConfig {
             shell_type,
             plan_tool: *include_plan_tool,
             apply_patch_tool_type,
-            web_search_request: *include_web_search_request,
+            web_search_request: allow_web_search,
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
@@ -911,6 +916,7 @@ mod tests {
             include_plan_tool: true,
             include_apply_patch_tool: false,
             include_web_search_request: true,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
@@ -931,6 +937,7 @@ mod tests {
             include_plan_tool: true,
             include_apply_patch_tool: false,
             include_web_search_request: true,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
@@ -944,6 +951,30 @@ mod tests {
     }
 
     #[test]
+    fn test_minimal_reasoning_disables_web_search() {
+        let model_family =
+            find_family_for_model("gpt-5").expect("gpt-5 should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            include_plan_tool: true,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            reasoning_effort: Some(ReasoningEffortConfig::Minimal),
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
+        });
+        let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
+
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| matches!(tool.spec, ToolSpec::WebSearch {})),
+            "web_search tool should be disabled for minimal reasoning"
+        );
+    }
+
+    #[test]
     #[ignore]
     fn test_parallel_support_flags() {
         let model_family = find_family_for_model("gpt-5-codex")
@@ -953,6 +984,7 @@ mod tests {
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: false,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: false,
             experimental_unified_exec_tool: true,
@@ -974,6 +1006,7 @@ mod tests {
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: false,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: false,
             experimental_unified_exec_tool: false,
@@ -1006,6 +1039,7 @@ mod tests {
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
@@ -1111,6 +1145,7 @@ mod tests {
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: false,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
@@ -1188,6 +1223,7 @@ mod tests {
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
@@ -1257,6 +1293,7 @@ mod tests {
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
@@ -1321,6 +1358,7 @@ mod tests {
             include_plan_tool: false,
             include_apply_patch_tool: true,
             include_web_search_request: true,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
@@ -1388,6 +1426,7 @@ mod tests {
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
@@ -1467,6 +1506,7 @@ mod tests {
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
+            reasoning_effort: None,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
