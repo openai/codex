@@ -183,7 +183,9 @@ impl CodexToolCallParam {
 #[serde(rename_all = "camelCase")]
 pub struct CodexToolCallReplyParam {
     /// The conversation id for this Codex session.
-    pub conversation_id: String,
+    /// If omitted, uses the most recently started conversation in this MCP session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
 
     /// The *next user prompt* to continue the Codex conversation.
     pub prompt: String,
@@ -314,7 +316,7 @@ mod tests {
           "inputSchema": {
             "properties": {
               "conversationId": {
-                "description": "The conversation id for this Codex session.",
+                "description": "The conversation id for this Codex session. If omitted, uses the most recently started conversation in this MCP session.",
                 "type": "string"
               },
               "prompt": {
@@ -323,7 +325,6 @@ mod tests {
               },
             },
             "required": [
-              "conversationId",
               "prompt",
             ],
             "type": "object",

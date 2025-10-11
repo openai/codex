@@ -42,6 +42,9 @@ pub(crate) struct MessageProcessor {
     codex_linux_sandbox_exe: Option<PathBuf>,
     conversation_manager: Arc<ConversationManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
+    /// The most recently started conversation in this MCP session.
+    /// Used as the default when codex-reply is called without an explicit conversationId.
+    current_conversation_id: Arc<Mutex<Option<ConversationId>>>,
 }
 
 impl MessageProcessor {
@@ -62,6 +65,7 @@ impl MessageProcessor {
             codex_linux_sandbox_exe,
             conversation_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
+            current_conversation_id: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -401,6 +405,7 @@ impl MessageProcessor {
         let outgoing = self.outgoing.clone();
         let conversation_manager = self.conversation_manager.clone();
         let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
+        let current_conversation_id = self.current_conversation_id.clone();
 
         // Spawn an async task to handle the Codex session so that we do not
         // block the synchronous message-processing loop.
@@ -413,6 +418,7 @@ impl MessageProcessor {
                 outgoing,
                 conversation_manager,
                 running_requests_id_to_codex_uuid,
+                current_conversation_id,
             )
             .await;
         });
@@ -450,12 +456,12 @@ impl MessageProcessor {
             },
             None => {
                 tracing::error!(
-                    "Missing arguments for codex-reply tool-call; the `conversation_id` and `prompt` fields are required."
+                    "Missing arguments for codex-reply tool-call; the `prompt` field is required."
                 );
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
                         r#type: "text".to_owned(),
-                        text: "Missing arguments for codex-reply tool-call; the `conversation_id` and `prompt` fields are required.".to_owned(),
+                        text: "Missing arguments for codex-reply tool-call; the `prompt` field is required.".to_owned(),
                         annotations: None,
                     })],
                     is_error: Some(true),
@@ -466,22 +472,47 @@ impl MessageProcessor {
                 return;
             }
         };
-        let conversation_id = match ConversationId::from_string(&conversation_id) {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::error!("Failed to parse conversation_id: {e}");
-                let result = CallToolResult {
-                    content: vec![ContentBlock::TextContent(TextContent {
-                        r#type: "text".to_owned(),
-                        text: format!("Failed to parse conversation_id: {e}"),
-                        annotations: None,
-                    })],
-                    is_error: Some(true),
-                    structured_content: None,
-                };
-                self.send_response::<mcp_types::CallToolRequest>(request_id, result)
-                    .await;
-                return;
+
+        // If conversation_id is not provided, use the current conversation
+        let conversation_id = match conversation_id {
+            Some(id_str) => match ConversationId::from_string(&id_str) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Failed to parse conversation_id: {e}");
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_owned(),
+                            text: format!("Failed to parse conversation_id: {e}"),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                        .await;
+                    return;
+                }
+            },
+            None => {
+                // Use the current conversation from this MCP session
+                match *self.current_conversation_id.lock().await {
+                    Some(id) => id,
+                    None => {
+                        tracing::error!("No current conversation found. Call 'codex' tool first.");
+                        let result = CallToolResult {
+                            content: vec![ContentBlock::TextContent(TextContent {
+                                r#type: "text".to_owned(),
+                                text: "No current conversation found. Call 'codex' tool first to start a conversation.".to_owned(),
+                                annotations: None,
+                            })],
+                            is_error: Some(true),
+                            structured_content: None,
+                        };
+                        self.send_response::<mcp_types::CallToolRequest>(request_id, result)
+                            .await;
+                        return;
+                    }
+                }
             }
         };
 
