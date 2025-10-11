@@ -25,53 +25,74 @@ pub async fn discover_prompts_in_excluding(
     exclude: &HashSet<String>,
 ) -> Vec<CustomPrompt> {
     let mut out: Vec<CustomPrompt> = Vec::new();
-    let mut entries = match fs::read_dir(dir).await {
-        Ok(entries) => entries,
-        Err(_) => return out,
-    };
+    let mut stack: Vec<(PathBuf, Option<String>)> = vec![(dir.to_path_buf(), None)];
 
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        let is_file = entry
-            .file_type()
-            .await
-            .map(|ft| ft.is_file())
-            .unwrap_or(false);
-        if !is_file {
-            continue;
-        }
-        // Only include Markdown files with a .md extension.
-        let is_md = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("md"))
-            .unwrap_or(false);
-        if !is_md {
-            continue;
-        }
-        let Some(name) = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(str::to_string)
-        else {
-            continue;
-        };
-        if exclude.contains(&name) {
-            continue;
-        }
-        let content = match fs::read_to_string(&path).await {
-            Ok(s) => s,
+    while let Some((current_dir, prefix)) = stack.pop() {
+        let mut entries = match fs::read_dir(&current_dir).await {
+            Ok(entries) => entries,
             Err(_) => continue,
         };
-        let (description, argument_hint, body) = parse_frontmatter(&content);
-        out.push(CustomPrompt {
-            name,
-            path,
-            content: body,
-            description,
-            argument_hint,
-        });
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type().await else {
+                continue;
+            };
+
+            if file_type.is_dir() {
+                let Some(dir_name) = entry.file_name().to_str().map(str::to_string) else {
+                    continue;
+                };
+                let next_prefix = if let Some(parent) = &prefix {
+                    format!("{parent}::{dir_name}")
+                } else {
+                    dir_name
+                };
+                stack.push((path, Some(next_prefix)));
+                continue;
+            }
+
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !ext.eq_ignore_ascii_case("md") {
+                continue;
+            }
+
+            let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+
+            let name = if let Some(parent) = &prefix {
+                format!("{parent}::{file_stem}")
+            } else {
+                file_stem.to_string()
+            };
+
+            if exclude.contains(&name) {
+                continue;
+            }
+
+            let content = match fs::read_to_string(&path).await {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            let (description, argument_hint, body) = parse_frontmatter(&content);
+            out.push(CustomPrompt {
+                name,
+                path,
+                content: body,
+                description,
+                argument_hint,
+            });
+        }
     }
+
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -166,9 +187,22 @@ mod tests {
         fs::write(dir.join("b.md"), b"b").unwrap();
         fs::write(dir.join("a.md"), b"a").unwrap();
         fs::create_dir(dir.join("subdir")).unwrap();
+        fs::write(dir.join("subdir").join("c.md"), b"c").unwrap();
         let found = discover_prompts_in(dir).await;
         let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
-        assert_eq!(names, vec!["a", "b"]);
+        assert_eq!(names, vec!["a", "b", "subdir::c"]);
+    }
+
+    #[tokio::test]
+    async fn discovers_nested_directories() {
+        let tmp = tempdir().expect("create TempDir");
+        let dir = tmp.path();
+        fs::create_dir_all(dir.join("bmad/agents")).unwrap();
+        fs::write(dir.join("bmad/agents/dev.md"), b"hi").unwrap();
+        fs::write(dir.join("bmad/root.md"), b"root").unwrap();
+        let found = discover_prompts_in(dir).await;
+        let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["bmad::agents::dev", "bmad::root"]);
     }
 
     #[tokio::test]
@@ -182,6 +216,25 @@ mod tests {
         let found = discover_prompts_in_excluding(dir, &exclude).await;
         let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
         assert_eq!(names, vec!["foo"]);
+    }
+
+    #[tokio::test]
+    async fn exclude_matches_full_prompt_names() {
+        let tmp = tempdir().expect("create TempDir");
+        let dir = tmp.path();
+        fs::write(dir.join("init.md"), b"ignored").unwrap();
+        fs::create_dir_all(dir.join("nested")).expect("create nested directory");
+        fs::write(dir.join("nested").join("init.md"), b"allowed").unwrap();
+        fs::create_dir_all(dir.join("skipme")).expect("create directory to skip");
+        fs::write(dir.join("skipme").join("inner.md"), b"ignored").unwrap();
+
+        let mut exclude = HashSet::new();
+        exclude.insert("init".to_string());
+        exclude.insert("skipme::inner".to_string());
+
+        let found = discover_prompts_in_excluding(dir, &exclude).await;
+        let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["nested::init"]);
     }
 
     #[tokio::test]
