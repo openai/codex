@@ -82,15 +82,16 @@ impl App {
 
     /// Handle global Esc presses for backtracking when no overlay is present.
     pub(crate) fn handle_backtrack_esc_key(&mut self, tui: &mut tui::Tui) {
-        // Only handle backtracking when composer is empty to avoid clobbering edits.
-        if self.chat_widget.composer_is_empty() {
-            if !self.backtrack.primed {
-                self.prime_backtrack();
-            } else if self.overlay.is_none() {
-                self.open_backtrack_preview(tui);
-            } else if self.backtrack.overlay_preview_active {
-                self.step_backtrack_and_highlight(tui);
-            }
+        if !self.chat_widget.composer_is_empty() {
+            return;
+        }
+
+        if !self.backtrack.primed {
+            self.prime_backtrack();
+        } else if self.overlay.is_none() {
+            self.open_backtrack_preview(tui);
+        } else if self.backtrack.overlay_preview_active {
+            self.step_backtrack_and_highlight(tui);
         }
     }
 
