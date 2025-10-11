@@ -1292,6 +1292,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-prehook"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codex-common",
+ "codex-mcp-client",
+ "libc",
+ "mcp-types",
+ "pretty_assertions",
+ "regex-lite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "codex-process-hardening"
 version = "0.0.0"
 dependencies = [
