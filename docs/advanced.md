@@ -27,7 +27,7 @@ The Codex CLI can also be run as an MCP _server_ via `codex mcp-server`. For exa
 You can launch a Codex MCP server with the [Model Context Protocol Inspector](https://modelcontextprotocol.io/legacy/tools/inspector):
 
 ```bash
-npx @modelcontextprotocol/inspector codex mcp-server
+npx @modelcontextprotocol/inspector codex mcp
 ```
 
 Send a `tools/list` request and you will see that there are two tools available:
@@ -58,7 +58,7 @@ Send a `tools/list` request and you will see that there are two tools available:
 > [!TIP]
 > Codex often takes a few minutes to run. To accommodate this, adjust the MCP inspector's Request and Total timeouts to 600000ms (10 minutes) under ⛭ Configuration.
 
-Use the MCP inspector and `codex mcp-server` to build a simple tic-tac-toe game with the following settings:
+Use the MCP inspector and `codex mcp` to build a simple tic-tac-toe game with the following settings:
 
 **approval-policy:** never
 
