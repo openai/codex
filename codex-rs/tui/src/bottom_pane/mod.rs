@@ -406,6 +406,10 @@ impl BottomPane {
         self.is_task_running
     }
 
+    pub(crate) fn composer_in_vim_normal_mode(&self) -> bool {
+        self.composer.is_vim_normal_mode()
+    }
+
     /// Return true when the pane is in the regular composer state without any
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
