@@ -396,6 +396,10 @@ impl ChatComposer {
         self.keybinding_mode == KeybindingMode::Vim
     }
 
+    pub(crate) fn is_vim_normal_mode(&self) -> bool {
+        matches!(self.vim.as_ref().map(|v| v.mode), Some(VimMode::Normal))
+    }
+
     fn current_vim_mode(&self) -> Option<VimMode> {
         self.vim.as_ref().map(|v| v.mode)
     }
@@ -814,6 +818,12 @@ impl ChatComposer {
                 self.after_vim_cursor_motion();
                 return Some((InputResult::None, true));
             }
+            KeyCode::Char('e') => {
+                let pos = self.textarea.end_of_next_word();
+                self.textarea.set_cursor(pos);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
             KeyCode::Char('0') => {
                 self.textarea.move_cursor_to_beginning_of_line(false);
                 self.after_vim_cursor_motion();
@@ -885,12 +895,6 @@ impl ChatComposer {
             }
             KeyCode::Char('p') => {
                 self.paste_from_clipboard(false);
-                return Some((InputResult::None, true));
-            }
-            KeyCode::Char('e') => {
-                let pos = self.textarea.end_of_next_word();
-                self.textarea.set_cursor(pos);
-                self.after_vim_cursor_motion();
                 return Some((InputResult::None, true));
             }
             _ => {}
@@ -968,6 +972,24 @@ impl ChatComposer {
             }
             KeyCode::Char('l') => {
                 self.textarea.move_cursor_right();
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('w') => {
+                let pos = self.textarea.end_of_next_word();
+                self.textarea.set_cursor(pos);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('b') => {
+                let pos = self.textarea.beginning_of_previous_word();
+                self.textarea.set_cursor(pos);
+                self.after_vim_cursor_motion();
+                return Some((InputResult::None, true));
+            }
+            KeyCode::Char('e') => {
+                let pos = self.textarea.end_of_next_word();
+                self.textarea.set_cursor(pos);
                 self.after_vim_cursor_motion();
                 return Some((InputResult::None, true));
             }
@@ -2200,6 +2222,42 @@ mod vim_tests {
         let len = composer.textarea.text().len();
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
         assert_eq!(composer.textarea.cursor(), len.saturating_sub(1));
+    }
+
+    #[test]
+    fn visual_mode_word_motions() {
+        let mut composer = vim_composer();
+        composer.set_text_content("foo bar baz".to_string());
+        composer.textarea.set_cursor(0);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 3);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 7);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 4);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 7);
+
+        assert!(composer.textarea.has_selection());
+    }
+
+    #[test]
+    fn detects_vim_normal_mode() {
+        let mut composer = vim_composer();
+        assert!(!composer.is_vim_normal_mode());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert!(!composer.is_vim_normal_mode());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(composer.is_vim_normal_mode());
     }
 }
 
