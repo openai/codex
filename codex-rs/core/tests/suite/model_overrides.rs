@@ -38,6 +38,8 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             summary: None,
+            auto_compact: None,
+            auto_compact_limit: None,
         })
         .await
         .expect("submit override");
@@ -78,6 +80,8 @@ async fn override_turn_context_does_not_create_config_file() {
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::Medium)),
             summary: None,
+            auto_compact: None,
+            auto_compact_limit: None,
         })
         .await
         .expect("submit override");

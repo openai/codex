@@ -16,12 +16,14 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::config::persist_auto_compact_limit;
 use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::ConversationId;
+use codex_protocol::num_format::format_with_separators;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -371,6 +373,52 @@ impl App {
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
+            }
+            AppEvent::UpdateAutoCompactMode(mode) => {
+                let changed = self.config.auto_compact_mode != mode;
+                self.chat_widget.set_auto_compact_mode(mode);
+                self.config.auto_compact_mode = mode;
+                if changed {
+                    let message = format!("Auto-compact mode set to {}", mode);
+                    self.chat_widget.add_info_message(message, None);
+                }
+            }
+            AppEvent::UpdateAutoCompactLimit(limit) => {
+                let changed = self.config.model_auto_compact_token_limit != limit;
+                self.chat_widget.set_auto_compact_limit(limit);
+                self.config.model_auto_compact_token_limit = limit;
+                if changed {
+                    match persist_auto_compact_limit(
+                        &self.config.codex_home,
+                        self.active_profile.as_deref(),
+                        limit,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            let message = match limit {
+                                Some(tokens) => {
+                                    let formatted = format_with_separators(tokens.max(0) as u64);
+                                    format!("Auto-compact limit set to {formatted} tokens")
+                                }
+                                None => "Auto-compact limit reset to the model default".to_string(),
+                            };
+                            self.chat_widget.add_info_message(message, None);
+                        }
+                        Err(err) => {
+                            tracing::error!(
+                                error = %err,
+                                "failed to persist auto-compact limit"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save auto-compact limit: {err}"
+                            ));
+                        }
+                    }
+                }
+            }
+            AppEvent::OpenAutoCompactLimitEditor => {
+                self.chat_widget.show_auto_compact_limit_editor();
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;

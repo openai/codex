@@ -9,8 +9,10 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::config_types::AutoCompactMode;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
+use core_test_support::skip_if_sandbox;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 
@@ -25,6 +27,11 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
@@ -43,6 +50,8 @@ const CONTEXT_LIMIT_MESSAGE: &str =
     "Your input exceeds the context window of this model. Please adjust your input and try again.";
 const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
+const CONTEXT_WINDOW_ERROR_MESSAGE: &str =
+    "Your input exceeds the context window of this model. Please adjust your input and try again.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
@@ -403,6 +412,390 @@ async fn auto_compact_runs_after_token_limit_hit() {
     assert_eq!(
         last_text, SUMMARIZATION_PROMPT,
         "auto compact should send the summarization prompt as a user message",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_respects_config_toggle() {
+    skip_if_sandbox!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SECOND_LARGE_REPLY),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+
+    let first_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(FIRST_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(first_matcher)
+        .respond_with(sse_response(sse1))
+        .mount(&server)
+        .await;
+
+    let second_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(SECOND_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(second_matcher)
+        .respond_with(sse_response(sse2))
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_auto_compact_token_limit = Some(200_000);
+    config.auto_compact_mode = AutoCompactMode::Manual;
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: FIRST_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: SECOND_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "auto-compact should not trigger extra requests"
+    );
+    for req in &requests {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        assert!(
+            !body.contains("You have exceeded the maximum number of tokens"),
+            "auto-compact prompt should not appear when disabled"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_override_disables_inline_compaction() {
+    skip_if_sandbox!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SECOND_LARGE_REPLY),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+
+    let first_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(FIRST_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(first_matcher)
+        .respond_with(sse_response(sse1))
+        .mount(&server)
+        .await;
+
+    let second_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(SECOND_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(second_matcher)
+        .respond_with(sse_response(sse2))
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_auto_compact_token_limit = Some(200_000);
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: FIRST_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+            auto_compact: Some(AutoCompactMode::Manual),
+            auto_compact_limit: None,
+        })
+        .await
+        .unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: SECOND_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "override should prevent auto-compact request"
+    );
+    for req in &requests {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        assert!(
+            !body.contains("You have exceeded the maximum number of tokens"),
+            "auto-compact prompt should not appear after disable override"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_manual_mode_emits_warning_without_compaction() {
+    skip_if_sandbox!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SECOND_LARGE_REPLY),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+
+    let first_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(FIRST_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(first_matcher)
+        .respond_with(sse_response(sse1))
+        .mount(&server)
+        .await;
+
+    let second_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(SECOND_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(second_matcher)
+        .respond_with(sse_response(sse2))
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_auto_compact_token_limit = Some(200_000);
+    config.auto_compact_mode = AutoCompactMode::Manual;
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: FIRST_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: SECOND_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    let warning = wait_for_event(&codex, |ev| {
+        matches!(ev, EventMsg::Error(err) if err.message.contains("Auto-compaction is set to manual"))
+    })
+    .await;
+
+    if let EventMsg::Error(err) = warning {
+        assert!(err.message.contains("Auto-compaction is set to manual"));
+    } else {
+        panic!("expected manual auto-compact warning");
+    }
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "manual mode should not trigger automatic summarization requests"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_retries_after_context_window_failure() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let failure_event = json!({
+        "type": "response.failed",
+        "response": {
+            "id": "resp_fail",
+            "status": "failed",
+            "error": {
+                "code": "context_length_exceeded",
+                "message": CONTEXT_WINDOW_ERROR_MESSAGE,
+            },
+            "usage": null,
+            "object": "response",
+            "created_at": 0,
+            "background": false,
+        }
+    });
+
+    let sse_failure = sse(vec![failure_event]);
+    let sse_summary = sse(vec![
+        ev_assistant_message("m-summary", SUMMARY_TEXT),
+        ev_completed_with_tokens("resp_summary", 100),
+    ]);
+    let sse_success = sse(vec![
+        ev_assistant_message("m-success", FINAL_REPLY),
+        ev_completed_with_tokens("resp_success", 120_000),
+    ]);
+
+    mount_sse_sequence(&server, vec![sse_failure, sse_summary, sse_success]).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_auto_compact_token_limit = Some(200_000);
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: FIRST_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        3,
+        "context window failure should trigger inline auto-compaction and retry"
+    );
+
+    let bodies: Vec<String> = requests
+        .iter()
+        .map(|req| String::from_utf8_lossy(&req.body).into_owned())
+        .collect();
+
+    assert!(
+        bodies[1].contains("You have exceeded the maximum number of tokens"),
+        "second request should run the summarization prompt"
+    );
+    assert!(
+        !bodies[0].contains("You have exceeded the maximum number of tokens"),
+        "initial request should be the user turn"
+    );
+    assert!(
+        bodies[2].contains(FIRST_AUTO_MSG),
+        "final retry should include the original user prompt"
     );
 }
 

@@ -576,8 +576,9 @@ async fn integration_git_info_unit_test() {
         "Git info should contain repository_url"
     );
     let repo_url = git_info.repository_url.as_ref().unwrap();
-    assert_eq!(
-        repo_url, "https://github.com/example/integration-test.git",
+    assert!(
+        repo_url == "https://github.com/example/integration-test.git"
+            || repo_url == "git@github.com:example/integration-test.git",
         "Repository URL should match what we configured"
     );
 

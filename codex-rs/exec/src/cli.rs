@@ -18,6 +18,10 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Token usage threshold that triggers auto-compaction.
+    #[arg(long = "auto-compact-limit", value_name = "TOKENS")]
+    pub auto_compact_limit: Option<i64>,
+
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
 
