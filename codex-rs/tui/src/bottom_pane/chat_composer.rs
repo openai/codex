@@ -313,6 +313,11 @@ impl ChatComposer {
         self.sync_file_search_popup();
     }
 
+    pub(crate) fn clear_for_ctrl_c(&mut self) {
+        self.set_text_content(String::new());
+        self.history.reset_navigation();
+    }
+
     /// Get the current composer text.
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
