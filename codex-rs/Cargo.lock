@@ -1101,6 +1101,7 @@ dependencies = [
  "codex-arg0",
  "codex-common",
  "codex-core",
+ "codex-lmstudio",
  "codex-ollama",
  "codex-protocol",
  "core_test_support",
@@ -1188,6 +1189,19 @@ dependencies = [
  "seccompiler",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-lmstudio"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "which",
+ "wiremock",
 ]
 
 [[package]]
@@ -1390,6 +1404,7 @@ dependencies = [
  "codex-core",
  "codex-file-search",
  "codex-git-tooling",
+ "codex-lmstudio",
  "codex-login",
  "codex-ollama",
  "codex-protocol",
@@ -1412,6 +1427,7 @@ dependencies = [
  "rand 0.9.2",
  "ratatui",
  "regex-lite",
+ "reqwest",
  "serde",
  "serde_json",
  "shlex",

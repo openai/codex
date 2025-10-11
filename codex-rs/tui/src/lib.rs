@@ -7,9 +7,10 @@ use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
 use codex_core::AuthManager;
-use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
+use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -19,7 +20,8 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_ollama::DEFAULT_OSS_MODEL;
+use codex_lmstudio::DEFAULT_OSS_MODEL as LMSTUDIO_DEFAULT_OSS_MODEL;
+use codex_ollama::DEFAULT_OSS_MODEL as OLLAMA_DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
@@ -55,6 +57,7 @@ mod markdown;
 mod markdown_render;
 mod markdown_stream;
 pub mod onboarding;
+mod oss_selection;
 mod pager_overlay;
 pub mod public_widgets;
 mod render;
@@ -113,21 +116,100 @@ pub async fn run_main(
         )
     };
 
-    // When using `--oss`, let the bootstrapper pick the model (defaulting to
-    // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
-    // `oss` model provider.
+    let raw_overrides = cli.config_overrides.raw_overrides.clone();
+    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
+    let cli_kv_overrides = match overrides_cli.parse_overrides() {
+        // Parse `-c` overrides from the CLI.
+        Ok(v) => v,
+        #[allow(clippy::print_stderr)]
+        Err(e) => {
+            eprintln!("Error parsing -c overrides: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // we load config.toml here to determine project state.
+    #[allow(clippy::print_stderr)]
+    let codex_home = match find_codex_home() {
+        Ok(codex_home) => codex_home,
+        Err(err) => {
+            eprintln!("Error finding codex home: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    #[allow(clippy::print_stderr)]
+    let config_toml =
+        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides.clone()).await {
+            Ok(config_toml) => config_toml,
+            Err(err) => {
+                eprintln!("Error loading config.toml: {err}");
+                std::process::exit(1);
+            }
+        };
+
+    let model_provider_override = if cli.oss {
+        if let Some(provider) = &cli.oss_provider {
+            // Explicit provider specified with --oss-provider
+            Some(provider.clone())
+        } else {
+            // Check profile config first, then global config, finally show selection UI
+            let config_profile = config_toml
+                .get_config_profile(cli.config_profile.clone())
+                .ok();
+            if let Some(profile) = &config_profile {
+                // Check if profile has an oss provider
+                if let Some(profile_oss_provider) = &profile.oss_provider {
+                    Some(profile_oss_provider.clone())
+                }
+                // If not then check if the toml has an oss provider
+                else if let Some(default) = &config_toml.oss_provider {
+                    Some(default.clone())
+                }
+                // Or else prompt the user
+                else {
+                    let provider = oss_selection::select_oss_provider(&codex_home).await?;
+                    if provider == "__CANCELLED__" {
+                        // If user cancelled the OSS selection, we should exit gracefully rather than fail
+                        return Err(std::io::Error::other(
+                            "OSS provider selection was cancelled by user",
+                        ));
+                    }
+                    Some(provider)
+                }
+            } else if let Some(default) = &config_toml.oss_provider {
+                Some(default.clone())
+            } else {
+                let provider = oss_selection::select_oss_provider(&codex_home).await?;
+                if provider == "__CANCELLED__" {
+                    // If user cancelled the OSS selection, we should exit gracefully rather than fail
+                    return Err(std::io::Error::other(
+                        "OSS provider selection was cancelled by user",
+                    ));
+                }
+                Some(provider)
+            }
+        }
+    } else {
+        None
+    };
+
+    // When using `--oss`, let the bootstrapper pick the model based on selected provider
     let model = if let Some(model) = &cli.model {
         Some(model.clone())
     } else if cli.oss {
-        Some(DEFAULT_OSS_MODEL.to_owned())
+        // Use the provider from model_provider_override
+        if let Some(provider_id) = &model_provider_override {
+            match provider_id.as_str() {
+                LMSTUDIO_OSS_PROVIDER_ID => Some(LMSTUDIO_DEFAULT_OSS_MODEL.to_owned()),
+                OLLAMA_OSS_PROVIDER_ID => Some(OLLAMA_DEFAULT_OSS_MODEL.to_owned()),
+                _ => None,
+            }
+        } else {
+            None
+        }
     } else {
         None // No model specified, will use the default.
-    };
-
-    let model_provider_override = if cli.oss {
-        Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_owned())
-    } else {
-        None
     };
 
     // canonicalize the cwd
@@ -139,7 +221,7 @@ pub async fn run_main(
         approval_policy,
         sandbox_mode,
         cwd,
-        model_provider: model_provider_override,
+        model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
         base_instructions: None,
@@ -148,16 +230,6 @@ pub async fn run_main(
         include_view_image_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
-    };
-    let raw_overrides = cli.config_overrides.raw_overrides.clone();
-    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
-    let cli_kv_overrides = match overrides_cli.parse_overrides() {
-        Ok(v) => v,
-        #[allow(clippy::print_stderr)]
-        Err(e) => {
-            eprintln!("Error parsing -c overrides: {e}");
-            std::process::exit(1);
-        }
     };
 
     let mut config = {
@@ -241,10 +313,33 @@ pub async fn run_main(
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
 
-    if cli.oss {
-        codex_ollama::ensure_oss_ready(&config)
-            .await
-            .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
+    if cli.oss && model_provider_override.is_some() {
+        // We're in the oss section, so provider_id should be Some
+        // Let's handle None case gracefully though just in case
+        let provider_id = match model_provider_override.as_ref() {
+            Some(id) => id,
+            None => {
+                error!("OSS provider unexpectedly not set when oss flag is used");
+                return Err(std::io::Error::other(
+                    "OSS provider not set but oss flag was used",
+                ));
+            }
+        };
+        match provider_id.as_str() {
+            LMSTUDIO_OSS_PROVIDER_ID => {
+                codex_lmstudio::ensure_oss_ready(&config)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
+            }
+            OLLAMA_OSS_PROVIDER_ID => {
+                codex_ollama::ensure_oss_ready(&config)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
+            }
+            _ => {
+                // Unknown OSS provider, skip setup
+            }
+        }
     }
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));

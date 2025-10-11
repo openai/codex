@@ -179,6 +179,19 @@ Alternatively, you can have the model run until it is done, and never ask to run
 approval_policy = "never"
 ```
 
+## oss_provider
+
+Specifies the default OSS provider to use when running Codex. This is used when the `--oss` flag is provided without a specific provider.
+
+Valid values are:
+- `"lmstudio"` - Use LM Studio as the local model provider
+- `"ollama"` - Use Ollama as the local model provider
+
+```toml
+# Example: Set default OSS provider to LM Studio
+oss_provider = "lmstudio"
+```
+
 ## profiles
 
 A _profile_ is a collection of configuration values that can be set together. Multiple profiles can be defined in `config.toml` and you can specify the one you
