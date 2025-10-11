@@ -88,6 +88,21 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
     Some(commands)
 }
 
+/// Returns the sequence of plain commands within a `bash -lc "..."` invocation
+/// when the script only contains word-only commands joined by safe operators.
+pub fn parse_bash_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
+    let [bash, flag, script] = command else {
+        return None;
+    };
+
+    if bash != "bash" || flag != "-lc" {
+        return None;
+    }
+
+    let tree = try_parse_bash(script)?;
+    try_parse_word_only_commands_sequence(&tree, script)
+}
+
 fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Vec<String>> {
     if cmd.kind() != "command" {
         return None;

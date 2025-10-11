@@ -2,6 +2,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use std::ops::Range;
 use textwrap::Options;
+use textwrap::wrap_algorithms::Penalties;
 
 use crate::render::line_utils::push_owned_lines;
 
@@ -90,7 +91,11 @@ impl<'a> RtOptions<'a> {
             subsequent_indent: Line::default(),
             break_words: true,
             word_separator: textwrap::WordSeparator::new(),
-            wrap_algorithm: textwrap::WrapAlgorithm::new(),
+            wrap_algorithm: textwrap::WrapAlgorithm::OptimalFit(Penalties {
+                // ~infinite overflow penalty, we never want to overflow a line.
+                overflow_penalty: usize::MAX / 4,
+                ..Default::default()
+            }),
             word_splitter: textwrap::WordSplitter::HyphenSplitter,
         }
     }
@@ -149,6 +154,7 @@ impl<'a> RtOptions<'a> {
     }
 }
 
+#[must_use]
 pub(crate) fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> Vec<Line<'a>>
 where
     O: Into<RtOptions<'a>>,
@@ -186,7 +192,7 @@ where
     };
 
     // Build first wrapped line with initial indent.
-    let mut first_line = rt_opts.initial_indent.clone();
+    let mut first_line = rt_opts.initial_indent.clone().style(line.style);
     {
         let sliced = slice_line_spans(line, &span_bounds, first_line_range);
         let mut spans = first_line.spans;
@@ -214,7 +220,7 @@ where
         if r.is_empty() {
             continue;
         }
-        let mut subsequent_line = rt_opts.subsequent_indent.clone();
+        let mut subsequent_line = rt_opts.subsequent_indent.clone().style(line.style);
         let offset_range = (r.start + base)..(r.end + base);
         let sliced = slice_line_spans(line, &span_bounds, &offset_range);
         let mut spans = subsequent_line.spans;

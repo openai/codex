@@ -1,7 +1,7 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::RolloutRecorder;
 use codex_core::protocol::GitInfo;
-use core_test_support::non_sandbox_test;
+use core_test_support::skip_if_no_network;
 use std::time::Duration;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -21,7 +21,7 @@ use wiremock::matchers::path;
 /// 4. Ensures the response is received exactly once and contains "hi"
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chat_mode_stream_cli() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = MockServer::start().await;
     let sse = concat!(
@@ -76,7 +76,7 @@ async fn chat_mode_stream_cli() {
     server.verify().await;
 
     // Verify a new session rollout was created and is discoverable via list_conversations
-    let page = RolloutRecorder::list_conversations(home.path(), 10, None)
+    let page = RolloutRecorder::list_conversations(home.path(), 10, None, &[])
         .await
         .expect("list conversations");
     assert!(
@@ -97,7 +97,7 @@ async fn chat_mode_stream_cli() {
 /// received by a mock OpenAI Responses endpoint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_cli_applies_experimental_instructions_file() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // Start mock server which will capture the request and return a minimal
     // SSE stream for a single turn.
@@ -106,16 +106,12 @@ async fn exec_cli_applies_experimental_instructions_file() {
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
     );
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_raw(sse, "text/event-stream"),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
+    let resp_mock = core_test_support::responses::mount_sse_once_match(
+        &server,
+        path("/v1/responses"),
+        sse.to_string(),
+    )
+    .await;
 
     // Create a temporary instructions file with a unique marker we can assert
     // appears in the outbound request payload.
@@ -164,8 +160,8 @@ async fn exec_cli_applies_experimental_instructions_file() {
 
     // Inspect the captured request and verify our custom base instructions were
     // included in the `instructions` field.
-    let request = &server.received_requests().await.unwrap()[0];
-    let body = request.body_json::<serde_json::Value>().unwrap();
+    let request = resp_mock.single_request();
+    let body = request.body_json();
     let instructions = body
         .get("instructions")
         .and_then(|v| v.as_str())
@@ -185,7 +181,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
 /// 4. Ensures the fixture content is correctly streamed through the CLI
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_api_stream_cli() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cli_responses_fixture.sse");
@@ -217,7 +213,7 @@ async fn responses_api_stream_cli() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integration_creates_and_checks_session_file() {
     // Honor sandbox network restrictions for CI parity with the other tests.
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     // 1. Temp home so we read/write isolated session files.
     let home = TempDir::new().unwrap();

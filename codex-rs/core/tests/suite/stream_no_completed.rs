@@ -10,10 +10,10 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use core_test_support::load_sse_fixture;
 use core_test_support::load_sse_fixture_with_id;
-use core_test_support::non_sandbox_test;
+use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use tokio::time::timeout;
+use core_test_support::wait_for_event_with_timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -32,7 +32,7 @@ fn sse_completed(id: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retries_on_early_close() {
-    non_sandbox_test!();
+    skip_if_no_network!();
 
     let server = MockServer::start().await;
 
@@ -102,13 +102,10 @@ async fn retries_on_early_close() {
         .unwrap();
 
     // Wait until TaskComplete (should succeed after retry).
-    loop {
-        let ev = timeout(Duration::from_secs(10), codex.next_event())
-            .await
-            .unwrap()
-            .unwrap();
-        if matches!(ev.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TaskComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
 }

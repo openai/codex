@@ -5,8 +5,16 @@
 If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API key:
 
 ```shell
-codex login --api-key "your-api-key-here"
+printenv OPENAI_API_KEY | codex login --with-api-key
 ```
+
+Alternatively, read from a file:
+
+```shell
+codex login --with-api-key < my_key.txt
+```
+
+The legacy `--api-key` flag now exits with an error instructing you to use `--with-api-key` so that the key never appears in shell history or process listings.
 
 This key must, at minimum, have write access to the Responses API.
 
@@ -57,4 +65,4 @@ If you run Codex on a remote machine (VPS/server) without a local browser, the l
 ssh -L 1455:localhost:1455 <user>@<remote-host>
 ```
 
-Then, in that SSH session, run `codex` and select "Sign in with ChatGPT". When prompted, open the printed URL (it will be `http://localhost:1455/...`) in your local browser. The traffic will be tunneled to the remote server. 
+Then, in that SSH session, run `codex` and select "Sign in with ChatGPT". When prompted, open the printed URL (it will be `http://localhost:1455/...`) in your local browser. The traffic will be tunneled to the remote server.
