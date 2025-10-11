@@ -71,8 +71,6 @@ use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
-use crate::protocol::ContextItemSummary;
-use crate::protocol::ContextItemsEvent;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -84,8 +82,6 @@ use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
-use crate::protocol::PruneCategory;
-use crate::protocol::PruneRange;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
@@ -1002,63 +998,13 @@ impl Session {
     }
 
     /// Build the full turn input by concatenating the current conversation
-    /// history (respecting inclusion mask) with additional items for this turn.
+    /// history with additional items for this turn.
     pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
-        use std::collections::HashSet;
-        // Snapshot history (included items) and a copy of the call registry for integrity checks.
-        let (history, registry_lookup) = {
+        let history = {
             let state = self.state.lock().await;
-            let hist = state.included_history_snapshot();
-            let lookup = move |id: &str| state.lookup_call_begin(id);
-            (hist, lookup)
+            state.history_snapshot()
         };
-
-        // Build a set of call_ids that have an existing begin in history.
-        let mut has_begin: HashSet<String> = history
-            .iter()
-            .filter_map(|ri| match ri {
-                ResponseItem::FunctionCall { call_id, .. } => Some(call_id.clone()),
-                ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
-                ResponseItem::LocalShellCall {
-                    call_id: Some(id), ..
-                } => Some(id.clone()),
-                _ => None,
-            })
-            .collect();
-
-        // Stitch history with extra, inserting any missing begins right before
-        // their corresponding outputs.
-        let mut stitched: Vec<ResponseItem> = Vec::with_capacity(history.len() + extra.len() + 4);
-        stitched.extend(history.into_iter());
-
-        for item in extra.into_iter() {
-            match &item {
-                ResponseItem::FunctionCall { call_id, .. }
-                | ResponseItem::CustomToolCall { call_id, .. } => {
-                    has_begin.insert(call_id.clone());
-                    stitched.push(item);
-                }
-                ResponseItem::LocalShellCall {
-                    call_id: Some(id), ..
-                } => {
-                    has_begin.insert(id.clone());
-                    stitched.push(item);
-                }
-                ResponseItem::FunctionCallOutput { call_id, .. }
-                | ResponseItem::CustomToolCallOutput { call_id, .. } => {
-                    if !has_begin.contains(call_id)
-                        && let Some(begin) = registry_lookup(call_id)
-                    {
-                        // Insert a matching begin just before the output to satisfy the API.
-                        has_begin.insert(call_id.clone());
-                        stitched.push(begin);
-                    }
-                    stitched.push(item);
-                }
-                _ => stitched.push(item),
-            }
-        }
-        stitched
+        [history, extra].concat()
     }
 
     /// Returns the input if there was no task running to inject into
@@ -1499,51 +1445,6 @@ async fn submission_loop(
                         .await;
                 }
             }
-            // --- Context prune (experimental) ---
-            Op::GetContextUsage => {
-                let sub_id = sub.id.clone();
-                let usage = compute_context_usage(&sess).await;
-                let event = Event {
-                    id: sub_id,
-                    msg: EventMsg::ConversationUsage(usage),
-                };
-                sess.send_event(event).await;
-            }
-            Op::GetContextItems => {
-                let sub_id = sub.id.clone();
-                let items = compute_context_items(&sess).await;
-                let event = Event {
-                    id: sub_id,
-                    msg: EventMsg::ContextItems(items),
-                };
-                sess.send_event(event).await;
-            }
-            Op::PruneContext { categories, range } => {
-                // Lightweight in-memory prune by category + range.
-                let _ = apply_prune_by_category(&sess, categories, range).await;
-            }
-            Op::PruneContextByIndices { indices } => {
-                let _ = apply_prune_by_indices(&sess, indices).await;
-            }
-            Op::SetContextInclusion { indices, included } => {
-                {
-                    let mut state = sess.state.lock().await;
-                    state.set_inclusion(&indices, included);
-                }
-                // Send updated usage and list so UI can refresh
-                let usage = compute_context_usage(&sess).await;
-                sess.send_event(Event {
-                    id: sub.id.clone(),
-                    msg: EventMsg::ConversationUsage(usage),
-                })
-                .await;
-                let items = compute_context_items(&sess).await;
-                sess.send_event(Event {
-                    id: sub.id.clone(),
-                    msg: EventMsg::ContextItems(items),
-                })
-                .await;
-            }
             Op::Shutdown => {
                 sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
                 info!("Shutting down Codex instance");
@@ -1600,61 +1501,6 @@ async fn submission_loop(
                     }),
                 };
                 sess.send_event(event).await;
-            }
-            Op::RestoreFullContext => {
-                // Flush rollout, read lines, reconstruct and replace history
-                let (path, rec_opt) = {
-                    let guard = sess.services.rollout.lock().await;
-                    match guard.as_ref() {
-                        Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
-                        None => {
-                            error!("rollout recorder not found for RestoreFullContext");
-                            continue;
-                        }
-                    }
-                };
-                if let Some(rec) = rec_opt
-                    && let Err(e) = rec.flush().await
-                {
-                    warn!("failed to flush rollout recorder before RestoreFullContext: {e}");
-                }
-                let rebuilt = match tokio::fs::read_to_string(&path).await {
-                    Ok(contents) => {
-                        let mut rollout_items: Vec<RolloutItem> = Vec::new();
-                        for line in contents.lines() {
-                            if line.trim().is_empty() {
-                                continue;
-                            }
-                            match serde_json::from_str::<crate::protocol::RolloutLine>(line) {
-                                Ok(rl) => rollout_items.push(rl.item),
-                                Err(e) => {
-                                    warn!("restore: failed to parse rollout line: {e}");
-                                }
-                            }
-                        }
-                        sess.reconstruct_history_from_rollout(&turn_context, &rollout_items)
-                    }
-                    Err(e) => {
-                        warn!("restore: failed to read rollout file: {e}");
-                        Vec::new()
-                    }
-                };
-                if !rebuilt.is_empty() {
-                    sess.replace_history(rebuilt).await;
-                }
-                // Emit fresh usage and list for UI
-                let usage = compute_context_usage(&sess).await;
-                sess.send_event(Event {
-                    id: sub.id.clone(),
-                    msg: EventMsg::ConversationUsage(usage),
-                })
-                .await;
-                let items = compute_context_items(&sess).await;
-                sess.send_event(Event {
-                    id: sub.id.clone(),
-                    msg: EventMsg::ContextItems(items),
-                })
-                .await;
             }
             Op::Review { review_request } => {
                 spawn_review_thread(
@@ -2596,206 +2442,6 @@ use crate::tools::context::ExecCommandContext;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
-// --- Context prune: helpers used by GetContextUsage/GetContextItems/Prune ops ---
-fn classify_item_for_prune(item: &ResponseItem) -> (PruneCategory, std::borrow::Cow<'_, str>) {
-    match item {
-        ResponseItem::Message { role, content, .. } => {
-            let text = content
-                .iter()
-                .find_map(|c| match c {
-                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                        Some(text.as_str())
-                    }
-                    _ => None,
-                })
-                .unwrap_or("");
-            let category = if text.starts_with(crate::protocol::USER_INSTRUCTIONS_OPEN_TAG) {
-                PruneCategory::UserInstructions
-            } else if text.starts_with(crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG) {
-                PruneCategory::EnvironmentContext
-            } else if role == "assistant" {
-                PruneCategory::AssistantMessage
-            } else {
-                PruneCategory::UserMessage
-            };
-            (category, std::borrow::Cow::Borrowed(text))
-        }
-        ResponseItem::Reasoning { summary, .. } => {
-            let text = summary
-                .iter()
-                .map(|s| match s {
-                    codex_protocol::models::ReasoningItemReasoningSummary::SummaryText { text } => {
-                        text.as_str()
-                    }
-                })
-                .next()
-                .unwrap_or("");
-            (PruneCategory::Reasoning, std::borrow::Cow::Borrowed(text))
-        }
-        ResponseItem::FunctionCall {
-            name, arguments, ..
-        } => (
-            PruneCategory::ToolCall,
-            std::borrow::Cow::Owned(format!("{name} {arguments}")),
-        ),
-        ResponseItem::CustomToolCall { name, input, .. } => (
-            PruneCategory::ToolCall,
-            std::borrow::Cow::Owned(format!("{name} {input}")),
-        ),
-        ResponseItem::LocalShellCall { action, .. } => (
-            PruneCategory::ToolCall,
-            std::borrow::Cow::Owned(format!("{action:?}")),
-        ),
-        ResponseItem::FunctionCallOutput { output, .. } => (
-            PruneCategory::ToolOutput,
-            std::borrow::Cow::Borrowed(&output.content),
-        ),
-        ResponseItem::CustomToolCallOutput { output, .. } => (
-            PruneCategory::ToolOutput,
-            std::borrow::Cow::Borrowed(output),
-        ),
-        ResponseItem::WebSearchCall { action, .. } => {
-            let query = match action {
-                codex_protocol::models::WebSearchAction::Search { query } => query.as_str(),
-                _ => "",
-            };
-            (PruneCategory::ToolCall, std::borrow::Cow::Borrowed(query))
-        }
-        ResponseItem::Other => (
-            PruneCategory::AssistantMessage,
-            std::borrow::Cow::Borrowed(""),
-        ),
-    }
-}
-
-async fn compute_context_usage(sess: &Session) -> crate::protocol::ConversationUsageEvent {
-    use std::collections::HashMap;
-    let items = sess.history_snapshot().await;
-    let mut totals: HashMap<PruneCategory, (u64, u64)> = HashMap::new();
-    for item in &items {
-        let (cat, text) = classify_item_for_prune(item);
-        let bytes = text.len() as u64;
-        let entry = totals.entry(cat).or_insert((0, 0));
-        entry.0 = entry.0.saturating_add(bytes);
-        entry.1 = entry.1.saturating_add(1);
-    }
-    let order = [
-        PruneCategory::ToolOutput,
-        PruneCategory::ToolCall,
-        PruneCategory::Reasoning,
-        PruneCategory::AssistantMessage,
-        PruneCategory::UserMessage,
-        PruneCategory::UserInstructions,
-        PruneCategory::EnvironmentContext,
-    ];
-    let mut total_bytes = 0u64;
-    let mut by_category = Vec::new();
-    for cat in order {
-        let (b, c) = totals.get(&cat).copied().unwrap_or((0, 0));
-        total_bytes = total_bytes.saturating_add(b);
-        by_category.push(crate::protocol::ConversationUsageByCategory {
-            category: cat,
-            bytes: b,
-            count: Some(c),
-        });
-    }
-    crate::protocol::ConversationUsageEvent {
-        total_bytes,
-        by_category,
-    }
-}
-
-async fn compute_context_items(sess: &Session) -> ContextItemsEvent {
-    let items = sess.history_snapshot().await;
-    let list = items
-        .iter()
-        .enumerate()
-        .map(|(idx, it)| {
-            let (category, text) = classify_item_for_prune(it);
-            let s = text.as_ref();
-            let preview = if s.len() <= 200 {
-                s.to_string()
-            } else {
-                let mut end = 200;
-                while !s.is_char_boundary(end) && end > 0 {
-                    end -= 1;
-                }
-                format!("{}…", &s[..end])
-            };
-            ContextItemSummary {
-                index: idx,
-                category,
-                preview,
-                included: true,
-            }
-        })
-        .collect::<Vec<_>>();
-    ContextItemsEvent {
-        total: list.len(),
-        items: list,
-    }
-}
-
-async fn apply_prune_by_category(
-    sess: &Session,
-    categories: Vec<PruneCategory>,
-    range: PruneRange,
-) -> usize {
-    let items = sess.history_snapshot().await;
-    let mut to_remove: Vec<usize> = Vec::new();
-    let (start, end) = match range {
-        PruneRange::All => (0, items.len()),
-        PruneRange::FirstTurns { count } => (0, items.len().min(count)),
-    };
-    for (idx, it) in items.iter().enumerate().take(end).skip(start) {
-        let (cat, _) = classify_item_for_prune(it);
-        if categories.contains(&cat) {
-            to_remove.push(idx);
-        }
-    }
-    apply_prune_by_indices(sess, to_remove).await
-}
-
-async fn apply_prune_by_indices(sess: &Session, mut indices: Vec<usize>) -> usize {
-    if indices.is_empty() {
-        return 0;
-    }
-    let items = sess.history_snapshot().await;
-    indices.sort_unstable();
-    indices.dedup();
-    // Filter out pinned: open tool call begins still registered
-    let mut filtered: Vec<usize> = Vec::with_capacity(indices.len());
-    for idx in indices {
-        let remove = match items.get(idx) {
-            Some(ResponseItem::FunctionCall { call_id, .. })
-            | Some(ResponseItem::CustomToolCall { call_id, .. }) => {
-                let state = sess.state.lock().await;
-                state.lookup_call_begin(call_id).is_none()
-            }
-            _ => true,
-        };
-        if remove {
-            filtered.push(idx);
-        }
-    }
-    if filtered.is_empty() {
-        return 0;
-    }
-    let mut new_items = Vec::with_capacity(items.len().saturating_sub(filtered.len()));
-    let mut it = filtered.into_iter().peekable();
-    for (i, item) in items.into_iter().enumerate() {
-        if it.peek().is_some_and(|next| *next == i) {
-            it.next();
-            continue;
-        }
-        new_items.push(item);
-    }
-    sess.replace_history(new_items).await;
-    1
-}
-
-// No-op previously used during wiring; intentionally removed to avoid dead_code.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3317,41 +2963,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn turn_input_injects_missing_call_begin_after_prune() {
-        use codex_protocol::models::ResponseItem;
-
-        let (sess, _tc, _rx) = make_session_and_context_with_rx();
-
-        // Record a function call begin in history, then simulate prune by replacing history.
-        let begin = ResponseItem::FunctionCall {
-            id: None,
-            name: "some_tool".to_string(),
-            // NOTE: arguments represented as raw JSON string
-            arguments: "{}".to_string(),
-            call_id: "call-xyz".to_string(),
-        };
-        sess.record_into_history(std::slice::from_ref(&begin)).await;
-        sess.replace_history(Vec::new()).await;
-
-        // Build extra with only the output; without our fix, the API would reject it.
-        let extra = vec![ResponseItem::FunctionCallOutput {
-            call_id: "call-xyz".to_string(),
-            output: FunctionCallOutputPayload {
-                content: "ok".into(),
-                success: Some(true),
-            },
-        }];
-
-        let stitched = sess.turn_input_with_history(extra).await;
-        // Expect the synthetic begin to appear before the output in the stitched input.
-        assert!(
-            matches!(stitched.first(), Some(ResponseItem::FunctionCall{ call_id, ..}) if call_id=="call-xyz")
-        );
-        assert!(
-            matches!(stitched.get(1), Some(ResponseItem::FunctionCallOutput{ call_id, ..}) if call_id=="call-xyz")
-        );
-    }
     #[tokio::test]
     async fn fatal_tool_error_stops_turn_and_reports_error() {
         let (session, turn_context, _rx) = make_session_and_context_with_rx();

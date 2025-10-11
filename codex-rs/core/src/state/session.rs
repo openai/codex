@@ -1,7 +1,6 @@
 //! Session-wide mutable state.
 
 use codex_protocol::models::ResponseItem;
-use std::collections::HashMap;
 
 use crate::conversation_history::ConversationHistory;
 use crate::protocol::RateLimitSnapshot;

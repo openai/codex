@@ -15,7 +15,6 @@ use ratatui::widgets::Widget;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-// re-use the SelectionAction defined in this module
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
 use crate::render::RectExt as _;
@@ -30,7 +29,6 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
-use std::any::Any;
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
@@ -281,34 +279,6 @@ impl ListSelectionView {
         }
     }
 
-    fn accept_delete(&mut self) {
-        if let Some(idx) = self.state.selected_idx
-            && let Some(actual_idx) = self.filtered_indices.get(idx)
-            && let Some(item) = self.items.get(*actual_idx)
-        {
-            for act in &item.delete_actions {
-                act(&self.app_event_tx);
-            }
-            // Do not dismiss on delete unless caller encoded it via actions
-        }
-    }
-
-    pub(crate) fn update_item_name(&mut self, actual_idx: usize, new_name: String) {
-        if let Some(item) = self.items.get_mut(actual_idx) {
-            item.name = new_name;
-        } else {
-            return;
-        }
-        if let Some(selected_actual) = self
-            .state
-            .selected_idx
-            .and_then(|visible| self.filtered_indices.get(visible).copied())
-        {
-            self.last_selected_actual_idx = Some(selected_actual);
-        }
-        self.apply_filter();
-    }
-
     #[cfg(test)]
     pub(crate) fn set_search_query(&mut self, query: String) {
         self.search_query = query;
@@ -357,27 +327,6 @@ impl BottomPaneView for ListSelectionView {
                     for act in &item.actions {
                         act(&self.app_event_tx);
                     }
-                }
-            }
-            KeyEvent {
-                code: KeyCode::Char(' '),
-                modifiers,
-                ..
-            } => {
-                if modifiers.contains(KeyModifiers::CONTROL)
-                    || modifiers.contains(KeyModifiers::ALT)
-                {
-                    return;
-                }
-                if self.is_searchable {
-                    if self.space_triggers_action {
-                        self.accept();
-                    } else {
-                        self.search_query.push(' ');
-                        self.apply_filter();
-                    }
-                } else {
-                    self.accept();
                 }
             }
             KeyEvent {
@@ -444,9 +393,6 @@ impl BottomPaneView for ListSelectionView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
-        if let Some(ref act) = self.on_cancel_event {
-            act(&self.app_event_tx);
-        }
         self.complete = true;
         CancellationEvent::Handled
     }
@@ -668,51 +614,5 @@ mod tests {
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
         );
-    }
-    #[test]
-    fn space_action_respects_flag_in_searchable_view() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        let make_item = |count: &Arc<AtomicUsize>| SelectionItem {
-            name: "Toggle".to_string(),
-            actions: vec![Box::new({
-                let count = Arc::clone(count);
-                move |_| {
-                    count.fetch_add(1, Ordering::SeqCst);
-                }
-            })],
-            dismiss_on_select: false,
-            ..Default::default()
-        };
-
-        let mut view = ListSelectionView::new(
-            SelectionViewParams {
-                items: vec![make_item(&counter)],
-                is_searchable: true,
-                space_triggers_action: false,
-                ..Default::default()
-            },
-            tx.clone(),
-        );
-        view.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
-
-        counter.store(0, Ordering::SeqCst);
-        let mut view = ListSelectionView::new(
-            SelectionViewParams {
-                items: vec![make_item(&counter)],
-                is_searchable: true,
-                space_triggers_action: true,
-                ..Default::default()
-            },
-            tx,
-        );
-        view.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 }
