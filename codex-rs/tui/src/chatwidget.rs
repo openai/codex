@@ -1875,6 +1875,10 @@ impl ChatWidget {
         self.bottom_pane.composer_is_empty()
     }
 
+    pub(crate) fn composer_in_vim_normal_mode(&self) -> bool {
+        self.bottom_pane.composer_in_vim_normal_mode()
+    }
+
     /// True when the UI is in the regular composer state with no running task,
     /// no modal overlay (e.g. approvals or status indicator), and no composer popups.
     /// In this state Esc-Esc backtracking is enabled.
