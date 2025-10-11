@@ -57,6 +57,35 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+#[derive(Clone, Debug)]
+struct ReverseISearchState {
+    query: String,
+    /// The most recent matched global index (if any).
+    matched_index: Option<usize>,
+    /// The matched command text (if any).
+    matched_text: Option<String>,
+    /// When awaiting an async fetch, this holds the offset we are waiting for.
+    waiting_on: Option<usize>,
+}
+
+impl ReverseISearchState {
+    fn new() -> Self {
+        Self {
+            query: String::new(),
+            matched_index: None,
+            matched_text: None,
+            waiting_on: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+// Where to place the cursor when accepting a reverse‑i‑search selection.
+// Currently we always place the cursor at the start of the accepted line.
+enum AcceptCursorTarget {
+    LineStart,
+}
+
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
@@ -109,6 +138,8 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<u8>,
+    // Reverse incremental search (Ctrl+R) state.
+    reverse_search: Option<ReverseISearchState>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -152,6 +183,7 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             context_window_percent: None,
+            reverse_search: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -236,12 +268,35 @@ impl ChatComposer {
         offset: usize,
         entry: Option<String>,
     ) -> bool {
-        let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
-            return false;
-        };
-        self.textarea.set_text(&text);
-        self.textarea.set_cursor(0);
-        true
+        let mut updated = false;
+        if let Some(text) = self
+            .history
+            .on_entry_response(log_id, offset, entry.clone())
+        {
+            self.textarea.set_text(&text);
+            self.textarea.set_cursor(0);
+            updated = true;
+        }
+
+        // If a reverse-i-search is active and we were waiting on this offset,
+        // incorporate it and continue searching if needed.
+        if let Some(rs) = self.reverse_search.as_mut()
+            && rs.waiting_on == Some(offset)
+        {
+            rs.waiting_on = None;
+            if let Some(ref text) = entry
+                && text.contains(&rs.query)
+            {
+                rs.matched_index = Some(offset);
+                rs.matched_text = Some(text.clone());
+                return true;
+            }
+            // Not a match – continue scanning older entries.
+            let start = offset.saturating_sub(1);
+            updated |= self.reverse_search_scan_from(start);
+        }
+
+        updated
     }
 
     pub fn handle_paste(&mut self, pasted: String) -> bool {
@@ -857,6 +912,11 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
+        // If reverse-i-search is active, handle within that mode.
+        if let Some(_rs) = self.reverse_search.as_ref() {
+            return self.handle_reverse_i_search_key(key_event);
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('d'),
@@ -865,6 +925,16 @@ impl ChatComposer {
                 ..
             } if self.is_empty() => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
+                (InputResult::None, true)
+            }
+            // Enter reverse-i-search mode.
+            KeyEvent {
+                code: KeyCode::Char('r'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.start_reverse_i_search();
                 (InputResult::None, true)
             }
             // -------------------------------------------------------------
@@ -1000,6 +1070,235 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    fn start_reverse_i_search(&mut self) {
+        // Start with no selection; wait for first typed character to search.
+        self.reverse_search = Some(ReverseISearchState::new());
+    }
+
+    /// Scan for the next match from `start` going backwards. Returns true if
+    /// UI should update (match or awaiting fetch).
+    fn reverse_search_scan_from(&mut self, start: usize) -> bool {
+        let Some(rs) = self.reverse_search.as_mut() else {
+            return false;
+        };
+        if rs.query.is_empty() {
+            rs.matched_index = None;
+            rs.matched_text = None;
+            rs.waiting_on = None;
+            return true;
+        }
+        let total = self.history.total_entries();
+        if total == 0 {
+            rs.matched_index = None;
+            rs.matched_text = None;
+            rs.waiting_on = None;
+            return true;
+        }
+
+        // Iterate from `start` down to 0.
+        let mut i_opt = Some(start);
+        while let Some(i) = i_opt {
+            if let Some(text) = self.history.entry_if_ready(i) {
+                if text.contains(&rs.query) {
+                    rs.matched_index = Some(i);
+                    rs.matched_text = Some(text);
+                    rs.waiting_on = None;
+                    return true;
+                }
+            } else {
+                // Not available yet; request and wait.
+                self.history.request_entry(i, &self.app_event_tx);
+                rs.waiting_on = Some(i);
+                rs.matched_index = None;
+                rs.matched_text = None;
+                return true;
+            }
+            if i == 0 {
+                break;
+            }
+            i_opt = Some(i - 1);
+        }
+        // No match found.
+        rs.matched_index = None;
+        rs.matched_text = None;
+        rs.waiting_on = None;
+        true
+    }
+
+    fn handle_reverse_i_search_key(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyModifiers as KM;
+
+        // Ctrl+G cancels search (no accept)
+        if let KeyEvent {
+            code: KeyCode::Char('g'),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        } = key_event
+        {
+            if modifiers.contains(KM::CONTROL) {
+                self.reverse_search = None;
+                return (InputResult::None, true);
+            }
+        }
+
+        // Visible characters extend the query and keep searching.
+        if let KeyEvent {
+            code: KeyCode::Char(ch),
+            modifiers,
+            ..
+        } = key_event
+        {
+            if !modifiers.contains(KM::CONTROL) && !modifiers.contains(KM::ALT) {
+                if let Some(rs) = self.reverse_search.as_mut() {
+                    rs.query.push(ch);
+                    let total = self.history.total_entries();
+                    if total > 0 {
+                        let start = total - 1;
+                        let _ = self.reverse_search_scan_from(start);
+                    } else {
+                        rs.matched_index = None;
+                        rs.matched_text = None;
+                        rs.waiting_on = None;
+                    }
+                }
+                return (InputResult::None, true);
+            }
+        }
+
+        // Backspace edits the query.
+        if matches!(key_event.code, KeyCode::Backspace) {
+            if let Some(rs) = self.reverse_search.as_mut() {
+                rs.query.pop();
+                let total = self.history.total_entries();
+                if total == 0 {
+                    return (InputResult::None, true);
+                }
+                let start = total - 1;
+                let _ = self.reverse_search_scan_from(start);
+            }
+            return (InputResult::None, true);
+        }
+
+        // Ctrl+R cycles older matches (only when query is non-empty).
+        if let KeyEvent {
+            code: KeyCode::Char('r'),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        } = key_event
+        {
+            if modifiers.contains(KM::CONTROL) {
+                let total = self.history.total_entries();
+                if total == 0 {
+                    return (InputResult::None, true);
+                }
+                if let Some(rs) = self.reverse_search.as_ref() {
+                    if rs.query.is_empty() {
+                        return (InputResult::None, true);
+                    }
+                }
+                let start = self
+                    .reverse_search
+                    .as_ref()
+                    .and_then(|rs| rs.matched_index)
+                    .map(|i| i.saturating_sub(1))
+                    .unwrap_or_else(|| total.saturating_sub(1));
+                let _ = self.reverse_search_scan_from(start);
+                return (InputResult::None, true);
+            }
+        }
+
+        // All other non-visible keys: accept current match then forward.
+        let target = match key_event.code {
+            KeyCode::Left | KeyCode::Right => AcceptCursorTarget::LineStart,
+            _ => AcceptCursorTarget::LineStart,
+        };
+        let _ = self.accept_current_reverse_search_match_into_textarea_with_target(target);
+        self.handle_key_event_without_popup(key_event)
+    }
+
+    fn accept_current_reverse_search_match_into_textarea_with_target(
+        &mut self,
+        target: AcceptCursorTarget,
+    ) -> bool {
+        if let Some(rs) = self.reverse_search.take() {
+            if let Some(text) = rs.matched_text {
+                let cursor = match target {
+                    AcceptCursorTarget::LineStart => 0,
+                };
+                self.textarea.set_text(&text);
+                self.textarea.set_cursor(cursor);
+            }
+            // Always return true when exiting search mode to force a UI update.
+            return true;
+        }
+        false
+    }
+
+    /// Accept selection using line-start cursor placement.
+    pub(crate) fn accept_reverse_search_line_end(&mut self) -> bool {
+        self.accept_current_reverse_search_match_into_textarea_with_target(
+            AcceptCursorTarget::LineStart,
+        )
+    }
+
+    /// For keys handled outside the composer (e.g., global handlers), decide
+    /// whether reverse‑i‑search should accept the current match first.
+    ///
+    /// Semantics mirror bash:
+    /// - "Search characters" (visible chars without Ctrl/Alt), Backspace,
+    ///   Ctrl+R and Ctrl+G stay in search mode.
+    /// - All other keys accept the current selection into the composer,
+    ///   exit search mode, then allow normal handling.
+    ///
+    /// Returns true if it accepted and exited search mode.
+    pub(crate) fn accept_reverse_search_for_key(&mut self, key_event: &KeyEvent) -> bool {
+        if self.reverse_search.is_none() {
+            return false;
+        }
+        match key_event {
+            // Visible chars keep searching.
+            KeyEvent {
+                code: KeyCode::Char(_),
+                modifiers,
+                ..
+            } if !modifiers.contains(KeyModifiers::CONTROL)
+                && !modifiers.contains(KeyModifiers::ALT) =>
+            {
+                return false;
+            }
+            // Backspace edits the query; keep searching.
+            KeyEvent {
+                code: KeyCode::Backspace,
+                ..
+            } => return false,
+            // Ctrl+R cycles; Ctrl+G cancels — both handled by search mode.
+            KeyEvent {
+                code: KeyCode::Char('r'),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
+                return false;
+            }
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
+                return false;
+            }
+            // Everything else: accept with cursor at start, then normal handling applies.
+            _ => {}
+        }
+        self.accept_current_reverse_search_match_into_textarea_with_target(
+            AcceptCursorTarget::LineStart,
+        )
     }
 
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
@@ -1513,7 +1812,18 @@ impl WidgetRef for ChatComposer {
                 } else {
                     popup_rect
                 };
-                if let Some(items) = self.footer_hint_override.as_ref() {
+
+                if let Some(rs) = self.reverse_search.as_ref() {
+                    // Show the reverse-i-search query in the hint row.
+                    let query = &rs.query;
+                    let msg = format!("(reverse-i-search)`{query}'");
+                    let mut custom_rect = hint_rect;
+                    if custom_rect.width > 2 {
+                        custom_rect.x += 2;
+                        custom_rect.width = custom_rect.width.saturating_sub(2);
+                    }
+                    Line::from(msg).render_ref(custom_rect, buf);
+                } else if let Some(items) = self.footer_hint_override.as_ref() {
                     if !items.is_empty() {
                         let mut spans = Vec::with_capacity(items.len() * 4);
                         for (idx, (key, label)) in items.iter().enumerate() {
@@ -1541,6 +1851,8 @@ impl WidgetRef for ChatComposer {
         block_rect.y = composer_rect.y.saturating_sub(1);
         block_rect.height = composer_rect.height.saturating_add(1);
         Block::default().style(style).render_ref(block_rect, buf);
+
+        // Header arrow/prompt
         buf.set_span(
             composer_rect.x,
             composer_rect.y,
@@ -1548,11 +1860,18 @@ impl WidgetRef for ChatComposer {
             composer_rect.width,
         );
 
-        let mut state = self.textarea_state.borrow_mut();
-        StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
-        if self.textarea.text().is_empty() {
-            let placeholder = Span::from(self.placeholder_text.as_str()).dim();
-            Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+        if let Some(rs) = self.reverse_search.as_ref() {
+            // Show the matched command in the prompt pane, without mutating the textarea state.
+            let matched = rs.matched_text.as_deref().unwrap_or("");
+            Line::from(matched).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+        } else {
+            let mut state = self.textarea_state.borrow_mut();
+            StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+            if self.textarea.text().is_empty() {
+                let placeholder = Span::from(self.placeholder_text.as_str()).dim();
+                Line::from(vec![placeholder])
+                    .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+            }
         }
     }
 }
