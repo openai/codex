@@ -13,6 +13,7 @@ use codex_core::config::load_global_mcp_servers;
 use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
+use codex_core::features::Feature;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
@@ -285,7 +286,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         .await
         .context("failed to load configuration")?;
 
-    if !config.use_experimental_use_rmcp_client {
+    if !config.features.enabled(Feature::RmcpClient) {
         bail!(
             "OAuth login is only supported when experimental_use_rmcp_client is true in config.toml."
         );
