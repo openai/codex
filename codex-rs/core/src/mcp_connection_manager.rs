@@ -359,13 +359,13 @@ impl McpConnectionManager {
         ))
     }
 
-    /// Set the ModelClient for the sampling handler.
+    /// Set the Config for the sampling handler.
     ///
-    /// This must be called after the ModelClient is created to enable
-    /// MCP servers to make LLM sampling requests.
-    pub async fn set_model_client(&self, client: Arc<crate::client::ModelClient>) {
+    /// This must be called after initialization to enable MCP servers
+    /// to make LLM sampling requests with proper configuration.
+    pub async fn set_config(&self, config: Arc<crate::config::Config>) {
         if let Some(handler) = &self.sampling_handler {
-            handler.set_model_client(client).await;
+            handler.set_config(config).await;
         }
     }
 

@@ -443,11 +443,9 @@ impl Session {
             conversation_id,
         );
 
-        // Set the model client in the MCP connection manager's sampling handler
-        // so that MCP servers can make LLM requests.
-        mcp_connection_manager
-            .set_model_client(Arc::new(client.clone()))
-            .await;
+        // Set the config in the MCP connection manager's sampling handler
+        // so that MCP servers can make LLM requests with proper settings.
+        mcp_connection_manager.set_config(config.clone()).await;
 
         let turn_context = TurnContext {
             client,

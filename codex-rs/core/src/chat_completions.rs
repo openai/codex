@@ -48,7 +48,10 @@ pub(crate) async fn stream_chat_completions(
     let mut messages = Vec::<serde_json::Value>::new();
 
     let full_instructions = prompt.get_full_instructions(model_family);
-    messages.push(json!({"role": "system", "content": full_instructions}));
+    // Only add system message if instructions are non-empty
+    if !full_instructions.is_empty() {
+        messages.push(json!({"role": "system", "content": full_instructions}));
+    }
 
     let input = prompt.get_formatted_input();
 
