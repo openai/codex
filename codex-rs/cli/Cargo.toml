@@ -35,6 +35,7 @@ codex-tui = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
 ctor = { workspace = true }
+dirs = { workspace = true }
 owo-colors = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }

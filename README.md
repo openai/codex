@@ -73,6 +73,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 
 - [**Getting started**](./docs/getting-started.md)
   - [CLI usage](./docs/getting-started.md#cli-usage)
+  - [Managing multiple authentication profiles](./docs/getting-started.md#managing-multiple-authentication-profiles)
   - [Running with a prompt as input](./docs/getting-started.md#running-with-a-prompt-as-input)
   - [Example prompts](./docs/getting-started.md#example-prompts)
   - [Memory with AGENTS.md](./docs/getting-started.md#memory-with-agentsmd)
