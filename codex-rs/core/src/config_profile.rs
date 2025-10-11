@@ -20,6 +20,8 @@ pub struct ConfigProfile {
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
+    /// Path to a file whose contents are appended to user instructions.
+    pub append_user_instructions_file: Option<PathBuf>,
 }
 
 impl From<ConfigProfile> for codex_app_server_protocol::Profile {
