@@ -27,6 +27,10 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_session_id: Option<String>,
 
+    /// Internal: resume requests should fork into a new session.
+    #[clap(skip)]
+    pub resume_fork: bool,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,

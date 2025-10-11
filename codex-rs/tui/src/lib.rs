@@ -409,7 +409,7 @@ async fn run_ratatui_app(
     }
 
     // Determine resume behavior: explicit id, then resume last, then picker.
-    let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
+    let selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
         match find_conversation_path_by_id_str(&config.codex_home, id_str).await? {
             Some(path) => resume_picker::ResumeSelection::Resume(path),
             None => {
@@ -447,6 +447,13 @@ async fn run_ratatui_app(
         }
     } else {
         resume_picker::ResumeSelection::StartFresh
+    };
+
+    let resume_selection = match (cli.resume_fork, selection) {
+        (true, resume_picker::ResumeSelection::Resume(path)) => {
+            resume_picker::ResumeSelection::Fork(path)
+        }
+        (_, other) => other,
     };
 
     let Cli { prompt, images, .. } = cli;
