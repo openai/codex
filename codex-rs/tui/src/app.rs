@@ -17,6 +17,7 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
+use codex_core::config_types::KeybindingMode;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -422,6 +423,21 @@ impl App {
                 ..
             } => {
                 // Enter alternate screen and set viewport to full size.
+                let _ = tui.enter_alt_screen();
+                self.overlay = Some(Overlay::new_transcript(
+                    self.transcript_cells.clone(),
+                    self.config.keybinding_mode,
+                ));
+                tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers: crossterm::event::KeyModifiers::NONE,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } if self.config.keybinding_mode == KeybindingMode::Vim
+                && self.chat_widget.composer_in_vim_normal_mode() =>
+            {
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_transcript(
                     self.transcript_cells.clone(),
