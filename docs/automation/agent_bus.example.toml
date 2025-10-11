@@ -1,0 +1,46 @@
+upstream_repo = "openai/codex"
+pr_number = 4522
+
+[security]
+allow_commands = ["/status", "/rerun", "/handoff", "/notify"]
+min_seconds_between_posts = 120
+
+[agents.github_upstream]
+type = "github"
+repo = "openai/codex"
+permissions = ["status", "comment"]
+
+[agents.github_fork]
+type = "github"
+repo = "grahama1970/codex"
+permissions = ["status", "comment", "dispatch"]
+
+[agents.http_ops]
+type = "http"
+base_url = "https://ops.example.com/hooks"
+headers = { X-Agent = "codex-bus/1" }
+allow_paths = ["/ci/notify", "/audit/event"]
+hmac_secret_env = "OPS_WEBHOOK_SECRET" # optional: HMAC-sign outbound JSON body
+hmac_header = "X-Hub-Signature-256"
+
+[agents.mcp_memory]
+type = "mcp"
+transport = "stdio"
+command = "node"
+args = ["/abs/path/to/memory-agent-node/server.js"]
+tools = ["memory_search", "memory_explain"]
+timeout_ms = 800
+
+[review]
+barriers = ["build-test","Format / etc","ubuntu-24.04 - x86_64-unknown-linux-gnu","macos-14 - aarch64-apple-darwin","macos-14 - x86_64-apple-darwin"]
+# Owners who can issue APPROVE/REQUEST_CHANGES via review_gate (required for actionable commands)
+# owners = ["@your-handle", "@another-owner"]
+
+# Map owner commands to review intents (defaults shown)
+# actions = { approve="/apply", defer="/defer", decline="/decline" }
+
+# Gate behavior (optional)
+# If true, actionable review commands will still execute even when required checks are failing.
+# When fire_on_fail=true and approve_on_fail=false, "/apply" will submit REQUEST_CHANGES instead of APPROVE.
+# fire_on_fail = false
+# approve_on_fail = false
