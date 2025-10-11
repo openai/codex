@@ -16,7 +16,10 @@
 
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::Read;
 use std::io::Result;
+use std::io::Seek;
+use std::io::SeekFrom;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -111,6 +114,8 @@ pub(crate) async fn append_entry(
     ensure_owner_only_permissions(&history_file).await?;
 
     // Perform a blocking write under an advisory write lock using std::fs.
+    let max_bytes = config.history.max_bytes;
+
     tokio::task::spawn_blocking(move || -> Result<()> {
         // Retry a few times to avoid indefinite blocking when contended.
         for _ in 0..MAX_RETRIES {
@@ -119,6 +124,39 @@ pub(crate) async fn append_entry(
                     // While holding the exclusive lock, write the full line.
                     history_file.write_all(line.as_bytes())?;
                     history_file.flush()?;
+
+                    if let Some(max_bytes) = max_bytes {
+                        if max_bytes == 0 {
+                            history_file.set_len(0)?;
+                            history_file.flush()?;
+                            return Ok(());
+                        }
+
+                        let max_bytes = max_bytes as u64;
+                        let len = history_file.metadata()?.len();
+
+                        if len > max_bytes {
+                            let start = len - max_bytes;
+                            history_file.seek(SeekFrom::Start(start))?;
+
+                            let mut buffer = Vec::with_capacity((len - start) as usize);
+                            history_file.read_to_end(&mut buffer)?;
+
+                            if start != 0 {
+                                if let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                                    buffer.drain(..=pos);
+                                } else {
+                                    buffer.clear();
+                                }
+                            }
+
+                            history_file.set_len(0)?;
+                            if !buffer.is_empty() {
+                                history_file.write_all(&buffer)?;
+                            }
+                            history_file.flush()?;
+                        }
+                    }
                     return Ok(());
                 }
                 Err(std::fs::TryLockError::WouldBlock) => {
