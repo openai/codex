@@ -402,9 +402,16 @@ async fn run_ratatui_app(
         if should_show_windows_wsl_screen {
             config.windows_wsl_setup_acknowledged = true;
         }
-        if let Some(TrustDirectorySelection::Trust) = onboarding_result.directory_trust_decision {
-            config.approval_policy = AskForApproval::OnRequest;
-            config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        match onboarding_result.directory_trust_decision {
+            Some(TrustDirectorySelection::Trust) => {
+                config.approval_policy = AskForApproval::OnRequest;
+                config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+            }
+            Some(TrustDirectorySelection::DontTrust) => {
+                config.approval_policy = AskForApproval::UnlessTrusted;
+                config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+            }
+            None => {}
         }
     }
 
