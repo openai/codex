@@ -30,7 +30,7 @@ use codex_otel::otel_event_manager::ToolDecisionSource;
 pub(crate) struct ExecutorConfig {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) sandbox_cwd: PathBuf,
-    codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl ExecutorConfig {
@@ -86,7 +86,14 @@ impl Executor {
                 maybe_translate_shell_command(request.params, session, request.use_shell_profile);
         }
 
-        // Step 1: Normalise parameters via the selected backend.
+        // Step 1: Snapshot sandbox configuration so it stays stable for this run.
+        let config = self
+            .config
+            .read()
+            .map_err(|_| ExecError::rejection("executor config poisoned"))?
+            .clone();
+
+        // Step 2: Normalise parameters via the selected backend.
         let backend = backend_for_mode(&request.mode);
         let stdout_stream = if backend.stream_stdout(&request.mode) {
             request.stdout_stream.clone()
@@ -94,15 +101,8 @@ impl Executor {
             None
         };
         request.params = backend
-            .prepare(request.params, &request.mode)
+            .prepare(request.params, &request.mode, &config)
             .map_err(ExecError::from)?;
-
-        // Step 2: Snapshot sandbox configuration so it stays stable for this run.
-        let config = self
-            .config
-            .read()
-            .map_err(|_| ExecError::rejection("executor config poisoned"))?
-            .clone();
 
         // Step 3: Decide sandbox placement, prompting for approval when needed.
         let sandbox_decision = select_sandbox(
