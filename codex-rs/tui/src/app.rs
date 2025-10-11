@@ -484,11 +484,14 @@ mod tests {
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
+    use crate::test_backend::VT100Backend;
+    use crate::tui::Tui;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
     use codex_core::protocol::SessionConfiguredEvent;
     use codex_protocol::ConversationId;
+    use ratatui::Terminal;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -602,5 +605,30 @@ mod tests {
         let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
         assert_eq!(nth, 1);
         assert_eq!(prefill, "follow-up (edited)");
+    }
+
+    #[tokio::test]
+    async fn backtrack_preview_aborts_when_no_user_messages() {
+        let mut app = make_test_app();
+        let backend = VT100Backend::new(120, 40);
+        let terminal = Terminal::new(backend).expect("terminal");
+        let mut tui = Tui::new(terminal);
+
+        app.transcript_cells.push(Arc::new(AgentMessageCell::new(
+            vec![Line::from("assistant response".to_string())],
+            true,
+        )) as Arc<dyn HistoryCell>);
+
+        assert_eq!(user_count(&app.transcript_cells), 0);
+
+        app.handle_backtrack_esc_key(&mut tui);
+        assert!(app.backtrack.primed);
+
+        app.handle_backtrack_esc_key(&mut tui);
+
+        assert!(app.overlay.is_none());
+        assert!(!app.backtrack.overlay_preview_active);
+        assert!(!app.backtrack.primed);
+        assert_eq!(app.backtrack.nth_user_message, usize::MAX);
     }
 }

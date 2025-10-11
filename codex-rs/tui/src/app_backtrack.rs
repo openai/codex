@@ -151,11 +151,15 @@ impl App {
 
     /// Open overlay and begin backtrack preview flow (first step + highlight).
     fn open_backtrack_preview(&mut self, tui: &mut tui::Tui) {
+        if user_count(&self.transcript_cells) == 0 {
+            self.reset_backtrack_state();
+            return;
+        }
         self.open_transcript_overlay(tui);
         self.backtrack.overlay_preview_active = true;
         // Composer is hidden by overlay; clear its hint.
         self.chat_widget.clear_esc_backtrack_hint();
-        self.step_backtrack_and_highlight(tui);
+        let _ = self.step_backtrack_and_highlight(tui);
     }
 
     /// When overlay is already open, begin preview mode and select latest user message.
@@ -164,17 +168,22 @@ impl App {
         self.backtrack.base_id = self.chat_widget.conversation_id();
         self.backtrack.overlay_preview_active = true;
         let count = user_count(&self.transcript_cells);
-        if let Some(last) = count.checked_sub(1) {
-            self.apply_backtrack_selection(last);
+        if let Some(last) = count.checked_sub(1)
+            && self.apply_backtrack_selection(last)
+        {
+            tui.frame_requester().schedule_frame();
+            return;
         }
-        tui.frame_requester().schedule_frame();
+        self.backtrack.overlay_preview_active = false;
+        self.reset_backtrack_state();
     }
 
     /// Step selection to the next older user message and update overlay.
-    fn step_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
+    fn step_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) -> bool {
         let count = user_count(&self.transcript_cells);
         if count == 0 {
-            return;
+            self.abort_backtrack_preview(tui);
+            return false;
         }
 
         let last_index = count.saturating_sub(1);
@@ -189,22 +198,38 @@ impl App {
                 .min(last_index)
         };
 
-        self.apply_backtrack_selection(next_selection);
-        tui.frame_requester().schedule_frame();
+        if self.apply_backtrack_selection(next_selection) {
+            tui.frame_requester().schedule_frame();
+            true
+        } else {
+            self.abort_backtrack_preview(tui);
+            false
+        }
     }
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
-    fn apply_backtrack_selection(&mut self, nth_user_message: usize) {
+    fn apply_backtrack_selection(&mut self, nth_user_message: usize) -> bool {
         if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
             self.backtrack.nth_user_message = nth_user_message;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.set_highlight_cell(Some(cell_idx));
             }
+            true
         } else {
             self.backtrack.nth_user_message = usize::MAX;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.set_highlight_cell(None);
             }
+            false
+        }
+    }
+
+    fn abort_backtrack_preview(&mut self, tui: &mut tui::Tui) {
+        if self.overlay.is_some() {
+            self.close_transcript_overlay(tui);
+        } else {
+            self.backtrack.overlay_preview_active = false;
+            self.reset_backtrack_state();
         }
     }
 
@@ -238,7 +263,7 @@ impl App {
     /// Handle Esc in overlay backtrack preview: step selection if armed, else forward.
     fn overlay_step_backtrack(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         if self.backtrack.base_id.is_some() {
-            self.step_backtrack_and_highlight(tui);
+            let _ = self.step_backtrack_and_highlight(tui);
         } else {
             self.overlay_forward_event(tui, event)?;
         }
