@@ -76,8 +76,8 @@ def check_or_fix(readme_path: Path, fix: bool) -> int:
     lines = content.splitlines()
     # locate ToC markers
     try:
-        begin_idx = next(i for i, l in enumerate(lines) if l.strip() == BEGIN_TOC)
-        end_idx = next(i for i, l in enumerate(lines) if l.strip() == END_TOC)
+        begin_idx = next(i for i, line in enumerate(lines) if line.strip() == BEGIN_TOC)
+        end_idx = next(i for i, line in enumerate(lines) if line.strip() == END_TOC)
     except StopIteration:
         # No ToC markers found; treat as a no-op so repos without a ToC don't fail CI
         print(
@@ -86,7 +86,7 @@ def check_or_fix(readme_path: Path, fix: bool) -> int:
         return 0
     # extract current ToC list items
     current_block = lines[begin_idx + 1 : end_idx]
-    current = [l for l in current_block if l.lstrip().startswith("- [")]
+    current = [line for line in current_block if line.lstrip().startswith("- [")]
     # generate expected ToC
     expected = generate_toc_lines(content)
     if current == expected:
