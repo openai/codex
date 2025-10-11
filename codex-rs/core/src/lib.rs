@@ -68,6 +68,9 @@ pub mod spawn;
 pub mod terminal;
 mod tools;
 pub mod turn_diff_tracker;
+#[cfg_attr(target_os = "windows", path = "windows_wsl.rs")]
+#[cfg_attr(not(target_os = "windows"), path = "windows_wsl_stub.rs")]
+pub(crate) mod windows_wsl;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
@@ -85,7 +88,6 @@ pub mod util;
 
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use command_safety::is_safe_command;
-pub use safety::get_platform_sandbox;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.
 pub use codex_protocol::protocol;

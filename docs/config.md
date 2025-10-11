@@ -325,6 +325,19 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
+## windows
+
+Windows-specific preferences let Codex reuse WSL automatically when sandboxing commands from the Windows build of the CLI.
+
+```toml
+[windows]
+prefer_wsl = true
+hide_wsl_notice = false
+```
+
+- `prefer_wsl` &mdash; when enabled Codex checks for WSL support and, when available, proxies sandboxed exec calls through `wsl -e codex debug landlock ...` so the Linux sandbox helper and toolchain are reused automatically. If WSL is unavailable Codex falls back to running commands directly on Windows.
+- `hide_wsl_notice` &mdash; hides the informational banner that Codex prints the first time it relaunches an exec call inside WSL.
+
 ## Approval presets
 
 Codex provides three main Approval Presets:

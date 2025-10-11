@@ -45,7 +45,9 @@ fn should_escalate_on_failure(approval: AskForApproval, sandbox: SandboxType) ->
         (approval, sandbox),
         (
             AskForApproval::UnlessTrusted | AskForApproval::OnFailure,
-            SandboxType::MacosSeatbelt | SandboxType::LinuxSeccomp
+            SandboxType::MacosSeatbelt
+                | SandboxType::LinuxSeccomp
+                | SandboxType::WindowsWslWithLinuxSeccomp
         )
     )
 }
@@ -106,6 +108,7 @@ async fn select_shell_sandbox(
         &config.sandbox_policy,
         &approved_snapshot,
         request.params.with_escalated_permissions.unwrap_or(false),
+        config.platform_sandbox,
     );
 
     match safety {
@@ -173,6 +176,7 @@ fn select_apply_patch_sandbox(
         approval_policy,
         &config.sandbox_policy,
         &config.sandbox_cwd,
+        config.platform_sandbox,
     ) {
         SafetyCheck::AutoApprove { sandbox_type, .. } => Ok(SandboxDecision::auto(
             sandbox_type,
@@ -191,11 +195,22 @@ fn select_apply_patch_sandbox(
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::config_types::WindowsConfig;
     use crate::exec::ExecParams;
     use crate::function_tool::FunctionCallError;
     use crate::protocol::SandboxPolicy;
     use codex_apply_patch::ApplyPatchAction;
     use pretty_assertions::assert_eq;
+
+    fn platform_sandbox_for_tests() -> Option<SandboxType> {
+        if cfg!(target_os = "macos") {
+            Some(SandboxType::MacosSeatbelt)
+        } else if cfg!(target_os = "linux") {
+            Some(SandboxType::LinuxSeccomp)
+        } else {
+            None
+        }
+    }
 
     #[tokio::test]
     async fn select_apply_patch_user_override_when_explicit() {
@@ -207,7 +222,13 @@ mod tests {
             action,
             user_explicitly_approved_this_action: true,
         };
-        let cfg = ExecutorConfig::new(SandboxPolicy::ReadOnly, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(
+            SandboxPolicy::ReadOnly,
+            std::env::temp_dir(),
+            None,
+            platform_sandbox_for_tests(),
+            WindowsConfig::default(),
+        );
         let request = ExecutionRequest {
             params: ExecParams {
                 command: vec!["apply_patch".into()],
@@ -250,7 +271,13 @@ mod tests {
             action,
             user_explicitly_approved_this_action: false,
         };
-        let cfg = ExecutorConfig::new(SandboxPolicy::DangerFullAccess, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(
+            SandboxPolicy::DangerFullAccess,
+            std::env::temp_dir(),
+            None,
+            platform_sandbox_for_tests(),
+            WindowsConfig::default(),
+        );
         let request = ExecutionRequest {
             params: ExecParams {
                 command: vec!["apply_patch".into()],
@@ -279,7 +306,7 @@ mod tests {
         .await
         .expect("ok");
         // On platforms with a sandbox, DangerFullAccess still prefers it
-        let expected = crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None);
+        let expected = cfg.platform_sandbox.unwrap_or(SandboxType::None);
         assert_eq!(decision.initial_sandbox, expected);
         assert_eq!(decision.escalate_on_failure, false);
     }
@@ -294,7 +321,13 @@ mod tests {
             action,
             user_explicitly_approved_this_action: false,
         };
-        let cfg = ExecutorConfig::new(SandboxPolicy::ReadOnly, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(
+            SandboxPolicy::ReadOnly,
+            std::env::temp_dir(),
+            None,
+            platform_sandbox_for_tests(),
+            WindowsConfig::default(),
+        );
         let request = ExecutionRequest {
             params: ExecParams {
                 command: vec!["apply_patch".into()],
@@ -333,7 +366,13 @@ mod tests {
     #[tokio::test]
     async fn select_shell_autoapprove_in_danger_mode() {
         let (session, ctx) = make_session_and_context();
-        let cfg = ExecutorConfig::new(SandboxPolicy::DangerFullAccess, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(
+            SandboxPolicy::DangerFullAccess,
+            std::env::temp_dir(),
+            None,
+            platform_sandbox_for_tests(),
+            WindowsConfig::default(),
+        );
         let request = ExecutionRequest {
             params: ExecParams {
                 command: vec!["some-unknown".into()],
@@ -369,7 +408,13 @@ mod tests {
     #[tokio::test]
     async fn select_shell_escalates_on_failure_with_platform_sandbox() {
         let (session, ctx) = make_session_and_context();
-        let cfg = ExecutorConfig::new(SandboxPolicy::ReadOnly, std::env::temp_dir(), None);
+        let cfg = ExecutorConfig::new(
+            SandboxPolicy::ReadOnly,
+            std::env::temp_dir(),
+            None,
+            platform_sandbox_for_tests(),
+            WindowsConfig::default(),
+        );
         let request = ExecutionRequest {
             params: ExecParams {
                 // Unknown command => untrusted but not flagged dangerous

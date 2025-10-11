@@ -15,6 +15,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 
+use crate::config_types::WindowsConfig;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
@@ -27,6 +28,7 @@ use crate::protocol::SandboxPolicy;
 use crate::seatbelt::spawn_command_under_seatbelt;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+use crate::windows_wsl;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -70,6 +72,9 @@ pub enum SandboxType {
 
     /// Only available on Linux.
     LinuxSeccomp,
+
+    /// Runs commands inside WSL with the Linux seccomp sandbox on Windows.
+    WindowsWslWithLinuxSeccomp,
 }
 
 #[derive(Clone)]
@@ -86,6 +91,7 @@ pub async fn process_exec_tool_call(
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
+    windows_config: Option<&WindowsConfig>,
 ) -> Result<ExecToolCallOutput> {
     let start = Instant::now();
 
@@ -131,6 +137,31 @@ pub async fn process_exec_tool_call(
                 sandbox_cwd,
                 StdioPolicy::RedirectForShellTool,
                 env,
+            )
+            .await?;
+
+            consume_truncated_output(child, timeout_duration, stdout_stream).await
+        }
+        SandboxType::WindowsWslWithLinuxSeccomp => {
+            let ExecParams {
+                command,
+                cwd: command_cwd,
+                env,
+                ..
+            } = params;
+            let windows_cfg = windows_config.ok_or_else(|| {
+                CodexErr::UnsupportedOperation(
+                    "Windows sandbox execution requires Windows configuration".to_string(),
+                )
+            })?;
+            let child = windows_wsl::spawn_command_under_windows_wsl(
+                command,
+                command_cwd,
+                sandbox_policy,
+                sandbox_cwd,
+                StdioPolicy::RedirectForShellTool,
+                env,
+                windows_cfg,
             )
             .await?;
 

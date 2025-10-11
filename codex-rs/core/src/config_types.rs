@@ -322,7 +322,7 @@ pub struct Tui {
     pub notifications: Notifications,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub writable_roots: Vec<PathBuf>,
@@ -332,6 +332,29 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct WindowsConfigToml {
+    #[serde(default)]
+    pub prefer_wsl: bool,
+    #[serde(default)]
+    pub hide_wsl_notice: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WindowsConfig {
+    pub prefer_wsl: bool,
+    pub hide_wsl_notice: bool,
+}
+
+impl From<WindowsConfigToml> for WindowsConfig {
+    fn from(value: WindowsConfigToml) -> Self {
+        Self {
+            prefer_wsl: value.prefer_wsl,
+            hide_wsl_notice: value.hide_wsl_notice,
+        }
+    }
 }
 
 impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings {

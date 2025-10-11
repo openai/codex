@@ -64,6 +64,7 @@ use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::config::derive_platform_sandbox;
 use codex_core::config::load_config_as_toml;
 use codex_core::config_edit::CONFIG_KEY_EFFORT;
 use codex_core::config_edit::CONFIG_KEY_MODEL;
@@ -71,7 +72,6 @@ use codex_core::config_edit::persist_overrides_and_clear_if_none;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
-use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
@@ -613,13 +613,16 @@ impl CodexMessageProcessor {
             codex_core::protocol::SandboxPolicy::DangerFullAccess => {
                 codex_core::exec::SandboxType::None
             }
-            _ => get_platform_sandbox().unwrap_or(codex_core::exec::SandboxType::None),
+            _ => {
+                derive_platform_sandbox(&self.config).unwrap_or(codex_core::exec::SandboxType::None)
+            }
         };
         tracing::debug!("Sandbox type: {sandbox_type:?}");
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
         let sandbox_cwd = self.config.cwd.clone();
+        let windows_config = self.config.windows.clone();
 
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
@@ -629,6 +632,7 @@ impl CodexMessageProcessor {
                 sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
                 None,
+                Some(&windows_config),
             )
             .await
             {

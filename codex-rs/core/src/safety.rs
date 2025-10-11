@@ -6,10 +6,9 @@ use std::path::PathBuf;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 
-use crate::exec::SandboxType;
-
 use crate::command_safety::is_dangerous_command::command_might_be_dangerous;
 use crate::command_safety::is_safe_command::is_known_safe_command;
+use crate::exec::SandboxType;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 
@@ -30,6 +29,7 @@ pub fn assess_patch_safety(
     policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
+    platform_sandbox: Option<SandboxType>,
 ) -> SafetyCheck {
     if action.is_empty() {
         return SafetyCheck::Reject {
@@ -58,7 +58,7 @@ pub fn assess_patch_safety(
         // Only auto‑approve when we can actually enforce a sandbox. Otherwise
         // fall back to asking the user because the patch may touch arbitrary
         // paths outside the project.
-        match get_platform_sandbox() {
+        match platform_sandbox {
             Some(sandbox_type) => SafetyCheck::AutoApprove {
                 sandbox_type,
                 user_explicitly_approved: false,
@@ -95,6 +95,7 @@ pub fn assess_command_safety(
     sandbox_policy: &SandboxPolicy,
     approved: &HashSet<Vec<String>>,
     with_escalated_permissions: bool,
+    platform_sandbox: Option<SandboxType>,
 ) -> SafetyCheck {
     // Some commands look dangerous. Even if they are run inside a sandbox,
     // unless the user has explicitly approved them, we should ask,
@@ -132,13 +133,19 @@ pub fn assess_command_safety(
         };
     }
 
-    assess_safety_for_untrusted_command(approval_policy, sandbox_policy, with_escalated_permissions)
+    assess_safety_for_untrusted_command(
+        approval_policy,
+        sandbox_policy,
+        with_escalated_permissions,
+        platform_sandbox,
+    )
 }
 
 pub(crate) fn assess_safety_for_untrusted_command(
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     with_escalated_permissions: bool,
+    platform_sandbox: Option<SandboxType>,
 ) -> SafetyCheck {
     use AskForApproval::*;
     use SandboxPolicy::*;
@@ -160,7 +167,7 @@ pub(crate) fn assess_safety_for_untrusted_command(
             if with_escalated_permissions {
                 SafetyCheck::AskUser
             } else {
-                match get_platform_sandbox() {
+                match platform_sandbox {
                     Some(sandbox_type) => SafetyCheck::AutoApprove {
                         sandbox_type,
                         user_explicitly_approved: false,
@@ -175,7 +182,7 @@ pub(crate) fn assess_safety_for_untrusted_command(
         | (Never, WorkspaceWrite { .. })
         | (OnFailure, ReadOnly)
         | (OnFailure, WorkspaceWrite { .. }) => {
-            match get_platform_sandbox() {
+            match platform_sandbox {
                 Some(sandbox_type) => SafetyCheck::AutoApprove {
                     sandbox_type,
                     user_explicitly_approved: false,
@@ -198,16 +205,6 @@ pub(crate) fn assess_safety_for_untrusted_command(
                 }
             }
         }
-    }
-}
-
-pub fn get_platform_sandbox() -> Option<SandboxType> {
-    if cfg!(target_os = "macos") {
-        Some(SandboxType::MacosSeatbelt)
-    } else if cfg!(target_os = "linux") {
-        Some(SandboxType::LinuxSeccomp)
-    } else {
-        None
     }
 }
 
@@ -290,6 +287,16 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn platform_sandbox_for_tests() -> Option<SandboxType> {
+        if cfg!(target_os = "macos") {
+            Some(SandboxType::MacosSeatbelt)
+        } else if cfg!(target_os = "linux") {
+            Some(SandboxType::LinuxSeccomp)
+        } else {
+            None
+        }
+    }
+
     #[test]
     fn test_writable_roots_constraint() {
         // Use a temporary directory as our workspace to avoid touching
@@ -355,6 +362,7 @@ mod tests {
             &sandbox_policy,
             &approved,
             request_escalated_privileges,
+            platform_sandbox_for_tests(),
         );
 
         assert_eq!(safety_check, SafetyCheck::AskUser);
@@ -375,6 +383,7 @@ mod tests {
             &sandbox_policy,
             &approved,
             request_escalated_privileges,
+            platform_sandbox_for_tests(),
         );
 
         assert_eq!(
@@ -400,6 +409,7 @@ mod tests {
             &sandbox_policy,
             &approved,
             request_escalated_privileges,
+            platform_sandbox_for_tests(),
         );
 
         assert_eq!(
@@ -425,9 +435,10 @@ mod tests {
             &sandbox_policy,
             &approved,
             request_escalated_privileges,
+            platform_sandbox_for_tests(),
         );
 
-        let expected = match get_platform_sandbox() {
+        let expected = match platform_sandbox_for_tests() {
             Some(sandbox_type) => SafetyCheck::AutoApprove {
                 sandbox_type,
                 user_explicitly_approved: false,

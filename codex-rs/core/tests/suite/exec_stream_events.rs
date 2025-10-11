@@ -68,6 +68,7 @@ async fn test_exec_stdout_stream_events_echo() {
         cwd.as_path(),
         &None,
         Some(stdout_stream),
+        None,
     )
     .await;
 
@@ -120,6 +121,7 @@ async fn test_exec_stderr_stream_events_echo() {
         cwd.as_path(),
         &None,
         Some(stdout_stream),
+        None,
     )
     .await;
 
@@ -175,6 +177,7 @@ async fn test_aggregated_output_interleaves_in_order() {
         cwd.as_path(),
         &None,
         None,
+        None,
     )
     .await
     .expect("process_exec_tool_call");
@@ -212,6 +215,7 @@ async fn test_exec_timeout_returns_partial_output() {
         &policy,
         cwd.as_path(),
         &None,
+        None,
         None,
     )
     .await;

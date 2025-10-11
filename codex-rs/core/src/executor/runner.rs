@@ -7,6 +7,7 @@ use super::backends::ExecutionMode;
 use super::backends::backend_for_mode;
 use super::cache::ApprovalCache;
 use crate::codex::Session;
+use crate::config_types::WindowsConfig;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::error::get_error_message_ui;
@@ -30,6 +31,8 @@ use codex_otel::otel_event_manager::ToolDecisionSource;
 pub(crate) struct ExecutorConfig {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) sandbox_cwd: PathBuf,
+    pub(crate) platform_sandbox: Option<SandboxType>,
+    pub(crate) windows: WindowsConfig,
     codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
@@ -38,10 +41,14 @@ impl ExecutorConfig {
         sandbox_policy: SandboxPolicy,
         sandbox_cwd: PathBuf,
         codex_linux_sandbox_exe: Option<PathBuf>,
+        platform_sandbox: Option<SandboxType>,
+        windows: WindowsConfig,
     ) -> Self {
         Self {
             sandbox_policy,
             sandbox_cwd,
+            platform_sandbox,
+            windows,
             codex_linux_sandbox_exe,
         }
     }
@@ -229,6 +236,7 @@ impl Executor {
             &config.sandbox_cwd,
             &config.codex_linux_sandbox_exe,
             stdout_stream,
+            Some(&config.windows),
         )
         .await
     }
