@@ -20,12 +20,12 @@ pub(crate) struct ModelInfo {
 
 impl ModelInfo {
     fn new(context_window: u64, max_output_tokens: u64) -> Self {
-        let auto_compact_limit = ((context_window as u128 * 9) / 10).min(i64::MAX as u128) as i64;
+        let auto_compact_token_limit = (context_window as f64 * 0.8) as i64;
 
         Self {
             context_window,
             max_output_tokens,
-            auto_compact_token_limit: auto_compact_limit,
+            auto_compact_token_limit,
         }
     }
 }
