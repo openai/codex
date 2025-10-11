@@ -1,0 +1,36 @@
+name: smallwallets-toolbox
+
+on:
+  push:
+    paths:
+      - "smallwallets-openapi.json"
+      - "postman.collection.json"
+      - "scripts/generate_postman_collection.py"
+      - ".github/workflows/smallwallets-toolbox.yml"
+      - "README.md"
+  pull_request:
+    paths:
+      - "smallwallets-openapi.json"
+      - "postman.collection.json"
+      - "scripts/generate_postman_collection.py"
+      - ".github/workflows/smallwallets-toolbox.yml"
+      - "README.md"
+
+jobs:
+  lint-and-verify:
+    name: Lint OpenAPI and verify collection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Lint OpenAPI definition
+        run: npx --yes @redocly/cli@latest lint smallwallets-openapi.json
+
+      - name: Check Postman collection is up to date
+        run: python scripts/generate_postman_collection.py --check

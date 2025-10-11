@@ -19,23 +19,26 @@ This repository now includes comprehensive infrastructure for the **DecryptTheGi
 
 ### Quick Start - DTG System
 
-1. **Deploy the Cloudflare Worker**: 
+1. **Deploy the Cloudflare Worker**:
+
    ```bash
    # Deploy api/worker.js to your Cloudflare Workers account
    wrangler deploy api/worker.js
    ```
 
 2. **Try the Demo**:
+
    ```bash
    # Open the interactive demo
    open public/logger-demo.html
    ```
 
 3. **Run Data Processing**:
+
    ```bash
    # Validate CSV headers
    node scripts/csv_headers.mjs validate
-   
+
    # Process event batches
    node scripts/normalize_batch.mjs process events.json analytics
    ```
@@ -618,3 +621,22 @@ Have you discovered a vulnerability or have concerns about model output? Please 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
+
+---
+
+## SmallWallets toolbox
+
+### Postman collection
+
+- Import `postman.collection.json` in Postman to get pre-built requests for every path in the SmallWallets API.
+- Set the environment variables before sending requests:
+  - `baseUrl` (defaults to `https://sandbox.smallwallets.dev/v1`)
+  - `token` (replace with a valid JWT)
+- You can also import `smallwallets-openapi.json` as an API in Postman if you prefer to generate requests yourself.
+
+### Continuous integration
+
+A workflow is available at `.github/workflows/smallwallets-toolbox.yml`. It runs on pushes and pull requests that touch the SmallWallets toolbox files and performs the following checks:
+
+1. Lints `smallwallets-openapi.json` with `@redocly/cli`.
+2. Verifies `postman.collection.json` is up to date with `python scripts/generate_postman_collection.py --check`.
