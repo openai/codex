@@ -711,6 +711,7 @@ impl CodexMessageProcessor {
             page_size,
             cursor_ref,
             INTERACTIVE_SESSION_SOURCES,
+            None, // TODO: Add cwd filter support
         )
         .await
         {

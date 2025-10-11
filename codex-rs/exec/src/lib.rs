@@ -384,7 +384,7 @@ async fn resolve_resume_path(
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
-        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None, &[])
+        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None, &[], None)
             .await
         {
             Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),

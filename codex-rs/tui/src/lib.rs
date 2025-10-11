@@ -423,6 +423,7 @@ async fn run_ratatui_app(
             1,
             None,
             INTERACTIVE_SESSION_SOURCES,
+            None, // No cwd filter for resume_last
         )
         .await
         {
@@ -434,7 +435,11 @@ async fn run_ratatui_app(
             Err(_) => resume_picker::ResumeSelection::StartFresh,
         }
     } else if cli.resume_picker {
-        match resume_picker::run_resume_picker(&mut tui, &config.codex_home).await? {
+        // If --all flag is set, don't filter by cwd (pass None), otherwise filter by current directory
+        let cwd_filter = if cli.resume_all { None } else { Some(config.cwd.as_path()) };
+        match resume_picker::run_resume_picker(&mut tui, &config.codex_home, cwd_filter)
+            .await?
+        {
             resume_picker::ResumeSelection::Exit => {
                 restore();
                 session_log::log_session_end();
