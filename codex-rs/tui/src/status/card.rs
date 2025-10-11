@@ -49,6 +49,7 @@ struct StatusHistoryCell {
     model_name: String,
     model_details: Vec<String>,
     directory: PathBuf,
+    home: PathBuf,
     approval: String,
     sandbox: String,
     agents_summary: String,
@@ -114,6 +115,7 @@ impl StatusHistoryCell {
             model_name,
             model_details,
             directory: config.cwd.clone(),
+            home: config.codex_home.clone(),
             approval,
             sandbox,
             agents_summary,
@@ -256,11 +258,17 @@ impl HistoryCell for StatusHistoryCell {
             }
         });
 
-        let mut labels: Vec<String> =
-            vec!["Model", "Directory", "Approval", "Sandbox", "Agents.md"]
-                .into_iter()
-                .map(str::to_string)
-                .collect();
+        let mut labels: Vec<String> = vec![
+            "Model",
+            "Home",
+            "Directory",
+            "Approval",
+            "Sandbox",
+            "Agents.md",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
 
         if account_value.is_some() {
@@ -286,8 +294,10 @@ impl HistoryCell for StatusHistoryCell {
         }
 
         let directory_value = format_directory_display(&self.directory, Some(value_width));
+        let home_value = format_directory_display(&self.home, Some(value_width));
 
         lines.push(formatter.line("Model", model_spans));
+        lines.push(formatter.line("Home", vec![Span::from(home_value)]));
         lines.push(formatter.line("Directory", vec![Span::from(directory_value)]));
         lines.push(formatter.line("Approval", vec![Span::from(self.approval.clone())]));
         lines.push(formatter.line("Sandbox", vec![Span::from(self.sandbox.clone())]));

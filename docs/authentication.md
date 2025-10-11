@@ -23,7 +23,11 @@ This key must, at minimum, have write access to the Responses API.
 If you've used the Codex CLI before with usage-based billing via an API key and want to switch to using your ChatGPT plan, follow these steps:
 
 1. Update the CLI and ensure `codex --version` is `0.20.0` or later
-2. Delete `~/.codex/auth.json` (on Windows: `C:\\Users\\USERNAME\\.codex\\auth.json`)
+2. Delete `$CODEX_HOME/auth.json`.
+   - `CODEX_HOME` resolution order:
+     1) Project-local `.codex/` in the current working directory, if present.
+     2) `CODEX_HOME` environment variable, if set.
+     3) Default `~/.codex/` (on Windows: `C:\\Users\\USERNAME\\.codex\\auth.json`).
 3. Run `codex login` again
 
 ## Connecting on a "Headless" Machine
@@ -32,7 +36,8 @@ Today, the login process entails running a server on `localhost:1455`. If you ar
 
 ### Authenticate locally and copy your credentials to the "headless" machine
 
-The easiest solution is likely to run through the `codex login` process on your local machine such that `localhost:1455` _is_ accessible in your web browser. When you complete the authentication process, an `auth.json` file should be available at `$CODEX_HOME/auth.json` (on Mac/Linux, `$CODEX_HOME` defaults to `~/.codex` whereas on Windows, it defaults to `%USERPROFILE%\\.codex`).
+The easiest solution is likely to run through the `codex login` process on your local machine such that `localhost:1455` _is_ accessible in your web browser. When you complete the authentication process, an `auth.json` file should be available at `$CODEX_HOME/auth.json`.
+Recall `CODEX_HOME` resolves to the project-local `.codex/` if present; otherwise to the `CODEX_HOME` env var; otherwise to the default user directory (on Mac/Linux: `~/.codex`, on Windows: `%USERPROFILE%\\.codex`).
 
 Because the `auth.json` file is not tied to a specific host, once you complete the authentication flow locally, you can copy the `$CODEX_HOME/auth.json` file to the headless machine and then `codex` should "just work" on that machine. Note to copy a file to a Docker container, you can do:
 
