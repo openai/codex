@@ -441,6 +441,8 @@ const DEFAULT_ENV_VARS: &[&str] = &[
     "USERPROFILE",
     "TEMP",
     "TMP",
+    "APPDATA",    // Required for npm configuration and cache storage
+    "SYSTEMROOT", // Required for DNS resolution and network operations
 ];
 
 /// `extra_env` comes from the config for an entry in `mcp_servers` in
@@ -471,5 +473,454 @@ mod tests {
         let mcp_server_env = create_env_for_mcp_server(Some(extra_env));
         assert!(mcp_server_env.contains_key("PATH"));
         assert_eq!(Some(&env_var_new_value), mcp_server_env.get(env_var));
+    }
+
+    // Windows-specific tests for validating critical environment variables required by npm/npx operations.
+    // These tests empirically verify which environment variables must be passed to MCP servers on Windows.
+    //
+    // To run with detailed output:
+    // cargo test -p codex-mcp-client --lib tests::windows_env_tests -- --ignored --nocapture --test-threads=1
+    #[cfg(windows)]
+    mod windows_env_tests {
+        use super::*;
+        use std::path::PathBuf;
+        use std::time::Duration;
+        use tokio::process::Command;
+        use tokio::time;
+
+        // Test configuration constants
+        const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+        const TEST_PACKAGE: &str = "@openai/codex";
+
+        // Command names
+        const NPX: &str = "npx";
+        const NPM: &str = "npm";
+
+        // Critical environment variables required for npm/npx operations on Windows
+        // These have been validated through empirical testing
+        const CRITICAL_ENV_VARS: &[&str] = &[
+            "PATH",       // Required for executable discovery
+            "APPDATA",    // Required for npm configuration and cache storage
+            "SYSTEMROOT", // Required for DNS resolution and network operations
+        ];
+
+        /// Result type for test command execution
+        type CommandResult = Result<bool, CommandError>;
+
+        /// Errors that can occur during command execution
+        #[derive(Debug, Clone, PartialEq)]
+        enum CommandError {
+            SpawnFailed,
+            Timeout,
+            WaitFailed,
+            NotFound(String),
+        }
+
+        impl std::fmt::Display for CommandError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Self::SpawnFailed => write!(f, "Failed to spawn command"),
+                    Self::Timeout => write!(f, "Command execution timed out"),
+                    Self::WaitFailed => write!(f, "Failed to wait for process completion"),
+                    Self::NotFound(cmd) => write!(f, "{} command not found", cmd),
+                }
+            }
+        }
+
+        /// Test command builder for executing npm/npx operations with controlled environments
+        struct TestCommand {
+            program: PathBuf,
+            args: Vec<String>,
+            env: HashMap<String, String>,
+            timeout: Duration,
+        }
+
+        impl TestCommand {
+            /// Creates a command to check npm package version via npx
+            fn npm_view_via_npx(program: PathBuf) -> Self {
+                Self {
+                    program,
+                    args: vec![
+                        "npm".to_string(),
+                        "view".to_string(),
+                        TEST_PACKAGE.to_string(),
+                        "version".to_string(),
+                    ],
+                    env: create_env_for_mcp_server(None),
+                    timeout: TEST_TIMEOUT,
+                }
+            }
+
+            /// Creates a command to check npm package version directly
+            fn npm_view(program: PathBuf) -> Self {
+                Self {
+                    program,
+                    args: vec![
+                        "view".to_string(),
+                        TEST_PACKAGE.to_string(),
+                        "version".to_string(),
+                    ],
+                    env: create_env_for_mcp_server(None),
+                    timeout: TEST_TIMEOUT,
+                }
+            }
+
+            /// Creates a command to check npx version (non-network operation)
+            fn npx_version(program: PathBuf) -> Self {
+                Self {
+                    program,
+                    args: vec!["--version".to_string()],
+                    env: create_env_for_mcp_server(None),
+                    timeout: TEST_TIMEOUT,
+                }
+            }
+
+            /// Removes a specific environment variable from the command's environment
+            fn without_env(mut self, key: &str) -> Self {
+                self.env.remove(key);
+                self
+            }
+
+            /// Executes the command and returns success status or error
+            async fn execute(&self) -> CommandResult {
+                let mut child = Command::new(&self.program)
+                    .args(&self.args)
+                    .env_clear()
+                    .envs(&self.env)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .map_err(|_| CommandError::SpawnFailed)?;
+
+                match time::timeout(self.timeout, child.wait()).await {
+                    Ok(Ok(status)) => Ok(status.success()),
+                    Ok(Err(_)) => Err(CommandError::WaitFailed),
+                    Err(_) => {
+                        // Timeout occurred - ensure child process is killed
+                        if let Err(e) = child.kill().await {
+                            eprintln!("Warning: Failed to kill timed-out process: {}", e);
+                        }
+                        // Wait for process to actually terminate after kill
+                        let _ = child.wait().await;
+                        Err(CommandError::Timeout)
+                    }
+                }
+            }
+        }
+
+        /// Utility to find and validate npm command availability
+        fn find_npm() -> Result<PathBuf, CommandError> {
+            which::which(NPM).map_err(|_| CommandError::NotFound(NPM.to_string()))
+        }
+
+        /// Utility to find and validate npx command availability
+        fn find_npx() -> Result<PathBuf, CommandError> {
+            which::which(NPX).map_err(|_| CommandError::NotFound(NPX.to_string()))
+        }
+
+        /// Helper macro to skip test if command is not available
+        macro_rules! require_command {
+            ($finder:expr) => {
+                match $finder {
+                    Ok(path) => path,
+                    Err(e) => {
+                        eprintln!("Skipping test: {}", e);
+                        return;
+                    }
+                }
+            };
+        }
+
+        // ========== SYSTEMROOT Environment Variable Tests ==========
+
+        #[tokio::test]
+        #[ignore = "Requires npx installation"]
+        async fn npx_version_works_without_systemroot() {
+            // Validates that non-network operations don't require SYSTEMROOT
+            let npx_path = require_command!(find_npx());
+
+            let result = TestCommand::npx_version(npx_path)
+                .without_env("SYSTEMROOT")
+                .execute()
+                .await;
+
+            assert!(
+                matches!(result, Ok(true)),
+                "npx --version should succeed without SYSTEMROOT for non-network operations"
+            );
+        }
+
+        #[tokio::test]
+        #[ignore = "Requires npx and network access"]
+        async fn npx_network_operation_requires_systemroot() {
+            // Validates that network operations fail without SYSTEMROOT (DNS resolution fails)
+            let npx_path = require_command!(find_npx());
+
+            let result = TestCommand::npm_view_via_npx(npx_path)
+                .without_env("SYSTEMROOT")
+                .execute()
+                .await;
+
+            match result {
+                Ok(false) | Err(CommandError::Timeout) => {
+                    // Expected: command fails or hangs without SYSTEMROOT
+                }
+                Ok(true) => {
+                    panic!("Network operation unexpectedly succeeded without SYSTEMROOT");
+                }
+                Err(e) => {
+                    panic!("Unexpected error: {}", e);
+                }
+            }
+        }
+
+        // ========== APPDATA Environment Variable Tests ==========
+
+        #[tokio::test]
+        #[ignore = "Requires npx installation"]
+        async fn npx_version_works_without_appdata() {
+            // Validates that simple npx operations don't require APPDATA
+            let npx_path = require_command!(find_npx());
+
+            let result = TestCommand::npx_version(npx_path)
+                .without_env("APPDATA")
+                .execute()
+                .await;
+
+            assert!(
+                matches!(result, Ok(true)),
+                "npx --version should succeed without APPDATA for simple operations"
+            );
+        }
+
+        #[tokio::test]
+        #[ignore = "Requires npx and network access"]
+        async fn npx_network_operation_requires_appdata() {
+            // Validates that npx network operations fail without APPDATA (can't access npm cache)
+            let npx_path = require_command!(find_npx());
+
+            let result = TestCommand::npm_view_via_npx(npx_path)
+                .without_env("APPDATA")
+                .execute()
+                .await;
+
+            assert!(
+                matches!(result, Ok(false)),
+                "npx network operations should fail without APPDATA"
+            );
+        }
+
+        #[tokio::test]
+        #[ignore = "Requires npm and network access"]
+        async fn npm_network_operation_works_without_appdata() {
+            // Validates that npm can fall back to default cache location when APPDATA is missing
+            let npm_path = require_command!(find_npm());
+
+            let result = TestCommand::npm_view(npm_path)
+                .without_env("APPDATA")
+                .execute()
+                .await;
+
+            assert!(
+                matches!(result, Ok(true)),
+                "npm should handle missing APPDATA by using fallback cache location"
+            );
+        }
+
+        // ========== Baseline and Validation Tests ==========
+
+        #[tokio::test]
+        #[ignore = "Requires npx and network access"]
+        async fn npx_works_with_complete_environment() {
+            // Baseline test: validates that npx works correctly with all required env vars
+            let npx_path = require_command!(find_npx());
+
+            let cmd = TestCommand::npm_view_via_npx(npx_path);
+
+            // Verify critical variables are present
+            for var in CRITICAL_ENV_VARS {
+                assert!(
+                    cmd.env.contains_key(*var),
+                    "Critical environment variable {} is missing",
+                    var
+                );
+            }
+
+            let result = cmd.execute().await;
+            assert!(
+                matches!(result, Ok(true)),
+                "npx should work with complete environment"
+            );
+        }
+
+        // ========== Comprehensive Validation Test ==========
+        //
+        // To run this test with detailed output showing the validation process:
+        // cargo test -p codex-mcp-client --lib tests::windows_env_tests::validate_critical_environment_variables -- --ignored --nocapture
+        //
+        // This test empirically validates which Windows environment variables are
+        // critical for npm/npx operations by systematically removing each variable
+        // and testing if the operation still succeeds.
+
+        #[tokio::test]
+        #[ignore = "Requires npx and network access"]
+        async fn validate_critical_environment_variables() {
+            let npx_path = require_command!(find_npx());
+            // Base environment with all default vars that MCP servers receive
+            let base_env = create_env_for_mcp_server(None);
+
+            // Filter to only test variables that exist in the actual environment
+            let mut vars_to_test: Vec<String> = base_env
+                .keys()
+                .filter(|var| std::env::var(var).is_ok())
+                .cloned()
+                .collect();
+
+            // Sort alphabetically for consistent output
+            vars_to_test.sort();
+
+            println!("\n=== CRITICAL ENVIRONMENT VARIABLES VALIDATION ===");
+            println!(
+                "Testing {} environment variables for npm/npx criticality...",
+                vars_to_test.len()
+            );
+            println!("Each variable will be removed and npm/npx tested without it.\n");
+
+            // Create tasks for all tests
+            let mut tasks = Vec::new();
+            for var_name in vars_to_test.iter() {
+                let var_name = var_name.clone();
+                let npx_path = npx_path.clone();
+
+                let task = tokio::spawn(async move {
+                    eprintln!("  Testing without {}...", var_name);
+
+                    let result = TestCommand::npm_view_via_npx(npx_path)
+                        .without_env(&var_name)
+                        .execute()
+                        .await;
+
+                    let is_critical = matches!(result, Ok(false) | Err(CommandError::Timeout));
+
+                    (var_name, is_critical, result)
+                });
+
+                tasks.push(task);
+            }
+
+            // Wait for all tasks to complete and collect results
+            let mut test_results = Vec::new();
+            for task in tasks {
+                match task.await {
+                    Ok(result) => test_results.push(result),
+                    Err(e) => {
+                        panic!("Task failed: {}", e);
+                    }
+                }
+            }
+
+            // Sort results for consistent output
+            test_results.sort_by(|a, b| a.0.cmp(&b.0));
+
+            // Print detailed test results
+            println!("\n=== Test Results ===");
+            let max_var_len = test_results
+                .iter()
+                .map(|(name, _, _)| name.len())
+                .max()
+                .unwrap_or(10);
+            let header_width = max_var_len.max(20);
+
+            println!("{:<width$} | Status", "Variable", width = header_width);
+            println!("{}", "-".repeat(header_width + 40));
+
+            for (name, is_critical, _) in &test_results {
+                if *is_critical {
+                    println!(
+                        "{:<width$} | CRITICAL for npm/npx operations",
+                        name,
+                        width = header_width
+                    );
+                } else {
+                    println!("{:<width$} | Not critical", name, width = header_width);
+                }
+            }
+
+            // Extract critical variables from test results
+            let mut found_critical: Vec<&str> = test_results
+                .iter()
+                .filter_map(|(name, is_critical, _)| {
+                    if *is_critical {
+                        Some(name.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            found_critical.sort();
+
+            let mut expected_critical: Vec<&str> = CRITICAL_ENV_VARS.to_vec();
+            expected_critical.sort();
+
+            // Print summary for better visibility
+            println!("\n=== TEST RESULTS SUMMARY ===");
+            println!("Critical variables found:    {:?}", found_critical);
+            println!("Critical variables expected: {:?}", expected_critical);
+
+            // Provide detailed error message if mismatch occurs
+            if found_critical != expected_critical {
+                let found_set: std::collections::HashSet<&str> =
+                    found_critical.iter().copied().collect();
+                let expected_set: std::collections::HashSet<&str> =
+                    expected_critical.iter().copied().collect();
+                let missing = expected_set.difference(&found_set).collect::<Vec<_>>();
+                let unexpected = found_set.difference(&expected_set).collect::<Vec<_>>();
+
+                panic!(
+                    "Critical environment variables validation failed!\n\
+                Expected but not found critical: {:?}\n\
+                Found critical but not expected: {:?}\n\
+                Full test results:\n{}",
+                    missing,
+                    unexpected,
+                    test_results
+                        .iter()
+                        .map(|(name, critical, result)| {
+                            format!(
+                                "  {} = {} (result: {:?})",
+                                name,
+                                if *critical {
+                                    "CRITICAL"
+                                } else {
+                                    "not critical"
+                                },
+                                result
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+
+            // Verify all critical vars are included in the base environment
+            for var in CRITICAL_ENV_VARS {
+                assert!(
+                    base_env.contains_key(*var),
+                    "Critical variable {} must be included in default environment",
+                    var
+                );
+            }
+
+            println!("\n=== VALIDATION SUCCESSFUL ===");
+            println!(
+                "\n{} critical environment variables confirmed:",
+                CRITICAL_ENV_VARS.len()
+            );
+            println!("  - PATH: Required for executable discovery");
+            println!("  - APPDATA: Required for npm configuration and cache storage");
+            println!("  - SYSTEMROOT: Required for DNS resolution and network operations");
+        }
     }
 }
