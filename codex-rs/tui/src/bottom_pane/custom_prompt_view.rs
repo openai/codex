@@ -20,6 +20,7 @@ use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
+use std::any::Any;
 
 /// Callback invoked when the user submits a custom prompt.
 pub(crate) type PromptSubmitted = Box<dyn Fn(String) + Send + Sync>;
@@ -57,7 +58,7 @@ impl CustomPromptView {
 }
 
 impl BottomPaneView for CustomPromptView {
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
     fn handle_key_event(&mut self, key_event: KeyEvent) {

@@ -69,6 +69,11 @@ pub(crate) struct BottomPane {
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
     context_window_percent: Option<u8>,
+    footer_model_label: Option<String>,
+    footer_directory: Option<String>,
+    footer_account_email: Option<String>,
+    footer_primary_limit_percent: Option<u8>,
+    footer_weekly_limit_percent: Option<u8>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -102,6 +107,11 @@ impl BottomPane {
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
+            footer_model_label: None,
+            footer_directory: None,
+            footer_account_email: None,
+            footer_primary_limit_percent: None,
+            footer_weekly_limit_percent: None,
         }
     }
 
@@ -198,12 +208,20 @@ impl BottomPane {
                 && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
                 && view.is_complete()
             {
+                let completion_event = view.take_on_complete_event();
                 self.view_stack.pop();
+                if let Some(ev) = completion_event {
+                    self.app_event_tx.send(ev);
+                }
                 self.on_active_view_complete();
             } else {
                 view.handle_key_event(key_event);
                 if view.is_complete() {
+                    let completion_event = view.take_on_complete_event();
                     self.view_stack.clear();
+                    if let Some(ev) = completion_event {
+                        self.app_event_tx.send(ev);
+                    }
                     self.on_active_view_complete();
                 }
             }
@@ -239,7 +257,11 @@ impl BottomPane {
             let event = view.on_ctrl_c();
             if matches!(event, CancellationEvent::Handled) {
                 if view.is_complete() {
+                    let completion_event = view.take_on_complete_event();
                     self.view_stack.pop();
+                    if let Some(ev) = completion_event {
+                        self.app_event_tx.send(ev);
+                    }
                     self.on_active_view_complete();
                 }
                 self.show_ctrl_c_quit_hint();
@@ -259,6 +281,10 @@ impl BottomPane {
         if let Some(view) = self.view_stack.last_mut() {
             let needs_redraw = view.handle_paste(pasted);
             if view.is_complete() {
+                let completion_event = view.take_on_complete_event();
+                if let Some(ev) = completion_event {
+                    self.app_event_tx.send(ev);
+                }
                 self.on_active_view_complete();
             }
             if needs_redraw {
@@ -373,12 +399,53 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    // Footer metadata is owned by the composer; no mirrored state kept here.
+    pub(crate) fn set_footer_model_label(&mut self, label: Option<String>) {
+        self.footer_model_label = label.clone();
+        self.composer.set_footer_model_label(label);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_footer_directory(&mut self, directory: Option<String>) {
+        self.footer_directory = directory.clone();
+        self.composer.set_footer_directory(directory);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_footer_account_email(&mut self, email: Option<String>) {
+        self.footer_account_email = email.clone();
+        self.composer.set_footer_account_email(email);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_footer_limits(&mut self, primary: Option<u8>, weekly: Option<u8>) {
+        self.footer_primary_limit_percent = primary;
+        self.footer_weekly_limit_percent = weekly;
+        self.composer.set_footer_limits(primary, weekly);
+        self.request_redraw();
+    }
 
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
         self.push_view(Box::new(view));
+    }
+
+    /// If the active view is a ListSelectionView, pass a mutable reference to it to `f`.
+    /// Returns true when the active view was a list and was updated.
+    pub(crate) fn with_active_list_selection_mut<F>(&mut self, f: F) -> bool
+    where
+        F: FnOnce(&mut list_selection_view::ListSelectionView),
+    {
+        if let Some(view) = self.view_stack.last_mut()
+            && let Some(list) = view
+                .as_any_mut()
+                .downcast_mut::<list_selection_view::ListSelectionView>()
+        {
+            f(list);
+            self.request_redraw();
+            return true;
+        }
+        false
     }
 
     /// Update the queued messages shown under the status header.

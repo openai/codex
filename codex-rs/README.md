@@ -104,6 +104,17 @@ codex --sandbox danger-full-access
 
 The same setting can be persisted in `~/.codex/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
 
+### Pruning context (basic and advanced)
+
+Use `/prune` to manually reduce what goes into the next turn’s context without summarizing anything:
+
+- Basic presets: prune by category (tool calls, tool output, user/assistant messages, reasoning) across the entire history, or prune the first N turns (with dynamic 5/10/15… presets and an "X turns" option).
+- Advanced: list individual context items and stage changes for the next turn. Use `space` to toggle inclusion and `del` to mark an item for deletion; `enter` applies staged changes (with an extra confirmation if there are deletions), and `esc` returns to the main prune menu. Type to filter. System items (UserInstructions/EnvironmentContext) are hidden here.
+
+Notes:
+- Advanced applies changes on `enter` (there is no longer an automatic apply on each toggle).
+- The "Fix context" option attempts a smart repair by restoring the most recent missing tool call from the rollout (with confirmation).
+
 ## Code Organization
 
 This folder is the root of a Cargo workspace. It contains quite a bit of experimental code, but here are the key crates:

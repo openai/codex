@@ -69,6 +69,19 @@ Thumbs.db
 Icon?
 .Spotlight-V100/
 
+# images (local screenshots, assets not intended for source control)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.webp
+*.svg
+
+# local stash files
+stash_*.rs
+
 # Unwanted package managers
 .yarn/
 yarn.lock
@@ -81,78 +94,9 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
-# Local cargo caches (must never be committed)
-codex-rs/.cargo-home/
+
+# local toolchains/caches
 codex-rs/.cargo/
-codex-rs/.cgh/
-
-# Rust workspace build output (must never be committed)
-codex-rs/target/
-
-# Insta pending snapshots (temporary files, never commit)
-**/*.snap.new
-
-# Workspace-local caches
-codex-rs/.cache/
-# Standard ignore baseline (appended by Codex)
-
-# OS / Editors
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-.idea/
-.vscode/
-
-# Node / JS
-node_modules/
-.npm/
-.pnpm-store/
-.yarn/
-.pnp.*
-dist/
-build/
-coverage/
-.cache/
-.turbo/
-.vite/
-.parcel-cache/
-.next/
-.nuxt/
-
-# Python
-__pycache__/
-*.pyc
-.venv/
-env/
-.pytest_cache/
-.mypy_cache/
-.tox/
-
-# Rust
-target/
-
-# Java / Gradle
-.gradle/
-build/
-
-# Logs / Temp
-*.log
-*.pid
-tmp/
-.tmp/
-*.tmp
-
-# Secrets (commit only templates like .env.example)
-.env
-.env.local
-.env.*.local
-*.pem
-*.key
-*.p12
-*.crt
-
-# Misc
-.nyc_output/
-coverage-final.json
+codex-rs/.cargo-home/
+codex-rs/.rustup/
 codex-rs/codex-rs/

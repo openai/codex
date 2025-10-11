@@ -67,3 +67,17 @@ Use the MCP inspector and `codex mcp-server` to build a simple tic-tac-toe game 
 **sandbox:** workspace-write
 
 Click "Run Tool" and you should see a list of events emitted from the Codex MCP server as it builds the game.
+### Pruning context (advanced)
+
+The Advanced mode of `/prune` lets you stage exactly what goes into the next turn without modifying rollout files:
+
+- Type-to-filter: the header shows "Type to filter" to remind you.
+- `space`: toggle whether the item is included in the next turn.
+- `del`: mark/unmark the item for deletion (removal from the in‑memory context).
+- `enter`: apply staged changes. If there are deletions, a confirmation popup is shown first.
+- `esc`: return to the main `/prune` menu.
+
+Notes:
+- System items — UserInstructions and EnvironmentContext — are omitted from the Advanced list.
+- "Deletion" affects only the in‑memory context; rollout files on disk remain unchanged.
+- The main `/prune` menu also includes a "Fix context" option that attempts a smart repair by restoring the most recent missing tool call from the rollout (with confirmation).

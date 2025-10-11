@@ -18,18 +18,10 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<u8>,
-    // The fields below exist in this branch but the upstream footer renderer
-    // does not use them. Keep them here to avoid broader refactors while
-    // rendering exactly like upstream.
-    #[allow(dead_code)]
     pub(crate) model_label: Option<String>,
-    #[allow(dead_code)]
     pub(crate) directory: Option<String>,
-    #[allow(dead_code)]
     pub(crate) account_email: Option<String>,
-    #[allow(dead_code)]
     pub(crate) primary_limit_percent: Option<u8>,
-    #[allow(dead_code)]
     pub(crate) weekly_limit_percent: Option<u8>,
 }
 
@@ -91,19 +83,57 @@ fn footer_lines(props: &FooterProps) -> Vec<Line<'static>> {
             use_shift_enter_hint: props.use_shift_enter_hint,
             esc_backtrack_hint: props.esc_backtrack_hint,
         }),
-        // Upstream: only show the Ctrl-C reminder (no context indicator).
-        FooterMode::CtrlCReminder => vec![ctrl_c_reminder_line(CtrlCReminderState {
-            is_task_running: props.is_task_running,
-        })],
-        // Upstream: only show the Esc hint (no context indicator).
-        FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        // Upstream "ShortcutSummary": show context + " · ? for shortcuts".
-        FooterMode::ShortcutPrompt => vec![info_line(
+        FooterMode::CtrlCReminder => {
+            let mut line = Line::from("");
+            append_context_span(&mut line, props.context_window_percent);
+            line.push_span(Span::from(" | ").dim());
+            let ctrl = ctrl_c_reminder_line(CtrlCReminderState {
+                is_task_running: props.is_task_running,
+            });
+            line.extend(ctrl.spans);
+            vec![line]
+        }
+        FooterMode::EscHint => {
+            let mut line = Line::from("");
+            append_context_span(&mut line, props.context_window_percent);
+            line.push_span(Span::from(" | ").dim());
+            let esc = esc_hint_line(props.esc_backtrack_hint);
+            line.extend(esc.spans);
+            vec![line]
+        }
+        FooterMode::ShortcutPrompt => {
+            if props.is_task_running {
+                vec![info_line(
+                    props.model_label.clone(),
+                    props.directory.clone(),
+                    props.account_email.clone(),
+                    props.primary_limit_percent,
+                    props.weekly_limit_percent,
+                    props.context_window_percent,
+                    /*with_shortcuts_hint=*/ false,
+                )]
+            } else {
+                vec![info_line(
+                    props.model_label.clone(),
+                    props.directory.clone(),
+                    props.account_email.clone(),
+                    props.primary_limit_percent,
+                    props.weekly_limit_percent,
+                    props.context_window_percent,
+                    /*with_shortcuts_hint=*/ true,
+                )]
+            }
+        }
+        // When otherwise empty, still show the context indicator.
+        FooterMode::Empty => vec![info_line(
+            props.model_label.clone(),
+            props.directory.clone(),
+            props.account_email.clone(),
+            props.primary_limit_percent,
+            props.weekly_limit_percent,
             props.context_window_percent,
-            /*with_shortcuts_hint=*/ true,
+            /*with_shortcuts_hint=*/ false,
         )],
-        // Upstream "ContextOnly": only the context indicator.
-        FooterMode::Empty => vec![context_window_line(props.context_window_percent)],
     }
 }
 
@@ -230,13 +260,63 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn context_window_line(percent: Option<u8>) -> Line<'static> {
+fn append_context_span(line: &mut Line<'static>, percent: Option<u8>) {
     let percent = percent.unwrap_or(100);
-    Line::from(vec![Span::from(format!("{percent}% context left")).dim()])
+    if !line.spans.is_empty() {
+        line.push_span(Span::from(" | "));
+    }
+    // Style: percentage in default color (white), label dimmed.
+    line.push_span(Span::from(format!("{percent}%")));
+    line.push_span(Span::from(" context left").dim());
 }
 
-fn info_line(context_percent: Option<u8>, with_shortcuts_hint: bool) -> Line<'static> {
-    let mut line = context_window_line(context_percent);
+// Note: previous helper `append_segment` was removed to avoid dead_code warnings
+// and to make inline styling more explicit at each call site.
+
+fn info_line(
+    model_label: Option<String>,
+    directory: Option<String>,
+    account_email: Option<String>,
+    primary_limit_percent: Option<u8>,
+    weekly_limit_percent: Option<u8>,
+    context_percent: Option<u8>,
+    with_shortcuts_hint: bool,
+) -> Line<'static> {
+    let mut line = Line::from("");
+    // Order: context left | 5h XX% used | weekly XX% used | model | dir | email
+    append_context_span(&mut line, context_percent);
+    if let Some(p) = primary_limit_percent {
+        if !line.spans.is_empty() {
+            line.push_span(Span::from(" | "));
+        }
+        line.push_span(Span::from("5h ").dim());
+        line.push_span(Span::from(format!("{p}% used")));
+    }
+    if let Some(w) = weekly_limit_percent {
+        if !line.spans.is_empty() {
+            line.push_span(Span::from(" | "));
+        }
+        line.push_span(Span::from("weekly ").dim());
+        line.push_span(Span::from(format!("{w}% used")));
+    }
+    if let Some(text) = model_label
+        && !text.is_empty()
+    {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(text).dim());
+    }
+    if let Some(text) = directory
+        && !text.is_empty()
+    {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(text).dim());
+    }
+    if let Some(text) = account_email
+        && !text.is_empty()
+    {
+        line.push_span(Span::from(" | "));
+        line.push_span(Span::from(text).dim());
+    }
     if with_shortcuts_hint {
         line.push_span(Span::from(" · ").dim());
         line.extend(vec![

@@ -772,6 +772,7 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 
 ## Config reference
 
+
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
 | ------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `model`                                          | string                                                            | Model to use (e.g., `gpt-5-codex`).                                                                                        |
@@ -824,3 +825,4 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `responses_originator_header_internal_override`  | string                                                            | Override `originator` header value.                                                                                        |
 | `projects.<path>.trust_level`                    | string                                                            | Mark project/worktree as trusted (only `"trusted"` is recognized).                                                         |
 | `tools.web_search`                               | boolean                                                           | Enable web search tool (alias: `web_search_request`) (default: false).                                                     |
+| `tools.view_image`                                | boolean                                                           | Enable the `view_image` tool so the agent can attach local images to context (default: true).                              |

@@ -27,6 +27,10 @@ use futures::prelude::*;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+const USER_SUMMARY_MAX_SNIPPET_BYTES: usize = 600;
+const USER_SUMMARY_MAX_ENTRIES: usize = 2;
+const ASSISTANT_SUMMARY_MAX_ENTRIES: usize = 2;
+const ASSISTANT_SUMMARY_MAX_SNIPPET_BYTES: usize = 600;
 
 #[derive(Template)]
 #[template(path = "compact/history_bridge.md", escape = "none")]
@@ -70,14 +74,10 @@ async fn run_compact_task_inner(
     input: Vec<InputItem>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let turn_input = sess
+    let mut turn_input = sess
         .turn_input_with_history(vec![initial_input_for_turn.clone().into()])
         .await;
-
-    let prompt = Prompt {
-        input: turn_input,
-        ..Default::default()
-    };
+    let mut truncated_count = 0usize;
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();
     let mut retries = 0;
@@ -93,17 +93,36 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
+        let prompt = Prompt {
+            input: turn_input.clone(),
+            ..Default::default()
+        };
         let attempt_result =
             drain_to_completed(&sess, turn_context.as_ref(), &sub_id, &prompt).await;
 
         match attempt_result {
             Ok(()) => {
+                if truncated_count > 0 {
+                    sess.notify_background_event(
+                        &sub_id,
+                        format!(
+                            "Trimmed {truncated_count} older conversation item(s) before compacting so the prompt fits the model context window."
+                        ),
+                    )
+                    .await;
+                }
                 break;
             }
             Err(CodexErr::Interrupted) => {
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
+                if turn_input.len() > 1 {
+                    turn_input.remove(0);
+                    truncated_count += 1;
+                    retries = 0;
+                    continue;
+                }
                 sess.set_total_tokens_full(&sub_id, turn_context.as_ref())
                     .await;
                 let event = Event {
@@ -145,6 +164,26 @@ async fn run_compact_task_inner(
     let history_snapshot = sess.history_snapshot().await;
     let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
     let user_messages = collect_user_messages(&history_snapshot);
+
+    // Build a compact list of recent assistant replies (excluding the
+    // summarization reply we just generated) to preserve important signals
+    // without retaining entire tool outputs.
+    let assistant_recent = collect_assistant_messages(&history_snapshot);
+    let assistant_recent = condense_messages(
+        &assistant_recent,
+        ASSISTANT_SUMMARY_MAX_ENTRIES,
+        ASSISTANT_SUMMARY_MAX_SNIPPET_BYTES,
+    );
+    let summary_text = if assistant_recent.is_empty() {
+        summary_text
+    } else {
+        let bullets = assistant_recent
+            .into_iter()
+            .map(|line| format!("- {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Recent assistant replies:\n{bullets}\n\n{summary_text}")
+    };
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     sess.replace_history(new_history).await;
@@ -195,6 +234,47 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
         .collect()
 }
 
+/// Collect assistant messages (plain text) from response items.
+/// Returns text content of `ResponseItem::Message` with `role == "assistant"`.
+/// This intentionally ignores tool outputs and reasoning items to keep the
+/// compact bridge small.
+pub(crate) fn collect_assistant_messages(items: &[ResponseItem]) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in items {
+        if let ResponseItem::Message { role, content, .. } = item
+            && role == "assistant"
+            && let Some(text) = content_items_to_text(content)
+        {
+            out.push(text);
+        }
+    }
+    out
+}
+
+/// Condense a list of free-form messages into at most `max_entries` bullets,
+/// trimming internal whitespace and truncating each snippet to at most
+/// `max_snippet_bytes` using `truncate_middle`.
+fn condense_messages(
+    messages: &[String],
+    max_entries: usize,
+    max_snippet_bytes: usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for msg in messages.iter().rev() {
+        if out.len() == max_entries {
+            break;
+        }
+        let sanitized = msg.split_whitespace().collect::<Vec<_>>().join(" ");
+        if sanitized.is_empty() {
+            continue;
+        }
+        let snippet = truncate_middle(&sanitized, max_snippet_bytes).0;
+        out.push(snippet);
+    }
+    out.reverse();
+    out
+}
+
 pub fn is_session_prefix_message(text: &str) -> bool {
     matches!(
         InputMessageKind::from(("user", text)),
@@ -208,19 +288,39 @@ pub(crate) fn build_compacted_history(
     summary_text: &str,
 ) -> Vec<ResponseItem> {
     let mut history = initial_context;
-    let mut user_messages_text = if user_messages.is_empty() {
-        "(none)".to_string()
+
+    let mut condensed_user_messages = Vec::new();
+    for message in user_messages.iter().rev() {
+        if condensed_user_messages.len() == USER_SUMMARY_MAX_ENTRIES {
+            break;
+        }
+        let sanitized = message.split_whitespace().collect::<Vec<_>>().join(" ");
+        if sanitized.is_empty() {
+            continue;
+        }
+        let snippet = truncate_middle(&sanitized, USER_SUMMARY_MAX_SNIPPET_BYTES).0;
+        condensed_user_messages.push(snippet);
+    }
+    condensed_user_messages.reverse();
+
+    let mut user_messages_text = if condensed_user_messages.is_empty() {
+        "- (no recent user requests)".to_string()
     } else {
-        user_messages.join("\n\n")
+        condensed_user_messages
+            .into_iter()
+            .map(|line| format!("- {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
-    // Truncate the concatenated prior user messages so the bridge message
-    // stays well under the context window (approx. 4 bytes/token).
+    // Truncate the formatted user messages to stay well under the context window
+    // (approx. 4 bytes/token).
     let max_bytes = COMPACT_USER_MESSAGE_MAX_TOKENS * 4;
     if user_messages_text.len() > max_bytes {
         user_messages_text = truncate_middle(&user_messages_text, max_bytes).0;
     }
-    let summary_text = if summary_text.is_empty() {
-        "(no summary available)".to_string()
+
+    let summary_text = if summary_text.trim().is_empty() {
+        "- (no assistant summary available)".to_string()
     } else {
         summary_text.to_string()
     };

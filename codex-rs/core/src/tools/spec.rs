@@ -29,6 +29,7 @@ pub(crate) struct ToolsConfig {
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
     pub experimental_supported_tools: Vec<String>,
+    // prune tool removed; /prune UI remains via Op routes
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -39,6 +40,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
+    // prune tool removed
 }
 
 impl ToolsConfig {
@@ -51,6 +53,7 @@ impl ToolsConfig {
             use_streamable_shell_tool,
             include_view_image_tool,
             experimental_unified_exec_tool,
+            // prune tool removed
         } = params;
         let shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::Streamable
@@ -80,6 +83,7 @@ impl ToolsConfig {
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
+            // prune tool removed
         }
     }
 }
@@ -258,6 +262,8 @@ fn create_view_image_tool() -> ToolSpec {
     })
 }
 
+// prune tool removed from model tools
+
 fn create_test_sync_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -315,6 +321,56 @@ fn create_test_sync_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_grep_files_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "pattern".to_string(),
+        JsonSchema::String {
+            description: Some("Regular expression pattern to search for.".to_string()),
+        },
+    );
+    properties.insert(
+        "include".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional glob that limits which files are searched (e.g. \"*.rs\" or \
+                 \"*.{ts,tsx}\")."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Directory or file path to search. Defaults to the session's working directory."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "limit".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum number of file paths to return (defaults to 100).".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "grep_files".to_string(),
+        description: "Finds files whose contents match the pattern and lists them by modification \
+                      time."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["pattern".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -609,7 +665,9 @@ pub(crate) fn build_specs(
     use crate::exec_command::create_exec_command_tool_for_responses_api;
     use crate::exec_command::create_write_stdin_tool_for_responses_api;
     use crate::tools::handlers::ApplyPatchHandler;
+    // prune tool removed
     use crate::tools::handlers::ExecStreamHandler;
+    use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::PlanHandler;
@@ -678,8 +736,16 @@ pub(crate) fn build_specs(
 
     if config
         .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "read_file")
+        .contains(&"grep_files".to_string())
+    {
+        let grep_files_handler = Arc::new(GrepFilesHandler);
+        builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
+        builder.register_handler("grep_files", grep_files_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .contains(&"read_file".to_string())
     {
         let read_file_handler = Arc::new(ReadFileHandler);
         builder.push_spec_with_parallel_support(create_read_file_tool(), true);
@@ -698,8 +764,7 @@ pub(crate) fn build_specs(
 
     if config
         .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "test_sync_tool")
+        .contains(&"test_sync_tool".to_string())
     {
         let test_sync_handler = Arc::new(TestSyncHandler);
         builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
@@ -714,6 +779,8 @@ pub(crate) fn build_specs(
         builder.push_spec_with_parallel_support(create_view_image_tool(), true);
         builder.register_handler("view_image", view_image_handler);
     }
+
+    // prune tool removed from model tools
 
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
@@ -825,6 +892,7 @@ mod tests {
     }
 
     #[test]
+    // prune tool test removed
     #[ignore]
     fn test_parallel_support_flags() {
         let model_family = find_family_for_model("gpt-5-codex")
@@ -841,8 +909,9 @@ mod tests {
         let (tools, _) = build_specs(&config, None).build();
 
         assert!(!find_tool(&tools, "unified_exec").supports_parallel_tool_calls);
-        assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
     }
 
     #[test]
@@ -869,6 +938,11 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool_name(&tool.spec) == "read_file")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "grep_files")
         );
         assert!(tools.iter().any(|tool| tool_name(&tool.spec) == "list_dir"));
     }

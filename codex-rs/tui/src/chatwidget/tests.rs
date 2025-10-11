@@ -288,13 +288,7 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
-        last_context_items: None,
-        prune_keep_indices: std::collections::HashSet::new(),
-        prune_delete_indices: std::collections::HashSet::new(),
-        pending_prune_advanced: false,
-        prune_root_active: false,
-        pending_advanced_plan: None,
-        advanced_index_map: HashMap::new(),
+        // Prune UI fields removed in this branch.
     };
     (widget, rx, op_rx)
 }
@@ -621,6 +615,35 @@ fn alt_up_edits_most_recent_queued_message() {
         chat.queued_user_messages.front().unwrap().text,
         "first queued"
     );
+}
+
+/// Pressing Up to recall the most recent history entry and immediately queuing
+/// it while a task is running should always enqueue the same text, even when it
+/// is queued repeatedly.
+#[test]
+fn enqueueing_history_prompt_multiple_times_is_stable() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Submit an initial prompt to seed history.
+    chat.bottom_pane.set_composer_text("repeat me".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Simulate an active task so further submissions are queued.
+    chat.bottom_pane.set_task_running(true);
+
+    for _ in 0..3 {
+        // Recall the prompt from history and ensure it is what we expect.
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(chat.bottom_pane.composer_text(), "repeat me");
+
+        // Queue the prompt while the task is running.
+        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    assert_eq!(chat.queued_user_messages.len(), 3);
+    for message in chat.queued_user_messages.iter() {
+        assert_eq!(message.text, "repeat me");
+    }
 }
 
 #[test]
@@ -2352,3 +2375,4 @@ printf 'fenced within fenced\n'
 
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
+// Prune-by-turn and advanced prune tests removed in this branch.

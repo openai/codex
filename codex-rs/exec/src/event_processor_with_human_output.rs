@@ -498,15 +498,17 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     view.path.display()
                 );
             }
+            // Prune-related events: print a concise summary (pattern similar to plan update).
             EventMsg::ConversationUsage(ev) => {
                 let total = ev.total_bytes;
-                let mut categories = ev.by_category;
-                categories.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-                let top = categories
+                // Show top 2 categories by bytes.
+                let mut cats = ev.by_category;
+                cats.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+                let top: Vec<String> = cats
                     .into_iter()
                     .take(2)
-                    .map(|cat| format!("{:?} {}B", cat.category, format_with_separators(cat.bytes)))
-                    .collect::<Vec<_>>();
+                    .map(|c| format!("{:?} {}B", c.category, format_with_separators(c.bytes)))
+                    .collect();
                 ts_msg!(
                     self,
                     "{} total={}B{}{}",
@@ -517,11 +519,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
             }
             EventMsg::ContextItems(ev) => {
+                let total = ev.total;
                 ts_msg!(
                     self,
                     "{} {} items",
                     "context items".style(self.magenta),
-                    ev.total
+                    total
                 );
             }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {

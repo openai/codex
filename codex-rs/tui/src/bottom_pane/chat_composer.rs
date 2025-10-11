@@ -1509,7 +1509,22 @@ impl ChatComposer {
         }
     }
 
-    // Footer metadata setters removed; composer reads directly from internal fields.
+    pub(crate) fn set_footer_model_label(&mut self, label: Option<String>) {
+        self.footer_model_label = label;
+    }
+
+    pub(crate) fn set_footer_directory(&mut self, directory: Option<String>) {
+        self.footer_directory = directory;
+    }
+
+    pub(crate) fn set_footer_account_email(&mut self, email: Option<String>) {
+        self.footer_account_email = email;
+    }
+
+    pub(crate) fn set_footer_limits(&mut self, primary: Option<u8>, weekly: Option<u8>) {
+        self.footer_primary_limit_percent = primary;
+        self.footer_weekly_limit_percent = weekly;
+    }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
@@ -1558,6 +1573,8 @@ impl WidgetRef for ChatComposer {
                                 spans.push("   ".into());
                             }
                         }
+                        // Always append the context percent on the left, even when
+                        // custom hint items are provided.
                         let percent = self.context_window_percent.unwrap_or(100);
                         if !spans.is_empty() {
                             spans.push(" | ".dim());

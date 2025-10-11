@@ -1,4 +1,4 @@
-use crate::chatwidget::get_limits_duration;
+use super::helpers::get_limits_duration;
 
 use super::helpers::format_reset_timestamp;
 use chrono::DateTime;

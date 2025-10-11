@@ -1221,7 +1221,7 @@ impl ChatWidget {
                 self.add_mcp_output();
             }
             SlashCommand::Prune => {
-                self.open_prune_menu();
+                // Prune UI disabled in this branch; ignore.
             }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
@@ -1508,25 +1508,9 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            // Advanced prune events
-            codex_core::protocol::EventMsg::ConversationUsage(_ev) => {
-                // Reserved for future footer usage metrics
-            }
-            codex_core::protocol::EventMsg::ContextItems(ev) => {
-                self.last_context_items = Some(ev.items);
-                self.prune_keep_indices.clear();
-                self.prune_delete_indices.clear();
-                if let Some(list) = &self.last_context_items {
-                    for it in list.iter() {
-                        if it.included {
-                            self.prune_keep_indices.insert(it.index);
-                        }
-                    }
-                }
-                if self.pending_prune_advanced {
-                    self.render_prune_advanced_view();
-                }
-            }
+            // Prune-related informational events are ignored in this branch.
+            codex_core::protocol::EventMsg::ConversationUsage(_) => {}
+            codex_core::protocol::EventMsg::ContextItems(_) => {}
         }
     }
 

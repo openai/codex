@@ -1,5 +1,15 @@
-You have exceeded the maximum number of tokens, please stop coding and instead write a short memento message for the next agent. Your note should:
-- Summarize what you finished and what still needs work. If there was a recent update_plan call, repeat its steps verbatim.
-- List outstanding TODOs with file paths / line numbers so they're easy to find.
-- Flag code that needs more tests (edge cases, performance, integration, etc.).
-- Record any open bugs, quirks, or setup steps that will make it easier for the next agent to pick up where you left off.
+You have reached the conversation context limit. Stop all work and produce a concise English summary for the next assistant.
+
+Respond using the exact structure below and keep every bullet under ~120 characters. Use ASCII only.
+
+Completed:
+- <action you actually completed, including key files/commands/results>
+- (add a second bullet if needed; skip if nothing else was completed)
+
+State:
+- <tests run, validation status, or current state>
+- (optional extra bullet if it adds important context)
+
+TODO:
+- <remaining tasks, blockers, or follow-ups>
+- (if nothing is pending, write `- TODO: none`)

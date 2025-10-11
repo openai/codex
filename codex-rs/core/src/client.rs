@@ -21,7 +21,9 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
+use tracing::Level;
 use tracing::debug;
+use tracing::info;
 use tracing::trace;
 use tracing::warn;
 
@@ -181,6 +183,12 @@ impl ModelClient {
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
         let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
+        if tracing::enabled!(Level::INFO) {
+            match serde_json::to_string(&tools_json) {
+                Ok(serialized_tools) => info!(tools_catalog_for_turn = %serialized_tools),
+                Err(err) => warn!(?err, "failed to serialize tools for logging"),
+            }
+        }
         let reasoning = create_reasoning_param_for_request(
             &self.config.model_family,
             self.effort,
@@ -381,7 +389,7 @@ impl ModelClient {
                         UnexpectedResponseError {
                             status,
                             body,
-                            request_id: None,
+                            request_id,
                         },
                     )));
                 }
@@ -649,10 +657,12 @@ async fn process_sse<S>(
     let mut response_error: Option<CodexErr> = None;
 
     loop {
-        let sse = match otel_event_manager
-            .log_sse_event(|| timeout(idle_timeout, stream.next()))
-            .await
-        {
+        let start = std::time::Instant::now();
+        let response = timeout(idle_timeout, stream.next()).await;
+        let duration = start.elapsed();
+        otel_event_manager.log_sse_event(&response, duration);
+
+        let sse = match response {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");

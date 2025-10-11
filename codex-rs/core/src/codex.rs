@@ -114,6 +114,8 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+// Prune (experimental)
+// Prune helpers removed in this branch; keep protocol types internal to protocol.rs
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -1174,6 +1176,8 @@ impl Drop for Session {
         self.interrupt_task_sync();
     }
 }
+
+// --- Context prune helpers removed ---
 
 async fn submission_loop(
     sess: Arc<Session>,
