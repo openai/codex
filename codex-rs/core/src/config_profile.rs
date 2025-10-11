@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+use crate::config_types::ServiceTier;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -20,6 +21,8 @@ pub struct ConfigProfile {
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
+    #[serde(rename = "service_tier", alias = "serviceTier")]
+    pub service_tier: Option<ServiceTier>,
 }
 
 impl From<ConfigProfile> for codex_app_server_protocol::Profile {
