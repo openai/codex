@@ -94,13 +94,13 @@ impl PasteBurst {
 
     /// Flush the buffered burst if the inter-key timeout has elapsed.
     ///
-    /// Returns Some(String) when either:
+    /// Returns a [`FlushResult::Paste`] when either:
     /// - We were actively buffering paste-like input and the buffer is now
     ///   emitted as a single pasted string; or
     /// - We had saved a single fast first-char with no subsequent burst and we
-    ///   now emit that char as normal typed input.
+    ///   now emit that char as normal typed input (returned as [`FlushResult::Typed`]).
     ///
-    /// Returns None if the timeout has not elapsed or there is nothing to flush.
+    /// Returns [`FlushResult::None`] if the timeout has not elapsed or there is nothing to flush.
     pub fn flush_if_due(&mut self, now: Instant) -> FlushResult {
         let timed_out = self
             .last_plain_char_time
@@ -197,13 +197,21 @@ impl PasteBurst {
     }
 
     /// Before applying modified/non-char input: flush buffered burst immediately.
-    pub fn flush_before_modified_input(&mut self) -> Option<String> {
-        if self.is_active() {
+    ///
+    /// Returns [`FlushResult::Paste`] if buffered text should be treated as a paste,
+    /// [`FlushResult::Typed`] for a pending single character, or [`FlushResult::None`]
+    /// if nothing was pending.
+    pub fn flush_before_modified_input(&mut self) -> FlushResult {
+        if self.is_active_internal() {
             self.active = false;
-            Some(std::mem::take(&mut self.buffer))
-        } else {
-            None
+            return FlushResult::Paste(std::mem::take(&mut self.buffer));
         }
+
+        if let Some((ch, _at)) = self.pending_first_char.take() {
+            return FlushResult::Typed(ch);
+        }
+
+        FlushResult::None
     }
 
     /// Clear only the timing window and any pending first-char.
