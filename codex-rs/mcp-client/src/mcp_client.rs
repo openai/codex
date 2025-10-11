@@ -434,6 +434,7 @@ const DEFAULT_ENV_VARS: &[&str] = &[
 #[cfg(windows)]
 const DEFAULT_ENV_VARS: &[&str] = &[
     // TODO: More research is necessary to curate this list.
+    "SYSTEMROOT",
     "PATH",
     "PATHEXT",
     "USERNAME",
@@ -441,6 +442,19 @@ const DEFAULT_ENV_VARS: &[&str] = &[
     "USERPROFILE",
     "TEMP",
     "TMP",
+    // Additional Windows system/user variables commonly required by CLI shims and launchers
+    "WINDIR",
+    "COMSPEC",
+    // User data/caches locations used by many CLIs (npm/bun/etc.)
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    // Preserve HOME if present; some tools prefer it over USERPROFILE
+    "HOME",
+    // Program files roots
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
 ];
 
 /// `extra_env` comes from the config for an entry in `mcp_servers` in
