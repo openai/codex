@@ -226,6 +226,11 @@ impl ChatComposer {
         let mode = self.footer_mode();
 
         let mut token_spans: Vec<Span<'static>> = Vec::new();
+        let repo_present = self.repo_name.is_some();
+        let show_context_in_summary = matches!(mode, FooterMode::ShortcutSummary)
+            && (self.context_window_percent.is_some() || !repo_present);
+        let show_context_in_context_only = matches!(mode, FooterMode::ContextOnly);
+        let include_context_in_tokens = !(show_context_in_summary || show_context_in_context_only);
         if let Some(token_usage_info) = &self.token_usage_info {
             let token_usage = &token_usage_info.total_token_usage;
             token_spans.push("   ".into());
@@ -233,21 +238,23 @@ impl ChatComposer {
             token_spans.push(format!("{tokens} tokens used").dim());
             let last_token_usage = &token_usage_info.last_token_usage;
             let mut appended_percent = false;
-            if let Some(context_window) = token_usage_info.model_context_window {
-                let percent_remaining: u8 = if context_window > 0 {
-                    last_token_usage.percent_of_context_window_remaining(context_window)
-                } else {
-                    100
-                };
-                token_spans.push("   ".into());
-                token_spans.push(format!("{percent_remaining}% context left").dim());
-                appended_percent = true;
+            if include_context_in_tokens {
+                if let Some(context_window) = token_usage_info.model_context_window {
+                    let percent_remaining: u8 = if context_window > 0 {
+                        last_token_usage.percent_of_context_window_remaining(context_window)
+                    } else {
+                        100
+                    };
+                    token_spans.push("   ".into());
+                    token_spans.push(format!("{percent_remaining}% context left").dim());
+                    appended_percent = true;
+                }
+                if !appended_percent && let Some(percent) = self.context_window_percent {
+                    token_spans.push("   ".into());
+                    token_spans.push(format!("{percent}% context left").dim());
+                }
             }
-            if !appended_percent && let Some(percent) = self.context_window_percent {
-                token_spans.push("   ".into());
-                token_spans.push(format!("{percent}% context left").dim());
-            }
-        } else if let Some(percent) = self.context_window_percent {
+        } else if include_context_in_tokens && let Some(percent) = self.context_window_percent {
             token_spans.push("   ".into());
             token_spans.push(format!("{percent}% context left").dim());
         }
@@ -296,7 +303,7 @@ impl ChatComposer {
                 };
                 vec![vec![
                     indent,
-                    key_hint::ctrl_span('C'),
+                    "Ctrl+C".dim(),
                     format!(" again to {action}").into(),
                 ]]
             }
@@ -318,12 +325,35 @@ impl ChatComposer {
                     ]]
                 }
             }
-            FooterMode::Empty => Vec::new(),
-            FooterMode::ShortcutOverlay | FooterMode::ShortcutPrompt => {
+            FooterMode::ContextOnly => {
+                let indent: Span<'static> = " ".repeat(FOOTER_INDENT_COLS).into();
+                let percent = self.context_window_percent.unwrap_or(100);
+                vec![vec![indent, format!("{percent}% context left").dim()]]
+            }
+            FooterMode::ShortcutOverlay => {
                 let mut segments: Vec<Vec<Span<'static>>> = Vec::new();
                 let indent: Span<'static> = " ".repeat(FOOTER_INDENT_COLS).into();
                 segments.push(vec![indent, key_hint::plain_span('?'), " shortcuts".into()]);
-                if self.esc_backtrack_hint && matches!(mode, FooterMode::ShortcutPrompt) {
+                segments
+            }
+            FooterMode::ShortcutSummary => {
+                let indent: Span<'static> = " ".repeat(FOOTER_INDENT_COLS).into();
+                let mut summary = vec![indent];
+                let show_context =
+                    self.context_window_percent.is_some() || self.repo_name.is_none();
+                if show_context {
+                    let percent = self.context_window_percent.unwrap_or(100);
+                    summary.push(format!("{percent}% context left").dim());
+                    summary.push(" · ".dim());
+                    summary.push(key_hint::plain_span('?'));
+                    summary.push(" for shortcuts".dim());
+                } else {
+                    summary.push(key_hint::plain_span('?'));
+                    summary.push(" shortcuts".into());
+                }
+
+                let mut segments = vec![summary];
+                if self.esc_backtrack_hint {
                     segments.push(vec![
                         "   ".into(),
                         key_hint::plain_span("Esc"),
@@ -1908,7 +1938,12 @@ mod tests {
         };
 
         let mut hint_row: Option<(u16, String)> = None;
-        const HINT_MARKERS: &[&str] = &["? shortcuts", "Ctrl+C again to ", "edit previous message"];
+        const HINT_MARKERS: &[&str] = &[
+            "? for shortcuts",
+            "? shortcuts",
+            "Ctrl+C again to ",
+            "edit previous message",
+        ];
         for y in 0..area.height {
             let row = row_to_string(y);
             if HINT_MARKERS.iter().any(|marker| row.contains(marker)) {

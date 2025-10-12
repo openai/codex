@@ -89,7 +89,3 @@ fn key_hint_style() -> Style {
 pub(crate) fn plain_span(key: impl Display) -> Span<'static> {
     Span::styled(format!("{key}"), key_hint_style())
 }
-
-pub(crate) fn ctrl_span(key: impl Display) -> Span<'static> {
-    Span::styled(format!("{CTRL_PREFIX}{key}"), key_hint_style())
-}
