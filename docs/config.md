@@ -370,9 +370,8 @@ API_KEY = "value"
 experimental_use_rmcp_client = true
 [mcp_servers.figma]
 url = "https://mcp.linear.app/mcp"
-# Optional bearer token to be passed into an `Authorization: Bearer <token>` header
-# Use this with caution because the token is in plaintext and can be read by Codex itself.
-bearer_token = "<token>"
+# Optional environment variable containing a bearer token to use for auth
+bearer_token_env_var = "<token>"
 ```
 
 For oauth login, you must enable `experimental_use_rmcp_client = true` and then run `codex mcp login server_name`
