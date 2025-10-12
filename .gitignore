@@ -81,3 +81,21 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
+
+# Rust / Cargo
+target/
+**/*.rs.bk
+debug/
+release/
+
+# Rust build artifacts (exclude from repo)
+*.crate
+rmcp-*/
+**/*.rmeta
+**/*.rlib
+**/*.d
+**/incremental/
+
+# Keep main project Cargo.lock for reproducible builds
+# but exclude dependency Cargo.lock files
+rmcp-*/Cargo.lock
