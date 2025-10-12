@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_http_config::configure_builder;
 use codex_otel::metrics;
 use futures::FutureExt;
 use mcp_types::CallToolRequestParams;
@@ -383,7 +384,7 @@ async fn create_oauth_transport_and_runtime(
     StreamableHttpClientTransport<AuthClient<reqwest::Client>>,
     OAuthPersistor,
 )> {
-    let http_client = reqwest::Client::builder().build()?;
+    let http_client = configure_builder(reqwest::Client::builder()).build()?;
     let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
 
     oauth_state

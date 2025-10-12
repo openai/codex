@@ -1786,6 +1786,7 @@ url = "https://example.com/mcp"
                 enabled: false,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                keepalive_interval_sec: None,
             },
         )]);
 

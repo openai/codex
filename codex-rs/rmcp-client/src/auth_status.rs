@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::Error;
 use anyhow::Result;
+use codex_http_config::configure_builder;
 use codex_protocol::protocol::McpAuthStatus;
 use reqwest::Client;
 use reqwest::StatusCode;
@@ -46,7 +47,9 @@ pub async fn determine_streamable_http_auth_status(
 /// Attempt to determine whether a streamable HTTP MCP server advertises OAuth login.
 async fn supports_oauth_login(url: &str) -> Result<bool> {
     let base_url = Url::parse(url)?;
-    let client = Client::builder().timeout(DISCOVERY_TIMEOUT).build()?;
+    let client = configure_builder(Client::builder())
+        .timeout(DISCOVERY_TIMEOUT)
+        .build()?;
 
     let mut last_error: Option<Error> = None;
     for candidate_path in discovery_paths(base_url.path()) {

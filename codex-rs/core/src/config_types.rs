@@ -635,6 +635,7 @@ mod tests {
                 args: Vec::new(),
                 env: None,
             },
+            enabled: true,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             keepalive_interval_sec: None,

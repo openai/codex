@@ -88,12 +88,22 @@ fn read_env_pool_idle_secs(key: &str) -> Option<Duration> {
 fn clamp_pool_idle(duration: Duration, source: &str) -> Duration {
     let min = Duration::from_millis(MIN_DURATION_MILLIS);
     if duration < min {
-        warn!(field = source, requested_ms = duration.as_millis(), min_ms = MIN_DURATION_MILLIS, "clamping value below minimum");
+        warn!(
+            field = source,
+            requested_ms = duration.as_millis(),
+            min_ms = MIN_DURATION_MILLIS,
+            "clamping value below minimum"
+        );
         return min;
     }
 
     if duration > MAX_POOL_IDLE_TIMEOUT {
-        warn!(field = source, requested_secs = duration.as_secs(), max_secs = MAX_POOL_IDLE_TIMEOUT.as_secs(), "clamping value above maximum");
+        warn!(
+            field = source,
+            requested_secs = duration.as_secs(),
+            max_secs = MAX_POOL_IDLE_TIMEOUT.as_secs(),
+            "clamping value above maximum"
+        );
         return MAX_POOL_IDLE_TIMEOUT;
     }
 

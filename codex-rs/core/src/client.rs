@@ -1286,6 +1286,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
+            stream_heartbeat_interval_ms: Some(0),
             requires_openai_auth: false,
         };
 
@@ -1320,6 +1321,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
+            stream_heartbeat_interval_ms: Some(0),
             requires_openai_auth: false,
         };
 

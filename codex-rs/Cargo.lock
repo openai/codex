@@ -904,6 +904,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
+ "codex-http-config",
  "pretty_assertions",
  "reqwest",
  "serde",
@@ -1037,6 +1038,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-file-search",
+ "codex-http-config",
  "codex-mcp-client",
  "codex-otel",
  "codex-protocol",
@@ -1174,6 +1176,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "walkdir",
+]
+
+[[package]]
+name = "codex-http-config"
+version = "0.0.0"
+dependencies = [
+ "reqwest",
+ "tracing",
 ]
 
 [[package]]
@@ -1352,6 +1362,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "codex-http-config",
  "codex-otel",
  "codex-protocol",
  "dirs",

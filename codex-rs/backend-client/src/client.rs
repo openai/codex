@@ -2,6 +2,7 @@ use crate::types::CodeTaskDetailsResponse;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
+use codex_http_config::configure_builder;
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
@@ -52,7 +53,7 @@ impl Client {
         {
             base_url = format!("{base_url}/backend-api");
         }
-        let http = reqwest::Client::builder().build()?;
+        let http = configure_builder(reqwest::Client::builder()).build()?;
         let path_style = PathStyle::from_base_url(&base_url);
         Ok(Self {
             base_url,
