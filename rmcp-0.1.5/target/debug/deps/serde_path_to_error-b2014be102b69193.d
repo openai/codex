@@ -1,9 +1,0 @@
-C:\Users\downl\Desktop\codex-main\codex-main\rmcp-0.1.5\target\debug\deps\libserde_path_to_error-b2014be102b69193.rmeta: C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\lib.rs C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\de.rs C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\path.rs C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\ser.rs C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\wrap.rs
-
-C:\Users\downl\Desktop\codex-main\codex-main\rmcp-0.1.5\target\debug\deps\serde_path_to_error-b2014be102b69193.d: C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\lib.rs C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\de.rs C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\path.rs C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\ser.rs C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\wrap.rs
-
-C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\lib.rs:
-C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\de.rs:
-C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\path.rs:
-C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\ser.rs:
-C:\Users\downl\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_path_to_error-0.1.17\src\wrap.rs:
