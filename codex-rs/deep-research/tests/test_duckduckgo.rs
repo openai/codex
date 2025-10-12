@@ -1,9 +1,18 @@
 // DuckDuckGo実装の統合テスト
+use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_deep_research::WebSearchProvider;
 use std::env;
 
 #[tokio::test]
 async fn test_duckduckgo_search_real() {
+    // Skip test if network is disabled in sandbox
+    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
     // APIキーを削除してDuckDuckGoを強制使用
     env::remove_var("BRAVE_API_KEY");
     env::remove_var("GOOGLE_API_KEY");
@@ -48,6 +57,14 @@ async fn test_duckduckgo_search_real() {
 
 #[tokio::test]
 async fn test_web_search_fallback_chain() {
+    // Skip test if network is disabled in sandbox
+    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
     // APIキーを削除
     env::remove_var("BRAVE_API_KEY");
     env::remove_var("GOOGLE_API_KEY");
@@ -58,7 +75,6 @@ async fn test_web_search_fallback_chain() {
 
     // call_search_api経由でフォールバックチェーンをテスト
     // （内部でduckduckgo_search_realが呼ばれる）
-    use codex_deep_research::provider::ResearchProvider;
     let sources = provider
         .search("Rust ownership", 3)
         .await
@@ -83,6 +99,14 @@ async fn test_web_search_fallback_chain() {
 
 #[tokio::test]
 async fn test_multiple_queries() {
+    // Skip test if network is disabled in sandbox
+    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
     env::remove_var("BRAVE_API_KEY");
     env::remove_var("GOOGLE_API_KEY");
     env::remove_var("GOOGLE_CSE_ID");

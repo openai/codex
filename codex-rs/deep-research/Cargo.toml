@@ -16,6 +16,7 @@ tracing = { workspace = true }
 urlencoding = { workspace = true }
 
 [dev-dependencies]
+codex-core = { path = "../core" }
 criterion = { version = "0.5", features = ["async_tokio"] }
 pretty_assertions.workspace = true
 tokio-test.workspace = true
