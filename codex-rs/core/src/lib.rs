@@ -55,6 +55,7 @@ pub use conversation_manager::NewConversation;
 // Re-export common auth types for workspace consumers
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
+pub mod approval;
 pub mod default_client;
 pub mod model_family;
 mod openai_model_info;
