@@ -2,8 +2,6 @@
 //!
 //! These tools allow sub-agents to call Codex capabilities via MCP protocol.
 
-use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Value;
 
 /// Codex MCP tool definitions for sub-agents

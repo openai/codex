@@ -1800,7 +1800,7 @@ async fn submission_loop(
                     }
                 }
             }
-            Op::ExecuteHook { event, context } => {
+            Op::ExecuteHook { event, context: _ } => {
                 // Parse hook event
                 let hook_event = match event.as_str() {
                     "on_task_start" => crate::hooks::HookEvent::OnTaskStart,

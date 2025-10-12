@@ -26,6 +26,7 @@ pub(crate) struct ToolsConfig {
     pub plan_tool: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
+    #[allow(dead_code)]
     pub deep_web_search: bool,
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,

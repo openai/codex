@@ -1,10 +1,6 @@
 /// GitHub integration for Codex Sub-Agents
 ///
 /// Provides PR creation, review comments, status updates, and bot interactions
-use anyhow::Context;
-/// GitHub integration for Codex Sub-Agents
-///
-/// Provides PR creation, review comments, status updates, and bot interactions
 use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
@@ -15,10 +11,12 @@ use tracing::info;
 /// GitHub integration client
 pub struct GitHubIntegration {
     /// GitHub token
+    #[allow(dead_code)]
     token: Option<String>,
     /// Repository (owner/repo format)
     repository: String,
     /// Base URL (for GitHub Enterprise)
+    #[allow(dead_code)]
     base_url: String,
 }
 
@@ -48,7 +46,7 @@ impl GitHubIntegration {
     }
 
     /// Add review comment
-    pub async fn add_review_comment(&self, pr_number: u64, comment: ReviewComment) -> Result<()> {
+    pub async fn add_review_comment(&self, pr_number: u64, _comment: ReviewComment) -> Result<()> {
         info!("💬 Adding review comment to PR #{}", pr_number);
 
         // TODO: Actual GitHub API call

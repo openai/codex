@@ -4,7 +4,6 @@ use super::types::*;
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::time::Duration;
 use tokio::time::interval;
 use tracing::debug;

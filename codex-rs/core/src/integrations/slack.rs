@@ -18,6 +18,7 @@ pub struct SlackIntegration {
     /// Bot token
     bot_token: Option<String>,
     /// Default channel
+    #[allow(dead_code)]
     default_channel: String,
 }
 
@@ -56,7 +57,7 @@ impl SlackIntegration {
         &self,
         channel: &str,
         text: &str,
-        blocks: Option<Vec<SlackBlock>>,
+        _blocks: Option<Vec<SlackBlock>>,
     ) -> Result<()> {
         info!("💬 Posting to Slack channel: {}", channel);
 

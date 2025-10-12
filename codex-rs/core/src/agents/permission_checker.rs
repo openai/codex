@@ -192,7 +192,7 @@ impl PermissionChecker {
                 if let Some(url) = parameters.get("url").and_then(|v| v.as_str()) {
                     self.check_network_access(url)?;
                 }
-                if let Some(url) = parameters.get("search_term").and_then(|v| v.as_str()) {
+                if let Some(_url) = parameters.get("search_term").and_then(|v| v.as_str()) {
                     // For web_search, check if https://* is allowed
                     self.check_network_access("https://search.brave.com")?;
                 }

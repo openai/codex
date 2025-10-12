@@ -18,6 +18,7 @@ pub(crate) struct SessionServices {
     pub(crate) user_shell: crate::shell::Shell,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) executor: Executor,
+    #[allow(dead_code)]
     pub(crate) agent_runtime: Arc<AgentRuntime>,
     pub(crate) async_subagent_integration: Arc<AsyncSubAgentIntegration>,
 }
