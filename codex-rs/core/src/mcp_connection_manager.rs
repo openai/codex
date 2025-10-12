@@ -205,11 +205,7 @@ impl McpConnectionManager {
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<(Self, ClientStartErrors)> {
         // Create sampling handler if using rmcp client
-        let sampling_handler = if use_rmcp_client {
-            Some(Arc::new(CodexSamplingHandler::new()))
-        } else {
-            None
-        };
+        let sampling_handler = use_rmcp_client.then_some(Arc::new(CodexSamplingHandler::new()));
 
         // Early exit if no servers are configured.
         if mcp_servers.is_empty() {
@@ -260,7 +256,7 @@ impl McpConnectionManager {
                     capabilities: ClientCapabilities {
                         experimental: None,
                         roots: None,
-                        sampling: Some(json!({})),
+                        sampling: use_rmcp_client.then_some(json!({})),
                         // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
                         // indicates this should be an empty object.
                         elicitation: Some(json!({})),
