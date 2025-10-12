@@ -29,6 +29,7 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
+use std::any::Any;
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;

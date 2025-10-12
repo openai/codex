@@ -151,3 +151,5 @@ Git Ignore & Attributes
 
 Plan First
 - Always present the intended solution to the user before implementation.
+
+ 

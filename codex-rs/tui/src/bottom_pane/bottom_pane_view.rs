@@ -1,9 +1,9 @@
 use crate::app_event::AppEvent;
+use std::any::Any;
 use crate::bottom_pane::ApprovalRequest;
 use crate::render::renderable::Renderable;
 use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
-use std::any::Any;
 
 use super::CancellationEvent;
 
@@ -52,6 +52,4 @@ pub(crate) trait BottomPaneView: Renderable {
         None
     }
 
-    /// Downcast support for views that expose extra APIs.
-    fn as_any_mut(&mut self) -> &mut dyn Any;
 }

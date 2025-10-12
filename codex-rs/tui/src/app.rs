@@ -382,17 +382,36 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
-            AppEvent::OpenPruneAdvanced => {}
-            AppEvent::PruneAdvancedClosed => {}
-            AppEvent::ToggleKeepIndex { .. } => {}
-            AppEvent::ToggleDeleteIndex { .. } => {}
-            AppEvent::ConfirmAdvancedChanges => {}
-            AppEvent::OpenPruneManual => {}
-            AppEvent::OpenPruneByTurn => {}
-            AppEvent::OpenPruneByTurnPrompt => {}
-            AppEvent::ConfirmPruneManual { .. } => {}
-            AppEvent::ConfirmPruneByTurn { .. } => {}
-            AppEvent::ConfirmPruneMax => {}
+            // --- Prune wiring (restored) ---
+            AppEvent::OpenPruneAdvanced => {
+                self.chat_widget.open_prune_advanced();
+            }
+            AppEvent::PruneAdvancedClosed => {
+                self.chat_widget.on_prune_advanced_closed();
+            }
+            AppEvent::ToggleKeepIndex { idx } => {
+                self.chat_widget.toggle_keep_index(idx);
+            }
+            AppEvent::ToggleDeleteIndex { idx } => {
+                self.chat_widget.toggle_delete_index(idx);
+            }
+            AppEvent::ConfirmAdvancedChanges => {
+                self.chat_widget.confirm_advanced_changes();
+            }
+            AppEvent::OpenPruneManual => {
+                self.chat_widget.open_prune_manual_menu();
+            }
+            AppEvent::ApplyAdvancedPrune => {
+                self.chat_widget.apply_advanced_prune();
+            }
+            AppEvent::FinalizePruneOnShutdown => self.finalize_prune_on_shutdown().await,
+            AppEvent::RestoreContextFromBackup => {
+                self.restore_context_from_backup().await;
+            }
+            AppEvent::ShowInfoMessage(msg) => {
+                self.chat_widget.add_info_message(msg, None);
+            }
+            _ => {}
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let _ = tui.enter_alt_screen();

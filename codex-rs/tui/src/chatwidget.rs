@@ -1221,7 +1221,7 @@ impl ChatWidget {
                 self.add_mcp_output();
             }
             SlashCommand::Prune => {
-                // Prune UI disabled in this branch; ignore.
+                self.open_prune_menu();
             }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
@@ -1508,9 +1508,25 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            // Prune-related informational events are ignored in this branch.
-            codex_core::protocol::EventMsg::ConversationUsage(_) => {}
-            codex_core::protocol::EventMsg::ContextItems(_) => {}
+            // Advanced prune events
+            codex_core::protocol::EventMsg::ConversationUsage(_) => {
+                // Reserved for future footer usage metrics
+            }
+            codex_core::protocol::EventMsg::ContextItems(ev) => {
+                self.last_context_items = Some(ev.items);
+                self.prune_keep_indices.clear();
+                self.prune_delete_indices.clear();
+                if let Some(list) = &self.last_context_items {
+                    for it in list.iter() {
+                        if it.included {
+                            self.prune_keep_indices.insert(it.index);
+                        }
+                    }
+                }
+                if self.pending_prune_advanced {
+                    self.render_prune_advanced_view();
+                }
+            }
         }
     }
 
@@ -1637,11 +1653,10 @@ impl ChatWidget {
             .as_ref()
             .and_then(|list| list.iter().find(|it| it.index == idx))
             .cloned()
-            && let Some(&row_idx) = self.advanced_index_map.get(&item.index)
         {
             let new_name = self.advanced_item_label(&item);
             self.bottom_pane.with_active_list_selection_mut(|view| {
-                view.update_item_name(row_idx, new_name);
+                view.update_name_for_idx(item.index, new_name);
             });
         }
         self.request_redraw();
@@ -1724,8 +1739,7 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from(header).dim()),
             on_enter_event: None,
-            on_cancel_event: None,
-            space_triggers_action: false,
+            on_complete_event: None,
         });
     }
 
@@ -1734,27 +1748,14 @@ impl ChatWidget {
             let inc_len = plan.to_include.len();
             let exc_len = plan.to_exclude.len();
             let del_len = plan.to_delete.len();
-            if inc_len > 0 {
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(Op::SetContextInclusion {
-                        indices: plan.to_include,
-                        included: true,
-                    }));
-            }
-            if exc_len > 0 {
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(Op::SetContextInclusion {
-                        indices: plan.to_exclude,
-                        included: false,
-                    }));
-            }
+            // Inclusion toggles are kept in the TUI and finalized on shutdown rewrite.
             if del_len > 0 {
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::PruneContextByIndices {
                         indices: plan.to_delete,
                     }));
             }
-            self.submit_op(Op::GetContextItems);
+            // Do not refresh ContextItems from core; TUI keeps local toggles.
             let freed = plan.before_count.saturating_sub(plan.after_count);
             let pct = if plan.before_count > 0 {
                 ((freed as u32 * 100) / plan.before_count as u32) as u8
@@ -1835,13 +1836,8 @@ impl ChatWidget {
             is_searchable: true,
             search_placeholder: Some("Filter context items".to_string()),
             header: Box::new(ratatui::text::Line::from("Type to filter").dim()),
-            on_enter_event: Some(Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::ConfirmAdvancedChanges);
-            })),
-            on_cancel_event: Some(Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::PruneAdvancedClosed);
-            })),
-            space_triggers_action: true,
+            on_enter_event: Some(AppEvent::ConfirmAdvancedChanges),
+            on_complete_event: Some(AppEvent::PruneAdvancedClosed),
         });
     }
 
@@ -1903,10 +1899,7 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select an action")),
             on_enter_event: None,
-            on_cancel_event: Some(Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::PruneRootClosed);
-            })),
-            space_triggers_action: false,
+            on_complete_event: Some(AppEvent::PruneRootClosed),
         });
     }
 
@@ -1988,8 +1981,7 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select categories to prune")),
             on_enter_event: None,
-            on_cancel_event: None,
-            space_triggers_action: false,
+            on_complete_event: None,
         });
     }
 
@@ -2042,10 +2034,7 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from(header)),
             on_enter_event: None,
-            on_cancel_event: Some(Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::OpenPruneManual);
-            })),
-            space_triggers_action: false,
+            on_complete_event: Some(AppEvent::OpenPruneManual),
         });
         // No immediate user feedback here; the confirm selection posts a toast.
     }

@@ -128,18 +128,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn with_active_list_selection_mut<F>(&mut self, f: F)
-    where
-        F: FnOnce(&mut list_selection_view::ListSelectionView),
-    {
-        if let Some(view) = self.view_stack.last_mut()
-            && let Some(list) = view
-                .as_any_mut()
-                .downcast_mut::<list_selection_view::ListSelectionView>()
-        {
-            f(list);
-        }
-    }
+    
 
     pub fn desired_height(&self, width: u16) -> u16 {
         // Always reserve one blank row above the pane for visual spacing.
