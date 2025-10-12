@@ -8,10 +8,8 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 
 use crate::color::blend;
+use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
-use crate::terminal_palette::terminal_palette;
-
-const FALLBACK_DARK_GRAY: (u8, u8, u8) = (103, 103, 103);
 
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
@@ -35,11 +33,11 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
         .map(|level| level.has_16m)
         .unwrap_or(false);
-    let band_half_width = 3.0;
+    let band_half_width = 5.0;
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(chars.len());
-    let default_fg = default_fg();
-    let palette_dark_gray = terminal_palette().map(|palette| palette[8]);
+    let base_color = default_fg().unwrap_or((128, 128, 128));
+    let highlight_color = default_bg().unwrap_or((255, 255, 255));
     for (i, ch) in chars.iter().enumerate() {
         let i_pos = i as isize + padding as isize;
         let pos = pos as isize;
@@ -52,11 +50,8 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
             0.0
         };
         let style = if has_true_color {
-            let base = palette_dark_gray
-                .or(default_fg)
-                .unwrap_or(FALLBACK_DARK_GRAY);
             let highlight = t.clamp(0.0, 1.0);
-            let (r, g, b) = blend((255, 255, 255), base, highlight);
+            let (r, g, b) = blend(highlight_color, base_color, highlight * 0.9);
             // Allow custom RGB colors, as the implementation is thoughtfully
             // adjusting the level of the default foreground color.
             #[allow(clippy::disallowed_methods)]
