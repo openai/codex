@@ -144,6 +144,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut paste_image = Line::from("");
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
+    let mut reverse_search = Line::from("");
     let mut show_transcript = Line::from("");
 
     for descriptor in SHORTCUTS {
@@ -154,21 +155,31 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::EditPrevious => edit_previous = text,
+                ShortcutId::ReverseISearch => reverse_search = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
             }
         }
     }
 
+    // Keep Ctrl+<char> bindings in the right column by pairing rows as:
+    // [non‑Ctrl, Ctrl] and using blank left entries when needed.
     let ordered = vec![
-        commands,
-        newline,
-        file_paths,
-        paste_image,
-        edit_previous,
-        quit,
-        Line::from(""),
-        show_transcript,
+        // Row 0
+        commands, // left: '/ for commands'
+        newline,  // right: Shift+Enter or Ctrl+J for newline
+        // Row 1
+        file_paths,  // left: '@ for file paths'
+        paste_image, // right: Ctrl+V to paste images
+        // Row 2
+        edit_previous,  // left: Esc to edit previous message
+        reverse_search, // right: Ctrl+R for reverse search
+        // Row 3
+        Line::from(""), // left: blank to align Quit on right
+        quit,           // right: Ctrl+C to exit
+        // Row 4
+        Line::from(""),  // left: blank to align transcript on right
+        show_transcript, // right: Ctrl+T to view transcript
     ];
 
     build_columns(ordered)
@@ -233,6 +244,7 @@ enum ShortcutId {
     FilePaths,
     PasteImage,
     EditPrevious,
+    ReverseISearch,
     Quit,
     ShowTranscript,
 }
@@ -350,6 +362,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: "",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::ReverseISearch,
+        bindings: &[ShortcutBinding {
+            key: key_hint::ctrl(KeyCode::Char('r')),
+            condition: DisplayCondition::Always,
+        }],
+        prefix: "",
+        label: " for reverse search",
     },
     ShortcutDescriptor {
         id: ShortcutId::Quit,

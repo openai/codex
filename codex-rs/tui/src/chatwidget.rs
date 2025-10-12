@@ -1032,6 +1032,11 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // If reverse-i-search is active, accept the current selection into the
+        // composer for non-visible/global keys before higher-level handlers.
+        if key_event.kind == KeyEventKind::Press {
+            let _ = self.bottom_pane.accept_reverse_search_for_key(&key_event);
+        }
         match key_event {
             KeyEvent {
                 code: KeyCode::Char(c),

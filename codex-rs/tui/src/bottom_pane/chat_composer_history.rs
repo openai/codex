@@ -70,6 +70,44 @@ impl ChatComposerHistory {
         self.local_history.push(text.to_string());
     }
 
+    // ------------------------------------------------------------------
+    // Helpers for reverse-i-search
+    // ------------------------------------------------------------------
+
+    /// Total number of entries combining persistent and local history.
+    pub(crate) fn total_entries(&self) -> usize {
+        self.history_entry_count + self.local_history.len()
+    }
+
+    /// Returns the entry text at `global_idx` if it is available locally
+    /// (either a local entry or a previously-fetched persistent entry).
+    ///
+    /// Does not modify internal navigation state.
+    pub(crate) fn entry_if_ready(&self, global_idx: usize) -> Option<String> {
+        if global_idx >= self.history_entry_count {
+            return self
+                .local_history
+                .get(global_idx - self.history_entry_count)
+                .cloned();
+        }
+        self.fetched_history.get(&global_idx).cloned()
+    }
+
+    /// If `global_idx` refers to a persistent history entry that hasn't been
+    /// fetched yet, request it from Codex Core.
+    pub(crate) fn request_entry(&self, global_idx: usize, app_event_tx: &AppEventSender) {
+        if global_idx < self.history_entry_count
+            && !self.fetched_history.contains_key(&global_idx)
+            && let Some(log_id) = self.history_log_id
+        {
+            let op = Op::GetHistoryEntryRequest {
+                offset: global_idx,
+                log_id,
+            };
+            app_event_tx.send(AppEvent::CodexOp(op));
+        }
+    }
+
     /// Should Up/Down key presses be interpreted as history navigation given
     /// the current content and cursor position of `textarea`?
     pub fn should_handle_navigation(&self, text: &str, cursor: usize) -> bool {
