@@ -1481,7 +1481,12 @@ name = "codex-rmcp-client"
 version = "0.47.0-alpha.1"
 dependencies = [
  "anyhow",
+
  "axum 0.7.9",
+
+ "axum",
+ "codex-protocol",
+
  "dirs",
  "futures",
  "keyring",
