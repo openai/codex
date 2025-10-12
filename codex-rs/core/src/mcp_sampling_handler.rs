@@ -81,12 +81,6 @@ impl SamplingHandler for CodexSamplingHandler {
 
         // Select model based on preferences or use config's default
         let model_name = select_model_from_preferences(&params, &config);
-        debug!(
-            "Calling LLM for sampling with model={}, {} items, system_prompt={}",
-            model_name,
-            prompt.input.len(),
-            params.system_prompt.is_some()
-        );
 
         // Create a temporary client for this sampling request
         let response_stream = call_llm_for_sampling(&prompt, &model_name, &config).await?;
@@ -119,14 +113,13 @@ fn select_model_from_preferences(
     {
         for hint in hints {
             if let Some(name) = &hint.name {
-                debug!("Using model from MCP preference: {name}");
                 return name.clone();
             }
         }
     }
 
-    // Fall back to config's model
-    config.model.clone()
+    // Fall back to config's model family slug
+    config.model_family.slug.clone()
 }
 
 /// Call the LLM directly for sampling, bypassing the session's ModelClient.
@@ -137,13 +130,19 @@ async fn call_llm_for_sampling(
 ) -> Result<crate::client_common::ResponseStream, rmcp::ErrorData> {
     use crate::chat_completions::stream_chat_completions;
     use crate::default_client::create_client;
+    use crate::model_family::derive_default_model_family;
     use crate::model_family::find_family_for_model;
     use codex_otel::otel_event_manager::OtelEventManager;
 
-    let model_family = find_family_for_model(model).ok_or_else(|| {
-        warn!("Unknown model family for sampling: {model}");
-        rmcp::ErrorData::invalid_params(format!("Unknown model: {model}"), None)
-    })?;
+    // Try to find a known model family, or use a default one
+    let model_family = find_family_for_model(model).unwrap_or_else(|| {
+        let default_family = derive_default_model_family(model);
+        debug!(
+            "Using default model family for sampling: model={model}, family={}",
+            default_family.slug
+        );
+        default_family
+    });
 
     let client = create_client();
     let otel_manager = OtelEventManager::new(
@@ -238,25 +237,15 @@ async fn collect_response_from_stream(
 
     while let Some(event_result) = response_stream.next().await {
         match event_result {
-            Ok(ResponseEvent::OutputItemDone(item)) => {
-                extract_text_from_item(&item, &mut response_text);
-            }
+            Ok(ResponseEvent::OutputItemDone(_)) => {}
             Ok(ResponseEvent::OutputTextDelta(text)) => {
                 response_text.push_str(&text);
             }
-            Ok(ResponseEvent::Completed {
-                response_id,
-                token_usage,
-            }) => {
-                debug!("Response completed: id={response_id}, tokens={token_usage:?}");
+            Ok(ResponseEvent::Completed { .. }) => {
                 stop_reason = Some(CreateMessageResult::STOP_REASON_END_TURN.to_string());
             }
-            Ok(ResponseEvent::Created) => {
-                debug!("Response created");
-            }
-            Ok(ResponseEvent::RateLimits(_)) => {
-                debug!("Rate limits info received during sampling");
-            }
+            Ok(ResponseEvent::Created) => {}
+            Ok(ResponseEvent::RateLimits(_)) => {}
             Ok(ResponseEvent::ReasoningSummaryDelta(_))
             | Ok(ResponseEvent::ReasoningContentDelta(_))
             | Ok(ResponseEvent::ReasoningSummaryPartAdded)
@@ -279,15 +268,4 @@ async fn collect_response_from_stream(
     }
 
     Ok((response_text, stop_reason))
-}
-
-/// Extract text content from a response item.
-fn extract_text_from_item(item: &codex_protocol::models::ResponseItem, output: &mut String) {
-    if let codex_protocol::models::ResponseItem::Message { content, .. } = item {
-        for content_item in content {
-            if let ContentItem::OutputText { text } = content_item {
-                output.push_str(text);
-            }
-        }
-    }
 }
