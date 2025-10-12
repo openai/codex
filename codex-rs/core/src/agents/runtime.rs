@@ -142,7 +142,7 @@ impl AgentRuntime {
                         artifacts: vec![],
                         tokens_used: 0,
                         duration_secs: 0.0,
-                        error: Some(format!("Task panicked: {}", e)),
+                        error: Some(format!("Task panicked: {e}")),
                     });
                 }
             }
@@ -218,7 +218,7 @@ Guidelines:
 
 Only output the JSON, no explanation."#;
 
-        let user_message = format!("Generate an agent definition for this task:\n\n{}", prompt);
+        let user_message = format!("Generate an agent definition for this task:\n\n{prompt}");
 
         let input_items = vec![ResponseItem::Message {
             id: None,
@@ -253,17 +253,12 @@ Only output the JSON, no explanation."#;
         // レスポンスを収集
         let mut full_response = String::new();
         while let Some(event) = response_stream.next().await {
-            match event? {
-                ResponseEvent::OutputItemDone(item) => {
-                    if let ResponseItem::Message { content, .. } = item {
-                        for content_item in content {
-                            if let ContentItem::OutputText { text } = content_item {
-                                full_response.push_str(&text);
-                            }
-                        }
+            if let ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) = event? {
+                for content_item in content {
+                    if let ContentItem::OutputText { text } = content_item {
+                        full_response.push_str(&text);
                     }
                 }
-                _ => {}
             }
         }
 
@@ -336,7 +331,8 @@ Only output the JSON, no explanation."#;
                         artifacts: artifacts.clone(),
                         error: None,
                     }),
-                ));
+                ))
+                .await;
 
                 AgentResult {
                     agent_name: agent_name.to_string(),
@@ -367,7 +363,8 @@ Only output the JSON, no explanation."#;
                         artifacts: vec![],
                         error: Some(e.to_string()),
                     }),
-                ));
+                ))
+                .await;
 
                 AgentResult {
                     agent_name: agent_name.to_string(),
@@ -421,7 +418,7 @@ Only output the JSON, no explanation."#;
             let mut loader = self.loader.write().await;
             loader
                 .load_by_name(agent_name)
-                .with_context(|| format!("Failed to load agent '{}'", agent_name))?
+                .with_context(|| format!("Failed to load agent '{agent_name}'"))?
         };
 
         // 予算を設定
@@ -545,7 +542,7 @@ Only output the JSON, no explanation."#;
         agent_def: &AgentDefinition,
         goal: &str,
         inputs: HashMap<String, String>,
-        deadline: Option<u64>,
+        _deadline: Option<u64>,
     ) -> Result<Vec<String>> {
         debug!("Executing agent '{}' with goal: {}", agent_def.name, goal);
 
@@ -573,7 +570,7 @@ Only output the JSON, no explanation."#;
         );
 
         // 2. ユーザー入力を構築
-        let user_message = format!("Task: {}\n\nPlease proceed with the execution.", goal);
+        let user_message = format!("Task: {goal}\n\nPlease proceed with the execution.");
 
         // 3. ModelClient作成
         let client = ModelClient::new(
@@ -606,7 +603,7 @@ Only output the JSON, no explanation."#;
 
         // 6. LLM呼び出し
         let mut stream = client.stream(&prompt).await?;
-        let response_text = String::new();
+        let mut response_text = String::new();
         let mut total_tokens = 0;
 
         while let Some(event) = stream.next().await {
@@ -614,17 +611,33 @@ Only output the JSON, no explanation."#;
                 ResponseEvent::Created => {
                     debug!("Agent '{}': Response stream started", agent_def.name);
                 }
-                ResponseEvent::OutputItemDone(_item) => {
-                    // TODO: Extract text from ResponseItem properly
+                ResponseEvent::OutputItemDone(item) => {
                     debug!("Agent '{}': Output item done", agent_def.name);
-                    // Placeholder token estimation
-                    total_tokens += 100;
+                    // Extract text from ResponseItem
+                    if let ResponseItem::Message { content, .. } = item {
+                        for content_item in content {
+                            if let ContentItem::OutputText { text } = content_item {
+                                response_text.push_str(&text);
+                            }
+                        }
+                    }
                 }
                 ResponseEvent::Completed {
                     response_id: _,
-                    token_usage: _,
+                    token_usage,
                 } => {
                     debug!("Agent '{}': Response completed", agent_def.name);
+                    // Use actual token usage from API
+                    if let Some(usage) = token_usage {
+                        total_tokens = usage.total_tokens as usize;
+                        debug!(
+                            "Agent '{}': Actual token usage: {} (input: {}, output: {})",
+                            agent_def.name,
+                            usage.total_tokens,
+                            usage.input_tokens,
+                            usage.output_tokens
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -659,7 +672,7 @@ Only output the JSON, no explanation."#;
                 goal,
                 inputs
                     .iter()
-                    .map(|(k, v)| format!("- **{}**: {}", k, v))
+                    .map(|(k, v)| format!("- **{k}**: {v}"))
                     .collect::<Vec<_>>()
                     .join("\n"),
                 response_text,
@@ -667,7 +680,7 @@ Only output the JSON, no explanation."#;
                 agent_def
                     .success_criteria
                     .iter()
-                    .map(|c| format!("  - {}", c))
+                    .map(|c| format!("  - {c}"))
                     .collect::<Vec<_>>()
                     .join("\n")
             );
@@ -751,7 +764,7 @@ artifacts:
         fs::write(agents_dir.join("test-agent.yaml"), agent_yaml).unwrap();
 
         // モックConfig作成
-        let config = Arc::new(Config::default_for_family("gpt-5-codex"));
+        let config = Arc::new(Config::default());
         let provider = ModelProviderInfo {
             name: "Test Provider".to_string(),
             base_url: Some("https://api.openai.com/v1".to_string()),
@@ -766,8 +779,16 @@ artifacts:
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
         };
-        let otel_manager = OtelEventManager::new();
         let conversation_id = ConversationId(Uuid::new_v4());
+        let otel_manager = OtelEventManager::new(
+            conversation_id,
+            "test-model",
+            "test",
+            None,
+            None,
+            false,
+            "test".to_string(),
+        );
 
         let runtime = AgentRuntime::new(
             temp_dir.path().to_path_buf(),
@@ -815,7 +836,7 @@ artifacts:
         fs::write(agents_dir.join("agent1.yaml"), "name: Agent1\ngoal: Goal1\ntools: {}\npolicies: {context: {}}\nsuccess_criteria: []\nartifacts: []").unwrap();
         fs::write(agents_dir.join("agent2.yaml"), "name: Agent2\ngoal: Goal2\ntools: {}\npolicies: {context: {}}\nsuccess_criteria: []\nartifacts: []").unwrap();
 
-        let config = Arc::new(Config::default_for_family("gpt-5-codex_medium"));
+        let config = Arc::new(Config::default());
         let provider = ModelProviderInfo {
             name: "Test Provider".to_string(),
             base_url: Some("https://api.openai.com/v1".to_string()),
@@ -830,8 +851,16 @@ artifacts:
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
         };
-        let otel_manager = OtelEventManager::new();
         let conversation_id = ConversationId(Uuid::new_v4());
+        let otel_manager = OtelEventManager::new(
+            conversation_id,
+            "test-model",
+            "test",
+            None,
+            None,
+            false,
+            "test".to_string(),
+        );
 
         let runtime = AgentRuntime::new(
             temp_dir.path().to_path_buf(),
@@ -1014,14 +1043,14 @@ impl AgentRuntime {
             agent_def.success_criteria.join("\n- "),
             inputs
                 .iter()
-                .map(|(k, v)| format!("- {}: {}", k, v))
+                .map(|(k, v)| format!("- {k}: {v}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
             tools_description
         );
 
         // 4. 初期プロンプト
-        let user_prompt = format!("Task: {}", goal);
+        let user_prompt = format!("Task: {goal}");
 
         // 5. LLM対話ループ（最大5回のツール呼び出し）
         let max_iterations = 5;
@@ -1056,10 +1085,8 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for (tool_name, tool_args) in tool_calls {
                 if !allowed_tools.contains(&tool_name) {
-                    let error_msg = format!(
-                        "ERROR: Tool '{}' is not permitted for this agent",
-                        tool_name
-                    );
+                    let error_msg =
+                        format!("ERROR: Tool '{tool_name}' is not permitted for this agent");
                     tool_results.push(error_msg);
                     continue;
                 }
@@ -1074,11 +1101,11 @@ impl AgentRuntime {
                     .await
                 {
                     Ok(result) => {
-                        tool_results.push(format!("TOOL_RESULT[{}]: {}", tool_name, result));
+                        tool_results.push(format!("TOOL_RESULT[{tool_name}]: {result}"));
                     }
                     Err(e) => {
-                        let error_msg = format!("ERROR executing tool '{}': {}", tool_name, e);
-                        error!("{}", error_msg);
+                        let error_msg = format!("ERROR executing tool '{tool_name}': {e}");
+                        error!("{error_msg}");
                         tool_results.push(error_msg);
                     }
                 }
@@ -1087,7 +1114,7 @@ impl AgentRuntime {
             // ツール結果をLLMにフィードバック
             let feedback = tool_results.join("\n\n");
             conversation_history.push(("user".to_string(), feedback.clone()));
-            artifacts.push(format!("--- Tool Execution Results ---\n{}", feedback));
+            artifacts.push(format!("--- Tool Execution Results ---\n{feedback}"));
         }
 
         info!("Agent '{}' completed execution", agent_def.name);
@@ -1141,16 +1168,32 @@ impl AgentRuntime {
 
         // レスポンスを収集
         let mut full_response = String::new();
+        let mut _tokens_used = 0;
+
         while let Some(event) = response_stream.next().await {
             match event? {
-                ResponseEvent::OutputItemDone(item) => {
+                ResponseEvent::OutputItemDone(ResponseItem::Message { content, .. }) => {
                     // ResponseItemからテキストを抽出
-                    if let ResponseItem::Message { content, .. } = item {
-                        for content_item in content {
-                            if let ContentItem::OutputText { text } = content_item {
-                                full_response.push_str(&text);
-                            }
+                    for content_item in content {
+                        if let ContentItem::OutputText { text } = content_item {
+                            full_response.push_str(&text);
                         }
+                    }
+                }
+                ResponseEvent::Completed {
+                    response_id: _,
+                    token_usage,
+                } => {
+                    // 実際のトークン使用量をキャプチャ
+                    if let Some(usage) = token_usage {
+                        _tokens_used = usage.total_tokens as usize;
+                        debug!(
+                            "LLM call completed: {} tokens (input: {}, output: {})",
+                            usage.total_tokens, usage.input_tokens, usage.output_tokens
+                        );
+                        // トークン予算から消費
+                        // Note: agent_nameが必要だが、この関数には渡されていないため、
+                        // 呼び出し側で管理する必要がある
                     }
                 }
                 _ => {}
@@ -1171,7 +1214,8 @@ impl AgentRuntime {
 
             // TOOL_CALL: codex_read_file(path="src/auth.rs")
             if line.starts_with("TOOL_CALL:") {
-                if let Some(call_str) = line.strip_prefix("TOOL_CALL:").map(|s| s.trim()) {
+                if let Some(call_str) = line.strip_prefix("TOOL_CALL:").and_then(|s| Some(s.trim()))
+                {
                     if let Some((tool_name, args_str)) = call_str.split_once('(') {
                         let tool_name = tool_name.trim().to_string();
                         let args_str = args_str.trim_end_matches(')').trim();
@@ -1214,11 +1258,11 @@ impl AgentRuntime {
                 Some(Duration::from_secs(30)),
             )
             .await
-            .context(format!("Failed to call Codex MCP tool '{}'", tool_name))?;
+            .context(format!("Failed to call Codex MCP tool '{tool_name}'"))?;
 
         // 結果をテキスト形式に変換
         let result_text =
-            serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{:?}", result));
+            serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{result:?}"));
 
         Ok(result_text)
     }
@@ -1231,39 +1275,39 @@ mod mcp_tests {
     #[tokio::test]
     async fn test_filter_codex_mcp_tools() {
         use crate::agents::types::ContextPolicy;
-        use crate::agents::types::ExecutionPolicy;
-        use crate::agents::types::PermissionPolicy;
-        use crate::agents::types::ToolsPolicy;
+        use crate::agents::types::ToolPermissions;
         use crate::model_provider_info::WireApi;
         use uuid::Uuid;
 
         let agent_def = AgentDefinition {
             name: "test-agent".to_string(),
             goal: "Test".to_string(),
-            tools: ToolsPolicy {
+            tools: ToolPermissions {
                 mcp: vec![
                     "codex_read_file".to_string(),
                     "codex_grep".to_string(),
                     "some_other_tool".to_string(), // 非Codexツール
                 ],
-                shell: vec![],
+                fs: Default::default(),
+                net: Default::default(),
+                shell: Default::default(),
             },
-            policies: ExecutionPolicy {
+            policies: crate::agents::types::AgentPolicies {
+                shell: None,
+                net: None,
                 context: ContextPolicy {
                     max_tokens: 1000,
-                    max_function_calls: 10,
+                    retention: "job".to_string(),
                 },
-                permissions: PermissionPolicy {
-                    filesystem: vec![],
-                    network: vec![],
-                },
+                secrets: Default::default(),
             },
             success_criteria: vec![],
             artifacts: vec![],
+            extra: Default::default(),
         };
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default_for_family("gpt-4"));
+        let config = Arc::new(Config::default());
         let provider = ModelProviderInfo {
             name: "Test".to_string(),
             base_url: Some("https://api.openai.com/v1".to_string()),
@@ -1278,8 +1322,16 @@ mod mcp_tests {
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
         };
-        let otel_manager = OtelEventManager::new();
         let conversation_id = ConversationId(Uuid::new_v4());
+        let otel_manager = OtelEventManager::new(
+            conversation_id,
+            "test-model",
+            "test",
+            None,
+            None,
+            false,
+            "test".to_string(),
+        );
 
         let runtime = AgentRuntime::new(
             temp_dir.path().to_path_buf(),
@@ -1305,7 +1357,7 @@ mod mcp_tests {
         use uuid::Uuid;
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default_for_family("gpt-4"));
+        let config = Arc::new(Config::default());
         let provider = ModelProviderInfo {
             name: "Test".to_string(),
             base_url: Some("https://api.openai.com/v1".to_string()),
@@ -1320,8 +1372,16 @@ mod mcp_tests {
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
         };
-        let otel_manager = OtelEventManager::new();
         let conversation_id = ConversationId(Uuid::new_v4());
+        let otel_manager = OtelEventManager::new(
+            conversation_id,
+            "test-model",
+            "test",
+            None,
+            None,
+            false,
+            "test".to_string(),
+        );
 
         let runtime = AgentRuntime::new(
             temp_dir.path().to_path_buf(),
