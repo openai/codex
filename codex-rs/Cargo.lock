@@ -1205,6 +1205,7 @@ version = "0.47.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "codex-core",
  "criterion",
  "pretty_assertions",
  "reqwest",
