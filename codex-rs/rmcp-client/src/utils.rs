@@ -95,6 +95,8 @@ pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
 
 #[cfg(windows)]
 pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
+    // Windows networking & OS integration
+    "SYSTEMROOT",
     "PATH",
     "PATHEXT",
     "USERNAME",
@@ -102,6 +104,18 @@ pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
     "USERPROFILE",
     "TEMP",
     "TMP",
+    // Suggested for shell-wrapping shims and CLI tools
+    "WINDIR",
+    "COMSPEC",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    // Preserve HOME if present; some tools prefer it over USERPROFILE
+    "HOME",
+    // Program files roots
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
 ];
 
 #[cfg(test)]
