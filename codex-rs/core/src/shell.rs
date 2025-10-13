@@ -90,15 +90,42 @@ impl Shell {
                 if let Some(command_index) = command.iter().position(|arg| arg == "-Command") {
                     let mut modified_command = command.clone();
                     if let Some(cmd_arg) = modified_command.get_mut(command_index + 1) {
-                        // Special case: preserve stdin sentinel "-" 
+                        // Special case: preserve stdin sentinel "-"
                         if cmd_arg == "-" {
                             // For stdin input, we can't prepend to the argument itself.
                             // Instead, we need to handle UTF-8 encoding differently or skip it.
                             // For now, preserve the original behavior for stdin.
                             return Some(command);
                         }
-                        // Prepend UTF-8 encoding setup to the command
-                        *cmd_arg = format!("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}", cmd_arg);
+                        
+                        // Special case: if stop-parsing token detected, use -EncodedCommand
+                        if cmd_arg.trim_start().starts_with("--%") {
+                            // Encode the command with UTF-8 setup prepended
+                            let full_command = format!(
+                                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}",
+                                cmd_arg
+                            );
+                            
+                            // Convert to UTF-16LE and then to base64
+                            let utf16_bytes: Vec<u8> = full_command
+                                .encode_utf16()
+                                .flat_map(|c| c.to_le_bytes())
+                                .collect();
+                            
+                            let encoded = base64::engine::general_purpose::STANDARD.encode(&utf16_bytes);
+                            
+                            // Replace -Command with -EncodedCommand and set the encoded string
+                            modified_command[command_index] = "-EncodedCommand".to_string();
+                            *cmd_arg = encoded;
+                            
+                            return Some(modified_command);
+                        }
+                        
+                        // Normal case: prepend UTF-8 encoding setup to the command
+                        *cmd_arg = format!(
+                            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}",
+                            cmd_arg
+                        );
                     }
                     Some(modified_command)
                 } else {
