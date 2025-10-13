@@ -199,7 +199,7 @@ impl FileSearchManager {
                 })
             };
 
-            let mut manager = match file_search::SearchManager::new(
+            let mut manager = match file_search::search_manager::SearchManager::new(
                 &query,
                 MAX_FILE_SEARCH_RESULTS,
                 &search_dir,

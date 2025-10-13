@@ -4,8 +4,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use codex_file_search::SearchItem;
-use codex_file_search::SearchManager;
+use codex_file_search::search_manager::SearchItem;
+use codex_file_search::search_manager::SearchManager;
 
 fn push(injector: &nucleo::Injector<SearchItem>, path: &str) {
     injector.push(
