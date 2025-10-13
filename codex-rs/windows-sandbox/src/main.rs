@@ -8,11 +8,7 @@ use clap::Parser;
 use codex_protocol::protocol::SandboxPolicy;
 use std::collections::HashMap;
 use std::env;
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
 use std::path::PathBuf;
-use std::process::ExitStatus;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -24,12 +20,37 @@ struct WindowsSandboxCommand {
     #[arg(long)]
     sandbox_policy_cwd: Option<PathBuf>,
 
-    /// JSON-encoded SandboxPolicy definition.
-    pub sandbox_policy: SandboxPolicy,
+    /// Sandbox policy to apply. Accepts preset names ('workspace-write', 'read-only', 'danger-full-access')
+    /// or a JSON-encoded SandboxPolicy.
+    pub sandbox_policy: SandboxPolicyArg,
 
     /// Command and arguments to execute once sandboxing is configured.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
     pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SandboxPolicyArg(SandboxPolicy);
+
+impl SandboxPolicyArg {
+    fn into_policy(self) -> SandboxPolicy {
+        self.0
+    }
+}
+
+impl std::str::FromStr for SandboxPolicyArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "read-only" => Ok(Self(SandboxPolicy::new_read_only_policy())),
+            "workspace-write" => Ok(Self(SandboxPolicy::new_workspace_write_policy())),
+            "danger-full-access" => Ok(Self(SandboxPolicy::DangerFullAccess)),
+            other => serde_json::from_str::<SandboxPolicy>(other)
+                .map(Self)
+                .map_err(|err| format!("failed to parse sandbox policy: {err}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,8 +63,11 @@ fn main() -> ! {
     let WindowsSandboxCommand {
         sandbox_policy_cwd,
         sandbox_policy,
+
         command,
     } = args;
+
+    let policy = sandbox_policy.into_policy();
 
     if command.is_empty() {
         eprintln!("No command specified to execute.");
@@ -64,7 +88,7 @@ fn main() -> ! {
         imp::spawn_command_under_windows_low_il(
             command,
             current_dir,
-            &sandbox_policy,
+            &policy,
             sandbox_policy_cwd.as_path(),
             StdioPolicy::Inherit,
             env_map,
@@ -104,6 +128,7 @@ mod imp {
     use std::io::{self};
     use std::mem::size_of;
     use std::os::windows::ffi::OsStrExt;
+
     use std::os::windows::process::ExitStatusExt;
     use std::path::Path;
     use std::path::PathBuf;
@@ -115,22 +140,22 @@ mod imp {
     use windows::Win32::Foundation::HLOCAL;
     use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows::Win32::Foundation::LocalFree;
+    use windows::Win32::Foundation::PSID;
     use windows::Win32::Foundation::SetHandleInformation;
     use windows::Win32::Foundation::WAIT_OBJECT_0;
     use windows::Win32::Foundation::WIN32_ERROR;
     use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
     use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
-    use windows::Win32::Security::Authorization::GetSecurityDescriptorSacl;
-    use windows::Win32::Security::Authorization::LABEL_SECURITY_INFORMATION;
-    use windows::Win32::Security::Authorization::PSECURITY_DESCRIPTOR;
-    use windows::Win32::Security::Authorization::SACL_SECURITY_INFORMATION;
     use windows::Win32::Security::Authorization::SE_FILE_OBJECT;
-    use windows::Win32::Security::Authorization::SE_GROUP_INTEGRITY;
     use windows::Win32::Security::Authorization::SetNamedSecurityInfoW;
-    use windows::Win32::Security::CreateRestrictedToken;
+    use windows::Win32::Security::DuplicateTokenEx;
     use windows::Win32::Security::GetLengthSid;
-    use windows::Win32::Security::PSID;
+    use windows::Win32::Security::GetSecurityDescriptorSacl;
+    use windows::Win32::Security::LABEL_SECURITY_INFORMATION;
+    use windows::Win32::Security::PSECURITY_DESCRIPTOR;
+    use windows::Win32::Security::SACL_SECURITY_INFORMATION;
     use windows::Win32::Security::SID_AND_ATTRIBUTES;
+    use windows::Win32::Security::SecurityImpersonation;
     use windows::Win32::Security::TOKEN_ACCESS_MASK;
     use windows::Win32::Security::TOKEN_ADJUST_DEFAULT;
     use windows::Win32::Security::TOKEN_ADJUST_PRIVILEGES;
@@ -140,21 +165,20 @@ mod imp {
     use windows::Win32::Security::TOKEN_MANDATORY_LABEL;
     use windows::Win32::Security::TOKEN_QUERY;
     use windows::Win32::Security::TokenIntegrityLevel;
+    use windows::Win32::Security::TokenPrimary;
     use windows::Win32::Storage::FileSystem::GetFileAttributesW;
     use windows::Win32::System::Console::GetStdHandle;
     use windows::Win32::System::Console::STD_ERROR_HANDLE;
     use windows::Win32::System::Console::STD_INPUT_HANDLE;
     use windows::Win32::System::Console::STD_OUTPUT_HANDLE;
-    use windows::Win32::System::Environment::CreateEnvironmentBlock;
-    use windows::Win32::System::Environment::DestroyEnvironmentBlock;
     use windows::Win32::System::JobObjects::AssignProcessToJobObject;
     use windows::Win32::System::JobObjects::CreateJobObjectW;
     use windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     use windows::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
     use windows::Win32::System::JobObjects::SetInformationJobObject;
+    use windows::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
     use windows::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows::Win32::System::Threading::CreateProcessAsUserW;
-    use windows::Win32::System::Threading::DuplicateTokenEx;
     use windows::Win32::System::Threading::GetCurrentProcess;
     use windows::Win32::System::Threading::GetExitCodeProcess;
     use windows::Win32::System::Threading::OpenProcessToken;
@@ -162,8 +186,6 @@ mod imp {
     use windows::Win32::System::Threading::PROCESS_INFORMATION;
     use windows::Win32::System::Threading::STARTF_USESTDHANDLES;
     use windows::Win32::System::Threading::STARTUPINFOW;
-    use windows::Win32::System::Threading::SecurityImpersonation;
-    use windows::Win32::System::Threading::TokenPrimary;
     use windows::Win32::System::Threading::WaitForSingleObject;
     use windows::core::PCWSTR;
     use windows::core::PWSTR;
@@ -193,10 +215,10 @@ mod imp {
             SandboxPolicy::ReadOnly => {}
             SandboxPolicy::WorkspaceWrite { .. } => {
                 for root in &writable_roots {
-                    if path_exists(root) {
-                        if let Ok(g) = set_low_integrity_dir_guarded(root) {
-                            guards.push(g);
-                        }
+                    if path_exists(root)
+                        && let Ok(g) = set_low_integrity_dir_guarded(root)
+                    {
+                        guards.push(g);
                     }
                 }
                 for ro in &read_only_overrides {
@@ -239,9 +261,10 @@ mod imp {
         if !policy.has_full_network_access() {
             apply_best_effort_network_block(&mut env_map);
         }
+        ensure_non_interactive_pager(&mut env_map);
 
         // 4) Create a restricted, Low-IL primary token from the current process token.
-        let token = create_restricted_low_il_token()?;
+        let token = create_restricted_token()?;
 
         // 5) Startup info with inherited stdio.
         let mut si = STARTUPINFOW {
@@ -271,9 +294,9 @@ mod imp {
         let mut pi = PROCESS_INFORMATION::default();
         unsafe {
             CreateProcessAsUserW(
-                Some(token.handle),
+                token.handle,
                 PCWSTR::null(),
-                Some(PWSTR(cmdline.as_mut_ptr())),
+                PWSTR(cmdline.as_mut_ptr()),
                 None,
                 None,
                 true,
@@ -426,6 +449,16 @@ mod imp {
     }
 
     // best-effort network block
+    fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
+        env_map
+            .entry("GIT_PAGER".into())
+            .or_insert_with(|| "more.com".into());
+        env_map
+            .entry("PAGER".into())
+            .or_insert_with(|| "more.com".into());
+        env_map.entry("LESS".into()).or_insert_with(String::new);
+    }
+
     fn apply_best_effort_network_block(env_map: &mut HashMap<String, String>) {
         let sink = "http://127.0.0.1:9";
         env_map
@@ -504,7 +537,7 @@ mod imp {
                 Some(sacl_ptr),
             );
             if !psd.is_invalid() {
-                let _ = LocalFree(Some(HLOCAL(psd.0.cast())));
+                let _ = LocalFree(HLOCAL(psd.0.cast()));
             }
             if status != WIN32_ERROR(0) {
                 return Err(io::Error::from_raw_os_error(status.0 as i32));
@@ -514,7 +547,7 @@ mod imp {
     }
     fn path_exists(p: &Path) -> bool {
         let w = to_wide(p.as_os_str());
-        unsafe { GetFileAttributesW(PCWSTR(w.as_ptr())).0 != u32::MAX }
+        unsafe { GetFileAttributesW(PCWSTR(w.as_ptr())) != u32::MAX }
     }
 
     // token + job object
@@ -539,7 +572,9 @@ mod imp {
                 let h = CreateJobObjectW(None, PCWSTR::null())
                     .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
                 let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                    | windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_BREAKAWAY_OK
+                    | windows::Win32::System::JobObjects::JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
                 SetInformationJobObject(
                     h,
                     windows::Win32::System::JobObjects::JobObjectExtendedLimitInformation,
@@ -560,7 +595,7 @@ mod imp {
             }
         }
     }
-    fn create_restricted_low_il_token() -> io::Result<TokenGuard> {
+    fn create_restricted_token() -> io::Result<TokenGuard> {
         unsafe {
             let mut process_token = HANDLE::default();
             let desired = TOKEN_ACCESS_MASK(
@@ -574,44 +609,45 @@ mod imp {
             OpenProcessToken(GetCurrentProcess(), desired, &mut process_token)
                 .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
             let mut new_token = HANDLE::default();
-            CreateRestrictedToken(
+            let duplicate = DuplicateTokenEx(
                 process_token,
-                windows::Win32::Security::DISABLE_MAX_PRIVILEGE
-                    | windows::Win32::Security::LUA_TOKEN
-                    | windows::Win32::Security::WRITE_RESTRICTED,
+                desired,
                 None,
-                None,
-                None,
+                SecurityImpersonation,
+                TokenPrimary,
                 &mut new_token,
-            )
-            .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            );
+            let _ = CloseHandle(process_token);
+            duplicate.map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
             set_integrity_low(new_token)?;
             Ok(TokenGuard { handle: new_token })
         }
     }
     unsafe fn set_integrity_low(token: HANDLE) -> io::Result<()> {
-        let mut sid = PSID::default();
-        let s = OsStr::new("S-1-16-4096")
-            .encode_wide()
-            .chain(Some(0))
-            .collect::<Vec<u16>>();
-        ConvertStringSidToSidW(PCWSTR(s.as_ptr()), &mut sid)
+        unsafe {
+            let mut sid = PSID::default();
+            let s = OsStr::new("S-1-16-4096")
+                .encode_wide()
+                .chain(Some(0))
+                .collect::<Vec<u16>>();
+            ConvertStringSidToSidW(PCWSTR(s.as_ptr()), &mut sid)
+                .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+            let tml = TOKEN_MANDATORY_LABEL {
+                Label: SID_AND_ATTRIBUTES {
+                    Sid: sid,
+                    Attributes: SE_GROUP_INTEGRITY as u32,
+                },
+            };
+            let size = (size_of::<TOKEN_MANDATORY_LABEL>() + GetLengthSid(sid) as usize) as u32;
+            windows::Win32::Security::SetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                &tml as *const _ as *const core::ffi::c_void,
+                size,
+            )
             .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
-        let tml = TOKEN_MANDATORY_LABEL {
-            Label: SID_AND_ATTRIBUTES {
-                Sid: sid,
-                Attributes: SE_GROUP_INTEGRITY,
-            },
-        };
-        let size = (size_of::<TOKEN_MANDATORY_LABEL>() + GetLengthSid(sid) as usize) as u32;
-        windows::Win32::Security::SetTokenInformation(
-            token,
-            TokenIntegrityLevel,
-            &tml as *const _ as *const core::ffi::c_void,
-            size,
-        )
-        .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
-        Ok(())
+            Ok(())
+        }
     }
     fn wait_for_process(
         pi: &windows::Win32::System::Threading::PROCESS_INFORMATION,
