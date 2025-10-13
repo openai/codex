@@ -451,6 +451,10 @@ impl ModelClient {
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
     }
+
+    pub fn get_config(&self) -> Arc<Config> {
+        self.config.clone()
+    }
 }
 
 enum StreamAttemptError {

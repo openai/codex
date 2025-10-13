@@ -13,6 +13,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+const SUBSESSION_TOOL_FLAG: &str = "subsession";
+
 #[derive(Debug, Clone)]
 pub enum ConfigShellToolType {
     Default,
@@ -253,6 +255,88 @@ fn create_view_image_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_create_session_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "session_type".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Session profile to use (tester, mathematician, linter_fixer, default)".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "prompt".to_string(),
+        JsonSchema::String {
+            description: Some("Initial user prompt for the child session".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "create_session".to_string(),
+        description: "Spawn a child Codex session with the requested profile.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_type".to_string(), "prompt".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_wait_session_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "session_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Identifier returned from create_session identifying the child session".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Milliseconds to wait; values <= 0 check status without waiting.".to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "wait_session".to_string(),
+        description: "Wait for a child session to finish and return its final assistant message."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_cancel_session_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "session_id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier for the child session to cancel".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "cancel_session".to_string(),
+        description: "Cancel a pending child session if it is still running.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -741,6 +825,10 @@ pub(crate) fn build_specs(
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
+    let has_subsession_tool = config
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == SUBSESSION_TOOL_FLAG);
 
     if config.experimental_unified_exec_tool {
         builder.push_spec(create_unified_exec_tool());
@@ -770,6 +858,17 @@ pub(crate) fn build_specs(
     builder.register_handler("shell", shell_handler.clone());
     builder.register_handler("container.exec", shell_handler.clone());
     builder.register_handler("local_shell", shell_handler);
+
+    if has_subsession_tool {
+        use crate::tools::handlers::SubsessionsHandler;
+        let subsessions_handler = Arc::new(SubsessionsHandler);
+        builder.push_spec(create_create_session_tool());
+        builder.push_spec(create_wait_session_tool());
+        builder.push_spec(create_cancel_session_tool());
+        builder.register_handler("create_session", subsessions_handler.clone());
+        builder.register_handler("wait_session", subsessions_handler.clone());
+        builder.register_handler("cancel_session", subsessions_handler);
+    }
 
     if config.plan_tool {
         builder.push_spec(PLAN_TOOL.clone());
@@ -919,7 +1018,15 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["unified_exec", "update_plan", "web_search", "view_image"],
+            &[
+                "unified_exec",
+                "create_session",
+                "wait_session",
+                "cancel_session",
+                "update_plan",
+                "web_search",
+                "view_image",
+            ],
         );
     }
 
@@ -996,6 +1103,11 @@ mod tests {
                 .any(|tool| tool_name(&tool.spec) == "grep_files")
         );
         assert!(tools.iter().any(|tool| tool_name(&tool.spec) == "list_dir"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "create_session")
+        );
     }
 
     #[test]
@@ -1059,8 +1171,9 @@ mod tests {
             ],
         );
 
+        let tool = find_tool(&tools, "test_server/do_something_cool");
         assert_eq!(
-            tools[3].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
@@ -1228,8 +1341,9 @@ mod tests {
             ],
         );
 
+        let tool = find_tool(&tools, "dash/search");
         assert_eq!(
-            tools[4].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -1294,8 +1408,9 @@ mod tests {
                 "dash/paginate",
             ],
         );
+        let tool = find_tool(&tools, "dash/paginate");
         assert_eq!(
-            tools[4].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -1358,8 +1473,9 @@ mod tests {
                 "dash/tags",
             ],
         );
+        let tool = find_tool(&tools, "dash/tags");
         assert_eq!(
-            tools[4].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -1425,8 +1541,9 @@ mod tests {
                 "dash/value",
             ],
         );
+        let tool = find_tool(&tools, "dash/value");
         assert_eq!(
-            tools[4].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {
@@ -1530,8 +1647,9 @@ mod tests {
             ],
         );
 
+        let tool = find_tool(&tools, "test_server/do_something_cool");
         assert_eq!(
-            tools[4].spec,
+            tool.spec,
             ToolSpec::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
