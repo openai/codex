@@ -47,7 +47,7 @@ jobs:
 
   build:
     needs: tag-check
-    name: ${{ matrix.runner }} - ${{ matrix.target }}
+    name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     defaults:
@@ -94,10 +94,117 @@ jobs:
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         run: |
-          sudo apt install -y musl-tools pkg-config
+          sudo apt-get update
+          sudo apt-get install -y musl-tools pkg-config
 
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-responses-api-proxy
+
+      - if: ${{ matrix.runner == 'macos-14' }}
+        name: Configure Apple code signing
+        shell: bash
+        env:
+          KEYCHAIN_PASSWORD: actions
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
+            echo "APPLE_CERTIFICATE is required for macOS signing"
+            exit 1
+          fi
+
+          if [[ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]]; then
+            echo "APPLE_CERTIFICATE_PASSWORD is required for macOS signing"
+            exit 1
+          fi
+
+          cert_path="${RUNNER_TEMP}/apple_signing_certificate.p12"
+          echo "$APPLE_CERTIFICATE" | base64 -d > "$cert_path"
+
+          keychain_path="${RUNNER_TEMP}/codex-signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+
+          keychain_args=()
+          cleanup_keychain() {
+            if ((${#keychain_args[@]} > 0)); then
+              security list-keychains -s "${keychain_args[@]}" || true
+              security default-keychain -s "${keychain_args[0]}" || true
+            else
+              security list-keychains -s || true
+            fi
+            if [[ -f "$keychain_path" ]]; then
+              security delete-keychain "$keychain_path" || true
+            fi
+          }
+
+          while IFS= read -r keychain; do
+            [[ -n "$keychain" ]] && keychain_args+=("$keychain")
+          done < <(security list-keychains | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/"//g')
+
+          if ((${#keychain_args[@]} > 0)); then
+            security list-keychains -s "$keychain_path" "${keychain_args[@]}"
+          else
+            security list-keychains -s "$keychain_path"
+          fi
+
+          security default-keychain -s "$keychain_path"
+          security import "$cert_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path" > /dev/null
+
+          codesign_hashes=()
+          while IFS= read -r hash; do
+            [[ -n "$hash" ]] && codesign_hashes+=("$hash")
+          done < <(security find-identity -v -p codesigning "$keychain_path" \
+            | sed -n 's/.*\([0-9A-F]\{40\}\).*/\1/p' \
+            | sort -u)
+
+          if ((${#codesign_hashes[@]} == 0)); then
+            echo "No signing identities found in $keychain_path"
+            cleanup_keychain
+            rm -f "$cert_path"
+            exit 1
+          fi
+
+          if ((${#codesign_hashes[@]} > 1)); then
+            echo "Multiple signing identities found in $keychain_path:"
+            printf '  %s\n' "${codesign_hashes[@]}"
+            cleanup_keychain
+            rm -f "$cert_path"
+            exit 1
+          fi
+
+          APPLE_CODESIGN_IDENTITY="${codesign_hashes[0]}"
+
+          rm -f "$cert_path"
+
+          echo "APPLE_CODESIGN_IDENTITY=$APPLE_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
+          echo "APPLE_CODESIGN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+          echo "::add-mask::$APPLE_CODESIGN_IDENTITY"
+
+      - if: ${{ matrix.runner == 'macos-14' }}
+        name: Sign macOS binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
+            echo "APPLE_CODESIGN_IDENTITY is required for macOS signing"
+            exit 1
+          fi
+
+          keychain_args=()
+          if [[ -n "${APPLE_CODESIGN_KEYCHAIN:-}" && -f "${APPLE_CODESIGN_KEYCHAIN}" ]]; then
+            keychain_args+=(--keychain "${APPLE_CODESIGN_KEYCHAIN}")
+          fi
+
+          for binary in codex codex-responses-api-proxy; do
+            path="target/${{ matrix.target }}/release/${binary}"
+            codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
+          done
 
       - name: Stage artifacts
         shell: bash
@@ -156,6 +263,29 @@ jobs:
             # uncompressed binary to keep the directory small.
             zstd -T0 -19 --rm "$dest/$base"
           done
+
+      - name: Remove signing keychain
+        if: ${{ always() && matrix.runner == 'macos-14' }}
+        shell: bash
+        env:
+          APPLE_CODESIGN_KEYCHAIN: ${{ env.APPLE_CODESIGN_KEYCHAIN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${APPLE_CODESIGN_KEYCHAIN:-}" ]]; then
+            keychain_args=()
+            while IFS= read -r keychain; do
+              [[ "$keychain" == "$APPLE_CODESIGN_KEYCHAIN" ]] && continue
+              [[ -n "$keychain" ]] && keychain_args+=("$keychain")
+            done < <(security list-keychains | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/"//g')
+            if ((${#keychain_args[@]} > 0)); then
+              security list-keychains -s "${keychain_args[@]}"
+              security default-keychain -s "${keychain_args[0]}"
+            fi
+
+            if [[ -f "$APPLE_CODESIGN_KEYCHAIN" ]]; then
+              security delete-keychain "$APPLE_CODESIGN_KEYCHAIN"
+            fi
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

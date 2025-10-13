@@ -148,15 +148,26 @@ jobs:
           targets: ${{ matrix.target }}
           components: clippy
 
-      - uses: actions/cache@v4
+      # Explicit cache restore: split cargo home vs target, so we can
+      # avoid caching the large target dir on the gnu-dev job.
+      - name: Restore cargo home cache
+        id: cache_cargo_home_restore
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            ${{ github.workspace }}/codex-rs/target/
-          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Restore target cache (except gnu-dev)
+        id: cache_target_restore
+        if: ${{ !(matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release') }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/codex-rs/target/
+          key: cargo-target-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
@@ -193,6 +204,31 @@ jobs:
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }}
         env:
           RUST_BACKTRACE: 1
+
+      # Save caches explicitly; make non-fatal so cache packaging
+      # never fails the overall job. Only save when key wasn't hit.
+      - name: Save cargo home cache
+        if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Save target cache (except gnu-dev)
+        if: >-
+          always() && !cancelled() &&
+          (steps.cache_target_restore.outputs.cache-hit != 'true') &&
+          !(matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release')
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/codex-rs/target/
+          key: cargo-target-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
 
       # Fail the job if any of the previous steps failed.
       - name: verify all steps passed

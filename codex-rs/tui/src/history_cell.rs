@@ -6,12 +6,15 @@ use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::MarkdownCitationContext;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
+use crate::render::line_utils::push_owned_lines;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
+use crate::text_formatting::truncate_text;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -262,6 +265,126 @@ impl HistoryCell for PlainHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct PrefixedWrappedHistoryCell {
+    text: Text<'static>,
+    initial_prefix: Line<'static>,
+    subsequent_prefix: Line<'static>,
+}
+
+impl PrefixedWrappedHistoryCell {
+    pub(crate) fn new(
+        text: impl Into<Text<'static>>,
+        initial_prefix: impl Into<Line<'static>>,
+        subsequent_prefix: impl Into<Line<'static>>,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            initial_prefix: initial_prefix.into(),
+            subsequent_prefix: subsequent_prefix.into(),
+        }
+    }
+}
+
+impl HistoryCell for PrefixedWrappedHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if width == 0 {
+            return Vec::new();
+        }
+        let opts = RtOptions::new(width.max(1) as usize)
+            .initial_indent(self.initial_prefix.clone())
+            .subsequent_indent(self.subsequent_prefix.clone());
+        let wrapped = word_wrap_lines(&self.text, opts);
+        let mut out = Vec::new();
+        push_owned_lines(&wrapped, &mut out);
+        out
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.display_lines(width).len() as u16
+    }
+}
+
+fn truncate_exec_snippet(full_cmd: &str) -> String {
+    let mut snippet = match full_cmd.split_once('\n') {
+        Some((first, _)) => format!("{first} ..."),
+        None => full_cmd.to_string(),
+    };
+    snippet = truncate_text(&snippet, 80);
+    snippet
+}
+
+fn exec_snippet(command: &[String]) -> String {
+    let full_cmd = strip_bash_lc_and_escape(command);
+    truncate_exec_snippet(&full_cmd)
+}
+
+pub fn new_approval_decision_cell(
+    command: Vec<String>,
+    decision: codex_core::protocol::ReviewDecision,
+) -> Box<dyn HistoryCell> {
+    use codex_core::protocol::ReviewDecision::*;
+
+    let (symbol, summary): (Span<'static>, Vec<Span<'static>>) = match decision {
+        Approved => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " this time".bold(),
+                ],
+            )
+        }
+        ApprovedForSession => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " every time this session".bold(),
+                ],
+            )
+        }
+        Denied => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✗ ".red(),
+                vec![
+                    "You ".into(),
+                    "did not approve".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                ],
+            )
+        }
+        Abort => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✗ ".red(),
+                vec![
+                    "You ".into(),
+                    "canceled".bold(),
+                    " the request to run ".into(),
+                    snippet,
+                ],
+            )
+        }
+    };
+
+    Box::new(PrefixedWrappedHistoryCell::new(
+        Line::from(summary),
+        symbol,
+        "  ",
+    ))
+}
+
 /// Cyan history cell line showing the current review status.
 pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
     PlainHistoryCell {
@@ -445,10 +568,6 @@ pub(crate) fn new_session_info(
 
 pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
     UserHistoryCell { message }
-}
-
-pub(crate) fn new_user_approval_decision(lines: Vec<Line<'static>>) -> PlainHistoryCell {
-    PlainHistoryCell { lines }
 }
 
 #[derive(Debug)]
@@ -943,11 +1062,6 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![vec![padded_emoji("⚠️").into(), message.dim()].into()];
-    PlainHistoryCell { lines }
-}
-
 /// Render a user‑friendly plan update styled like a checkbox todo list.
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     let UpdatePlanArgs { explanation, plan } = update;
@@ -1201,6 +1315,29 @@ mod tests {
         let cell = AgentMessageCell::new(vec![Line::default()], false);
         assert_eq!(cell.transcript_lines(80), vec![Line::from("  ")]);
         assert_eq!(cell.desired_transcript_height(80), 1);
+    }
+
+    #[test]
+    fn prefixed_wrapped_history_cell_indents_wrapped_lines() {
+        let summary = Line::from(vec![
+            "You ".into(),
+            "approved".bold(),
+            " codex to run ".into(),
+            "echo something really long to ensure wrapping happens".dim(),
+            " this time".bold(),
+        ]);
+        let cell = PrefixedWrappedHistoryCell::new(summary, "✔ ".green(), "  ");
+        let rendered = render_lines(&cell.display_lines(24));
+        assert_eq!(
+            rendered,
+            vec![
+                "✔ You approved codex".to_string(),
+                "  to run echo something".to_string(),
+                "  really long to ensure".to_string(),
+                "  wrapping happens this".to_string(),
+                "  time".to_string(),
+            ]
+        );
     }
 
     #[test]
