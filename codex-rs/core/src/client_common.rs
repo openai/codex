@@ -23,6 +23,13 @@ use tokio::sync::mpsc;
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TurnType {
+    #[default]
+    Regular,
+    Review,
+}
+
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
@@ -41,6 +48,9 @@ pub struct Prompt {
 
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
+
+    /// The type of turn being executed
+    pub turn_type: TurnType,
 }
 
 impl Prompt {
