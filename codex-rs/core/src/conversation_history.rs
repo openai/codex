@@ -12,6 +12,11 @@ impl ConversationHistory {
         Self { items: Vec::new() }
     }
 
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.items.len()
+    }
+
     /// Returns a clone of the contents in the transcript.
     pub(crate) fn contents(&self) -> Vec<ResponseItem> {
         self.items.clone()

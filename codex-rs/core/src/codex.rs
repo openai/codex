@@ -111,7 +111,7 @@ use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 // Prune (experimental)
-// Prune helpers removed in this branch; keep protocol types internal to protocol.rs
+// Context prune types are defined in protocol.rs
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -1002,7 +1002,8 @@ impl Session {
     pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
         let history = {
             let state = self.state.lock().await;
-            state.history_snapshot()
+            // Apply inclusion mask if present so the model sees the pruned context.
+            state.filtered_history()
         };
         [history, extra].concat()
     }
@@ -1430,6 +1431,58 @@ async fn submission_loop(
                     msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
                         custom_prompts,
                     }),
+                };
+                sess.send_event(event).await;
+            }
+            // --- Context prune (experimental) ---
+            Op::GetContextItems => {
+                let sub_id = sub.id.clone();
+                let event = {
+                    let state = sess.state.lock().await;
+                    let ev = state.build_context_items_event();
+                    Event { id: sub_id, msg: EventMsg::ContextItems(ev) }
+                };
+                sess.send_event(event).await;
+            }
+            Op::SetContextInclusion { indices, included } => {
+                {
+                    let mut state = sess.state.lock().await;
+                    state.set_context_inclusion(&indices, included);
+                }
+                // Optional: emit a refreshed listing so UIs that do not keep local toggles update.
+                let sub_id = sub.id.clone();
+                let event = {
+                    let state = sess.state.lock().await;
+                    let ev = state.build_context_items_event();
+                    Event { id: sub_id, msg: EventMsg::ContextItems(ev) }
+                };
+                sess.send_event(event).await;
+            }
+            Op::PruneContextByIndices { indices } => {
+                {
+                    let mut state = sess.state.lock().await;
+                    state.prune_by_indices(indices);
+                }
+                // Emit refreshed context items after destructive prune.
+                let sub_id = sub.id.clone();
+                let event = {
+                    let state = sess.state.lock().await;
+                    let ev = state.build_context_items_event();
+                    Event { id: sub_id, msg: EventMsg::ContextItems(ev) }
+                };
+                sess.send_event(event).await;
+            }
+            Op::PruneContext { categories, range } => {
+                {
+                    let mut state = sess.state.lock().await;
+                    state.prune_by_categories(&categories, &range);
+                }
+                // Emit refreshed listing so the UI can reflect inclusion changes.
+                let sub_id = sub.id.clone();
+                let event = {
+                    let state = sess.state.lock().await;
+                    let ev = state.build_context_items_event();
+                    Event { id: sub_id, msg: EventMsg::ContextItems(ev) }
                 };
                 sess.send_event(event).await;
             }

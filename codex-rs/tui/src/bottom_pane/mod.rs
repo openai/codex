@@ -69,11 +69,6 @@ pub(crate) struct BottomPane {
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
     context_window_percent: Option<u8>,
-    footer_model_label: Option<String>,
-    footer_directory: Option<String>,
-    footer_account_email: Option<String>,
-    footer_primary_limit_percent: Option<u8>,
-    footer_weekly_limit_percent: Option<u8>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -107,11 +102,6 @@ impl BottomPane {
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
-            footer_model_label: None,
-            footer_directory: None,
-            footer_account_email: None,
-            footer_primary_limit_percent: None,
-            footer_weekly_limit_percent: None,
         }
     }
 
@@ -388,30 +378,6 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_footer_model_label(&mut self, label: Option<String>) {
-        self.footer_model_label = label.clone();
-        self.composer.set_footer_model_label(label);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_footer_directory(&mut self, directory: Option<String>) {
-        self.footer_directory = directory.clone();
-        self.composer.set_footer_directory(directory);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_footer_account_email(&mut self, email: Option<String>) {
-        self.footer_account_email = email.clone();
-        self.composer.set_footer_account_email(email);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_footer_limits(&mut self, primary: Option<u8>, weekly: Option<u8>) {
-        self.footer_primary_limit_percent = primary;
-        self.footer_weekly_limit_percent = weekly;
-        self.composer.set_footer_limits(primary, weekly);
-        self.request_redraw();
-    }
 
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {

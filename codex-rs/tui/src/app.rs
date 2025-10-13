@@ -386,8 +386,16 @@ impl App {
             AppEvent::OpenPruneAdvanced => {
                 self.chat_widget.open_prune_advanced();
             }
+            AppEvent::OpenPruneRoot => {
+                // Ensure any advanced state is cleared before showing the root menu again.
+                self.chat_widget.on_prune_advanced_closed();
+                self.chat_widget.open_prune_menu();
+            }
             AppEvent::PruneAdvancedClosed => {
                 self.chat_widget.on_prune_advanced_closed();
+            }
+            AppEvent::PruneRootClosed => {
+                self.chat_widget.on_prune_root_closed();
             }
             AppEvent::ToggleKeepIndex { idx } => {
                 self.chat_widget.toggle_keep_index(idx);
@@ -401,6 +409,9 @@ impl App {
             AppEvent::OpenPruneManual => {
                 self.chat_widget.open_prune_manual_menu();
             }
+            AppEvent::OpenPruneManualConfirm { category, label } => {
+                self.chat_widget.open_prune_manual_confirm(category, label);
+            }
             AppEvent::ApplyAdvancedPrune => {
                 self.chat_widget.apply_advanced_prune();
             }
@@ -411,7 +422,6 @@ impl App {
             AppEvent::ShowInfoMessage(msg) => {
                 self.chat_widget.add_info_message(msg, None);
             }
-            _ => {}
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let _ = tui.enter_alt_screen();

@@ -2382,4 +2382,3 @@ printf 'fenced within fenced\n'
 
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
-// Prune-by-turn and advanced prune tests removed in this branch.

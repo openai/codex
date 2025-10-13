@@ -270,6 +270,9 @@ pub(crate) struct ChatWidget {
     prune_keep_indices: HashSet<usize>,
     prune_delete_indices: HashSet<usize>,
     pending_prune_advanced: bool,
+    // When true, closing the Advanced view is part of an Enter-driven flow to
+    // show the confirmation popup; do not reopen the root menu in this case.
+    closing_advanced_for_confirm: bool,
     prune_root_active: bool,
     advanced_index_map: HashMap<usize, usize>,
     pending_advanced_plan: Option<AdvancedPendingPlan>,
@@ -307,6 +310,25 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    /// Estimate freed percent for a manual prune of a given category based on the
+    /// last known `ContextItems` snapshot. If not available, returns 0.
+    fn estimate_manual_prune_freed_pct(
+        &self,
+        category: codex_core::protocol::PruneCategory,
+    ) -> u8 {
+        let Some(list) = &self.last_context_items else { return 0; };
+        let mut included_total: u32 = 0;
+        let mut cat_count: u32 = 0;
+        for item in list.iter() {
+            if item.included {
+                included_total = included_total.saturating_add(1);
+                if item.category == category {
+                    cat_count = cat_count.saturating_add(1);
+                }
+            }
+        }
+        if included_total == 0 { 0 } else { ((cat_count * 100) / included_total) as u8 }
+    }
     fn advanced_marker_for(&self, item: &ContextItemSummary) -> &'static str {
         if self.prune_delete_indices.contains(&item.index) {
             "[D]"
@@ -982,6 +1004,7 @@ impl ChatWidget {
             prune_keep_indices: HashSet::new(),
             prune_delete_indices: HashSet::new(),
             pending_prune_advanced: false,
+            closing_advanced_for_confirm: false,
             prune_root_active: false,
             advanced_index_map: HashMap::new(),
             pending_advanced_plan: None,
@@ -1056,6 +1079,7 @@ impl ChatWidget {
             prune_keep_indices: HashSet::new(),
             prune_delete_indices: HashSet::new(),
             pending_prune_advanced: false,
+            closing_advanced_for_confirm: false,
             prune_root_active: false,
             advanced_index_map: HashMap::new(),
             pending_advanced_plan: None,
@@ -1603,6 +1627,11 @@ impl ChatWidget {
     pub(crate) fn open_prune_advanced(&mut self) {
         self.prune_root_active = false;
         self.pending_prune_advanced = true;
+        // If we already have a cached list from a recent refresh, render immediately
+        // to avoid a perceived "freeze" while waiting for the core response.
+        if self.last_context_items.is_some() {
+            self.render_prune_advanced_view();
+        }
         self.submit_op(Op::GetContextItems);
     }
 
@@ -1610,17 +1639,17 @@ impl ChatWidget {
         self.pending_prune_advanced = false;
         self.pending_advanced_plan = None;
         self.advanced_index_map.clear();
+        if self.closing_advanced_for_confirm {
+            // Clear flag and do not reopen the root menu; the confirm popup is now active.
+            self.closing_advanced_for_confirm = false;
+        } else {
+            // Esc/backtrack from Advanced should return to the root prune menu.
+            self.open_prune_menu();
+        }
     }
 
     pub(crate) fn on_prune_root_closed(&mut self) {
         self.prune_root_active = false;
-    }
-
-    pub(crate) fn handle_prune_advanced_escape(&mut self) {
-        self.on_prune_advanced_closed();
-        if !self.prune_root_active {
-            self.open_prune_menu();
-        }
     }
 
     pub(crate) fn toggle_keep_index(&mut self, idx: usize) {
@@ -1665,6 +1694,7 @@ impl ChatWidget {
     pub(crate) fn confirm_advanced_changes(&mut self) {
         // Build plan and show confirmation dialog.
         self.pending_prune_advanced = false;
+        self.closing_advanced_for_confirm = true;
         let mut to_include: Vec<usize> = Vec::new();
         let mut to_exclude: Vec<usize> = Vec::new();
         let mut before_count: usize = 0;
@@ -1749,6 +1779,22 @@ impl ChatWidget {
             let exc_len = plan.to_exclude.len();
             let del_len = plan.to_delete.len();
             // Inclusion toggles are kept in the TUI and finalized on shutdown rewrite.
+            // Also notify core immediately so subsequent turns reflect the staged plan.
+            // Guard empty vectors to avoid emitting no-op ops.
+            if inc_len > 0 {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(codex_core::protocol::Op::SetContextInclusion {
+                        indices: plan.to_include.clone(),
+                        included: true,
+                    }));
+            }
+            if exc_len > 0 {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(codex_core::protocol::Op::SetContextInclusion {
+                        indices: plan.to_exclude.clone(),
+                        included: false,
+                    }));
+            }
             if del_len > 0 {
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::PruneContextByIndices {
@@ -1837,6 +1883,7 @@ impl ChatWidget {
             search_placeholder: Some("Filter context items".to_string()),
             header: Box::new(ratatui::text::Line::from("Type to filter").dim()),
             on_enter_event: Some(AppEvent::ConfirmAdvancedChanges),
+            // Completing Advanced via Enter triggers confirm; Esc just closes Advanced (no root menu).
             on_complete_event: Some(AppEvent::PruneAdvancedClosed),
         });
     }
@@ -1899,6 +1946,7 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select an action")),
             on_enter_event: None,
+            // Esc/back from root menu closes the prune flow.
             on_complete_event: Some(AppEvent::PruneRootClosed),
         });
     }
@@ -1981,7 +2029,8 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select categories to prune")),
             on_enter_event: None,
-            on_complete_event: None,
+            // Esc/back from Manual returns to the root prune menu.
+            on_complete_event: Some(AppEvent::OpenPruneRoot),
         });
     }
 
@@ -2006,8 +2055,9 @@ impl ChatWidget {
             ..Default::default()
         });
 
-        // Yes — apply prune for the selected category
+        // Yes — apply prune for the selected category (show estimated freed %)
         let label_clone = label.clone();
+        let freed_pct_est = self.estimate_manual_prune_freed_pct(category.clone());
         items.push(SelectionItem {
             name: format!("Yes, prune {label}"),
             description: Some("Remove matching items and refresh context".to_string()),
@@ -2018,7 +2068,7 @@ impl ChatWidget {
                 }));
                 tx.send(AppEvent::CodexOp(Op::GetContextItems));
                 tx.send(AppEvent::ShowInfoMessage(format!(
-                    "Pruned {label_clone} from context"
+                    "Pruned {label_clone} from context: ~{freed_pct_est}% freed."
                 )));
             })],
             dismiss_on_select: true,
@@ -2034,6 +2084,7 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from(header)),
             on_enter_event: None,
+            // Esc/back from confirm returns to the manual menu.
             on_complete_event: Some(AppEvent::OpenPruneManual),
         });
         // No immediate user feedback here; the confirm selection posts a toast.

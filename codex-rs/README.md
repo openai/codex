@@ -108,12 +108,12 @@ The same setting can be persisted in `~/.codex/config.toml` via the top-level `s
 
 Use `/prune` to manually reduce what goes into the next turn’s context without summarizing anything:
 
-- Basic presets: prune by category (tool calls, tool output, user/assistant messages, reasoning) across the entire history, or prune the first N turns (with dynamic 5/10/15… presets and an "X turns" option).
+- Basic presets: prune by category (tool calls, tool output, user/assistant messages, reasoning) across the entire history.
 - Advanced: list individual context items and stage changes for the next turn. Use `space` to toggle inclusion and `del` to mark an item for deletion; `enter` applies staged changes (with an extra confirmation if there are deletions), and `esc` returns to the main prune menu. Type to filter. System items (UserInstructions/EnvironmentContext) are hidden here.
 
 Notes:
-- Advanced applies changes on `enter` (there is no longer an automatic apply on each toggle).
-- The "Fix context" option attempts a smart repair by restoring the most recent missing tool call from the rollout (with confirmation).
+- Advanced applies changes on `enter` and updates the agent’s in-memory context immediately. Deletions remove items from the in‑memory transcript; non‑destructive include/exclude toggles affect only what is sent to the model. On shutdown, the TUI also offers a best‑effort rollout rewrite to persist the current inclusion mask for future resumes.
+- The menu includes a "Restore full context" option that resumes the session from the automatic `.bak` of the rollout (with validation), effectively undoing any destructive prune done during the session.
 
 ## Code Organization
 

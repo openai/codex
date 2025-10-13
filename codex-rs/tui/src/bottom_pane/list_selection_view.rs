@@ -232,22 +232,6 @@ impl ListSelectionView {
         self.apply_filter();
     }
 
-    /// Extract the category label encoded in `search_value` for the given index.
-    pub(crate) fn category_label_for_idx(&self, idx: usize) -> Option<String> {
-        for item in &self.items {
-            if let Some(sv) = &item.search_value
-                && sv.starts_with(&format!("IDX:{idx}|"))
-            {
-                if let Some(cat_pos) = sv.find("|CAT:") {
-                    let rest = &sv[cat_pos + 5..];
-                    let end = rest.find('|').unwrap_or(rest.len());
-                    return Some(rest[..end].to_string());
-                }
-                return None;
-            }
-        }
-        None
-    }
 
     fn move_up(&mut self) {
         let len = self.visible_len();

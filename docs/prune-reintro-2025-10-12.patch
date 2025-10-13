@@ -1,0 +1,383 @@
+diff --git a/codex-rs/README.md b/codex-rs/README.md
+index 3c842eb51..57ee75a4f 100644
+--- a/codex-rs/README.md
++++ b/codex-rs/README.md
+@@ -108,12 +108,12 @@ The same setting can be persisted in `~/.codex/config.toml` via the top-level `s
+ 
+ Use `/prune` to manually reduce what goes into the next turn’s context without summarizing anything:
+ 
+-- Basic presets: prune by category (tool calls, tool output, user/assistant messages, reasoning) across the entire history, or prune the first N turns (with dynamic 5/10/15… presets and an "X turns" option).
++- Basic presets: prune by category (tool calls, tool output, user/assistant messages, reasoning) across the entire history.
+ - Advanced: list individual context items and stage changes for the next turn. Use `space` to toggle inclusion and `del` to mark an item for deletion; `enter` applies staged changes (with an extra confirmation if there are deletions), and `esc` returns to the main prune menu. Type to filter. System items (UserInstructions/EnvironmentContext) are hidden here.
+ 
+ Notes:
+-- Advanced applies changes on `enter` (there is no longer an automatic apply on each toggle).
+-- The "Fix context" option attempts a smart repair by restoring the most recent missing tool call from the rollout (with confirmation).
++- Advanced applies changes on `enter` and updates the agent’s in-memory context immediately. Deletions remove items from the in‑memory transcript; non‑destructive include/exclude toggles affect only what is sent to the model. On shutdown, the TUI also offers a best‑effort rollout rewrite to persist the current inclusion mask for future resumes.
++- The menu includes a "Restore full context" option that resumes the session from the automatic `.bak` of the rollout (with validation), effectively undoing any destructive prune done during the session.
+ 
+ ## Code Organization
+ 
+diff --git a/codex-rs/core/src/codex.rs b/codex-rs/core/src/codex.rs
+index 67851bfad..c12dd08e2 100644
+--- a/codex-rs/core/src/codex.rs
++++ b/codex-rs/core/src/codex.rs
+@@ -1002,7 +1002,8 @@ impl Session {
+     pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
+         let history = {
+             let state = self.state.lock().await;
+-            state.history_snapshot()
++            // Apply inclusion mask if present so the model sees the pruned context.
++            state.filtered_history()
+         };
+         [history, extra].concat()
+     }
+@@ -1433,6 +1434,58 @@ async fn submission_loop(
+                 };
+                 sess.send_event(event).await;
+             }
++            // --- Context prune (experimental) ---
++            Op::GetContextItems => {
++                let sub_id = sub.id.clone();
++                let event = {
++                    let state = sess.state.lock().await;
++                    let ev = state.build_context_items_event();
++                    Event { id: sub_id, msg: EventMsg::ContextItems(ev) }
++                };
++                sess.send_event(event).await;
++            }
++            Op::SetContextInclusion { indices, included } => {
++                {
++                    let mut state = sess.state.lock().await;
++                    state.set_context_inclusion(&indices, included);
++                }
++                // Optional: emit a refreshed listing so UIs that do not keep local toggles update.
++                let sub_id = sub.id.clone();
++                let event = {
++                    let state = sess.state.lock().await;
++                    let ev = state.build_context_items_event();
++                    Event { id: sub_id, msg: EventMsg::ContextItems(ev) }
++                };
++                sess.send_event(event).await;
++            }
++            Op::PruneContextByIndices { indices } => {
++                {
++                    let mut state = sess.state.lock().await;
++                    state.prune_by_indices(indices);
++                }
++                // Emit refreshed context items after destructive prune.
++                let sub_id = sub.id.clone();
++                let event = {
++                    let state = sess.state.lock().await;
++                    let ev = state.build_context_items_event();
++                    Event { id: sub_id, msg: EventMsg::ContextItems(ev) }
++                };
++                sess.send_event(event).await;
++            }
++            Op::PruneContext { categories, range } => {
++                {
++                    let mut state = sess.state.lock().await;
++                    state.prune_by_categories(&categories, &range);
++                }
++                // Emit refreshed listing so the UI can reflect inclusion changes.
++                let sub_id = sub.id.clone();
++                let event = {
++                    let state = sess.state.lock().await;
++                    let ev = state.build_context_items_event();
++                    Event { id: sub_id, msg: EventMsg::ContextItems(ev) }
++                };
++                sess.send_event(event).await;
++            }
+             Op::Compact => {
+                 // Attempt to inject input into current task
+                 if let Err(items) = sess
+diff --git a/codex-rs/core/src/state/session.rs b/codex-rs/core/src/state/session.rs
+index cb4dc3926..570add7f3 100644
+--- a/codex-rs/core/src/state/session.rs
++++ b/codex-rs/core/src/state/session.rs
+@@ -1,6 +1,11 @@
+ //! Session-wide mutable state.
+ 
+-use codex_protocol::models::ResponseItem;
++use codex_protocol::models::{ContentItem, ResponseItem};
++use codex_protocol::protocol::{
++    ContextItemSummary, ContextItemsEvent, PruneCategory, PruneRange, ENVIRONMENT_CONTEXT_OPEN_TAG,
++    USER_INSTRUCTIONS_OPEN_TAG,
++};
++use std::collections::BTreeSet;
+ 
+ use crate::conversation_history::ConversationHistory;
+ use crate::protocol::RateLimitSnapshot;
+@@ -13,12 +18,18 @@ pub(crate) struct SessionState {
+     pub(crate) history: ConversationHistory,
+     pub(crate) token_info: Option<TokenUsageInfo>,
+     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+-    // Advanced prune/inclusion bookkeeping removed in this branch.
++    // Optional inclusion mask for Advanced Prune. When None, all items are included.
++    include_mask: Option<BTreeSet<usize>>,
+ }
+ 
+ impl SessionState {
+     /// Create a new session state mirroring previous `State::default()` semantics.
+-    pub(crate) fn new() -> Self { Self { history: ConversationHistory::new(), ..Default::default() } }
++    pub(crate) fn new() -> Self {
++        Self {
++            history: ConversationHistory::new(),
++            ..Default::default()
++        }
++    }
+ 
+     // History helpers
+     pub(crate) fn record_items<I>(&mut self, items: I)
+@@ -35,7 +46,8 @@ impl SessionState {
+ 
+     pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
+         self.history.replace(items);
+-        // No inclusion mask bookkeeping in this branch.
++        // Reset include_mask because indices changed completely.
++        self.include_mask = None;
+     }
+ 
+ 
+@@ -75,3 +87,204 @@ impl SessionState {
+ 
+     // pinned_tail_start_index and turn accounting removed in this branch.
+ }
++
++impl SessionState {
++    /// Return a filtered history after applying the inclusion mask.
++    pub(crate) fn filtered_history(&self) -> Vec<ResponseItem> {
++        match &self.include_mask {
++            None => self.history.contents(),
++            Some(mask) => self
++                .history
++                .contents()
++                .into_iter()
++                .enumerate()
++                .filter_map(|(idx, item)| mask.contains(&idx).then_some(item))
++                .collect(),
++        }
++    }
++
++    /// Ensure include_mask is initialized to "all included".
++    fn ensure_mask_all_included(&mut self) {
++        if self.include_mask.is_none() {
++            let len = self.history.contents().len();
++            self.include_mask = Some((0..len).collect());
++        }
++    }
++
++    /// Set inclusion for given indices. Ignores out-of-range indices.
++    pub(crate) fn set_context_inclusion(&mut self, indices: &[usize], included: bool) {
++        self.ensure_mask_all_included();
++        if let Some(mask) = &mut self.include_mask {
++            let len = self.history.contents().len();
++            for &idx in indices {
++                if idx >= len {
++                    continue;
++                }
++                if included {
++                    mask.insert(idx);
++                } else {
++                    mask.remove(&idx);
++                }
++            }
++        }
++    }
++
++    /// Delete items by index from history and update the inclusion mask accordingly.
++    pub(crate) fn prune_by_indices(&mut self, mut indices: Vec<usize>) {
++        indices.sort_unstable_by(|a, b| b.cmp(a));
++        let mut items = self.history.contents();
++        let mut changed = false;
++        for idx in indices {
++            if idx < items.len() {
++                items.remove(idx);
++                changed = true;
++                if let Some(mask) = &mut self.include_mask {
++                    mask.remove(&idx);
++                    // Shift indices greater than idx by -1
++                    let mut shifted: BTreeSet<usize> = BTreeSet::new();
++                    for &m in mask.iter() {
++                        shifted.insert(if m > idx { m - 1 } else { m });
++                    }
++                    *mask = shifted;
++                }
++            }
++        }
++        if changed {
++            self.history.replace(items);
++        }
++    }
++
++    /// Mark matching categories as excluded (non-destructive prune).
++    pub(crate) fn prune_by_categories(&mut self, categories: &[PruneCategory], _range: &PruneRange) {
++        if categories.is_empty() {
++            return;
++        }
++        let items = self.history.contents();
++        let mut to_exclude: Vec<usize> = Vec::new();
++        for (idx, item) in items.iter().enumerate() {
++            if let Some(cat) = categorize(item) {
++                if categories.iter().any(|c| c == &cat) {
++                    to_exclude.push(idx);
++                }
++            }
++        }
++        self.set_context_inclusion(&to_exclude, false);
++    }
++
++    /// Build a ContextItemsEvent summarizing items and their inclusion state.
++    pub(crate) fn build_context_items_event(&self) -> ContextItemsEvent {
++        let items = self.history.contents();
++        let mask = self.include_mask.as_ref();
++        let mut out: Vec<ContextItemSummary> = Vec::with_capacity(items.len());
++        for (idx, item) in items.iter().enumerate() {
++            if let Some(category) = categorize(item) {
++                let included = match mask {
++                    None => true,
++                    Some(m) => m.contains(&idx),
++                };
++                let preview = preview_for(item);
++                out.push(ContextItemSummary {
++                    index: idx,
++                    category,
++                    preview,
++                    included,
++                });
++            }
++        }
++        ContextItemsEvent { total: out.len(), items: out }
++    }
++}
++
++/// Map a ResponseItem to a PruneCategory.
++fn categorize(item: &ResponseItem) -> Option<PruneCategory> {
++    use ResponseItem::*;
++    match item {
++        Message { role, content, .. } => {
++            if let Some(text) = first_text(content) {
++                let t = text.trim();
++                if starts_with_case_insensitive(t, ENVIRONMENT_CONTEXT_OPEN_TAG) {
++                    return Some(PruneCategory::EnvironmentContext);
++                }
++                if starts_with_case_insensitive(t, USER_INSTRUCTIONS_OPEN_TAG) {
++                    return Some(PruneCategory::UserInstructions);
++                }
++            }
++            if role == "assistant" {
++                Some(PruneCategory::AssistantMessage)
++            } else if role == "user" {
++                Some(PruneCategory::UserMessage)
++            } else {
++                None
++            }
++        }
++        Reasoning { .. } => Some(PruneCategory::Reasoning),
++        FunctionCall { .. } | CustomToolCall { .. } | LocalShellCall { .. } | WebSearchCall { .. } => {
++            Some(PruneCategory::ToolCall)
++        }
++        FunctionCallOutput { .. } | CustomToolCallOutput { .. } => Some(PruneCategory::ToolOutput),
++        Other => None,
++    }
++}
++
++fn first_text(items: &[ContentItem]) -> Option<&str> {
++    for c in items {
++        match c {
++            ContentItem::InputText { text } | ContentItem::OutputText { text } => return Some(text),
++            _ => {}
++        }
++    }
++    None
++}
++
++fn starts_with_case_insensitive(text: &str, prefix: &str) -> bool {
++    let tl = text.len();
++    let pl = prefix.len();
++    if tl < pl {
++        return false;
++    }
++    text[..pl].eq_ignore_ascii_case(prefix)
++}
++
++fn preview_for(item: &ResponseItem) -> String {
++    use ResponseItem::*;
++    const MAX: usize = 80;
++    match item {
++        Message { role, content, .. } => {
++            let raw = first_text(content).unwrap_or("");
++            let mut s = raw.trim();
++            if let Some(idx) = s.find('\n') {
++                s = &s[..idx];
++            }
++            let mut out = format!("{role}: {s}");
++            if out.len() > MAX {
++                out.truncate(MAX);
++            }
++            out
++        }
++        Reasoning { .. } => "<reasoning>…".to_string(),
++        FunctionCall { name, .. } => format!("tool call: {name}"),
++        FunctionCallOutput { output, .. } => {
++            let mut s = output.content.trim().to_string();
++            if s.len() > MAX {
++                s.truncate(MAX);
++            }
++            format!("tool output: {s}")
++        }
++        CustomToolCall { name, .. } => format!("tool call: {name}"),
++        CustomToolCallOutput { output, .. } => {
++            let mut s = output.trim().to_string();
++            if s.len() > MAX {
++                s.truncate(MAX);
++            }
++            format!("tool output: {s}")
++        }
++        LocalShellCall { status, .. } => format!("shell: {status:?}"),
++        WebSearchCall { action, .. } => match action {
++            codex_protocol::models::WebSearchAction::Search { query } => {
++                format!("search: {query}")
++            }
++            codex_protocol::models::WebSearchAction::Other => "search".to_string(),
++        },
++        Other => String::from("other"),
++    }
++}
+diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
+index 2a81ac63d..35e565540 100644
+--- a/codex-rs/tui/src/chatwidget.rs
++++ b/codex-rs/tui/src/chatwidget.rs
+@@ -1749,6 +1749,22 @@ impl ChatWidget {
+             let exc_len = plan.to_exclude.len();
+             let del_len = plan.to_delete.len();
+             // Inclusion toggles are kept in the TUI and finalized on shutdown rewrite.
++            // Also notify core immediately so subsequent turns reflect the staged plan.
++            // Guard empty vectors to avoid emitting no-op ops.
++            if inc_len > 0 {
++                self.app_event_tx
++                    .send(AppEvent::CodexOp(codex_core::protocol::Op::SetContextInclusion {
++                        indices: plan.to_include.clone(),
++                        included: true,
++                    }));
++            }
++            if exc_len > 0 {
++                self.app_event_tx
++                    .send(AppEvent::CodexOp(codex_core::protocol::Op::SetContextInclusion {
++                        indices: plan.to_exclude.clone(),
++                        included: false,
++                    }));
++            }
+             if del_len > 0 {
+                 self.app_event_tx
+                     .send(AppEvent::CodexOp(Op::PruneContextByIndices {
+diff --git a/docs/advanced.md b/docs/advanced.md
+index 1bec1fb78..9ec3d9e9b 100644
+--- a/docs/advanced.md
++++ b/docs/advanced.md
+@@ -80,4 +80,4 @@ The Advanced mode of `/prune` lets you stage exactly what goes into the next tur
+ Notes:
+ - System items — UserInstructions and EnvironmentContext — are omitted from the Advanced list.
+ - "Deletion" affects only the in‑memory context; rollout files on disk remain unchanged.
+-- The main `/prune` menu also includes a "Fix context" option that attempts a smart repair by restoring the most recent missing tool call from the rollout (with confirmation).
++- The main `/prune` menu also includes a "Restore full context" option that resumes from the `.bak` of the current rollout (with confirmation).
