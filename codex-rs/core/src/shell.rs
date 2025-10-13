@@ -98,26 +98,14 @@ impl Shell {
                             return Some(command);
                         }
                         
-                        // Special case: if stop-parsing token detected, use -EncodedCommand
+                        // Special case: stop-parsing token "--%"
+                        // The token must be the first token after -Command and only works in command-line context.
+                        // We cannot inject encoding setup inside the command without breaking stop-parsing semantics.
+                        // Instead, we set the encoding at the PowerShell process level using -OutputEncoding.
                         if cmd_arg.trim_start().starts_with("--%") {
-                            // Encode the command with UTF-8 setup prepended
-                            let full_command = format!(
-                                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}",
-                                cmd_arg
-                            );
-                            
-                            // Convert to UTF-16LE and then to base64
-                            let utf16_bytes: Vec<u8> = full_command
-                                .encode_utf16()
-                                .flat_map(|c| c.to_le_bytes())
-                                .collect();
-                            
-                            let encoded = base64::engine::general_purpose::STANDARD.encode(&utf16_bytes);
-                            
-                            // Replace -Command with -EncodedCommand and set the encoded string
-                            modified_command[command_index] = "-EncodedCommand".to_string();
-                            *cmd_arg = encoded;
-                            
+                            // Insert -OutputEncoding utf8 before -Command
+                            modified_command.insert(command_index, "-OutputEncoding".to_string());
+                            modified_command.insert(command_index + 1, "utf8".to_string());
                             return Some(modified_command);
                         }
                         
@@ -675,5 +663,24 @@ mod tests_windows {
         assert!(actual.is_some());
         let cmd = actual.unwrap();
         assert_eq!(cmd, input); // Should be unchanged to preserve stdin functionality
+
+        // Test 5: PowerShell command with stop-parsing token should use -OutputEncoding
+        let input = vec![
+            "pwsh.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "--% git commit -m \"Turkish: şğı\"".to_string(),
+        ];
+        let actual = shell.format_default_shell_invocation(input);
+        
+        assert!(actual.is_some());
+        let cmd = actual.unwrap();
+        assert_eq!(cmd.len(), 6);
+        assert_eq!(cmd[0], "pwsh.exe");
+        assert_eq!(cmd[1], "-NoProfile");
+        assert_eq!(cmd[2], "-OutputEncoding");
+        assert_eq!(cmd[3], "utf8");
+        assert_eq!(cmd[4], "-Command");
+        assert_eq!(cmd[5], "--% git commit -m \"Turkish: şğı\"");
     }
 }
