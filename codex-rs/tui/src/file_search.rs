@@ -52,59 +52,6 @@ pub(crate) struct FileSearchManager {
     app_tx: AppEventSender,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::app_event::AppEvent;
-    use std::time::Instant;
-    use tokio::sync::mpsc::unbounded_channel;
-
-    #[test]
-    fn file_search_manager_emits_results() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let nested = temp_dir.path().join("src");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("gamma.rs"), "fn main() {}").unwrap();
-
-        let (tx, mut rx) = unbounded_channel();
-        let manager =
-            FileSearchManager::new(temp_dir.path().to_path_buf(), AppEventSender::new(tx));
-        manager.on_user_query("gam".to_string());
-
-        let start = Instant::now();
-        let mut saw_match = false;
-
-        let mut captured: Vec<String> = Vec::new();
-        while start.elapsed() < Duration::from_secs(2) {
-            while let Ok(event) = rx.try_recv() {
-                if let AppEvent::FileSearchResult { matches, .. } = &event {
-                    if matches.iter().any(|m| m.path.ends_with("gamma.rs")) {
-                        saw_match = true;
-                        captured.push(format!("{event:?}"));
-                        break;
-                    }
-                }
-                captured.push(format!("{event:?}"));
-            }
-            if saw_match {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-
-        if !saw_match {
-            while let Ok(event) = rx.try_recv() {
-                captured.push(format!("{event:?}"));
-            }
-        }
-
-        assert!(
-            saw_match,
-            "file search did not emit expected result; captured events: {captured:?}"
-        );
-    }
-}
-
 struct SearchState {
     /// Latest query typed by user (updated every keystroke).
     latest_query: String,
@@ -273,6 +220,8 @@ impl FileSearchManager {
             };
 
             let mut last_sent_paths: Vec<String> = Vec::new();
+            let mut last_sent_query: String = String::new();
+            let mut current_query = query.clone();
             let mut sent_once = false;
             let start = Instant::now();
             let mut last_progress = start;
@@ -280,6 +229,24 @@ impl FileSearchManager {
             loop {
                 if cancellation_token.load(Ordering::Relaxed) {
                     manager.cancel();
+                }
+
+                // Check for latest query updates while running and update the pattern.
+                let latest_query = {
+                    #[expect(clippy::unwrap_used)]
+                    let st = search_state.lock().unwrap();
+                    st.latest_query.clone()
+                };
+                if latest_query != current_query {
+                    manager.update_pattern(&latest_query);
+                    current_query = latest_query;
+
+                    // Keep active_search query in sync for accurate prefix checks.
+                    #[expect(clippy::unwrap_used)]
+                    if let Some(active_search) = &mut search_state.lock().unwrap().active_search {
+                        active_search.query.clear();
+                        active_search.query.push_str(&current_query);
+                    }
                 }
 
                 let status = manager.tick(SEARCH_MANAGER_TICK_TIMEOUT);
@@ -293,6 +260,7 @@ impl FileSearchManager {
 
                 let should_emit = !cancellation_token.load(Ordering::Relaxed)
                     && (paths_changed
+                        || (current_query != last_sent_query)
                         || (!sent_once
                             && (flag_was_set
                                 || status.changed
@@ -301,11 +269,13 @@ impl FileSearchManager {
 
                 if should_emit {
                     tx.send(AppEvent::FileSearchResult {
-                        query: query.clone(),
+                        query: current_query.clone(),
                         matches: matches.clone(),
                     });
                     sent_once = true;
                     last_sent_paths = paths;
+                    last_sent_query.clear();
+                    last_sent_query.push_str(&current_query);
                     last_progress = Instant::now();
                 }
 
@@ -320,7 +290,7 @@ impl FileSearchManager {
                         }
                     } else if timeout_elapsed {
                         tx.send(AppEvent::FileSearchResult {
-                            query: query.clone(),
+                            query: current_query.clone(),
                             matches,
                         });
                         break;
@@ -328,5 +298,57 @@ impl FileSearchManager {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use std::time::Instant;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn file_search_manager_emits_results() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let nested = temp_dir.path().join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("gamma.rs"), "fn main() {}").unwrap();
+
+        let (tx, mut rx) = unbounded_channel();
+        let manager =
+            FileSearchManager::new(temp_dir.path().to_path_buf(), AppEventSender::new(tx));
+        manager.on_user_query("gam".to_string());
+
+        let start = Instant::now();
+        let mut saw_match = false;
+
+        let mut captured: Vec<String> = Vec::new();
+        while start.elapsed() < Duration::from_secs(2) {
+            while let Ok(event) = rx.try_recv() {
+                if let AppEvent::FileSearchResult { matches, .. } = &event
+                    && matches.iter().any(|m| m.path.ends_with("gamma.rs")) {
+                        saw_match = true;
+                        captured.push(format!("{event:?}"));
+                        break;
+                    }
+                captured.push(format!("{event:?}"));
+            }
+            if saw_match {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        if !saw_match {
+            while let Ok(event) = rx.try_recv() {
+                captured.push(format!("{event:?}"));
+            }
+        }
+
+        assert!(
+            saw_match,
+            "file search did not emit expected result; captured events: {captured:?}"
+        );
     }
 }
