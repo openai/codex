@@ -1204,6 +1204,11 @@ pub struct StreamErrorEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct StreamInfoEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct PatchApplyBeginEvent {
     /// Identifier so this can be paired with the PatchApplyEnd event.
     pub call_id: String,

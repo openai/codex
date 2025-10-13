@@ -799,16 +799,22 @@ impl TextArea {
     }
 
     pub(crate) fn beginning_of_previous_word(&self) -> usize {
-        if let Some(first_non_ws) = self.text[..self.cursor_pos].rfind(|c: char| !c.is_whitespace())
-        {
-            let candidate = self.text[..first_non_ws]
-                .rfind(|c: char| c.is_whitespace())
-                .map(|i| i + 1)
-                .unwrap_or(0);
-            self.adjust_pos_out_of_elements(candidate, true)
-        } else {
-            0
-        }
+        let prefix = &self.text[..self.cursor_pos];
+        let Some((first_non_ws_idx, _)) = prefix
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| !ch.is_whitespace())
+        else {
+            return 0;
+        };
+        let before = &prefix[..first_non_ws_idx];
+        let candidate = before
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| ch.is_whitespace())
+            .map(|(idx, ch)| idx + ch.len_utf8())
+            .unwrap_or(0);
+        self.adjust_pos_out_of_elements(candidate, true)
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
@@ -1260,6 +1266,15 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
         assert_eq!(t.text(), "hello ");
         assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn delete_backward_word_handles_narrow_no_break_space() {
+        let mut t = ta_with("32\u{202F}AM");
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        pretty_assertions::assert_eq!(t.text(), "32\u{202F}");
+        pretty_assertions::assert_eq!(t.cursor(), t.text().len());
     }
 
     #[test]
