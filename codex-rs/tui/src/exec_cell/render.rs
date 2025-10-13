@@ -466,7 +466,16 @@ impl ExecCell {
             return lines.to_vec();
         }
         if max == 1 {
-            let omitted = omitted_hint.unwrap_or(lines.len());
+            // Carry forward any previously omitted count and add any
+            // additionally hidden content lines from this truncation.
+            let base = omitted_hint.unwrap_or(0);
+            // When an existing ellipsis is present, `lines` already includes
+            // that single representation line; exclude it from the count of
+            // additionally omitted content lines.
+            let extra = lines
+                .len()
+                .saturating_sub(usize::from(omitted_hint.is_some()));
+            let omitted = base + extra;
             return vec![Self::ellipsis_line(omitted)];
         }
 
@@ -478,8 +487,12 @@ impl ExecCell {
             out.extend(lines[..head].iter().cloned());
         }
 
-        let omitted = omitted_hint.unwrap_or_else(|| lines.len().saturating_sub(head + tail));
-        out.push(Self::ellipsis_line(omitted));
+        let base = omitted_hint.unwrap_or(0);
+        let additional = lines
+            .len()
+            .saturating_sub(head + tail)
+            .saturating_sub(usize::from(omitted_hint.is_some()));
+        out.push(Self::ellipsis_line(base + additional));
 
         if tail > 0 {
             out.extend(lines[lines.len() - tail..].iter().cloned());

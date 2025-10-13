@@ -32,7 +32,7 @@ expression: "lines[start_idx..].join(\"\\n\")"
   │ … +1 lines
   └ --- ansi-escape/Cargo.toml
     [package]
-    … +237 lines
+    … +243 lines
     ] }
     tracing = { version
 
