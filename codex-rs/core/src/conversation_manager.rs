@@ -7,6 +7,7 @@ use crate::codex::compact::content_items_to_text;
 use crate::codex::compact::is_session_prefix_message;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
+use crate::delegate_tool::DelegateToolAdapter;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::Event;
@@ -37,14 +38,24 @@ pub struct ConversationManager {
     conversations: Arc<RwLock<HashMap<ConversationId, Arc<CodexConversation>>>>,
     auth_manager: Arc<AuthManager>,
     session_source: SessionSource,
+    delegate_adapter: Option<Arc<dyn DelegateToolAdapter>>,
 }
 
 impl ConversationManager {
     pub fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
+        Self::with_delegate(auth_manager, session_source, None)
+    }
+
+    pub fn with_delegate(
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+        delegate_adapter: Option<Arc<dyn DelegateToolAdapter>>,
+    ) -> Self {
         Self {
             conversations: Arc::new(RwLock::new(HashMap::new())),
             auth_manager,
             session_source,
+            delegate_adapter,
         }
     }
 
@@ -73,6 +84,7 @@ impl ConversationManager {
         } = Codex::spawn(
             config,
             auth_manager,
+            self.delegate_adapter.clone(),
             InitialHistory::New,
             self.session_source,
         )
@@ -133,7 +145,14 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(config, auth_manager, initial_history, self.session_source).await?;
+        } = Codex::spawn(
+            config,
+            auth_manager,
+            self.delegate_adapter.clone(),
+            initial_history,
+            self.session_source,
+        )
+        .await?;
         self.finalize_spawn(codex, conversation_id).await
     }
 
@@ -167,7 +186,14 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(config, auth_manager, history, self.session_source).await?;
+        } = Codex::spawn(
+            config,
+            auth_manager,
+            self.delegate_adapter.clone(),
+            history,
+            self.session_source,
+        )
+        .await?;
 
         self.finalize_spawn(codex, conversation_id).await
     }

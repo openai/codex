@@ -105,6 +105,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.include_plan_tool = true;
+        config.include_delegate_tool = false;
     });
     let TestCodex {
         codex,
@@ -192,6 +193,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.include_plan_tool = true;
+        config.include_delegate_tool = false;
     });
     let TestCodex {
         codex,

@@ -232,6 +232,10 @@ pub struct NewConversationParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_plan_tool: Option<bool>,
 
+    /// Whether to include the delegate tool that invokes sub-agents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_delegate_tool: Option<bool>,
+
     /// Whether to include the apply patch tool in the conversation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_apply_patch_tool: Option<bool>,
@@ -842,6 +846,7 @@ mod tests {
                 config: None,
                 base_instructions: None,
                 include_plan_tool: None,
+                include_delegate_tool: None,
                 include_apply_patch_tool: None,
             },
         };

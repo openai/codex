@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 anyhow.workspace = true
 codex-common = { workspace = true, features = ["cli"] }
 codex-core.workspace = true

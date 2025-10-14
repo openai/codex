@@ -1,10 +1,17 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use async_trait::async_trait;
 use codex_common::CliConfigOverrides;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::ConfigOverrides;
+use codex_core::delegate_tool::DelegateEventReceiver as CoreDelegateEventReceiver;
+use codex_core::delegate_tool::DelegateToolAdapter;
+use codex_core::delegate_tool::DelegateToolError;
+use codex_core::delegate_tool::DelegateToolEvent as CoreDelegateToolEvent;
+use codex_core::delegate_tool::DelegateToolRequest;
+use codex_core::delegate_tool::DelegateToolRun;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -332,4 +339,107 @@ struct DelegateSuccess {
 struct DelegateFailure {
     agent_id: AgentId,
     error: String,
+}
+
+pub struct MultiAgentDelegateAdapter {
+    orchestrator: Arc<AgentOrchestrator>,
+}
+
+impl MultiAgentDelegateAdapter {
+    pub fn new(orchestrator: Arc<AgentOrchestrator>) -> Self {
+        Self { orchestrator }
+    }
+
+    fn map_event(event: DelegateEvent) -> CoreDelegateToolEvent {
+        match event {
+            DelegateEvent::Started {
+                run_id,
+                agent_id,
+                prompt,
+                started_at,
+            } => CoreDelegateToolEvent::Started {
+                run_id,
+                agent_id: agent_id.as_str().to_string(),
+                prompt,
+                started_at,
+            },
+            DelegateEvent::Delta {
+                run_id,
+                agent_id,
+                chunk,
+            } => CoreDelegateToolEvent::Delta {
+                run_id,
+                agent_id: agent_id.as_str().to_string(),
+                chunk,
+            },
+            DelegateEvent::Completed {
+                run_id,
+                agent_id,
+                output,
+                duration,
+            } => CoreDelegateToolEvent::Completed {
+                run_id,
+                agent_id: agent_id.as_str().to_string(),
+                output,
+                duration,
+            },
+            DelegateEvent::Failed {
+                run_id,
+                agent_id,
+                error,
+            } => CoreDelegateToolEvent::Failed {
+                run_id,
+                agent_id: agent_id.as_str().to_string(),
+                error,
+            },
+        }
+    }
+
+    fn map_error(err: OrchestratorError) -> DelegateToolError {
+        match err {
+            OrchestratorError::DelegateInProgress => DelegateToolError::DelegateInProgress,
+            OrchestratorError::AgentNotFound(agent) => DelegateToolError::AgentNotFound(agent),
+            OrchestratorError::DelegateSetupFailed(reason) => {
+                DelegateToolError::SetupFailed(reason)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl DelegateToolAdapter for MultiAgentDelegateAdapter {
+    async fn subscribe(&self) -> CoreDelegateEventReceiver {
+        let mut source = self.orchestrator.subscribe().await;
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(event) = source.recv().await {
+                if tx.send(Self::map_event(event)).is_err() {
+                    break;
+                }
+            }
+        });
+        rx
+    }
+
+    async fn delegate(
+        &self,
+        request: DelegateToolRequest,
+    ) -> Result<DelegateToolRun, DelegateToolError> {
+        let agent_id = AgentId::parse(request.agent_id.as_str())
+            .map_err(|_| DelegateToolError::AgentNotFound(request.agent_id.clone()))?;
+
+        let run_id = self
+            .orchestrator
+            .delegate(DelegateRequest {
+                agent_id: agent_id.clone(),
+                prompt: DelegatePrompt::new(request.prompt),
+            })
+            .await
+            .map_err(Self::map_error)?;
+
+        Ok(DelegateToolRun {
+            run_id,
+            agent_id: request.agent_id,
+        })
+    }
 }

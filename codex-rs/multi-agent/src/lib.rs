@@ -10,6 +10,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -20,6 +21,7 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::find_codex_home;
 use codex_core::config_loader;
+use codex_core::delegate_tool::DelegateToolAdapter;
 use serde::Deserialize;
 use serde::Serialize;
 use toml::Value as TomlValue;
@@ -336,7 +338,12 @@ pub use orchestrator::DelegateEvent;
 pub use orchestrator::DelegatePrompt;
 pub use orchestrator::DelegateRequest;
 pub use orchestrator::DelegateRunId;
+use orchestrator::MultiAgentDelegateAdapter;
 pub use orchestrator::OrchestratorError;
+
+pub fn delegate_tool_adapter(orchestrator: Arc<AgentOrchestrator>) -> Arc<dyn DelegateToolAdapter> {
+    Arc::new(MultiAgentDelegateAdapter::new(orchestrator))
+}
 
 #[cfg(test)]
 mod tests {

@@ -1259,6 +1259,7 @@ name = "codex-multi-agent"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "codex-common",
  "codex-core",
  "serde",

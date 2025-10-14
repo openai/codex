@@ -24,6 +24,7 @@ pub enum ConfigShellToolType {
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub plan_tool: bool,
+    pub delegate_tool: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
@@ -34,6 +35,7 @@ pub(crate) struct ToolsConfig {
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_family: &'a ModelFamily,
     pub(crate) include_plan_tool: bool,
+    pub(crate) include_delegate_tool: bool,
     pub(crate) include_apply_patch_tool: bool,
     pub(crate) include_web_search_request: bool,
     pub(crate) use_streamable_shell_tool: bool,
@@ -46,6 +48,7 @@ impl ToolsConfig {
         let ToolsConfigParams {
             model_family,
             include_plan_tool,
+            include_delegate_tool,
             include_apply_patch_tool,
             include_web_search_request,
             use_streamable_shell_tool,
@@ -75,6 +78,7 @@ impl ToolsConfig {
         Self {
             shell_type,
             plan_tool: *include_plan_tool,
+            delegate_tool: *include_delegate_tool,
             apply_patch_tool_type,
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
@@ -720,6 +724,8 @@ pub(crate) fn build_specs(
     use crate::exec_command::create_exec_command_tool_for_responses_api;
     use crate::exec_command::create_write_stdin_tool_for_responses_api;
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::DELEGATE_TOOL;
+    use crate::tools::handlers::DelegateToolHandler;
     use crate::tools::handlers::ExecStreamHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
@@ -738,6 +744,7 @@ pub(crate) fn build_specs(
     let exec_stream_handler = Arc::new(ExecStreamHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
+    let delegate_handler = Arc::new(DelegateToolHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
@@ -774,6 +781,11 @@ pub(crate) fn build_specs(
     if config.plan_tool {
         builder.push_spec(PLAN_TOOL.clone());
         builder.register_handler("update_plan", plan_handler);
+    }
+
+    if config.delegate_tool {
+        builder.push_spec(DELEGATE_TOOL.clone());
+        builder.register_handler("delegate_agent", delegate_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
@@ -909,6 +921,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: true,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
@@ -929,6 +942,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: true,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
@@ -951,6 +965,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: false,
             use_streamable_shell_tool: false,
@@ -972,6 +987,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: false,
             use_streamable_shell_tool: false,
@@ -1004,6 +1020,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
@@ -1109,6 +1126,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: false,
             use_streamable_shell_tool: false,
@@ -1186,6 +1204,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
@@ -1255,6 +1274,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
@@ -1319,6 +1339,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: true,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
@@ -1386,6 +1407,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
@@ -1465,6 +1487,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
@@ -1581,6 +1604,29 @@ mod tests {
                 description: "Do something cool".to_string(),
                 strict: false,
             })
+        );
+    }
+
+    #[test]
+    fn delegate_tool_enabled_by_flag() {
+        let model_family = find_family_for_model("gpt-5-codex")
+            .expect("gpt-5-codex should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            include_plan_tool: false,
+            include_delegate_tool: true,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            experimental_unified_exec_tool: true,
+        });
+        let (tools, _) = build_specs(&config, None).build();
+
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "delegate_agent")
         );
     }
 }

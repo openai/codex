@@ -59,7 +59,6 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
-use crate::app_event::DelegateRequestPayload;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
@@ -113,7 +112,6 @@ use codex_git_tooling::GitToolingError;
 use codex_git_tooling::create_ghost_commit;
 use codex_git_tooling::restore_ghost_commit;
 use codex_multi_agent::AgentId;
-use codex_multi_agent::DelegatePrompt;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -2228,41 +2226,8 @@ impl ChatWidget {
         ));
     }
 
-    fn try_delegate_shortcut(&mut self, text: &str) -> bool {
-        let trimmed = text.trim();
-        if !trimmed.starts_with('#') {
-            return false;
-        }
-
-        let mut parts = trimmed.splitn(2, char::is_whitespace);
-        let tag = parts.next().unwrap_or("");
-        let prompt = parts.next().unwrap_or("").trim();
-
-        let raw_id = tag.trim_start_matches('#').trim_end_matches(':');
-        if raw_id.is_empty() {
-            self.add_error_message("Specify an agent after '#'.".to_string());
-            return true;
-        }
-
-        let agent_id = match AgentId::parse(raw_id) {
-            Ok(id) => id,
-            Err(err) => {
-                self.add_error_message(format!("Invalid agent id `{raw_id}`: {err}"));
-                return true;
-            }
-        };
-
-        if prompt.is_empty() {
-            self.add_error_message("Delegate requests need a prompt.".to_string());
-            return true;
-        }
-
-        let payload = DelegateRequestPayload {
-            agent_id,
-            prompt: DelegatePrompt::new(prompt.to_string()),
-        };
-        self.app_event_tx.send(AppEvent::DelegateRequest(payload));
-        true
+    fn try_delegate_shortcut(&mut self, _text: &str) -> bool {
+        false
     }
 
     /// Return a reference to the widget's current config (includes any

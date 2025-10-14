@@ -160,6 +160,7 @@ impl CodexToolCallParam {
             codex_linux_sandbox_exe,
             base_instructions,
             include_plan_tool,
+            include_delegate_tool: None,
             include_apply_patch_tool: None,
             include_view_image_tool: None,
             show_raw_agent_reasoning: None,

@@ -384,34 +384,6 @@ fn test_rate_limit_warnings_monthly() {
 }
 
 #[test]
-fn hash_prefix_routes_to_delegate() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
-
-    chat.submit_user_message(UserMessage {
-        text: "#ideas_provider explore parser modularization".to_string(),
-        image_paths: Vec::new(),
-    });
-
-    assert!(
-        op_rx.try_recv().is_err(),
-        "delegated prompts must not reach the primary conversation"
-    );
-
-    let mut saw_delegate = false;
-    while let Ok(event) = rx.try_recv() {
-        if matches!(event, AppEvent::DelegateRequest(_)) {
-            saw_delegate = true;
-            break;
-        }
-    }
-
-    assert!(
-        saw_delegate,
-        "expected delegate request event for #ideas_provider"
-    );
-}
-
-#[test]
 fn delegate_stream_deltas_and_restore_status() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
     let agent = AgentId::parse("ideas_provider").expect("valid agent id");
@@ -460,7 +432,9 @@ fn delegate_stream_deltas_and_restore_status() {
 
     let mut saw_stop = false;
     while let Ok(event) = rx.try_recv() {
-        if let AppEvent::StopCommitAnimation = event { saw_stop = true }
+        if let AppEvent::StopCommitAnimation = event {
+            saw_stop = true
+        }
     }
     assert!(
         saw_stop,

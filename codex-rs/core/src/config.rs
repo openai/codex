@@ -199,6 +199,9 @@ pub struct Config {
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
 
+    /// Include the delegate tool that lets the primary agent route work to sub-agents.
+    pub include_delegate_tool: bool,
+
     /// Include the `apply_patch` tool for models that benefit from invoking
     /// file edits as a structured tool call. When unset, this falls back to the
     /// model family's default preference.
@@ -953,6 +956,7 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub include_plan_tool: Option<bool>,
+    pub include_delegate_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
@@ -981,6 +985,7 @@ impl Config {
             codex_linux_sandbox_exe,
             base_instructions,
             include_plan_tool,
+            include_delegate_tool,
             include_apply_patch_tool,
             include_view_image_tool,
             show_raw_agent_reasoning,
@@ -1165,6 +1170,7 @@ impl Config {
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             include_plan_tool: include_plan_tool.unwrap_or(false),
+            include_delegate_tool: include_delegate_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool
                 .or(cfg.experimental_use_freeform_apply_patch)
                 .unwrap_or(false),
@@ -2114,6 +2120,7 @@ model_verbosity = "high"
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
                 include_plan_tool: false,
+                include_delegate_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
                 use_experimental_streamable_shell_tool: false,
@@ -2177,6 +2184,7 @@ model_verbosity = "high"
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
@@ -2255,6 +2263,7 @@ model_verbosity = "high"
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,
@@ -2319,6 +2328,7 @@ model_verbosity = "high"
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             include_plan_tool: false,
+            include_delegate_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             use_experimental_streamable_shell_tool: false,

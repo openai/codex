@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
+use crate::delegate_tool::DelegateToolAdapter;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::function_tool::FunctionCallError;
 use crate::review_format::format_review_findings_block;
@@ -149,6 +150,7 @@ impl Codex {
     pub async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
+        delegate_adapter: Option<Arc<dyn DelegateToolAdapter>>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
     ) -> CodexResult<CodexSpawnOk> {
@@ -177,6 +179,7 @@ impl Codex {
             configure_session,
             config.clone(),
             auth_manager.clone(),
+            delegate_adapter,
             tx_event.clone(),
             conversation_history,
             session_source,
@@ -312,6 +315,7 @@ impl Session {
         configure_session: ConfigureSession,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
+        delegate_adapter: Option<Arc<dyn DelegateToolAdapter>>,
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
@@ -442,11 +446,14 @@ impl Session {
             model_reasoning_summary,
             conversation_id,
         );
+        let delegate_enabled = config.include_delegate_tool && delegate_adapter.is_some();
+
         let turn_context = TurnContext {
             client,
             tools_config: ToolsConfig::new(&ToolsConfigParams {
                 model_family: &config.model_family,
                 include_plan_tool: config.include_plan_tool,
+                include_delegate_tool: delegate_enabled,
                 include_apply_patch_tool: config.include_apply_patch_tool,
                 include_web_search_request: config.tools_web_search_request,
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
@@ -475,6 +482,7 @@ impl Session {
                 turn_context.cwd.clone(),
                 config.codex_linux_sandbox_exe.clone(),
             )),
+            delegate_adapter,
         };
 
         let sess = Arc::new(Session {
@@ -514,6 +522,10 @@ impl Session {
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
         self.tx_event.clone()
+    }
+
+    pub(crate) fn delegate_adapter(&self) -> Option<Arc<dyn DelegateToolAdapter>> {
+        self.services.delegate_adapter.as_ref().map(Arc::clone)
     }
 
     fn next_internal_sub_id(&self) -> String {
@@ -1193,9 +1205,12 @@ async fn submission_loop(
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
 
+                let delegate_enabled =
+                    config.include_delegate_tool && sess.delegate_adapter().is_some();
                 let tools_config = ToolsConfig::new(&ToolsConfigParams {
                     model_family: &effective_family,
                     include_plan_tool: config.include_plan_tool,
+                    include_delegate_tool: delegate_enabled,
                     include_apply_patch_tool: config.include_apply_patch_tool,
                     include_web_search_request: config.tools_web_search_request,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
@@ -1293,11 +1308,14 @@ async fn submission_loop(
                         sess.conversation_id,
                     );
 
+                    let delegate_enabled =
+                        config.include_delegate_tool && sess.delegate_adapter().is_some();
                     let fresh_turn_context = TurnContext {
                         client,
                         tools_config: ToolsConfig::new(&ToolsConfigParams {
                             model_family: &model_family,
                             include_plan_tool: config.include_plan_tool,
+                            include_delegate_tool: delegate_enabled,
                             include_apply_patch_tool: config.include_apply_patch_tool,
                             include_web_search_request: config.tools_web_search_request,
                             use_streamable_shell_tool: config
@@ -1539,6 +1557,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
         include_plan_tool: false,
+        include_delegate_tool: false,
         include_apply_patch_tool: config.include_apply_patch_tool,
         include_web_search_request: false,
         use_streamable_shell_tool: false,
@@ -2749,6 +2768,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &config.model_family,
             include_plan_tool: config.include_plan_tool,
+            include_delegate_tool: config.include_delegate_tool,
             include_apply_patch_tool: config.include_apply_patch_tool,
             include_web_search_request: config.tools_web_search_request,
             use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
@@ -2780,6 +2800,7 @@ mod tests {
                 turn_context.cwd.clone(),
                 None,
             )),
+            delegate_adapter: None,
         };
         let session = Session {
             conversation_id,
@@ -2822,6 +2843,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &config.model_family,
             include_plan_tool: config.include_plan_tool,
+            include_delegate_tool: config.include_delegate_tool,
             include_apply_patch_tool: config.include_apply_patch_tool,
             include_web_search_request: config.tools_web_search_request,
             use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
@@ -2853,6 +2875,7 @@ mod tests {
                 config.cwd.clone(),
                 None,
             )),
+            delegate_adapter: None,
         };
         let session = Arc::new(Session {
             conversation_id,

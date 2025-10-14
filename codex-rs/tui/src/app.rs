@@ -1,6 +1,5 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
-use crate::app_event::DelegateRequestPayload;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
@@ -24,8 +23,7 @@ use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_multi_agent::AgentOrchestrator;
 use codex_multi_agent::DelegateEvent;
-use codex_multi_agent::DelegateRequest;
-use codex_multi_agent::OrchestratorError;
+use codex_multi_agent::delegate_tool_adapter;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -55,7 +53,6 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) delegate_orchestrator: Arc<AgentOrchestrator>,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
@@ -95,6 +92,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
+        let delegate_adapter = delegate_tool_adapter(delegate_orchestrator.clone());
         let mut delegate_event_rx = delegate_orchestrator.subscribe().await;
         let delegate_app_event_tx = app_event_tx.clone();
         tokio::spawn(async move {
@@ -103,9 +101,10 @@ impl App {
             }
         });
 
-        let conversation_manager = Arc::new(ConversationManager::new(
+        let conversation_manager = Arc::new(ConversationManager::with_delegate(
             auth_manager.clone(),
             SessionSource::Cli,
+            Some(delegate_adapter.clone()),
         ));
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
@@ -158,7 +157,6 @@ impl App {
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
-            delegate_orchestrator,
             config,
             active_profile,
             file_search,
@@ -248,9 +246,6 @@ impl App {
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
-            }
-            AppEvent::DelegateRequest(payload) => {
-                self.handle_delegate_request(payload).await;
             }
             AppEvent::DelegateUpdate(update) => {
                 self.handle_delegate_update(update);
@@ -427,22 +422,6 @@ impl App {
         Ok(true)
     }
 
-    async fn handle_delegate_request(&mut self, payload: DelegateRequestPayload) {
-        let request: DelegateRequest = payload.clone().into();
-        if let Err(err) = self.delegate_orchestrator.delegate(request).await {
-            let message = match err {
-                OrchestratorError::DelegateInProgress => {
-                    "A delegate is already running.".to_string()
-                }
-                OrchestratorError::AgentNotFound(id) => format!("Agent `{id}` not found."),
-                OrchestratorError::DelegateSetupFailed(reason) => {
-                    format!("Unable to start delegate: {reason}")
-                }
-            };
-            self.chat_widget.add_error_message(message);
-        }
-    }
-
     fn handle_delegate_update(&mut self, event: DelegateEvent) {
         match event {
             DelegateEvent::Started {
@@ -576,21 +555,21 @@ mod tests {
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
-    use codex_common::CliConfigOverrides;
+    
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
-    use codex_core::config::ConfigOverrides;
+    
     use codex_core::protocol::SessionConfiguredEvent;
-    use codex_core::protocol::SessionSource;
+    
     use codex_protocol::ConversationId;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
-    use tempfile::tempdir;
+    
 
-    use codex_multi_agent::AgentOrchestrator;
+    
 
     fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
@@ -601,15 +580,6 @@ mod tests {
         )));
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let auth_manager_arc = auth_manager.clone();
-        let temp_home = tempdir().expect("tempdir");
-        let delegate_orchestrator = Arc::new(AgentOrchestrator::new(
-            temp_home.path().to_path_buf(),
-            auth_manager_arc,
-            SessionSource::Cli,
-            CliConfigOverrides::default(),
-            ConfigOverrides::default(),
-        ));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
 
         App {
@@ -617,7 +587,6 @@ mod tests {
             app_event_tx,
             chat_widget,
             auth_manager,
-            delegate_orchestrator,
             config,
             active_profile: None,
             file_search,

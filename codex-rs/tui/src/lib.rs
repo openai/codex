@@ -146,12 +146,14 @@ pub async fn run_main(
         codex_linux_sandbox_exe,
         base_instructions: None,
         include_plan_tool: Some(true),
+        include_delegate_tool: Some(true),
         include_apply_patch_tool: None,
         include_view_image_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
     };
-    let delegate_config_overrides = overrides.clone();
+    let mut delegate_config_overrides = overrides.clone();
+    delegate_config_overrides.include_delegate_tool = Some(false);
     let delegate_cli_overrides = cli.config_overrides.clone();
     #[allow(clippy::print_stderr)]
     let agent_context = match codex_multi_agent::load_agent_context(

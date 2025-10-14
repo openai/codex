@@ -19,12 +19,13 @@ cargo build -p codex-cli
 # Launch the TUI against this sample Codex home
 CODEX_HOME="$(pwd)/ai-temp/example-codex-home" target/debug/codex
 
-# Launch a specific sub-agent directly
+# Launch a specific sub-agent directly (skips the orchestrator)
 CODEX_HOME="$(pwd)/ai-temp/example-codex-home" target/debug/codex --agent ideas_provider
 CODEX_HOME="$(pwd)/ai-temp/example-codex-home" target/debug/codex --agent critic
 
-# Inside the primary session you can delegate manually:
-# type: '#ideas_provider outline parser refactors'
+# Inside the primary session, describe the task as usual.
+# The main assistant decides when to call the `delegate_agent` tool.
+# Use tags like `#ideas_provider` in your prompts only as hints for the AI.
 # Watch logs in log/codex-tui.log to confirm delegation activity.
 ```
 
