@@ -326,9 +326,14 @@ pub struct Tui {
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Notices {
+pub struct Notice {
     /// Tracks whether the user has acknowledged the full access warning prompt.
     pub hide_full_access_warning: Option<bool>,
+}
+
+impl Notice {
+    /// used by set_hide_full_access_warning until we refactor config updates
+    pub(crate) const TABLE_KEY: &'static str = "notice";
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]

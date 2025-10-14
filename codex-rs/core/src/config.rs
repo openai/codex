@@ -7,7 +7,7 @@ use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
 use crate::config_types::McpServerTransportConfig;
-use crate::config_types::Notices;
+use crate::config_types::Notice;
 use crate::config_types::Notifications;
 use crate::config_types::OtelConfig;
 use crate::config_types::OtelConfigToml;
@@ -233,7 +233,7 @@ pub struct Config {
     pub windows_wsl_setup_acknowledged: bool,
 
     /// Collection of various notices we show the user
-    pub notices: Notices,
+    pub notices: Notice,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -559,7 +559,7 @@ pub fn set_hide_full_access_warning(codex_home: &Path, acknowledged: bool) -> an
         Err(e) => return Err(e.into()),
     };
 
-    let notices_table = load_or_create_top_level_table(&mut doc, "notices")?;
+    let notices_table = load_or_create_top_level_table(&mut doc, Notice::TABLE_KEY)?;
 
     notices_table["hide_full_access_warning"] = toml_edit::value(acknowledged);
 
@@ -875,7 +875,7 @@ pub struct ConfigToml {
 
     /// Collection of in-product notices (different from notifications)
     /// See [`crate::config_types::Notices`] for more details
-    pub notices: Option<Notices>,
+    pub notice: Option<Notice>,
 
     /// Legacy, now use features
     pub experimental_instructions_file: Option<PathBuf>,
@@ -1249,7 +1249,7 @@ impl Config {
             features,
             active_profile: active_profile_name,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
-            notices: cfg.notices.unwrap_or_default(),
+            notices: cfg.notice.unwrap_or_default(),
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
                 .tui
