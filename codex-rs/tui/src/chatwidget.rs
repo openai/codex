@@ -2131,10 +2131,12 @@ impl ChatWidget {
     pub(crate) fn confirm_manual_changes(&mut self) {
         use codex_core::protocol::PruneCategory as PC;
         // Discover currently selected manual category from the active list view.
-        let selected = self.bottom_pane.with_active_list_selection(|list| {
-            list.selected_item_info().map(|(_, it)| it.search_value.clone())
-        }).flatten();
-        let Some(search_value) = selected else {
+        let selected = self
+            .bottom_pane
+            .with_active_list_selection(|list| {
+                list.selected_item_info().and_then(|(_, it)| it.search_value.clone())
+            });
+        let Some(search_value) = selected.flatten() else {
             // Nothing selected; prompt user.
             self.add_info_message("Select a category to prune (use Up/Down).".to_string(), None);
             return;
@@ -2166,7 +2168,6 @@ impl ChatWidget {
     }
 
     fn show_manual_confirm_prompt(&mut self) {
-        use codex_core::protocol::Op;
         let mut items: Vec<SelectionItem> = Vec::new();
         let mut header = String::from("Confirm prune");
         if let Some(plan) = &self.manual_pending_plan {
@@ -2184,7 +2185,6 @@ impl ChatWidget {
         });
         // Yes — apply prune for the selected category
         if let Some(plan) = &self.manual_pending_plan {
-            let label_clone = plan.label.clone();
             items.push(SelectionItem {
                 name: format!("Yes, prune {}", plan.label),
                 description: Some("Remove matching items and refresh context".to_string()),
