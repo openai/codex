@@ -1655,10 +1655,11 @@ impl ChatWidget {
         if self.pending_advanced_plan.is_some() {
             return;
         }
-        // Otherwise (Esc/back), clear state and return control to the composer without
-        // reopening the prune menu (prevents the ping-pong behavior).
+        // Otherwise (Esc/back), clear any transient advanced state and return to chat.
         self.reset_advanced_prune_state();
-        self.prune_root_active = false;
+        // Restore previous behavior: Esc from Advanced should reopen the prune root menu
+        // so the user can pick another action.
+        self.open_prune_menu();
     }
 
     pub(crate) fn on_prune_root_closed(&mut self) {
@@ -1827,8 +1828,6 @@ impl ChatWidget {
                 "Applied advanced prune: include +{inc_len}, exclude -{exc_len}, delete ×{del_len} (freed ~{pct}% of context)"
             );
             self.add_info_message(msg, None);
-            self.reset_advanced_prune_state();
-            self.prune_root_active = false;
         }
     }
 
@@ -2022,8 +2021,10 @@ impl ChatWidget {
                     "{pretty_label} currently consume ~{pct}% of included context ({count} items)"
                 )
             };
+            let label_owned = label.to_string();
+
             let event_cat = cat.clone();
-            let event_label = label.to_string();
+            let event_label = label_owned.clone();
             items.push(SelectionItem {
                 name: format!("Prune {label}"),
                 description: Some(description),
@@ -2129,19 +2130,18 @@ impl ChatWidget {
                 format!("Pruned {} from context: ~{}% freed.", plan.label, plan.freed_pct),
                 None,
             );
-            self.reset_manual_prune_state();
-            self.prune_root_active = false;
         }
     }
 
     pub(crate) fn on_prune_manual_closed(&mut self) {
         // If there's a pending manual plan, this close was triggered by Enter to show confirm.
+        // Keep the plan; do not reopen the root menu here.
         if self.manual_pending_plan.is_some() {
             return;
         }
-        // Esc/back from the manual list: clear state but do not reopen the prune menu.
+        // Esc/back from the manual list: clear state and reopen the prune root menu.
         self.reset_manual_prune_state();
-        self.prune_root_active = false;
+        self.open_prune_menu();
     }
 
     fn reset_manual_prune_state(&mut self) {
