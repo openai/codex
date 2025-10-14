@@ -827,9 +827,6 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
-    pub include_plan_tool: Option<bool>,
-    pub include_apply_patch_tool: Option<bool>,
-    pub include_view_image_tool: Option<bool>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1068,15 +1065,13 @@ impl Config {
 
         // Legacy booleans (pre-[features]) keep working but log a migration hint.
         let base_legacy = LegacyFeatureToggles {
-            include_plan_tool: cfg.include_plan_tool,
-            include_apply_patch_tool: cfg.include_apply_patch_tool,
-            include_view_image_tool: cfg.include_view_image_tool,
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_exec_command_tool: cfg.experimental_use_exec_command_tool,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
             experimental_use_rmcp_client: cfg.experimental_use_rmcp_client,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
             tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
+            ..Default::default()
         };
         base_legacy.apply(&mut features);
 
@@ -1528,8 +1523,6 @@ exclude_slash_tmp = true
             },
         );
         let cfg = ConfigToml {
-            include_plan_tool: Some(false),
-            include_view_image_tool: Some(true),
             profiles,
             profile: Some("work".to_string()),
             ..Default::default()
@@ -1556,8 +1549,6 @@ exclude_slash_tmp = true
         entries.insert("plan_tool".to_string(), false);
         entries.insert("apply_patch_freeform".to_string(), false);
         let cfg = ConfigToml {
-            include_plan_tool: Some(true),
-            include_apply_patch_tool: Some(true),
             features: Some(crate::features::FeaturesToml { entries }),
             ..Default::default()
         };
@@ -1580,9 +1571,6 @@ exclude_slash_tmp = true
     fn legacy_toggles_map_to_features() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
-            include_plan_tool: Some(true),
-            include_apply_patch_tool: Some(true),
-            include_view_image_tool: Some(false),
             experimental_use_exec_command_tool: Some(true),
             experimental_use_unified_exec_tool: Some(true),
             experimental_use_rmcp_client: Some(true),
@@ -1596,9 +1584,7 @@ exclude_slash_tmp = true
             codex_home.path().to_path_buf(),
         )?;
 
-        assert!(config.features.enabled(Feature::PlanTool));
         assert!(config.features.enabled(Feature::ApplyPatchFreeform));
-        assert!(!config.features.enabled(Feature::ViewImageTool));
         assert!(config.features.enabled(Feature::StreamableShell));
         assert!(config.features.enabled(Feature::UnifiedExec));
         assert!(config.features.enabled(Feature::RmcpClient));
