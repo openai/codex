@@ -1864,24 +1864,7 @@ pub(crate) async fn run_task(
                     }
                 }
 
-                if context_window_reached {
-                    let limit_str = model_context_window
-                        .map(|limit| limit.to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let current_tokens = total_usage_tokens
-                        .map(|tokens| tokens.to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let event = Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: format!(
-                                "Conversation reached the model context window (limit {limit_str}, current {current_tokens}). Lower your auto-compaction threshold under /auto-compact or start a new session."
-                            ),
-                        }),
-                    };
-                    sess.send_event(event).await;
-                    break;
-                } else if auto_compact_threshold_reached {
+                if auto_compact_threshold_reached {
                     let limit_str = auto_compact_threshold
                         .map(|limit| limit.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
@@ -1923,6 +1906,23 @@ pub(crate) async fn run_task(
                             break;
                         }
                     }
+                } else if context_window_reached {
+                    let limit_str = model_context_window
+                        .map(|limit| limit.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let current_tokens = total_usage_tokens
+                        .map(|tokens| tokens.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let event = Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!(
+                                "Conversation reached the model context window (limit {limit_str}, current {current_tokens}). Lower your auto-compaction threshold under /auto-compact or start a new session."
+                            ),
+                        }),
+                    };
+                    sess.send_event(event).await;
+                    break;
                 }
 
                 auto_retry_in_progress = false;

@@ -336,6 +336,11 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .await
         .unwrap();
 
+    println!(
+        "first event: {:?}",
+        tokio::time::timeout(std::time::Duration::from_secs(10), codex.next_event()).await
+    );
+
     codex
         .submit(Op::UserInput {
             items: vec![InputItem::Text {
@@ -476,6 +481,15 @@ async fn context_window_prompts_lower_limit_when_threshold_high() {
         .await
         .unwrap();
 
+    let event = tokio::time::timeout(std::time::Duration::from_secs(10), codex.next_event())
+        .await
+        .expect("first event should arrive")
+        .expect("event stream closed unexpectedly");
+    println!("first event: {:?}", event.msg);
+    if !matches!(event.msg, EventMsg::TaskComplete(_)) {
+        panic!("expected first event to be TaskComplete");
+    }
+
     codex
         .submit(Op::UserInput {
             items: vec![InputItem::Text {
@@ -586,6 +600,9 @@ async fn auto_compact_respects_config_toggle() {
         })
         .await
         .unwrap();
+
+    // Ensure the first turn finishes before sending another request.
+    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
