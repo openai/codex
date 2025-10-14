@@ -453,6 +453,7 @@ impl Session {
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 include_view_image_tool: config.include_view_image_tool,
                 experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                disable_builtin_tools: config.disable_builtin_tools,
             }),
             user_instructions,
             base_instructions,
@@ -1202,6 +1203,7 @@ async fn submission_loop(
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
                     experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                    disable_builtin_tools: config.disable_builtin_tools,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1306,6 +1308,7 @@ async fn submission_loop(
                             include_view_image_tool: config.include_view_image_tool,
                             experimental_unified_exec_tool: config
                                 .use_experimental_unified_exec_tool,
+                            disable_builtin_tools: config.disable_builtin_tools,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1545,6 +1548,7 @@ async fn spawn_review_thread(
         use_streamable_shell_tool: false,
         include_view_image_tool: false,
         experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+        disable_builtin_tools: config.disable_builtin_tools,
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -2764,6 +2768,7 @@ mod tests {
             use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
             include_view_image_tool: config.include_view_image_tool,
             experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+            disable_builtin_tools: config.disable_builtin_tools,
         });
         let turn_context = TurnContext {
             client,
