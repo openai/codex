@@ -1062,11 +1062,6 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![vec![padded_emoji("⚠️").into(), message.dim()].into()];
-    PlainHistoryCell { lines }
-}
-
 /// Render a user‑friendly plan update styled like a checkbox todo list.
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     let UpdatePlanArgs { explanation, plan } = update;
@@ -1153,7 +1148,7 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
     if !stderr.trim().is_empty() {
-        lines.extend(output_lines(
+        let output = output_lines(
             Some(&CommandOutput {
                 exit_code: 1,
                 stdout: String::new(),
@@ -1165,7 +1160,8 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
                 include_angle_pipe: true,
                 include_prefix: true,
             },
-        ));
+        );
+        lines.extend(output.lines);
     }
 
     PlainHistoryCell { lines }

@@ -310,6 +310,7 @@ async fn run_ratatui_app(
 
         let current_version = env!("CARGO_PKG_VERSION");
         let exe = std::env::current_exe()?;
+        let managed_by_bun = std::env::var_os("CODEX_MANAGED_BY_BUN").is_some();
         let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
 
         let mut content_lines: Vec<Line<'static>> = vec![
@@ -330,7 +331,14 @@ async fn run_ratatui_app(
             Line::from(""),
         ];
 
-        if managed_by_npm {
+        if managed_by_bun {
+            let bun_cmd = "bun install -g @openai/codex@latest";
+            content_lines.push(Line::from(vec![
+                "Run ".into(),
+                bun_cmd.cyan(),
+                " to update.".into(),
+            ]));
+        } else if managed_by_npm {
             let npm_cmd = "npm install -g @openai/codex@latest";
             content_lines.push(Line::from(vec![
                 "Run ".into(),
