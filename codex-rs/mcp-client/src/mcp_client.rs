@@ -14,13 +14,16 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_otel::metrics;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::InitializeRequest;
@@ -46,7 +49,9 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::time;
+use tokio::time::MissedTickBehavior;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -55,9 +60,17 @@ use tracing::warn;
 /// Capacity of the bounded channels used for transporting messages between the
 /// client API and the IO tasks.
 const CHANNEL_CAPACITY: usize = 128;
+const MCP_KEEPALIVE_METHOD: &str = "codex/keepalive";
 
 /// Internal representation of a pending request sender.
 type PendingSender = oneshot::Sender<JSONRPCMessage>;
+
+struct KeepaliveNotification;
+
+impl ModelContextProtocolNotification for KeepaliveNotification {
+    const METHOD: &'static str = MCP_KEEPALIVE_METHOD;
+    type Params = Option<serde_json::Value>;
+}
 
 /// A running MCP client instance.
 pub struct McpClient {
@@ -76,6 +89,12 @@ pub struct McpClient {
 
     /// Monotonically increasing counter used to generate request IDs.
     id_counter: AtomicI64,
+
+    /// Tracks the last observed activity for heartbeat scheduling.
+    last_activity: Arc<AtomicU64>,
+
+    /// Background keepalive task handle (if enabled).
+    heartbeat_handle: StdMutex<Option<JoinHandle<()>>>,
 }
 
 impl McpClient {
@@ -111,11 +130,13 @@ impl McpClient {
 
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
         let pending: Arc<Mutex<HashMap<i64, PendingSender>>> = Arc::new(Mutex::new(HashMap::new()));
+        let last_activity = Arc::new(AtomicU64::new(now_millis()));
 
         // Spawn writer task. It listens on the `outgoing_rx` channel and
         // writes messages to the child's STDIN.
         let writer_handle = {
             let mut stdin = stdin;
+            let last_activity_writer = last_activity.clone();
             tokio::spawn(async move {
                 while let Some(msg) = outgoing_rx.recv().await {
                     match serde_json::to_string(&msg) {
@@ -129,6 +150,7 @@ impl McpClient {
                                 error!("failed to write newline to child stdin");
                                 break;
                             }
+                            McpClient::record_activity_atomic(&last_activity_writer);
                             // No explicit flush needed on a pipe; write_all is sufficient.
                         }
                         Err(e) => error!("failed to serialize JSONRPCMessage: {e}"),
@@ -142,10 +164,12 @@ impl McpClient {
         let reader_handle = {
             let pending = pending.clone();
             let mut lines = BufReader::new(stdout).lines();
+            let last_activity_reader = last_activity.clone();
 
             tokio::spawn(async move {
                 while let Ok(Some(line)) = lines.next_line().await {
                     debug!("MCP message from server: {line}");
+                    McpClient::record_activity_atomic(&last_activity_reader);
                     match serde_json::from_str::<JSONRPCMessage>(&line) {
                         Ok(JSONRPCMessage::Response(resp)) => {
                             Self::dispatch_response(resp, &pending).await;
@@ -181,6 +205,8 @@ impl McpClient {
             outgoing_tx,
             pending,
             id_counter: AtomicI64::new(1),
+            last_activity,
+            heartbeat_handle: StdMutex::new(None),
         })
     }
 
@@ -237,6 +263,7 @@ impl McpClient {
                 "failed to send message to writer task - channel closed"
             ));
         }
+        self.record_activity();
 
         // Await the response, optionally bounded by a timeout.
         let msg = match timeout {
@@ -304,7 +331,9 @@ impl McpClient {
         self.outgoing_tx
             .send(notification)
             .await
-            .with_context(|| format!("failed to send notification `{method}` to writer task"))
+            .with_context(|| format!("failed to send notification `{method}` to writer task"))?;
+        self.record_activity();
+        Ok(())
     }
 
     /// Negotiates the initialization with the MCP server. Sends an `initialize`
@@ -343,6 +372,83 @@ impl McpClient {
         let params = CallToolRequestParams { name, arguments };
         debug!("MCP tool call: {params:?}");
         self.send_request::<CallToolRequest>(params, timeout).await
+    }
+
+    pub fn enable_keepalive(self: &Arc<Self>, interval: Duration, transport_label: &'static str) {
+        if interval.is_zero() {
+            return;
+        }
+
+        let weak = Arc::downgrade(self);
+        let interval_ms = interval.as_millis() as u64;
+        let label = transport_label;
+        let handle = tokio::spawn(async move {
+            let mut ticker = time::interval(interval);
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+
+                let Some(client) = weak.upgrade() else {
+                    break;
+                };
+
+                let elapsed_ms = client.millis_since_last_activity();
+                if elapsed_ms < interval_ms {
+                    continue;
+                }
+
+                tracing::event!(
+                    tracing::Level::DEBUG,
+                    event.name = "codex.mcp_keepalive",
+                    status = "emit",
+                    elapsed_ms = elapsed_ms,
+                );
+                metrics::record_heartbeat(label, "emit", Some(elapsed_ms));
+
+                match client
+                    .send_notification::<KeepaliveNotification>(None)
+                    .await
+                {
+                    Ok(()) => {
+                        client.record_activity();
+                        tracing::event!(
+                            tracing::Level::DEBUG,
+                            event.name = "codex.mcp_keepalive",
+                            status = "sent",
+                            interval_ms = interval_ms,
+                        );
+                        metrics::record_heartbeat(label, "sent", Some(interval_ms));
+                    }
+                    Err(error) => {
+                        tracing::event!(
+                            tracing::Level::WARN,
+                            event.name = "codex.mcp_keepalive",
+                            status = "error",
+                            error.message = %error,
+                        );
+                        metrics::record_heartbeat(label, "error", Some(elapsed_ms));
+                    }
+                }
+            }
+        });
+
+        if let Ok(mut guard) = self.heartbeat_handle.lock()
+            && let Some(existing) = guard.replace(handle)
+        {
+            existing.abort();
+        }
+    }
+
+    fn record_activity(&self) {
+        Self::record_activity_atomic(&self.last_activity);
+    }
+
+    fn millis_since_last_activity(&self) -> u64 {
+        now_millis().saturating_sub(self.last_activity.load(Ordering::Relaxed))
+    }
+
+    fn record_activity_atomic(activity: &AtomicU64) {
+        activity.store(now_millis(), Ordering::Relaxed);
     }
 
     /// Internal helper: route a JSON-RPC *response* object to the pending map.
@@ -394,12 +500,24 @@ impl McpClient {
 
 impl Drop for McpClient {
     fn drop(&mut self) {
+        if let Ok(mut guard) = self.heartbeat_handle.lock()
+            && let Some(handle) = guard.take()
+        {
+            handle.abort();
+        }
         // Even though we have already tagged this process with
         // `kill_on_drop(true)` above, this extra check has the benefit of
         // forcing the process to be reaped immediately if it has already exited
         // instead of waiting for the Tokio runtime to reap it later.
         let _ = self.child.try_wait();
     }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 /// Environment variables that are always included when spawning a new MCP

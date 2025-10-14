@@ -1,7 +1,7 @@
 use std::io::BufRead;
 use std::path::Path;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::AuthManager;
 use crate::auth::CodexAuth;
@@ -50,6 +50,7 @@ use crate::protocol::TokenUsage;
 use crate::state::TaskKind;
 use crate::token_data::PlanType;
 use crate::util::backoff;
+use codex_otel::metrics;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -267,6 +268,10 @@ impl ModelClient {
                     return Err(e);
                 }
                 Err(retryable_attempt_error) => {
+                    metrics::record_reconnect(
+                        "responses_sse",
+                        retryable_attempt_error.metrics_label(),
+                    );
                     if attempt == max_attempts {
                         return Err(retryable_attempt_error.into_error());
                     }
@@ -356,6 +361,7 @@ impl ModelClient {
                     stream,
                     tx_event,
                     self.provider.stream_idle_timeout(),
+                    self.provider.stream_heartbeat_interval(),
                     self.otel_event_manager.clone(),
                 ));
 
@@ -510,6 +516,14 @@ impl StreamAttemptError {
             Self::Fatal(error) => error,
         }
     }
+
+    fn metrics_label(&self) -> &'static str {
+        match self {
+            Self::RetryableHttpError { .. } => "http",
+            Self::RetryableTransportError { .. } => "transport",
+            Self::Fatal(_) => "fatal",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -652,25 +666,75 @@ async fn process_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
+    heartbeat_interval: Option<Duration>,
     otel_event_manager: OtelEventManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
     let mut stream = stream.eventsource();
+    let heartbeat_interval = heartbeat_interval.filter(|interval| !interval.is_zero());
 
     // If the stream stays completely silent for an extended period treat it as disconnected.
     // The response id returned from the "complete" message.
     let mut response_completed: Option<ResponseCompleted> = None;
     let mut response_error: Option<CodexErr> = None;
+    let mut last_data_at = Instant::now();
 
     loop {
-        let start = std::time::Instant::now();
-        let response = timeout(idle_timeout, stream.next()).await;
-        let duration = start.elapsed();
-        otel_event_manager.log_sse_event(&response, duration);
+        let since_last_data = last_data_at.elapsed();
 
-        let sse = match response {
-            Ok(Some(Ok(sse))) => sse,
+        if since_last_data >= idle_timeout {
+            metrics::record_idle_timeout("responses_sse");
+            let _ = tx_event
+                .send(Err(CodexErr::Stream(
+                    "idle timeout waiting for SSE".into(),
+                    None,
+                )))
+                .await;
+            return;
+        }
+
+        let (wait_duration, treat_elapsed_as_heartbeat) = if let Some(interval) = heartbeat_interval
+        {
+            let remaining_idle = idle_timeout
+                .checked_sub(since_last_data)
+                .unwrap_or(Duration::ZERO);
+
+            if remaining_idle.is_zero() {
+                (Duration::ZERO, false)
+            } else {
+                let duration = interval.min(remaining_idle);
+                let treat_as_heartbeat = duration < remaining_idle;
+                (duration, treat_as_heartbeat)
+            }
+        } else {
+            (idle_timeout, false)
+        };
+
+        if wait_duration.is_zero() {
+            metrics::record_idle_timeout("responses_sse");
+            let _ = tx_event
+                .send(Err(CodexErr::Stream(
+                    "idle timeout waiting for SSE".into(),
+                    None,
+                )))
+                .await;
+            return;
+        }
+
+        let wait_duration_ms = wait_duration.as_millis().min(u128::from(u64::MAX)) as u64;
+        let sse_result = otel_event_manager
+            .log_sse_event(
+                || timeout(wait_duration, stream.next()),
+                treat_elapsed_as_heartbeat,
+            )
+            .await;
+
+        let sse = match sse_result {
+            Ok(Some(Ok(sse))) => {
+                last_data_at = Instant::now();
+                sse
+            }
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");
                 let event = CodexErr::Stream(e.to_string(), None);
@@ -717,6 +781,16 @@ async fn process_sse<S>(
                 return;
             }
             Err(_) => {
+                if treat_elapsed_as_heartbeat {
+                    metrics::record_heartbeat("responses_sse", "emit", Some(wait_duration_ms));
+                    otel_event_manager.sse_event_heartbeat(wait_duration);
+                    if tx_event.send(Ok(ResponseEvent::Heartbeat)).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+
+                metrics::record_idle_timeout("responses_sse");
                 let _ = tx_event
                     .send(Err(CodexErr::Stream(
                         "idle timeout waiting for SSE".into(),
@@ -903,6 +977,7 @@ async fn stream_from_fixture(
         stream,
         tx_event,
         provider.stream_idle_timeout(),
+        provider.stream_heartbeat_interval(),
         otel_event_manager,
     ));
     Ok(ResponseStream { rx_event })
@@ -978,6 +1053,7 @@ mod tests {
             stream,
             tx,
             provider.stream_idle_timeout(),
+            provider.stream_heartbeat_interval(),
             otel_event_manager,
         ));
 
@@ -1014,6 +1090,7 @@ mod tests {
             stream,
             tx,
             provider.stream_idle_timeout(),
+            provider.stream_heartbeat_interval(),
             otel_event_manager,
         ));
 
@@ -1084,6 +1161,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
+            stream_heartbeat_interval_ms: Some(0),
             requires_openai_auth: false,
         };
 
@@ -1147,6 +1225,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
+            stream_heartbeat_interval_ms: Some(0),
             requires_openai_auth: false,
         };
 
@@ -1183,6 +1262,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
+            stream_heartbeat_interval_ms: Some(0),
             requires_openai_auth: false,
         };
 
@@ -1221,6 +1301,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
+            stream_heartbeat_interval_ms: Some(0),
             requires_openai_auth: false,
         };
 
@@ -1255,6 +1336,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
+            stream_heartbeat_interval_ms: Some(0),
             requires_openai_auth: false,
         };
 
@@ -1358,6 +1440,7 @@ mod tests {
                 request_max_retries: Some(0),
                 stream_max_retries: Some(0),
                 stream_idle_timeout_ms: Some(1000),
+                stream_heartbeat_interval_ms: Some(0),
                 requires_openai_auth: false,
             };
 

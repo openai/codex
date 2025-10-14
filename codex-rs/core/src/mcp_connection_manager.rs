@@ -42,11 +42,6 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Default timeout for initializing MCP server & initially listing tools.
-const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Default timeout for individual tool calls.
-const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
-
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
 pub type ClientStartErrors = HashMap<String, anyhow::Error>;
@@ -93,6 +88,7 @@ struct ManagedClient {
     client: McpClientAdapter,
     startup_timeout: Duration,
     tool_timeout: Option<Duration>,
+    _keepalive_interval: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -109,14 +105,21 @@ impl McpClientAdapter {
         env: Option<HashMap<String, String>>,
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
+        keepalive_interval: Option<Duration>,
     ) -> Result<Self> {
         if use_rmcp_client {
             let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
             client.initialize(params, Some(startup_timeout)).await?;
+            if let Some(interval) = keepalive_interval {
+                client.enable_keepalive(interval, "rmcp_stdio");
+            }
             Ok(McpClientAdapter::Rmcp(client))
         } else {
             let client = Arc::new(McpClient::new_stdio_client(program, args, env).await?);
             client.initialize(params, Some(startup_timeout)).await?;
+            if let Some(interval) = keepalive_interval {
+                client.enable_keepalive(interval, "mcp_stdio");
+            }
             Ok(McpClientAdapter::Legacy(client))
         }
     }
@@ -128,12 +131,16 @@ impl McpClientAdapter {
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
         store_mode: OAuthCredentialsStoreMode,
+        keepalive_interval: Option<Duration>,
     ) -> Result<Self> {
         let client = Arc::new(
             RmcpClient::new_streamable_http_client(&server_name, &url, bearer_token, store_mode)
                 .await?,
         );
         client.initialize(params, Some(startup_timeout)).await?;
+        if let Some(interval) = keepalive_interval {
+            client.enable_keepalive(interval, "rmcp_http");
+        }
         Ok(McpClientAdapter::Rmcp(client))
     }
 
@@ -211,8 +218,9 @@ impl McpConnectionManager {
                 continue;
             }
 
-            let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
-            let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
+            let keepalive_interval = cfg.keepalive_interval();
+            let startup_timeout = cfg.startup_timeout();
+            let tool_timeout = cfg.tool_timeout(keepalive_interval);
 
             let resolved_bearer_token = match &cfg.transport {
                 McpServerTransportConfig::StreamableHttp {
@@ -256,6 +264,7 @@ impl McpConnectionManager {
                             env,
                             params,
                             startup_timeout,
+                            keepalive_interval,
                         )
                         .await
                     }
@@ -267,20 +276,21 @@ impl McpConnectionManager {
                             params,
                             startup_timeout,
                             store_mode,
+                            keepalive_interval,
                         )
                         .await
                     }
                 }
                 .map(|c| (c, startup_timeout));
 
-                ((server_name, tool_timeout), client)
+                ((server_name, tool_timeout, keepalive_interval), client)
             });
         }
 
         let mut clients: HashMap<String, ManagedClient> = HashMap::with_capacity(join_set.len());
 
         while let Some(res) = join_set.join_next().await {
-            let ((server_name, tool_timeout), client_res) = match res {
+            let ((server_name, tool_timeout, keepalive_interval), client_res) = match res {
                 Ok(result) => result,
                 Err(e) => {
                     warn!("Task panic when starting MCP server: {e:#}");
@@ -296,6 +306,7 @@ impl McpConnectionManager {
                             client,
                             startup_timeout,
                             tool_timeout: Some(tool_timeout),
+                            _keepalive_interval: keepalive_interval,
                         },
                     );
                 }

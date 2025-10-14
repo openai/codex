@@ -239,6 +239,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         enabled: true,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
+        keepalive_interval_sec: None,
     };
 
     servers.insert(name.clone(), new_entry);
@@ -386,6 +387,9 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                         .tool_timeout_sec
                         .map(|timeout| timeout.as_secs_f64()),
                     "auth_status": auth_status,
+                    "keepalive_interval_sec": cfg
+                        .keepalive_interval_sec
+                        .map(|timeout| timeout.as_secs_f64()),
                 })
             })
             .collect();
@@ -606,6 +610,9 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             "tool_timeout_sec": server
                 .tool_timeout_sec
                 .map(|timeout| timeout.as_secs_f64()),
+            "keepalive_interval_sec": server
+                .keepalive_interval_sec
+                .map(|timeout| timeout.as_secs_f64()),
         }))?;
         println!("{output}");
         return Ok(());
@@ -653,6 +660,11 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     }
     if let Some(timeout) = server.tool_timeout_sec {
         println!("  tool_timeout_sec: {}", timeout.as_secs_f64());
+    }
+    if let Some(interval) = server.keepalive_interval_sec {
+        println!("  keepalive_interval_sec: {}", interval.as_secs_f64());
+    } else {
+        println!("  keepalive_interval_sec: default");
     }
     println!("  remove: codex mcp remove {}", get_args.name);
 

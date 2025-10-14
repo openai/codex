@@ -22,6 +22,7 @@ chrono = { workspace = true, features = ["serde"] }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-file-search = { workspace = true }
+codex-http-config = { workspace = true }
 codex-mcp-client = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
 codex-protocol = { workspace = true }

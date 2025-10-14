@@ -89,6 +89,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    keepalive_interval_sec: None,
                 },
             );
         })
@@ -238,6 +239,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    keepalive_interval_sec: None,
                 },
             );
         })
@@ -419,6 +421,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
                     enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    keepalive_interval_sec: None,
                 },
             );
         })

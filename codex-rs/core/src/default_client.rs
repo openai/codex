@@ -1,4 +1,5 @@
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use codex_http_config::configure_builder;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
 use std::sync::Mutex;
@@ -132,7 +133,7 @@ pub fn create_client() -> reqwest::Client {
     headers.insert("originator", originator().header_value.clone());
     let ua = get_codex_user_agent();
 
-    let mut builder = reqwest::Client::builder()
+    let mut builder = configure_builder(reqwest::Client::builder())
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers);

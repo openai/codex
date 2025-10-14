@@ -112,9 +112,10 @@ name = "OpenAI"
 base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
 # network tuning overrides (all optional; falls back to built‑in defaults)
-request_max_retries = 4            # retry failed HTTP requests
-stream_max_retries = 10            # retry dropped SSE streams
-stream_idle_timeout_ms = 300000    # 5m idle timeout
+request_max_retries = 4             # retry failed HTTP requests
+stream_max_retries = 10             # retry dropped SSE streams
+stream_idle_timeout_ms = 300000     # 5m idle timeout
+stream_heartbeat_interval_ms = 45000 # synthetic SSE heartbeats (0 disables)
 ```
 
 #### request_max_retries
@@ -128,6 +129,10 @@ Number of times Codex will attempt to reconnect when a streaming response is int
 #### stream_idle_timeout_ms
 
 How long Codex will wait for activity on a streaming response before treating the connection as lost. Defaults to `300_000` (5 minutes).
+
+#### stream_heartbeat_interval_ms
+
+How often Codex emits a synthetic heartbeat while waiting for streaming output. Defaults to `45_000` (45 seconds) for Responses API providers and is disabled for Chat Completions providers. Set to `0` to disable heartbeats entirely or increase the value (but keep it below `stream_idle_timeout_ms`) to reduce cadence.
 
 ## model_provider
 
@@ -806,6 +811,7 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `model_providers.<id>.request_max_retries`       | number                                                            | Per‑provider HTTP retry count (default: 4).                                                                                |
 | `model_providers.<id>.stream_max_retries`        | number                                                            | SSE stream retry count (default: 5).                                                                                       |
 | `model_providers.<id>.stream_idle_timeout_ms`    | number                                                            | SSE idle timeout (ms) (default: 300000).                                                                                   |
+| `model_providers.<id>.stream_heartbeat_interval_ms` | number                                                        | Synthetic SSE heartbeat interval (ms). Defaults to 45000 for Responses providers; set to 0 or omit to disable.            |
 | `project_doc_max_bytes`                          | number                                                            | Max bytes to read from `AGENTS.md`.                                                                                        |
 | `profile`                                        | string                                                            | Active profile name.                                                                                                       |
 | `profiles.<name>.*`                              | various                                                           | Profile‑scoped overrides of the same keys.                                                                                 |
