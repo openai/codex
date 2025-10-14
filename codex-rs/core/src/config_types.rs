@@ -322,6 +322,15 @@ pub struct Tui {
     pub notifications: Notifications,
 }
 
+/// Settings for notices we display to users via the tui and app-server clients
+/// (primarily the Codex IDE extension). NOTE: these are different from
+/// notifications - notices are warnings, NUX screens, acknowledgements, etc.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct Notices {
+    /// Tracks whether the user has acknowledged the full access warning prompt.
+    pub hide_full_access_warning: Option<bool>,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]

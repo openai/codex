@@ -7,6 +7,7 @@ use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
 use crate::config_types::McpServerTransportConfig;
+use crate::config_types::Notices;
 use crate::config_types::Notifications;
 use crate::config_types::OtelConfig;
 use crate::config_types::OtelConfigToml;
@@ -231,8 +232,8 @@ pub struct Config {
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: bool,
 
-    /// Tracks whether the user has acknowledged the full access warning prompt.
-    pub full_access_warning_acknowledged: bool,
+    /// Collection of various notices we show the user
+    pub notices: Notices,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -550,10 +551,7 @@ pub fn set_windows_wsl_setup_acknowledged(
 }
 
 /// Persist the acknowledgement flag for the full access warning prompt.
-pub fn set_full_access_warning_acknowledged(
-    codex_home: &Path,
-    acknowledged: bool,
-) -> anyhow::Result<()> {
+pub fn set_hide_full_access_warning(codex_home: &Path, acknowledged: bool) -> anyhow::Result<()> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     let mut doc = match std::fs::read_to_string(config_path.clone()) {
         Ok(s) => s.parse::<DocumentMut>()?,
@@ -561,15 +559,43 @@ pub fn set_full_access_warning_acknowledged(
         Err(e) => return Err(e.into()),
     };
 
-    doc["full_access_warning_acknowledged"] = toml_edit::value(acknowledged);
+    let notices_table = load_or_create_top_level_table(&mut doc, "notices")?;
+
+    notices_table["hide_full_access_warning"] = toml_edit::value(acknowledged);
 
     std::fs::create_dir_all(codex_home)?;
-
     let tmp_file = NamedTempFile::new_in(codex_home)?;
     std::fs::write(tmp_file.path(), doc.to_string())?;
     tmp_file.persist(config_path)?;
 
     Ok(())
+}
+
+fn load_or_create_top_level_table<'a>(
+    doc: &'a mut DocumentMut,
+    key: &str,
+) -> anyhow::Result<&'a mut toml_edit::Table> {
+    let mut created_table = false;
+
+    let root = doc.as_table_mut();
+    let needs_table =
+        !root.contains_key(key) || root.get(key).and_then(|item| item.as_table()).is_none();
+    if needs_table {
+        root.insert(key, toml_edit::table());
+        created_table = true;
+    }
+
+    let Some(table) = doc[key].as_table_mut() else {
+        return Err(anyhow::anyhow!(format!(
+            "table [{key}] missing after initialization"
+        )));
+    };
+
+    if created_table {
+        table.set_implicit(true);
+    }
+
+    Ok(table)
 }
 
 fn ensure_profile_table<'a>(
@@ -847,8 +873,9 @@ pub struct ConfigToml {
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
 
-    /// Tracks whether the full access warning prompt has been acknowledged.
-    pub full_access_warning_acknowledged: Option<bool>,
+    /// Collection of in-product notices (different from notifications)
+    /// See `[config_types::Notices]` for more details
+    pub notices: Option<Notices>,
 
     /// Legacy, now use features
     pub experimental_instructions_file: Option<PathBuf>,
@@ -1222,7 +1249,7 @@ impl Config {
             features,
             active_profile: active_profile_name,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
-            full_access_warning_acknowledged: cfg.full_access_warning_acknowledged.unwrap_or(false),
+            notices: cfg.notices.unwrap_or_default(),
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
                 .tui
@@ -2255,7 +2282,7 @@ model_verbosity = "high"
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
                 windows_wsl_setup_acknowledged: false,
-                full_access_warning_acknowledged: false,
+                notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
                 otel: OtelConfig::default(),
@@ -2320,7 +2347,7 @@ model_verbosity = "high"
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
             windows_wsl_setup_acknowledged: false,
-            full_access_warning_acknowledged: false,
+            notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
@@ -2400,7 +2427,7 @@ model_verbosity = "high"
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
             windows_wsl_setup_acknowledged: false,
-            full_access_warning_acknowledged: false,
+            notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),
@@ -2466,7 +2493,7 @@ model_verbosity = "high"
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
             windows_wsl_setup_acknowledged: false,
-            full_access_warning_acknowledged: false,
+            notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
             otel: OtelConfig::default(),

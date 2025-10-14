@@ -17,7 +17,7 @@ use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
-use codex_core::config::set_full_access_warning_acknowledged;
+use codex_core::config::set_hide_full_access_warning;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
@@ -378,12 +378,9 @@ impl App {
             }
             AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
                 self.chat_widget.set_full_access_warning_acknowledged(ack);
-                self.config.full_access_warning_acknowledged = ack;
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
-                if let Err(err) =
-                    set_full_access_warning_acknowledged(&self.config.codex_home, true)
-                {
+                if let Err(err) = set_hide_full_access_warning(&self.config.codex_home, true) {
                     tracing::error!(
                         error = %err,
                         "failed to persist full access warning acknowledgement"

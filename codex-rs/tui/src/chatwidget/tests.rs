@@ -1059,7 +1059,7 @@ fn model_selection_popup_snapshot() {
 fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
-    chat.config.full_access_warning_acknowledged = false;
+    chat.config.notices.hide_full_access_warning = None;
     chat.open_approvals_popup();
 
     let popup = render_bottom_popup(&chat, 80);
