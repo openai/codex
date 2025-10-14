@@ -95,6 +95,8 @@ pub(crate) enum AppEvent {
     OpenPruneAdvanced,
     /// Open the manual prune submenu (by category).
     OpenPruneManual,
+    /// Manual prune list closed (via Enter or Esc).
+    PruneManualClosed,
     /// Confirm the currently selected manual prune category.
     ConfirmManualChanges,
     /// Apply the pending manual prune plan.

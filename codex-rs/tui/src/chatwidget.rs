@@ -2067,8 +2067,8 @@ impl ChatWidget {
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select categories to prune")),
             on_enter_event: Some(AppEvent::ConfirmManualChanges),
-            // Esc/back from Manual returns to the root prune menu.
-            on_complete_event: Some(AppEvent::OpenPruneRoot),
+            // Esc/back or Enter complete the list; defer decision to on_prune_manual_closed.
+            on_complete_event: Some(AppEvent::PruneManualClosed),
         });
     }
 
@@ -2224,6 +2224,17 @@ impl ChatWidget {
                 None,
             );
         }
+    }
+
+    pub(crate) fn on_prune_manual_closed(&mut self) {
+        // If there's a pending manual plan, this close was triggered by Enter to show confirm.
+        // Keep the plan; do not reopen the root menu here.
+        if self.manual_pending_plan.is_some() {
+            return;
+        }
+        // Esc/back from the manual list: clear state and reopen the prune root menu.
+        self.reset_manual_prune_state();
+        self.open_prune_menu();
     }
 
     fn reset_manual_prune_state(&mut self) {
