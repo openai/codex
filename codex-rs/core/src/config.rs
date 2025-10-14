@@ -1589,9 +1589,7 @@ exclude_slash_tmp = true
         assert!(config.features.enabled(Feature::UnifiedExec));
         assert!(config.features.enabled(Feature::RmcpClient));
 
-        assert!(config.include_plan_tool);
         assert!(config.include_apply_patch_tool);
-        assert!(!config.include_view_image_tool);
         assert!(config.use_experimental_streamable_shell_tool);
         assert!(config.use_experimental_unified_exec_tool);
         assert!(config.use_experimental_use_rmcp_client);
