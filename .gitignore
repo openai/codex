@@ -13,6 +13,11 @@ build/
 out/
 storybook-static/
 
+# Rust build outputs (massive binaries; never commit)
+# Ignore target/ at repo root and in any nested workspace
+target/
+**/target/
+
 # ignore README for publishing
 codex-cli/README.md
 
@@ -49,6 +54,9 @@ yarn-error.log*
 # env
 .env*
 !.env.example
+
+# python
+.venv/
 
 # package
 *.tgz
@@ -100,3 +108,76 @@ codex-rs/.cargo/
 codex-rs/.cargo-home/
 codex-rs/.rustup/
 codex-rs/codex-rs/
+
+# --- Additional baseline ignores ---
+
+# Python
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.nox/
+.tox/
+.pytype/
+.pyre/
+.hypothesis/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+.ipynb_checkpoints/
+
+# JS frameworks/build tools
+.vite/
+.next/
+.nuxt/
+.svelte-kit/
+.angular/
+
+# Logs/IDs
+.pnpm-debug.log*
+*.pid
+
+# Coverage/test artifacts
+lcov-report/
+coverage-final.json
+cypress/videos/
+cypress/screenshots/
+cypress/downloads/
+playwright-report/
+test-results/
+junit.xml
+
+# OS cruft and editor backups
+ehthumbs.db
+Desktop.ini
+._*
+*.swo
+*.swn
+*.iml
+.vs/
+
+# Temp dirs
+tmp/
+.tmp/
+
+# Secrets & certs (never commit private keys)
+*.pem
+*.key
+*.p12
+*.crt
+*.cer
+*.der
+
+# Nix outputs (additional)
+result-*
+
+# Local toolchains/caches (generic)
+.cargo/
+.cargo-home/
+.rustup/
