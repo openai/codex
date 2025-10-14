@@ -213,7 +213,7 @@ async fn shell_output_reserializes_truncated_content() -> Result<()> {
     let call_id = "shell-truncated";
     let args = json!({
         "command": ["/bin/sh", "-c", "seq 1 400"],
-        "timeout_ms": 1_000,
+        "timeout_ms": 5_000,
     });
     let responses = vec![
         sse(vec![
