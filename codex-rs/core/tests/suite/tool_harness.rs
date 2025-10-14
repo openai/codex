@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use assert_matches::assert_matches;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -104,7 +105,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.include_plan_tool = true;
+        config.features.enable(Feature::PlanTool);
     });
     let TestCodex {
         codex,
@@ -191,7 +192,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.include_plan_tool = true;
+        config.features.enable(Feature::PlanTool);
     });
     let TestCodex {
         codex,
@@ -285,7 +286,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
+        config.features.enable(Feature::ApplyPatchFreeform);
     });
     let TestCodex {
         codex,
@@ -403,7 +404,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
+        config.features.enable(Feature::ApplyPatchFreeform);
     });
     let TestCodex {
         codex,
