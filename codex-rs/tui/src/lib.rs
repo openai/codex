@@ -307,7 +307,7 @@ async fn run_ratatui_app(
     // Show update banner in terminal history (instead of stderr) so it is visible
     // within the TUI scrollback. Building spans keeps styling consistent.
     #[cfg(not(debug_assertions))]
-    if let Some(latest_version) = updates::get_upgrade_version(&config) {
+    if let Some(latest_version) = updates::get_upgrade_version(&initial_config) {
         use crate::history_cell::padded_emoji;
         use crate::history_cell::with_border_with_inner_width;
         use ratatui::style::Stylize as _;
