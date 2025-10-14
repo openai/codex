@@ -59,6 +59,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
 use crate::app_event::AppEvent;
+use crate::app_event::DelegateRequestPayload;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
@@ -111,6 +112,8 @@ use codex_git_tooling::GhostCommit;
 use codex_git_tooling::GitToolingError;
 use codex_git_tooling::create_ghost_commit;
 use codex_git_tooling::restore_ghost_commit;
+use codex_multi_agent::AgentId;
+use codex_multi_agent::DelegatePrompt;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -262,6 +265,11 @@ pub(crate) struct ChatWidget {
     ghost_snapshots_disabled: bool,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
+
+    delegate_run: Option<String>,
+    delegate_had_stream: bool,
+    delegate_status_claimed: bool,
+    delegate_previous_status_header: Option<String>,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
 }
@@ -954,6 +962,10 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            delegate_run: None,
+            delegate_had_stream: false,
+            delegate_status_claimed: false,
+            delegate_previous_status_header: None,
             last_rendered_width: std::cell::Cell::new(None),
         }
     }
@@ -1019,6 +1031,10 @@ impl ChatWidget {
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
+            delegate_run: None,
+            delegate_had_stream: false,
+            delegate_status_claimed: false,
+            delegate_previous_status_header: None,
             last_rendered_width: std::cell::Cell::new(None),
         }
     }
@@ -1267,6 +1283,11 @@ impl ChatWidget {
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
+            return;
+        }
+
+        // Intercept explicit delegation commands (only support text-only submissions).
+        if image_paths.is_empty() && !text.is_empty() && self.try_delegate_shortcut(&text) {
             return;
         }
 
@@ -2107,6 +2128,9 @@ impl ChatWidget {
         if text.is_empty() {
             return;
         }
+        if self.try_delegate_shortcut(&text) {
+            return;
+        }
         self.submit_user_message(text.into());
     }
 
@@ -2119,6 +2143,126 @@ impl ChatWidget {
 
     pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
         self.conversation_id
+    }
+
+    pub(crate) fn add_delegate_completion(
+        &mut self,
+        agent_id: &AgentId,
+        response: Option<&str>,
+        duration_hint: Option<String>,
+    ) {
+        let header = format!("↳ #{agent} completed", agent = agent_id.as_str());
+        self.add_info_message(header, duration_hint);
+
+        let Some(text) = response.map(str::trim).filter(|s| !s.is_empty()) else {
+            return;
+        };
+
+        self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+
+        let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+        append_markdown(text, None, &mut lines, &self.config);
+        let cell = AgentMessageCell::new(lines, true);
+        self.add_to_history(cell);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_delegate_started(&mut self, run_id: &str, agent_id: &AgentId, prompt: &str) {
+        self.delegate_run = Some(run_id.to_string());
+        self.delegate_had_stream = false;
+        self.delegate_previous_status_header = Some(self.current_status_header.clone());
+        if self.bottom_pane.status_widget().is_none() {
+            self.bottom_pane.set_task_running(true);
+            self.delegate_status_claimed = true;
+        } else {
+            self.delegate_status_claimed = false;
+        }
+        self.set_status_header(format!("Delegating to #{}", agent_id.as_str()));
+        let trimmed = prompt.trim();
+        let hint = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        self.add_info_message(format!("↳ #{agent}…", agent = agent_id.as_str()), hint);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_delegate_delta(&mut self, run_id: &str, chunk: &str) {
+        if self.delegate_run.as_deref() != Some(run_id) {
+            return;
+        }
+        self.delegate_had_stream = true;
+        self.handle_streaming_delta(chunk.to_string());
+    }
+
+    pub(crate) fn on_delegate_completed(&mut self, run_id: &str) -> bool {
+        if self.delegate_run.as_deref() != Some(run_id) {
+            return false;
+        }
+        let had_stream = self.delegate_had_stream;
+        if had_stream {
+            self.flush_answer_stream_with_separator();
+            self.handle_stream_finished();
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
+        if let Some(previous) = self.delegate_previous_status_header.take() {
+            self.set_status_header(previous);
+        }
+        if self.delegate_status_claimed {
+            self.bottom_pane.set_task_running(false);
+            self.delegate_status_claimed = false;
+        }
+        self.delegate_run = None;
+        self.delegate_had_stream = false;
+        had_stream
+    }
+
+    pub(crate) fn on_delegate_failed(&mut self, run_id: &str, agent_id: &AgentId, error: &str) {
+        let _ = self.on_delegate_completed(run_id);
+        self.add_error_message(format!(
+            "Delegation to #{} failed: {}",
+            agent_id.as_str(),
+            error
+        ));
+    }
+
+    fn try_delegate_shortcut(&mut self, text: &str) -> bool {
+        let trimmed = text.trim();
+        if !trimmed.starts_with('#') {
+            return false;
+        }
+
+        let mut parts = trimmed.splitn(2, char::is_whitespace);
+        let tag = parts.next().unwrap_or("");
+        let prompt = parts.next().unwrap_or("").trim();
+
+        let raw_id = tag.trim_start_matches('#').trim_end_matches(':');
+        if raw_id.is_empty() {
+            self.add_error_message("Specify an agent after '#'.".to_string());
+            return true;
+        }
+
+        let agent_id = match AgentId::parse(raw_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.add_error_message(format!("Invalid agent id `{raw_id}`: {err}"));
+                return true;
+            }
+        };
+
+        if prompt.is_empty() {
+            self.add_error_message("Delegate requests need a prompt.".to_string());
+            return true;
+        }
+
+        let payload = DelegateRequestPayload {
+            agent_id,
+            prompt: DelegatePrompt::new(prompt.to_string()),
+        };
+        self.app_event_tx.send(AppEvent::DelegateRequest(payload));
+        true
     }
 
     /// Return a reference to the widget's current config (includes any

@@ -1,4 +1,4 @@
-model = "gpt-4o-mini"
+model = "gpt-5"
 sandbox_mode = "workspace-write"
 
 [history]

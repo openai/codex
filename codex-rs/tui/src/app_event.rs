@@ -4,6 +4,10 @@ use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
+use codex_multi_agent::AgentId;
+use codex_multi_agent::DelegateEvent;
+use codex_multi_agent::DelegatePrompt;
+use codex_multi_agent::DelegateRequest;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
@@ -26,6 +30,12 @@ pub(crate) enum AppEvent {
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_core::protocol::Op),
+
+    /// Request delegation to a sub-agent.
+    DelegateRequest(DelegateRequestPayload),
+
+    /// Update emitted from the orchestrator about delegate progress/completion.
+    DelegateUpdate(DelegateEvent),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -87,4 +97,19 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DelegateRequestPayload {
+    pub agent_id: AgentId,
+    pub prompt: DelegatePrompt,
+}
+
+impl From<DelegateRequestPayload> for DelegateRequest {
+    fn from(value: DelegateRequestPayload) -> Self {
+        DelegateRequest {
+            agent_id: value.agent_id,
+            prompt: value.prompt,
+        }
+    }
 }

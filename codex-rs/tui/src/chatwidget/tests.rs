@@ -35,6 +35,7 @@ use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
+use codex_multi_agent::AgentId;
 use codex_protocol::ConversationId;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -288,6 +289,10 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots: Vec::new(),
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
+        delegate_run: None,
+        delegate_had_stream: false,
+        delegate_status_claimed: false,
+        delegate_previous_status_header: None,
         last_rendered_width: std::cell::Cell::new(None),
     };
     (widget, rx, op_rx)
@@ -376,6 +381,95 @@ fn test_rate_limit_warnings_monthly() {
         ),],
         "expected one warning per limit for the highest crossed threshold"
     );
+}
+
+#[test]
+fn hash_prefix_routes_to_delegate() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.submit_user_message(UserMessage {
+        text: "#ideas_provider explore parser modularization".to_string(),
+        image_paths: Vec::new(),
+    });
+
+    assert!(
+        op_rx.try_recv().is_err(),
+        "delegated prompts must not reach the primary conversation"
+    );
+
+    let mut saw_delegate = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, AppEvent::DelegateRequest(_)) {
+            saw_delegate = true;
+            break;
+        }
+    }
+
+    assert!(
+        saw_delegate,
+        "expected delegate request event for #ideas_provider"
+    );
+}
+
+#[test]
+fn delegate_stream_deltas_and_restore_status() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let agent = AgentId::parse("ideas_provider").expect("valid agent id");
+
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert_eq!(chat.current_status_header, "Working");
+
+    chat.on_delegate_started("run-1", &agent, "sketch integration points");
+    assert_eq!(chat.delegate_run.as_deref(), Some("run-1"));
+    assert!(chat.delegate_status_claimed);
+    assert!(chat.bottom_pane.status_widget().is_some());
+    assert_eq!(chat.current_status_header, "Delegating to #ideas_provider");
+
+    chat.on_delegate_delta("run-1", "First idea\n");
+    let mut saw_start = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, AppEvent::StartCommitAnimation) {
+            saw_start = true;
+        }
+    }
+    assert!(
+        saw_start,
+        "expected commit animation when streaming delegate output"
+    );
+
+    chat.on_commit_tick();
+    let mut saw_history_line = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            let text = lines_to_single_string(&cell.display_lines(80));
+            if text.contains("First idea") {
+                saw_history_line = true;
+            }
+        }
+    }
+    assert!(
+        saw_history_line,
+        "expected streamed delegate output in history"
+    );
+
+    let streamed = chat.on_delegate_completed("run-1");
+    assert!(
+        streamed,
+        "delegate completion should report streaming output"
+    );
+
+    let mut saw_stop = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::StopCommitAnimation = event { saw_stop = true }
+    }
+    assert!(
+        saw_stop,
+        "expected commit animation to stop after delegate completion"
+    );
+    assert!(chat.delegate_run.is_none());
+    assert!(!chat.delegate_status_claimed);
+    assert!(chat.bottom_pane.status_widget().is_none());
+    assert_eq!(chat.current_status_header, "Working");
 }
 
 // (removed experimental resize snapshot test)

@@ -330,6 +330,14 @@ fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
     }
 }
 
+pub mod orchestrator;
+pub use orchestrator::AgentOrchestrator;
+pub use orchestrator::DelegateEvent;
+pub use orchestrator::DelegatePrompt;
+pub use orchestrator::DelegateRequest;
+pub use orchestrator::DelegateRunId;
+pub use orchestrator::OrchestratorError;
+
 #[cfg(test)]
 mod tests {
     use super::*;

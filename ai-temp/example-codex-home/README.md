@@ -1,28 +1,31 @@
 # Sample Codex Home Setup
 
-This directory mirrors a minimal `~/.codex` layout so you can try the new multi-agent loader without touching your real config.
+This directory mirrors a minimal `~/.codex` layout so you can try the multi-agent loader without touching your real config.
 
 ## Directory Structure
 
 - `config.toml`: baseline settings used when no sub-agent is selected.
-- `AGENTS.md`: default instruction set for the primary agent.
-- `agents/rust_test_writer`: sub-agent focused on Rust testing.
-- `agents/test_driver`: sub-agent that keeps sandboxing strict while running checks.
+- `AGENTS.md`: default instruction set for the primary agent (orchestrator).
+- `agents/ideas_provider/`: GPT-5 sub-agent that proposes multiple approaches.
+- `agents/critic/`: GPT-5-nano sub-agent that reviews the leading option.
 - `log/`, `sessions/`: empty placeholders so Codex can write logs and rollouts.
 
 ## Quick Start
 
 ```bash
-export CODEX_HOME="$(pwd)/ai-temp/example-codex-home"
+# Build the CLI once (from /path/to/repo)
+cargo build -p codex-cli
 
-# Primary agent (uses AGENTS.md + config.toml in this directory)
-codex --help
+# Launch the TUI against this sample Codex home
+CODEX_HOME="$(pwd)/ai-temp/example-codex-home" target/debug/codex
 
-# Rust-focused sub-agent
-codex --agent rust_test_writer
+# Launch a specific sub-agent directly
+CODEX_HOME="$(pwd)/ai-temp/example-codex-home" target/debug/codex --agent ideas_provider
+CODEX_HOME="$(pwd)/ai-temp/example-codex-home" target/debug/codex --agent critic
 
-# Test driver sub-agent with read-only sandbox
-codex --agent test_driver
+# Inside the primary session you can delegate manually:
+# type: '#ideas_provider outline parser refactors'
+# Watch logs in log/codex-tui.log to confirm delegation activity.
 ```
 
 Unset `CODEX_HOME` (or point it back to your real path) once you're done experimenting.

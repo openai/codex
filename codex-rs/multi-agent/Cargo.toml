@@ -9,6 +9,9 @@ codex-common = { workspace = true, features = ["cli"] }
 codex-core.workspace = true
 serde.workspace = true
 toml.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

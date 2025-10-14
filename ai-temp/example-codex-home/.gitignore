@@ -1,0 +1,6 @@
+# Runtime artifacts generated while testing the sample Codex home
+auth.json
+history.jsonl
+log/
+sessions/
+agents/*/sessions/

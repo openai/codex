@@ -1,5 +1,6 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+use crate::app_event::DelegateRequestPayload;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
@@ -21,6 +22,10 @@ use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_multi_agent::AgentOrchestrator;
+use codex_multi_agent::DelegateEvent;
+use codex_multi_agent::DelegateRequest;
+use codex_multi_agent::OrchestratorError;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -50,6 +55,7 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) delegate_orchestrator: Arc<AgentOrchestrator>,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
@@ -74,9 +80,11 @@ pub(crate) struct App {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
+        delegate_orchestrator: Arc<AgentOrchestrator>,
         config: Config,
         active_profile: Option<String>,
         initial_prompt: Option<String>,
@@ -86,6 +94,14 @@ impl App {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+
+        let mut delegate_event_rx = delegate_orchestrator.subscribe().await;
+        let delegate_app_event_tx = app_event_tx.clone();
+        tokio::spawn(async move {
+            while let Some(event) = delegate_event_rx.recv().await {
+                delegate_app_event_tx.send(AppEvent::DelegateUpdate(event));
+            }
+        });
 
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
@@ -142,6 +158,7 @@ impl App {
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
+            delegate_orchestrator,
             config,
             active_profile,
             file_search,
@@ -231,6 +248,12 @@ impl App {
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::DelegateRequest(payload) => {
+                self.handle_delegate_request(payload).await;
+            }
+            AppEvent::DelegateUpdate(update) => {
+                self.handle_delegate_update(update);
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
@@ -404,6 +427,75 @@ impl App {
         Ok(true)
     }
 
+    async fn handle_delegate_request(&mut self, payload: DelegateRequestPayload) {
+        let request: DelegateRequest = payload.clone().into();
+        if let Err(err) = self.delegate_orchestrator.delegate(request).await {
+            let message = match err {
+                OrchestratorError::DelegateInProgress => {
+                    "A delegate is already running.".to_string()
+                }
+                OrchestratorError::AgentNotFound(id) => format!("Agent `{id}` not found."),
+                OrchestratorError::DelegateSetupFailed(reason) => {
+                    format!("Unable to start delegate: {reason}")
+                }
+            };
+            self.chat_widget.add_error_message(message);
+        }
+    }
+
+    fn handle_delegate_update(&mut self, event: DelegateEvent) {
+        match event {
+            DelegateEvent::Started {
+                run_id,
+                agent_id,
+                prompt,
+                ..
+            } => {
+                self.chat_widget
+                    .on_delegate_started(&run_id, &agent_id, &prompt);
+            }
+            DelegateEvent::Delta { run_id, chunk, .. } => {
+                self.chat_widget.on_delegate_delta(&run_id, &chunk);
+            }
+            DelegateEvent::Completed {
+                run_id,
+                agent_id,
+                output,
+                duration,
+                ..
+            } => {
+                let streamed = self.chat_widget.on_delegate_completed(&run_id);
+                let hint = Some(format!(
+                    "finished in {}",
+                    Self::format_delegate_duration(duration)
+                ));
+                let response = output.as_deref().filter(|_| !streamed);
+                self.chat_widget
+                    .add_delegate_completion(&agent_id, response, hint);
+            }
+            DelegateEvent::Failed {
+                run_id,
+                agent_id,
+                error,
+            } => {
+                self.chat_widget
+                    .on_delegate_failed(&run_id, &agent_id, &error);
+            }
+        }
+    }
+
+    fn format_delegate_duration(duration: Duration) -> String {
+        if duration.as_secs() >= 60 {
+            let mins = duration.as_secs() / 60;
+            let secs = duration.as_secs() % 60;
+            format!("{mins}m{secs:02}s")
+        } else if duration.as_millis() >= 1000 {
+            format!("{:.1}s", duration.as_secs_f32())
+        } else {
+            format!("{:.0}ms", duration.as_millis())
+        }
+    }
+
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
         self.chat_widget.token_usage()
     }
@@ -484,15 +576,21 @@ mod tests {
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
+    use codex_common::CliConfigOverrides;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use codex_core::config::ConfigOverrides;
     use codex_core::protocol::SessionConfiguredEvent;
+    use codex_core::protocol::SessionSource;
     use codex_protocol::ConversationId;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use tempfile::tempdir;
+
+    use codex_multi_agent::AgentOrchestrator;
 
     fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
@@ -503,6 +601,15 @@ mod tests {
         )));
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+        let auth_manager_arc = auth_manager.clone();
+        let temp_home = tempdir().expect("tempdir");
+        let delegate_orchestrator = Arc::new(AgentOrchestrator::new(
+            temp_home.path().to_path_buf(),
+            auth_manager_arc,
+            SessionSource::Cli,
+            CliConfigOverrides::default(),
+            ConfigOverrides::default(),
+        ));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
 
         App {
@@ -510,6 +617,7 @@ mod tests {
             app_event_tx,
             chat_widget,
             auth_manager,
+            delegate_orchestrator,
             config,
             active_profile: None,
             file_search,

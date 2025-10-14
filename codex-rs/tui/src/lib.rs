@@ -6,6 +6,7 @@
 use app::App;
 pub use app::AppExitInfo;
 use codex_app_server_protocol::AuthMode;
+use codex_common::CliConfigOverrides;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
@@ -17,11 +18,14 @@ use codex_core::config::ConfigToml;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::SessionSource;
+use codex_multi_agent::AgentOrchestrator;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
@@ -147,6 +151,8 @@ pub async fn run_main(
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
     };
+    let delegate_config_overrides = overrides.clone();
+    let delegate_cli_overrides = cli.config_overrides.clone();
     #[allow(clippy::print_stderr)]
     let agent_context = match codex_multi_agent::load_agent_context(
         cli.agent.as_deref(),
@@ -161,6 +167,7 @@ pub async fn run_main(
             std::process::exit(1);
         }
     };
+    let global_codex_home = agent_context.global_codex_home().to_path_buf();
     let config_toml = agent_context.config_toml().clone();
     let mut config = agent_context.into_config();
 
@@ -242,9 +249,17 @@ pub async fn run_main(
         let _ = tracing_subscriber::registry().with(file_layer).try_init();
     };
 
-    run_ratatui_app(cli, config, active_profile, should_show_trust_screen)
-        .await
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(
+        cli,
+        config,
+        active_profile,
+        should_show_trust_screen,
+        global_codex_home,
+        delegate_cli_overrides,
+        delegate_config_overrides,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
@@ -252,6 +267,9 @@ async fn run_ratatui_app(
     config: Config,
     active_profile: Option<String>,
     should_show_trust_screen: bool,
+    global_codex_home: PathBuf,
+    delegate_cli_overrides: CliConfigOverrides,
+    delegate_config_overrides: ConfigOverrides,
 ) -> color_eyre::Result<AppExitInfo> {
     let mut config = config;
     color_eyre::install()?;
@@ -336,6 +354,13 @@ async fn run_ratatui_app(
     session_log::maybe_init(&config);
 
     let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
+    let delegate_orchestrator = Arc::new(AgentOrchestrator::new(
+        global_codex_home,
+        auth_manager.clone(),
+        SessionSource::Cli,
+        delegate_cli_overrides,
+        delegate_config_overrides,
+    ));
     let login_status = get_login_status(&config);
     let should_show_windows_wsl_screen =
         cfg!(target_os = "windows") && !config.windows_wsl_setup_acknowledged;
@@ -425,6 +450,7 @@ async fn run_ratatui_app(
     let app_result = App::run(
         &mut tui,
         auth_manager,
+        delegate_orchestrator,
         config,
         active_profile,
         prompt,
