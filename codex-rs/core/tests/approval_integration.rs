@@ -54,13 +54,13 @@ fn test_command_safety_assessments() {
         },
         TestCase {
             command: &["touch", "file"], // Unrecognized
-            decision: CommandDecision::permit(get_platform_sandbox_type(), false),
-            description: "Unrecognized commands should be sandboxed, not require approval, on supported platforms.",
+            decision: CommandDecision::require_approval(),
+            description: "Unrecognized commands should require approval to prevent wrapped dangerous commands.",
         },
         TestCase {
             command: &["npm", "install"], // Unrecognized
-            decision: CommandDecision::permit(get_platform_sandbox_type(), false),
-            description: "Unrecognized package manager commands should be sandboxed.",
+            decision: CommandDecision::require_approval(),
+            description: "Unrecognized package manager commands should require approval.",
         },
         TestCase {
             command: &["git", "status"],
@@ -93,7 +93,7 @@ fn test_command_safety_assessments() {
 
 #[test]
 fn test_invalid_and_edge_case_inputs() {
-    // Empty command is unrecognized, so it should be sandboxed.
+    // Empty command is unrecognized, so it should require approval.
     let result = assess_command_safety(
         &[],
         AskForApproval::OnRequest,
@@ -101,12 +101,9 @@ fn test_invalid_and_edge_case_inputs() {
         &approved_cache(&[]),
         false,
     );
-    pretty_assert_eq!(
-        result,
-        CommandDecision::permit(get_platform_sandbox_type(), false)
-    );
+    pretty_assert_eq!(result, CommandDecision::require_approval());
 
-    // Command with empty string is also unrecognized and should be sandboxed.
+    // Command with empty string is also unrecognized and should require approval.
     let result = assess_command_safety(
         &cmd(&["", "arg"]),
         AskForApproval::OnRequest,
@@ -114,10 +111,7 @@ fn test_invalid_and_edge_case_inputs() {
         &approved_cache(&[]),
         false,
     );
-    pretty_assert_eq!(
-        result,
-        CommandDecision::permit(get_platform_sandbox_type(), false)
-    );
+    pretty_assert_eq!(result, CommandDecision::require_approval());
 
     // A complex pipeline with the highest risk in the middle.
     let result = assess_command_safety(
@@ -132,7 +126,8 @@ fn test_invalid_and_edge_case_inputs() {
 
 #[test]
 fn test_danger_full_access_policy() {
-    // In DangerFullAccess mode, unrecognized commands should be permitted without a sandbox.
+    // Even in DangerFullAccess mode, unrecognized commands require approval because
+    // we can't assess their safety (prevents sudo/wrapper bypasses).
     let result = assess_command_safety(
         &cmd(&["touch", "file"]), // Unrecognized
         AskForApproval::OnRequest,
@@ -140,9 +135,9 @@ fn test_danger_full_access_policy() {
         &approved_cache(&[]),
         false,
     );
-    pretty_assert_eq!(result, CommandDecision::permit(SandboxType::None, false));
+    pretty_assert_eq!(result, CommandDecision::require_approval());
 
-    // However, commands that are explicitly high-risk should still require approval.
+    // Commands that are explicitly high-risk should also require approval.
     let result = assess_command_safety(
         &cmd(&["rm", "-rf", "/"]),
         AskForApproval::OnRequest,
@@ -197,22 +192,22 @@ fn test_adversarial_inputs() {
         },
         TestCase {
             command: &["env", "bash", "-c", "rm -rf /"],
-            decision: CommandDecision::permit(get_platform_sandbox_type(), false),
-            description: "Commands prefixed with `env` should be treated as Unrecognized and sandboxed.",
+            decision: CommandDecision::require_approval(),
+            description: "Commands prefixed with `env` should be treated as Unrecognized and require approval.",
         },
         TestCase {
             // The shell_parser rejects command substitution, so the command is Unrecognized.
-            // Unrecognized commands are sandboxed under this policy.
+            // Unrecognized commands require approval.
             command: &["bash", "-c", "echo $(rm -rf /)"],
-            decision: CommandDecision::permit(get_platform_sandbox_type(), false),
-            description: "Command substitution should be rejected by the parser and sandboxed.",
+            decision: CommandDecision::require_approval(),
+            description: "Command substitution should be rejected by the parser and require approval.",
         },
         TestCase {
             // The shell_parser rejects redirection, so the command is Unrecognized.
-            // Unrecognized commands are sandboxed under this policy.
+            // Unrecognized commands require approval.
             command: &["bash", "-c", "echo hello > /tmp/world"],
-            decision: CommandDecision::permit(get_platform_sandbox_type(), false),
-            description: "Redirection should be rejected by the parser and sandboxed.",
+            decision: CommandDecision::require_approval(),
+            description: "Redirection should be rejected by the parser and require approval.",
         },
     ];
 

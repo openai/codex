@@ -4,22 +4,9 @@ use crate::approval::rules_index;
 use crate::approval::shell_parser;
 use std::path::Path;
 
-/// Parse argv into an AST:
-/// - Strip repeated leading `sudo`
 /// - Try to unwrap shell scripts (any tool with `-c` or `-lc` pattern)
 /// - Otherwise produce a single SimpleAst
 pub(crate) fn parse_to_ast(argv: &[String]) -> CommandAst {
-    if argv.is_empty() {
-        return CommandAst::Unknown(vec![]);
-    }
-
-    // Normalize away leading `sudo` (possibly repeated)
-    let mut i = 0;
-    while i < argv.len() && argv[i] == "sudo" {
-        i += 1;
-    }
-    let argv = &argv[i..];
-
     if argv.is_empty() {
         return CommandAst::Unknown(vec![]);
     }

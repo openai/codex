@@ -686,14 +686,15 @@ mod approval_tests {
         }
 
         #[test]
-        fn parse_to_ast_drops_leading_sudo() {
+        fn parse_to_ast_keeps_sudo() {
+            // Sudo is no longer stripped - it's treated as unrecognized for security
             let ast = parser::parse_to_ast(&cmd(&["sudo", "sudo", "/bin/ls", "-l"]));
             let CommandAst::Sequence(simples) = ast else {
                 panic!("expected sequence ast");
             };
             pretty_assert_eq!(simples.len(), 1);
-            pretty_assert_eq!(simples[0].tool, "ls");
-            pretty_assert_eq!(simples[0].flags, vec!["-l"]);
+            pretty_assert_eq!(simples[0].tool, "sudo");
+            // The rest after sudo is treated as operands
         }
 
         #[test]
