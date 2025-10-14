@@ -297,6 +297,7 @@ fn make_chatwidget_manual() -> (
         prune_root_active: false,
         advanced_index_map: HashMap::new(),
         pending_advanced_plan: None,
+        manual_pending_plan: None,
     };
     (widget, rx, op_rx)
 }

@@ -1655,10 +1655,9 @@ impl ChatWidget {
         if self.pending_advanced_plan.is_some() {
             return;
         }
-        // Otherwise (Esc/back), clear any transient advanced state and return to chat.
+        // Otherwise (Esc/back), clear state and reopen the prune root menu so the user
+        // can pick a different action.
         self.reset_advanced_prune_state();
-        // Restore previous behavior: Esc from Advanced should reopen the prune root menu
-        // so the user can pick another action.
         self.open_prune_menu();
     }
 
