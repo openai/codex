@@ -207,6 +207,10 @@ impl McpConnectionManager {
                 continue;
             }
 
+            if !cfg.enabled {
+                continue;
+            }
+
             let startup_timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
             let tool_timeout = cfg.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
 

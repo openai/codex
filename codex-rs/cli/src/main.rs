@@ -157,7 +157,7 @@ struct LoginCommand {
     )]
     api_key: Option<String>,
 
-    #[arg(long = "use-device-code")]
+    #[arg(long = "device-auth")]
     use_device_code: bool,
 
     /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
