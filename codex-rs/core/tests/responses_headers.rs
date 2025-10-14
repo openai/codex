@@ -28,7 +28,7 @@ async fn responses_stream_includes_task_type_header() {
 
     let request_recorder = responses::mount_sse_once_match(
         &server,
-        header("codex-task-type", "standard"),
+        header("Codex-Task-Type", "standard"),
         response_body,
     )
     .await;
@@ -96,7 +96,7 @@ async fn responses_stream_includes_task_type_header() {
 
     let request = request_recorder.single_request();
     assert_eq!(
-        request.header("codex-task-type").as_deref(),
+        request.header("Codex-Task-Type").as_deref(),
         Some("standard")
     );
 }

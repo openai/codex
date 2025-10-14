@@ -308,7 +308,7 @@ impl ModelClient {
             .header("conversation_id", self.conversation_id.to_string())
             .header("session_id", self.conversation_id.to_string())
             .header(reqwest::header::ACCEPT, "text/event-stream")
-            .header("codex-task-type", task_kind.header_value())
+            .header("Codex-Task-Type", task_kind.header_value())
             .json(payload_json);
 
         if let Some(auth) = auth.as_ref()
