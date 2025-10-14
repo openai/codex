@@ -12,9 +12,7 @@
 // thiserror = "1"
 // tracing = "0.1"
 
-use crate::low_integrity;
-use crate::process;
-use crate::temp_user;
+use crate::windows_restricted_token_v2;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
@@ -33,7 +31,7 @@ pub(crate) enum StdioPolicy {
 #[derive(Debug, Parser)]
 #[command(
     name = "codex-windows-sandbox",
-    about = "Run a command inside a Windows AppContainer sandbox."
+    about = "Run a command inside a Windows restricted-token sandbox."
 )]
 struct WindowsSandboxCommand {
     /// Working directory that should be used when resolving relative sandbox policy paths.
@@ -109,55 +107,63 @@ pub fn spawn_command_under_windows_low_il(
     }
 
     // 1) Decide policy
-    let wants_network = sandbox_policy.has_full_network_access(); // same as mac/linux flags
-    let (writable_roots, read_only_overrides) =
-        roots_from_policy(sandbox_policy, sandbox_policy_cwd);
-
-    // 2) Create / reuse ephemeral user
-    let user =
-        temp_user::EphemeralUser::create().context("failed to create ephemeral sandbox user")?;
-
-    // 3) Network isolation (skip if policy says full network)
-    let _fw_guard: Option<crate::firewall::OutboundBlockGuard> = if wants_network {
-        None
-    } else {
-        // Temporarily disable firewall installation while investigating setup failures.
-        Some(
-            crate::firewall::install_for_user(&user)
-                .context("failed to install per-user firewall block rule")?,
-        )
-    };
-
-    low_integrity::enable_required_privileges()
-        .context("failed to enable SeSecurityPrivilege for integrity adjustments")?;
-
-    // 4) Mark allowed roots Low-Integrity (writeable by Low-IL)
-    for root in writable_roots.iter() {
-        low_integrity::ensure_low_integrity_dir(root)
-            .with_context(|| format!("failed to mark low-integrity: {}", root.display()))?;
+    let mut env_map = env_map;
+    if !sandbox_policy.has_full_network_access() {
+        apply_best_effort_network_block(&mut env_map);
     }
-    for ro in read_only_overrides.iter() {
-        // Explicitly force Medium IL if needed
-        low_integrity::ensure_medium_integrity_dir(ro)
-            .with_context(|| format!("failed to mark medium-integrity: {}", ro.display()))?;
-    }
+    ensure_non_interactive_pager(&mut env_map);
 
-    // 5) Launch under Low IL + job object
-    process::spawn_as_user_low_il(&user, command, command_cwd, stdio, env_map)
+    windows_restricted_token_v2::spawn_command_under_restricted_token_v2(
+        command,
+        command_cwd,
+        sandbox_policy,
+        sandbox_policy_cwd,
+        map_stdio_policy(stdio),
+        env_map,
+    )
+    .context("failed to spawn restricted-token sandbox process")
 }
-fn roots_from_policy(policy: &SandboxPolicy, base: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+
+fn map_stdio_policy(policy: StdioPolicy) -> windows_restricted_token_v2::StdioPolicy {
     match policy {
-        SandboxPolicy::DangerFullAccess => (vec![], vec![]),
-        SandboxPolicy::ReadOnly => (vec![], vec![]),
-        SandboxPolicy::WorkspaceWrite { .. } => {
-            let roots = policy.get_writable_roots_with_cwd(base);
-            let mut allows = Vec::new();
-            let mut ro = Vec::new();
-            for w in roots {
-                allows.push(w.root);
-                ro.extend(w.read_only_subpaths);
-            }
-            (allows, ro)
-        }
+        StdioPolicy::Inherit => windows_restricted_token_v2::StdioPolicy::Inherit,
     }
+}
+
+fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
+    env_map
+        .entry("GIT_PAGER".into())
+        .or_insert_with(|| "more.com".into());
+    env_map
+        .entry("PAGER".into())
+        .or_insert_with(|| "more.com".into());
+    env_map.entry("LESS".into()).or_insert_with(String::new);
+}
+
+fn apply_best_effort_network_block(env_map: &mut HashMap<String, String>) {
+    let sink = "http://127.0.0.1:9";
+    env_map
+        .entry("HTTP_PROXY".into())
+        .or_insert_with(|| sink.into());
+    env_map
+        .entry("HTTPS_PROXY".into())
+        .or_insert_with(|| sink.into());
+    env_map
+        .entry("ALL_PROXY".into())
+        .or_insert_with(|| sink.into());
+    env_map
+        .entry("NO_PROXY".into())
+        .or_insert_with(|| "localhost,127.0.0.1,::1".into());
+    env_map
+        .entry("PIP_NO_INDEX".into())
+        .or_insert_with(|| "1".into());
+    env_map
+        .entry("PIP_DISABLE_PIP_VERSION_CHECK".into())
+        .or_insert_with(|| "1".into());
+    env_map
+        .entry("NPM_CONFIG_OFFLINE".into())
+        .or_insert_with(|| "true".into());
+    env_map
+        .entry("CARGO_NET_OFFLINE".into())
+        .or_insert_with(|| "true".into());
 }

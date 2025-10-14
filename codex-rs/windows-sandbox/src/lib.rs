@@ -10,7 +10,10 @@ mod sandbox;
 mod temp_user;
 
 #[cfg(target_os = "windows")]
-pub use sandbox::run_main;
+pub mod windows_restricted_token_v2;
+
+#[cfg(target_os = "windows")]
+pub use windows_restricted_token_v2::run_main;
 
 #[cfg(not(target_os = "windows"))]
 pub fn run_main() -> ! {
