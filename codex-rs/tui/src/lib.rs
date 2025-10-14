@@ -112,7 +112,6 @@ use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
-use crate::tui::init;
 pub use cli::Cli;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
