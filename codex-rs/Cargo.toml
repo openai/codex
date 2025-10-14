@@ -32,7 +32,7 @@ members = [
     "git-apply",
     "utils/json-to-toml",
     "utils/readiness",
-    "utils/string",
+    "utils/string", "multi-agent",
 ]
 resolver = "2"
 
@@ -70,6 +70,7 @@ codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-tui = { path = "tui" }
+codex-multi-agent = { path = "multi-agent" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }

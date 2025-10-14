@@ -434,6 +434,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     if let Some(profile) = resume_cli.config_profile {
         interactive.config_profile = Some(profile);
     }
+    if let Some(agent) = resume_cli.agent {
+        interactive.agent = Some(agent);
+    }
     if let Some(sandbox) = resume_cli.sandbox_mode {
         interactive.sandbox_mode = Some(sandbox);
     }

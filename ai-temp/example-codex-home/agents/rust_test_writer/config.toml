@@ -1,0 +1,5 @@
+model = "o1-mini"
+sandbox_mode = "workspace-write"
+
+[history]
+persistence = "save-all"

@@ -14,8 +14,6 @@ use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
-use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -149,49 +147,22 @@ pub async fn run_main(
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
     };
-    let raw_overrides = cli.config_overrides.raw_overrides.clone();
-    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
-    let cli_kv_overrides = match overrides_cli.parse_overrides() {
-        Ok(v) => v,
-        #[allow(clippy::print_stderr)]
-        Err(e) => {
-            eprintln!("Error parsing -c overrides: {e}");
+    #[allow(clippy::print_stderr)]
+    let agent_context = match codex_multi_agent::load_agent_context(
+        cli.agent.as_deref(),
+        &cli.config_overrides,
+        overrides,
+    )
+    .await
+    {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("Error loading configuration: {err}");
             std::process::exit(1);
         }
     };
-
-    let mut config = {
-        // Load configuration and support CLI overrides.
-
-        #[allow(clippy::print_stderr)]
-        match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides).await {
-            Ok(config) => config,
-            Err(err) => {
-                eprintln!("Error loading configuration: {err}");
-                std::process::exit(1);
-            }
-        }
-    };
-
-    // we load config.toml here to determine project state.
-    #[allow(clippy::print_stderr)]
-    let config_toml = {
-        let codex_home = match find_codex_home() {
-            Ok(codex_home) => codex_home,
-            Err(err) => {
-                eprintln!("Error finding codex home: {err}");
-                std::process::exit(1);
-            }
-        };
-
-        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides).await {
-            Ok(config_toml) => config_toml,
-            Err(err) => {
-                eprintln!("Error loading config.toml: {err}");
-                std::process::exit(1);
-            }
-        }
-    };
+    let config_toml = agent_context.config_toml().clone();
+    let mut config = agent_context.into_config();
 
     let cli_profile_override = cli.config_profile.clone();
     let active_profile = cli_profile_override

@@ -1,0 +1,8 @@
+model = "gpt-4o-mini"
+sandbox_mode = "workspace-write"
+
+[history]
+persistence = "save-all"
+
+[tui]
+show_task_summary = true

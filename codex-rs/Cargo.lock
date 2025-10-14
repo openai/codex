@@ -1255,6 +1255,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-multi-agent"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-common",
+ "codex-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "codex-ollama"
 version = "0.0.0"
 dependencies = [
@@ -1391,6 +1405,7 @@ dependencies = [
  "codex-file-search",
  "codex-git-tooling",
  "codex-login",
+ "codex-multi-agent",
  "codex-ollama",
  "codex-protocol",
  "color-eyre",

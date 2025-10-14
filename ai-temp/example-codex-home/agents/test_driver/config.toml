@@ -1,0 +1,5 @@
+model = "gpt-4o-mini"
+sandbox_mode = "read-only"
+
+[history]
+persistence = "none"
