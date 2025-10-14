@@ -18,6 +18,7 @@ use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::features::Feature;
+use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
@@ -1014,14 +1015,14 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
-        let features = Features::from_config(
-            &cfg,
-            &config_profile,
-            include_plan_tool_override,
-            include_apply_patch_tool_override,
-            include_view_image_tool_override,
-            override_tools_web_search_request,
-        );
+        let feature_overrides = FeatureOverrides {
+            include_plan_tool: include_plan_tool_override,
+            include_apply_patch_tool: include_apply_patch_tool_override,
+            include_view_image_tool: include_view_image_tool_override,
+            web_search_request: override_tools_web_search_request,
+        };
+
+        let features = Features::from_config(&cfg, &config_profile, feature_overrides);
 
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 

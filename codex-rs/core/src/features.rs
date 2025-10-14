@@ -70,6 +70,27 @@ pub struct Features {
     enabled: BTreeSet<Feature>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct FeatureOverrides {
+    pub include_plan_tool: Option<bool>,
+    pub include_apply_patch_tool: Option<bool>,
+    pub include_view_image_tool: Option<bool>,
+    pub web_search_request: Option<bool>,
+}
+
+impl FeatureOverrides {
+    fn apply(self, features: &mut Features) {
+        LegacyFeatureToggles {
+            include_plan_tool: self.include_plan_tool,
+            include_apply_patch_tool: self.include_apply_patch_tool,
+            include_view_image_tool: self.include_view_image_tool,
+            tools_web_search: self.web_search_request,
+            ..Default::default()
+        }
+        .apply(features);
+    }
+}
+
 impl Features {
     /// Starts with built-in defaults.
     pub fn with_defaults() -> Self {
@@ -112,14 +133,10 @@ impl Features {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn from_config(
         cfg: &ConfigToml,
         config_profile: &ConfigProfile,
-        include_plan_tool_override: Option<bool>,
-        include_apply_patch_tool_override: Option<bool>,
-        include_view_image_tool_override: Option<bool>,
-        override_tools_web_search_request: Option<bool>,
+        overrides: FeatureOverrides,
     ) -> Self {
         let mut features = Features::with_defaults();
 
@@ -155,34 +172,7 @@ impl Features {
             features.apply_map(&profile_features.entries);
         }
 
-        if let Some(v) = include_plan_tool_override {
-            if v {
-                features.enable(Feature::PlanTool);
-            } else {
-                features.disable(Feature::PlanTool);
-            }
-        }
-        if let Some(v) = include_apply_patch_tool_override {
-            if v {
-                features.enable(Feature::ApplyPatchFreeform);
-            } else {
-                features.disable(Feature::ApplyPatchFreeform);
-            }
-        }
-        if let Some(v) = include_view_image_tool_override {
-            if v {
-                features.enable(Feature::ViewImageTool);
-            } else {
-                features.disable(Feature::ViewImageTool);
-            }
-        }
-        if let Some(v) = override_tools_web_search_request {
-            if v {
-                features.enable(Feature::WebSearchRequest);
-            } else {
-                features.disable(Feature::WebSearchRequest);
-            }
-        }
+        overrides.apply(&mut features);
 
         features
     }
