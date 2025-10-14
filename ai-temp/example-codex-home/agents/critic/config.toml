@@ -1,4 +1,4 @@
-model = "gpt-5-nano"
+model = "gpt-5"
 sandbox_mode = "read-only"
 
 [history]

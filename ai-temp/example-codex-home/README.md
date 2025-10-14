@@ -29,4 +29,10 @@ CODEX_HOME="$(pwd)/ai-temp/example-codex-home" target/debug/codex --agent critic
 # Watch logs in log/codex-tui.log to confirm delegation activity.
 ```
 
+### Suggested Prompt for the Read-Only Flow
+
+```
+We’re scoping a read-only refactor of the parser—no code yet. Please gather three approaches from the ideas provider, pick the leading option, run it by the critic for risks, and then give me a combined recommendation.
+```
+
 Unset `CODEX_HOME` (or point it back to your real path) once you're done experimenting.
