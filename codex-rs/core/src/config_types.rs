@@ -320,6 +320,10 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// User-defined prompt aliases available across Codex sessions.
+    #[serde(default)]
+    pub aliases: HashMap<String, String>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]

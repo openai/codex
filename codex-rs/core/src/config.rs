@@ -227,6 +227,9 @@ pub struct Config {
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
 
+    /// User-defined prompt aliases shared across sessions.
+    pub prompt_aliases: HashMap<String, String>,
+
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
 
@@ -746,6 +749,73 @@ pub async fn persist_alarm_script(codex_home: &Path, script: Option<&str>) -> an
                 doc.as_table_mut().remove("notify");
             }
         }
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
+pub async fn persist_prompt_aliases(
+    codex_home: &Path,
+    aliases: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if aliases.is_empty() {
+        if let Some(tui_table) = doc
+            .as_table_mut()
+            .get_mut("tui")
+            .and_then(|item| item.as_table_mut())
+        {
+            tui_table.remove("aliases");
+            if tui_table.is_empty() {
+                doc.as_table_mut().remove("tui");
+            }
+        }
+    } else {
+        if !doc.as_table().contains_key("tui") {
+            let mut table = toml_edit::Table::new();
+            table.set_implicit(false);
+            doc["tui"] = TomlItem::Table(table);
+        }
+        let Some(tui_table) = doc["tui"].as_table_mut() else {
+            anyhow::bail!("failed to access `tui` table after insertion");
+        };
+        tui_table.set_implicit(false);
+
+        let mut alias_table = toml_edit::Table::new();
+        alias_table.set_implicit(false);
+
+        let mut pairs: Vec<(&String, &String)> = aliases.iter().collect();
+        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (name, prompt) in pairs {
+            alias_table.insert(name.as_str(), toml_edit::value(prompt.clone()));
+        }
+
+        tui_table.insert("aliases", TomlItem::Table(alias_table));
     }
 
     tokio::fs::create_dir_all(codex_home)
@@ -1395,6 +1465,11 @@ impl Config {
                 .unwrap_or(false),
             use_experimental_use_rmcp_client: cfg.experimental_use_rmcp_client.unwrap_or(false),
             include_view_image_tool,
+            prompt_aliases: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.aliases.clone())
+                .unwrap_or_default(),
             active_profile: active_profile_name,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
@@ -2243,6 +2318,45 @@ notify = ["sh", "-c", "echo hi", "codex-alarm"]
         Ok(())
     }
 
+    #[tokio::test]
+    async fn persist_prompt_aliases_sets_values() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut aliases = HashMap::new();
+        aliases.insert("deploy".to_string(), "Run deploy".to_string());
+        aliases.insert("review".to_string(), "Run review".to_string());
+
+        persist_prompt_aliases(codex_home.path(), &aliases).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let tui_aliases = parsed.tui.map(|t| t.aliases).unwrap_or_default();
+
+        assert_eq!(tui_aliases.get("deploy"), Some(&"Run deploy".to_string()));
+        assert_eq!(tui_aliases.get("review"), Some(&"Run review".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_prompt_aliases_removes_section_when_empty() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut aliases = HashMap::new();
+        aliases.insert("deploy".to_string(), "Run deploy".to_string());
+        persist_prompt_aliases(codex_home.path(), &aliases).await?;
+
+        let empty: HashMap<String, String> = HashMap::new();
+        persist_prompt_aliases(codex_home.path(), &empty).await?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = tokio::fs::read_to_string(&config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let tui_aliases = parsed.tui.map(|t| t.aliases).unwrap_or_default();
+        assert!(tui_aliases.is_empty());
+        Ok(())
+    }
+
     struct PrecedenceTestFixture {
         cwd: TempDir,
         codex_home: TempDir,
@@ -2422,6 +2536,7 @@ model_verbosity = "high"
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
                 include_view_image_tool: true,
+                prompt_aliases: HashMap::new(),
                 active_profile: Some("o3".to_string()),
                 windows_wsl_setup_acknowledged: false,
                 disable_paste_burst: false,
@@ -2487,6 +2602,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            prompt_aliases: HashMap::new(),
             active_profile: Some("gpt3".to_string()),
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
@@ -2567,6 +2683,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            prompt_aliases: HashMap::new(),
             active_profile: Some("zdr".to_string()),
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
@@ -2633,6 +2750,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            prompt_aliases: HashMap::new(),
             active_profile: Some("gpt5".to_string()),
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_common::model_presets::ModelPreset;
@@ -16,6 +17,28 @@ use codex_core::protocol_config_types::ReasoningEffort;
 pub(crate) enum CheckpointAction {
     Save,
     Load,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum TodoAction {
+    Add { text: String },
+    List,
+    Complete { index: usize },
+    Auto { enabled: bool },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AliasAction {
+    Add { name: String },
+    Store { name: String, prompt: String },
+    Remove { name: String },
+    List,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum CommitAction {
+    Perform { message: Option<String>, auto: bool },
+    SetAuto { enabled: bool },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -53,12 +76,26 @@ pub(crate) enum AppEvent {
         action: CheckpointAction,
         name: Option<String>,
     },
+    /// Handle a `/todo` command issued from the composer.
+    TodoCommand {
+        action: TodoAction,
+    },
+    /// Handle a `/alias` command issued from the composer.
+    AliasCommand {
+        action: AliasAction,
+    },
+    /// Handle a `/commit` command issued from the composer.
+    CommitCommand {
+        action: CommitAction,
+    },
     /// Enable or disable automatic checkpoints.
     SetCheckpointAutomation {
         enabled: bool,
     },
     /// Fired when an automatic checkpoint should be captured after a turn.
     AutoCheckpointTick,
+    /// Fired when auto-commit should stage and commit changes after a turn.
+    AutoCommitTick,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
@@ -86,6 +123,11 @@ pub(crate) enum AppEvent {
     /// Persist the alarm script that should run after each completed turn.
     PersistAlarmScript {
         script: Option<String>,
+    },
+
+    /// Persist the global alias list so prompt shortcuts survive restarts.
+    PersistAliases {
+        aliases: HashMap<String, String>,
     },
 
     /// Open the reasoning selection popup after picking a model.

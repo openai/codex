@@ -974,6 +974,22 @@ impl PlanUpdateCell {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct TodoEntry {
+    pub index: usize,
+    pub description: String,
+    pub completed: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct TodoListCell {
+    entries: Vec<TodoEntry>,
+}
+
+pub(crate) fn new_todo_list(entries: Vec<TodoEntry>) -> TodoListCell {
+    TodoListCell { entries }
+}
+
 impl HistoryCell for PlanUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let render_note = |text: &str| -> Vec<Line<'static>> {
@@ -1025,6 +1041,45 @@ impl HistoryCell for PlanUpdateCell {
         lines.extend(prefix_lines(indented_lines, "  └ ".dim(), "    ".into()));
 
         lines
+    }
+}
+
+impl HistoryCell for TodoListCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let mut inner: Vec<Line<'static>> = Vec::new();
+        inner.push("TODOs".bold().into());
+        inner.push(Line::from(""));
+
+        if self.entries.is_empty() {
+            inner.push("No todo items yet.".dim().into());
+        } else {
+            for entry in &self.entries {
+                let check_span = if entry.completed {
+                    "[x]".green()
+                } else {
+                    "[ ]".into()
+                };
+                let index_span = format!("({})", entry.index).dim();
+                let description_span = if entry.completed {
+                    entry.description.clone().dim()
+                } else {
+                    entry.description.clone().into()
+                };
+                inner.push(
+                    vec![
+                        "  - ".into(),
+                        check_span,
+                        " ".into(),
+                        index_span,
+                        " ".into(),
+                        description_span,
+                    ]
+                    .into(),
+                );
+            }
+        }
+
+        with_border(inner)
     }
 }
 

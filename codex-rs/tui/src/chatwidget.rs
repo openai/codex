@@ -58,6 +58,7 @@ use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
+use crate::app_event::AliasAction;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
@@ -80,6 +81,7 @@ use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
+use crate::history_cell::TodoEntry;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
@@ -111,6 +113,7 @@ use codex_git_tooling::GhostCommit;
 use codex_git_tooling::GitToolingError;
 use codex_git_tooling::create_ghost_commit;
 use codex_git_tooling::restore_ghost_commit;
+use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -230,6 +233,34 @@ impl RateLimitWarningState {
     }
 }
 
+#[derive(Debug, Clone)]
+struct TodoItem {
+    text: String,
+    normalized: String,
+    completed: bool,
+}
+
+impl TodoItem {
+    fn new(text: String) -> Self {
+        let normalized = normalize_todo_key(&text);
+        Self {
+            text,
+            normalized,
+            completed: false,
+        }
+    }
+}
+
+fn normalize_todo_key(text: &str) -> String {
+    text.trim().to_ascii_lowercase()
+}
+
+#[derive(Clone, Debug)]
+struct AliasEntry {
+    name: String,
+    prompt: String,
+}
+
 pub(crate) fn get_limits_duration(windows_minutes: u64) -> String {
     const MINUTES_PER_HOUR: u64 = 60;
     const MINUTES_PER_DAY: u64 = 24 * MINUTES_PER_HOUR;
@@ -294,6 +325,10 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    todo_items: Vec<TodoItem>,
+    todo_auto_enabled: bool,
+    auto_commit_enabled: bool,
+    aliases: HashMap<String, AliasEntry>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
@@ -447,13 +482,16 @@ impl ChatWidget {
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
-        let response_for_notification = last_agent_message.clone().unwrap_or_default();
+        let response_for_notification = last_agent_message.unwrap_or_default();
         self.notify(Notification::AgentTurnComplete {
             response: response_for_notification,
         });
 
         if self.auto_checkpoint_enabled {
             self.app_event_tx.send(AppEvent::AutoCheckpointTick);
+        }
+        if self.auto_commit_enabled {
+            self.app_event_tx.send(AppEvent::AutoCommitTick);
         }
     }
 
@@ -560,6 +598,7 @@ impl ChatWidget {
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
+        self.update_todos_from_plan(&update);
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -963,7 +1002,7 @@ impl ChatWidget {
                 },
             );
 
-        Self {
+        let mut this = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -993,6 +1032,10 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
+            todo_items: Vec::new(),
+            todo_auto_enabled: false,
+            auto_commit_enabled: false,
+            aliases: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -1002,7 +1045,9 @@ impl ChatWidget {
             auto_checkpoint_enabled: false,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
-        }
+        };
+        this.hydrate_aliases_from_config();
+        this
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
@@ -1040,7 +1085,7 @@ impl ChatWidget {
                 },
             );
 
-        Self {
+        let mut this = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -1070,6 +1115,10 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
+            todo_items: Vec::new(),
+            todo_auto_enabled: false,
+            auto_commit_enabled: false,
+            aliases: HashMap::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -1079,7 +1128,9 @@ impl ChatWidget {
             auto_checkpoint_enabled: false,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
-        }
+        };
+        this.hydrate_aliases_from_config();
+        this
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
@@ -1208,12 +1259,36 @@ impl ChatWidget {
             SlashCommand::Alarm => {
                 self.open_alarm_script_editor();
             }
+            SlashCommand::Commit => {
+                self.add_info_message(
+                    "Usage: /commit [\"message\"] or /commit auto [on|off]".to_string(),
+                    Some(
+                        "Codex summarizes and commits git changes; enable auto commits with `/commit auto`."
+                            .to_string(),
+                    ),
+                );
+            }
             SlashCommand::Checkpoint => {
                 self.add_info_message(
                     "Usage: /checkpoint <save|load> [name] or /checkpoint auto [on|off]"
                         .to_string(),
                     Some("Example: /checkpoint auto".to_string()),
                 );
+            }
+            SlashCommand::Todo => {
+                self.add_info_message(
+                    "Usage: /todo add <description>, /todo list, /todo complete <number>, /todo auto [on|off]"
+                        .to_string(),
+                    None,
+                );
+                self.show_todo_list(None);
+            }
+            SlashCommand::Alias => {
+                self.add_info_message(
+                    "Usage: /alias add <name>, /alias list, /alias remove <name>".to_string(),
+                    Some("Invoke saved prompts with //name.".to_string()),
+                );
+                self.list_aliases();
             }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
@@ -1342,6 +1417,15 @@ impl ChatWidget {
             image_paths,
         } = user_message;
 
+        if let Some(result) = self.expand_alias_invocation(&text) {
+            match result {
+                Ok(expanded) => {
+                    text = expanded;
+                }
+                Err(()) => return,
+            }
+        }
+
         let trimmed_text = text.trim().to_owned();
 
         if trimmed_text.is_empty() && image_paths.is_empty() {
@@ -1364,6 +1448,16 @@ impl ChatWidget {
             && !prompt.is_empty()
         {
             text = format!("{prompt}\n\n{text}");
+        }
+
+        if self.todo_auto_enabled
+            && let Some(todo_block) = self.todo_markdown_block()
+        {
+            text = if text.is_empty() {
+                todo_block
+            } else {
+                format!("{todo_block}\n\n{text}")
+            };
         }
 
         self.capture_ghost_snapshot();
@@ -1957,8 +2051,370 @@ impl ChatWidget {
         self.config.global_prompt = prompt;
     }
 
+    pub(crate) fn add_todo_item(&mut self, text: String) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            self.add_error_message("Todo description cannot be empty.".to_string());
+            return;
+        }
+        let item = TodoItem::new(trimmed.to_string());
+        self.todo_items.push(item);
+        let position = self.todo_items.len();
+        self.add_info_message(
+            format!("Added TODO #{position}: {trimmed}"),
+            Some(
+                "Use `/todo list` to review or `/todo complete <number>` when finished."
+                    .to_string(),
+            ),
+        );
+        self.push_todo_list_history();
+    }
+
+    pub(crate) fn complete_todo(&mut self, index: usize) {
+        if let Some(item) = self.todo_items.get_mut(index) {
+            if item.completed {
+                self.add_info_message(
+                    format!("Todo #{} is already marked complete.", index + 1),
+                    None,
+                );
+                self.push_todo_list_history();
+            } else {
+                item.completed = true;
+                self.add_info_message(format!("Marked TODO #{} as completed.", index + 1), None);
+                self.push_todo_list_history();
+            }
+        } else {
+            self.add_error_message(format!("Todo #{} does not exist.", index + 1));
+        }
+    }
+
+    pub(crate) fn show_todo_list(&mut self, context: Option<&str>) {
+        if let Some(message) = context {
+            self.add_info_message(message.to_string(), None);
+        }
+        self.push_todo_list_history();
+    }
+
+    pub(crate) fn set_todo_auto_enabled(&mut self, enabled: bool) {
+        let previous = self.todo_auto_enabled;
+        self.todo_auto_enabled = enabled;
+        if enabled {
+            let msg = if previous {
+                "Todo auto-injection already enabled."
+            } else {
+                "Todo auto-injection enabled."
+            };
+            let hint = if self.todo_items.is_empty() {
+                Some("Add todos with `/todo add …` to include them in future prompts.".to_string())
+            } else {
+                Some("Todos will automatically be included in future prompts.".to_string())
+            };
+            self.add_info_message(msg.to_string(), hint);
+        } else {
+            let msg = if previous {
+                "Todo auto-injection disabled."
+            } else {
+                "Todo auto-injection already disabled."
+            };
+            self.add_info_message(
+                msg.to_string(),
+                Some("Run `/todo auto` to enable it again.".to_string()),
+            );
+        }
+    }
+
+    pub(crate) fn open_alias_prompt_editor(&mut self, name: String) {
+        let trimmed = name.trim();
+        let Some(key) = Self::normalize_alias_key(trimmed) else {
+            self.add_error_message(
+                "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+        let display_name = trimmed.to_string();
+        let initial_text = self.aliases.get(&key).map(|entry| entry.prompt.clone());
+
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            format!("Save alias //{display_name}"),
+            "Type the prompt to run when this alias is invoked.".to_string(),
+            Some("Press Enter to save; Esc to cancel.".to_string()),
+            initial_text,
+            false,
+            Box::new(move |input: String| {
+                tx.send(AppEvent::AliasCommand {
+                    action: AliasAction::Store {
+                        name: display_name.clone(),
+                        prompt: input,
+                    },
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn store_alias(&mut self, name: String, prompt: String) {
+        let trimmed_name = name.trim();
+        let Some(key) = Self::normalize_alias_key(trimmed_name) else {
+            self.add_error_message(
+                "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+
+        let trimmed_prompt = prompt.trim();
+        if trimmed_prompt.is_empty() {
+            self.add_error_message("Alias prompt cannot be empty.".to_string());
+            return;
+        }
+
+        let entry = AliasEntry {
+            name: trimmed_name.to_string(),
+            prompt: trimmed_prompt.to_string(),
+        };
+        let existed = self.aliases.insert(key, entry).is_some();
+        let action_word = if existed { "Updated" } else { "Saved" };
+        self.add_info_message(
+            format!("{action_word} alias //{trimmed_name}."),
+            Some("Invoke it later with //alias-name.".to_string()),
+        );
+        self.sync_aliases_to_composer();
+
+        let snapshot = self.alias_snapshot();
+        self.config.prompt_aliases = snapshot.clone();
+        self.app_event_tx
+            .send(AppEvent::PersistAliases { aliases: snapshot });
+    }
+
+    pub(crate) fn remove_alias(&mut self, name: &str) {
+        let Some(key) = Self::normalize_alias_key(name) else {
+            self.add_error_message(
+                "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return;
+        };
+
+        if let Some(entry) = self.aliases.remove(&key) {
+            self.add_info_message(format!("Removed alias //{}.", entry.name), None);
+            self.sync_aliases_to_composer();
+            let snapshot = self.alias_snapshot();
+            self.config.prompt_aliases = snapshot.clone();
+            self.app_event_tx
+                .send(AppEvent::PersistAliases { aliases: snapshot });
+        } else {
+            self.add_error_message(format!("Alias //{} does not exist.", name.trim()))
+        }
+    }
+
+    pub(crate) fn list_aliases(&mut self) {
+        if self.aliases.is_empty() {
+            self.add_info_message(
+                "No aliases defined yet.".to_string(),
+                Some("Use `/alias add <name>` to create one.".to_string()),
+            );
+            return;
+        }
+
+        let mut names: Vec<String> = self
+            .aliases
+            .values()
+            .map(|entry| entry.name.clone())
+            .collect();
+        names.sort();
+        let summary = names
+            .iter()
+            .map(|name| format!("//{name}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.add_info_message("Aliases:".to_string(), Some(summary));
+    }
+
+    fn hydrate_aliases_from_config(&mut self) {
+        self.aliases.clear();
+        for (display_name, prompt) in &self.config.prompt_aliases {
+            let trimmed_name = display_name.trim();
+            if trimmed_name.is_empty() {
+                continue;
+            }
+            let Some(key) = Self::normalize_alias_key(trimmed_name) else {
+                tracing::warn!(
+                    alias = trimmed_name,
+                    "invalid alias name found in config; skipping"
+                );
+                continue;
+            };
+
+            let trimmed_prompt = prompt.trim();
+            if trimmed_prompt.is_empty() {
+                tracing::warn!(
+                    alias = trimmed_name,
+                    "alias prompt in config was empty; skipping"
+                );
+                continue;
+            }
+
+            self.aliases.insert(
+                key,
+                AliasEntry {
+                    name: trimmed_name.to_string(),
+                    prompt: trimmed_prompt.to_string(),
+                },
+            );
+        }
+        self.sync_aliases_to_composer();
+    }
+
+    fn alias_snapshot(&self) -> HashMap<String, String> {
+        self.aliases
+            .values()
+            .map(|entry| (entry.name.clone(), entry.prompt.clone()))
+            .collect()
+    }
+
+    fn sync_aliases_to_composer(&mut self) {
+        let mut aliases: Vec<String> = self
+            .aliases
+            .values()
+            .map(|entry| entry.name.clone())
+            .collect();
+        aliases.sort();
+        self.bottom_pane.set_aliases(aliases);
+    }
+
     pub(crate) fn set_auto_checkpoint_enabled(&mut self, enabled: bool) {
         self.auto_checkpoint_enabled = enabled;
+    }
+
+    pub(crate) fn set_auto_commit_enabled(&mut self, enabled: bool) {
+        self.auto_commit_enabled = enabled;
+    }
+
+    fn push_todo_list_history(&mut self) {
+        let entries = self.todo_entries();
+        self.add_to_history(history_cell::new_todo_list(entries));
+        self.request_redraw();
+    }
+
+    fn todo_entries(&self) -> Vec<TodoEntry> {
+        self.todo_items
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| TodoEntry {
+                index: idx + 1,
+                description: item.text.clone(),
+                completed: item.completed,
+            })
+            .collect()
+    }
+
+    fn todo_markdown_block(&self) -> Option<String> {
+        if self.todo_items.is_empty() {
+            return None;
+        }
+        let mut lines = Vec::new();
+        lines.push("Current TODOs:".to_string());
+        for (idx, item) in self.todo_items.iter().enumerate() {
+            let check = if item.completed { "x" } else { " " };
+            lines.push(format!("- [{}] ({}) {}", check, idx + 1, item.text));
+        }
+        lines.push(String::new());
+        lines.push(
+            "When you finish a task, respond with `/todo complete <number>` to mark it done."
+                .to_string(),
+        );
+        Some(lines.join("\n"))
+    }
+
+    fn update_todos_from_plan(&mut self, update: &UpdatePlanArgs) {
+        let mut changed = false;
+        for plan_item in &update.plan {
+            let normalized = normalize_todo_key(&plan_item.step);
+            if normalized.is_empty() {
+                continue;
+            }
+            let should_complete = matches!(plan_item.status, StepStatus::Completed);
+            if let Some(existing) = self
+                .todo_items
+                .iter_mut()
+                .find(|item| item.normalized == normalized)
+            {
+                if existing.completed != should_complete {
+                    existing.completed = should_complete;
+                    changed = true;
+                }
+            } else {
+                let mut item = TodoItem::new(plan_item.step.clone());
+                item.completed = should_complete;
+                self.todo_items.push(item);
+                changed = true;
+            }
+        }
+        if changed {
+            self.push_todo_list_history();
+        }
+    }
+
+    fn normalize_alias_key(name: &str) -> Option<String> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            Some(trimmed.to_ascii_lowercase())
+        } else {
+            None
+        }
+    }
+
+    fn expand_alias_invocation(&mut self, text: &str) -> Option<Result<String, ()>> {
+        if !text.starts_with("//") {
+            return None;
+        }
+
+        let remainder = &text[2..];
+        let trimmed = remainder.trim_start();
+        if trimmed.is_empty() {
+            self.add_error_message("Alias usage must be in the form //alias-name.".to_string());
+            return Some(Err(()));
+        }
+
+        let mut alias_len = trimmed.len();
+        for (idx, ch) in trimmed.char_indices() {
+            if ch.is_whitespace() {
+                alias_len = idx;
+                break;
+            }
+        }
+        let alias_token = &trimmed[..alias_len];
+        let extra = trimmed[alias_len..].trim_start();
+
+        let Some(key) = Self::normalize_alias_key(alias_token) else {
+            self.add_error_message(
+                "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank."
+                    .to_string(),
+            );
+            return Some(Err(()));
+        };
+
+        if let Some(entry) = self.aliases.get(&key) {
+            let mut expanded = entry.prompt.clone();
+            if !extra.is_empty() {
+                if !expanded.is_empty() {
+                    expanded.push_str("\n\n");
+                }
+                expanded.push_str(extra);
+            }
+            Some(Ok(expanded))
+        } else {
+            self.add_error_message(format!("Alias //{alias_token} is not defined."));
+            Some(Err(()))
+        }
     }
 
     pub(crate) fn set_alarm_script(&mut self, script: Option<String>) {

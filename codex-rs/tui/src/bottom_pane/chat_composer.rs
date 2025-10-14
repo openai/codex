@@ -15,6 +15,7 @@ use ratatui::widgets::Block;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
+use super::alias_popup::AliasPopup;
 use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
@@ -28,7 +29,10 @@ use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use crate::app_event::AliasAction;
 use crate::app_event::CheckpointAction;
+use crate::app_event::CommitAction;
+use crate::app_event::TodoAction;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
@@ -76,6 +80,13 @@ struct AttachedImage {
     path: PathBuf,
 }
 
+struct AliasToken {
+    start: usize,
+    end: usize,
+    name: String,
+    has_remainder: bool,
+}
+
 enum PromptSelectionMode {
     Completion,
     Submit,
@@ -107,6 +118,7 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    aliases: Vec<String>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<u8>,
@@ -116,6 +128,7 @@ pub(crate) struct ChatComposer {
 enum ActivePopup {
     None,
     Command(CommandPopup),
+    Alias(AliasPopup),
     File(FileSearchPopup),
 }
 
@@ -150,6 +163,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            aliases: Vec::new(),
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             context_window_percent: None,
@@ -172,6 +186,7 @@ impl ChatComposer {
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
+                ActivePopup::Alias(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
@@ -185,6 +200,9 @@ impl ChatComposer {
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
+            ActivePopup::Alias(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
@@ -260,11 +278,16 @@ impl ChatComposer {
         self.paste_burst.clear_after_explicit_paste();
         // Keep popup sync consistent with key handling: prefer slash popup; only
         // sync file popup when slash popup is NOT active.
-        self.sync_command_popup();
-        if matches!(self.active_popup, ActivePopup::Command(_)) {
+        self.sync_alias_popup();
+        if matches!(self.active_popup, ActivePopup::Alias(_)) {
             self.dismissed_file_popup_token = None;
         } else {
-            self.sync_file_search_popup();
+            self.sync_command_popup();
+            if matches!(self.active_popup, ActivePopup::Command(_)) {
+                self.dismissed_file_popup_token = None;
+            } else {
+                self.sync_file_search_popup();
+            }
         }
         true
     }
@@ -375,24 +398,39 @@ impl ChatComposer {
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.textarea.insert_str(text);
-        self.sync_command_popup();
-        self.sync_file_search_popup();
+        self.sync_alias_popup();
+        if matches!(self.active_popup, ActivePopup::Alias(_)) {
+            self.dismissed_file_popup_token = None;
+        } else {
+            self.sync_command_popup();
+            if matches!(self.active_popup, ActivePopup::Command(_)) {
+                self.dismissed_file_popup_token = None;
+            } else {
+                self.sync_file_search_popup();
+            }
+        }
     }
 
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
+            ActivePopup::Alias(_) => self.handle_key_event_with_alias_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
         // Update (or hide/show) popup after processing the key.
-        self.sync_command_popup();
-        if matches!(self.active_popup, ActivePopup::Command(_)) {
+        self.sync_alias_popup();
+        if matches!(self.active_popup, ActivePopup::Alias(_)) {
             self.dismissed_file_popup_token = None;
         } else {
-            self.sync_file_search_popup();
+            self.sync_command_popup();
+            if matches!(self.active_popup, ActivePopup::Command(_)) {
+                self.dismissed_file_popup_token = None;
+            } else {
+                self.sync_file_search_popup();
+            }
         }
 
         result
@@ -535,6 +573,83 @@ impl ChatComposer {
                     }
                 }
                 // Fallback to default newline handling if no command selected.
+                self.handle_key_event_without_popup(key_event)
+            }
+            input => self.handle_input_basic(input),
+        }
+    }
+
+    /// Handle key events when the alias popup is visible.
+    fn handle_key_event_with_alias_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        if key_event.code == KeyCode::Esc {
+            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+            if next_mode != self.footer_mode {
+                self.footer_mode = next_mode;
+                return (InputResult::None, true);
+            }
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            } => {
+                if let ActivePopup::Alias(popup) = &mut self.active_popup {
+                    popup.move_up();
+                }
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            } => {
+                if let ActivePopup::Alias(popup) = &mut self.active_popup {
+                    popup.move_down();
+                }
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            } => {
+                let selected = if let ActivePopup::Alias(popup) = &mut self.active_popup {
+                    popup.selected_alias()
+                } else {
+                    None
+                };
+                if let Some(alias) = selected
+                    && self.replace_current_alias_token(&alias)
+                {
+                    self.active_popup = ActivePopup::None;
+                    return (InputResult::None, true);
+                }
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                let selected = if let ActivePopup::Alias(popup) = &mut self.active_popup {
+                    popup.selected_alias()
+                } else {
+                    None
+                };
+                if let Some(alias) = selected
+                    && self.replace_current_alias_token(&alias)
+                {
+                    self.active_popup = ActivePopup::None;
+                    return self.handle_key_event_without_popup(key_event);
+                }
+                self.active_popup = ActivePopup::None;
                 self.handle_key_event_without_popup(key_event)
             }
             input => self.handle_input_basic(input),
@@ -789,6 +904,85 @@ impl ChatComposer {
         left_at.or(right_at)
     }
 
+    fn replace_current_alias_token(&mut self, alias: &str) -> bool {
+        let Some(token) = Self::current_alias_token(&self.textarea) else {
+            return false;
+        };
+
+        let mut text = self.textarea.text().to_string();
+        let replacement = format!("//{alias}");
+        text.replace_range(token.start..token.end, &replacement);
+        self.textarea.set_text(&text);
+        self.textarea.set_cursor(token.start + replacement.len());
+        true
+    }
+
+    fn current_alias_token(textarea: &TextArea) -> Option<AliasToken> {
+        let text = textarea.text();
+        if text.is_empty() {
+            return None;
+        }
+        let cursor = Self::clamp_to_char_boundary(text, textarea.cursor());
+        let line_start = text[..cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_end = text[cursor..]
+            .find('\n')
+            .map(|i| cursor + i)
+            .unwrap_or(text.len());
+        let line = &text[line_start..line_end];
+        let cursor_in_line = cursor - line_start;
+
+        let mut token_start = 0usize;
+        for (idx, ch) in line.char_indices() {
+            if idx >= cursor_in_line {
+                break;
+            }
+            if ch.is_whitespace() {
+                token_start = idx + ch.len_utf8();
+            }
+        }
+        if token_start >= line.len() {
+            return None;
+        }
+        if !line[token_start..].starts_with("//") {
+            return None;
+        }
+
+        let alias_start = token_start + 2;
+        if alias_start > line.len() {
+            return None;
+        }
+
+        let mut alias_end = alias_start;
+        for (offset, ch) in line[alias_start..].char_indices() {
+            if ch.is_whitespace() {
+                break;
+            }
+            if !Self::is_alias_char(ch) {
+                break;
+            }
+            alias_end = alias_start + offset + ch.len_utf8();
+        }
+
+        let alias_name = if alias_end >= alias_start {
+            line[alias_start..alias_end].to_string()
+        } else {
+            String::new()
+        };
+
+        let has_remainder = line[alias_end..].chars().any(|ch| !ch.is_whitespace());
+
+        Some(AliasToken {
+            start: line_start + token_start,
+            end: line_start + alias_end,
+            name: alias_name,
+            has_remainder,
+        })
+    }
+
+    fn is_alias_char(ch: char) -> bool {
+        ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
+    }
+
     /// Replace the active `@token` (the one under the cursor) with `path`.
     ///
     /// The algorithm mirrors `current_at_token` so replacement works no matter
@@ -909,12 +1103,13 @@ impl ChatComposer {
                     .next()
                     .unwrap_or("")
                     .to_string();
-                if let Some((name, rest)) = parse_slash_name(&first_line) {
-                    if let Some((_n, cmd)) = built_in_slash_commands()
+                if let Some((name, rest)) = parse_slash_name(&first_line)
+                    && let Some((_n, cmd)) = built_in_slash_commands()
                         .into_iter()
                         .find(|(n, _)| *n == name)
-                    {
-                        if matches!(cmd, SlashCommand::Checkpoint) {
+                {
+                    match cmd {
+                        SlashCommand::Checkpoint => {
                             let rest_owned = rest.to_string();
                             let cleared = self.handle_checkpoint_command(&rest_owned);
                             if cleared {
@@ -922,16 +1117,42 @@ impl ChatComposer {
                             }
                             return (InputResult::None, true);
                         }
-                        if rest.is_empty() {
-                            self.textarea.set_text("");
-                            return (InputResult::Command(cmd), true);
+                        SlashCommand::Todo => {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_todo_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
                         }
+                        SlashCommand::Alias => {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_alias_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
+                        }
+                        SlashCommand::Commit => {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_commit_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
+                        }
+                        _ => {}
+                    }
+                    if rest.is_empty() {
+                        self.textarea.set_text("");
+                        return (InputResult::Command(cmd), true);
                     }
                 }
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
                 // Do not treat Enter as paste inside a slash-command context.
                 let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
+                    || matches!(self.active_popup, ActivePopup::Alias(_))
                     || self
                         .textarea
                         .text()
@@ -1015,6 +1236,61 @@ impl ChatComposer {
         }
     }
 
+    fn handle_commit_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::CommitCommand {
+                action: CommitAction::Perform {
+                    message: None,
+                    auto: false,
+                },
+            });
+            return true;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let first = parts.next().unwrap_or_default();
+
+        if first.eq_ignore_ascii_case("auto") {
+            match parts.next() {
+                None => {
+                    self.app_event_tx.send(AppEvent::CommitCommand {
+                        action: CommitAction::SetAuto { enabled: true },
+                    });
+                    return true;
+                }
+                Some(token) => {
+                    let normalized = token.to_ascii_lowercase();
+                    if matches!(normalized.as_str(), "on" | "enable" | "enabled" | "start")
+                        && parts.next().is_none()
+                    {
+                        self.app_event_tx.send(AppEvent::CommitCommand {
+                            action: CommitAction::SetAuto { enabled: true },
+                        });
+                        return true;
+                    }
+                    if matches!(normalized.as_str(), "off" | "disable" | "disabled" | "stop")
+                        && parts.next().is_none()
+                    {
+                        self.app_event_tx.send(AppEvent::CommitCommand {
+                            action: CommitAction::SetAuto { enabled: false },
+                        });
+                        return true;
+                    }
+                    // Otherwise treat entire command as a commit message starting with "auto ...".
+                }
+            }
+        }
+
+        self.app_event_tx.send(AppEvent::CommitCommand {
+            action: CommitAction::Perform {
+                message: Some(trimmed.to_string()),
+                auto: false,
+            },
+        });
+        true
+    }
+
     fn handle_checkpoint_command(&mut self, rest: &str) -> bool {
         let trimmed = rest.trim();
         if trimmed.is_empty() {
@@ -1033,6 +1309,7 @@ impl ChatComposer {
 
         let mut parts = trimmed.split_whitespace();
         let action_token = parts.next().unwrap_or_default();
+
         match action_token.to_ascii_lowercase().as_str() {
             "save" | "load" => {
                 let action = if action_token.eq_ignore_ascii_case("save") {
@@ -1040,7 +1317,7 @@ impl ChatComposer {
                 } else {
                     CheckpointAction::Load
                 };
-                let name = parts.next().map(|s| s.to_string());
+                let name = parts.next().map(std::string::ToString::to_string);
                 if parts.next().is_some() {
                     self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                         history_cell::new_error_event(
@@ -1054,7 +1331,7 @@ impl ChatComposer {
                 true
             }
             "auto" => {
-                let enabled = match parts.next().map(|s| s.to_ascii_lowercase()) {
+                let enabled = match parts.next().map(str::to_ascii_lowercase) {
                     None => true,
                     Some(token) => match token.as_str() {
                         "on" | "enable" | "enabled" | "start" => true,
@@ -1092,6 +1369,215 @@ impl ChatComposer {
         }
     }
 
+    fn handle_todo_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::TodoCommand {
+                action: TodoAction::List,
+            });
+            return true;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let action_token = parts.next().unwrap_or_default();
+        match action_token.to_ascii_lowercase().as_str() {
+            "add" => {
+                let description = parts.collect::<Vec<_>>().join(" ");
+                if description.trim().is_empty() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo add <description>".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::TodoCommand {
+                    action: TodoAction::Add {
+                        text: description.trim().to_string(),
+                    },
+                });
+                true
+            }
+            "list" => {
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo list".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::TodoCommand {
+                    action: TodoAction::List,
+                });
+                true
+            }
+            "complete" | "done" | "check" => {
+                let Some(index_token) = parts.next() else {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo complete <number>".to_string()),
+                    )));
+                    return false;
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo complete <number>".to_string()),
+                    )));
+                    return false;
+                }
+                let index = match index_token.parse::<usize>() {
+                    Ok(v) if v > 0 => v - 1,
+                    _ => {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(
+                                "Todo number must be a positive integer.".to_string(),
+                            ),
+                        )));
+                        return false;
+                    }
+                };
+                self.app_event_tx.send(AppEvent::TodoCommand {
+                    action: TodoAction::Complete { index },
+                });
+                true
+            }
+            "auto" => {
+                let enabled = match parts.next().map(str::to_ascii_lowercase) {
+                    None => true,
+                    Some(token) => match token.as_str() {
+                        "on" | "enable" | "enabled" | "start" => true,
+                        "off" | "disable" | "disabled" | "stop" => false,
+                        other => {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(format!(
+                                    "Invalid auto option '{other}'. Use 'on' or 'off'."
+                                )),
+                            )));
+                            return false;
+                        }
+                    },
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /todo auto [on|off]".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::TodoCommand {
+                    action: TodoAction::Auto { enabled },
+                });
+                true
+            }
+            other => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(format!(
+                        "Invalid todo action '{other}'. Use 'add', 'list', 'complete', or 'auto'."
+                    )),
+                )));
+                false
+            }
+        }
+    }
+
+    fn handle_alias_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::AliasCommand {
+                action: AliasAction::List,
+            });
+            return true;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let action_token = parts.next().unwrap_or_default();
+        match action_token.to_ascii_lowercase().as_str() {
+            "add" => {
+                let Some(name) = parts.next() else {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias add <name>".to_string()),
+                    )));
+                    return false;
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias add <name>".to_string()),
+                    )));
+                    return false;
+                }
+                let trimmed = name.trim();
+                if !Self::is_valid_alias_name(trimmed) {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank.".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::AliasCommand {
+                    action: AliasAction::Add {
+                        name: trimmed.to_string(),
+                    },
+                });
+                true
+            }
+            "remove" | "rm" | "delete" => {
+                let Some(name) = parts.next() else {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias remove <name>".to_string()),
+                    )));
+                    return false;
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias remove <name>".to_string()),
+                    )));
+                    return false;
+                }
+                let trimmed = name.trim();
+                if !Self::is_valid_alias_name(trimmed) {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Alias names may only contain letters, numbers, '-' or '_' and cannot be blank.".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::AliasCommand {
+                    action: AliasAction::Remove {
+                        name: trimmed.to_string(),
+                    },
+                });
+                true
+            }
+            "list" => {
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event("Usage: /alias list".to_string()),
+                    )));
+                    return false;
+                }
+                self.app_event_tx.send(AppEvent::AliasCommand {
+                    action: AliasAction::List,
+                });
+                true
+            }
+            other => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(format!(
+                        "Invalid alias action '{other}'. Use 'add', 'remove', or 'list'."
+                    )),
+                )));
+                false
+            }
+        }
+    }
+
+    fn is_valid_alias_name(name: &str) -> bool {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    }
+
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
         match self.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
@@ -1104,11 +1590,16 @@ impl ChatComposer {
                 self.textarea.insert_str(ch.to_string().as_str());
                 // Keep popup sync consistent with key handling: prefer slash popup; only
                 // sync file popup when slash popup is NOT active.
-                self.sync_command_popup();
-                if matches!(self.active_popup, ActivePopup::Command(_)) {
+                self.sync_alias_popup();
+                if matches!(self.active_popup, ActivePopup::Alias(_)) {
                     self.dismissed_file_popup_token = None;
                 } else {
-                    self.sync_file_search_popup();
+                    self.sync_command_popup();
+                    if matches!(self.active_popup, ActivePopup::Command(_)) {
+                        self.dismissed_file_popup_token = None;
+                    } else {
+                        self.sync_file_search_popup();
+                    }
                 }
                 true
             }
@@ -1455,6 +1946,9 @@ impl ChatComposer {
     /// textarea. This must be called after every modification that can change
     /// the text so the popup is shown/updated/hidden as appropriate.
     fn sync_command_popup(&mut self) {
+        if matches!(self.active_popup, ActivePopup::Alias(_)) {
+            return;
+        }
         // Determine whether the caret is inside the initial '/name' token on the first line.
         let text = self.textarea.text();
         let first_line_end = text.find('\n').unwrap_or(text.len());
@@ -1507,9 +2001,61 @@ impl ChatComposer {
         }
     }
 
+    pub(crate) fn set_aliases(&mut self, aliases: Vec<String>) {
+        self.aliases = aliases.clone();
+        if let ActivePopup::Alias(popup) = &mut self.active_popup {
+            popup.set_aliases(aliases);
+        }
+        self.sync_alias_popup();
+    }
+
+    fn sync_alias_popup(&mut self) {
+        if self.aliases.is_empty() {
+            if matches!(self.active_popup, ActivePopup::Alias(_)) {
+                self.active_popup = ActivePopup::None;
+            }
+            return;
+        }
+
+        let Some(token) = Self::current_alias_token(&self.textarea) else {
+            if matches!(self.active_popup, ActivePopup::Alias(_)) {
+                self.active_popup = ActivePopup::None;
+            }
+            return;
+        };
+
+        if !token.has_remainder
+            && !token.name.is_empty()
+            && self
+                .aliases
+                .iter()
+                .any(|alias| alias.as_str() == token.name)
+        {
+            if matches!(self.active_popup, ActivePopup::Alias(_)) {
+                self.active_popup = ActivePopup::None;
+            }
+            return;
+        }
+
+        match &mut self.active_popup {
+            ActivePopup::Alias(popup) => {
+                popup.set_aliases(self.aliases.clone());
+                popup.on_composer_text_change(&token.name);
+            }
+            _ => {
+                let mut popup = AliasPopup::new(self.aliases.clone());
+                popup.on_composer_text_change(&token.name);
+                self.active_popup = ActivePopup::Alias(popup);
+            }
+        }
+    }
+
     /// Synchronize `self.file_search_popup` with the current text in the textarea.
     /// Note this is only called when self.active_popup is NOT Command.
     fn sync_file_search_popup(&mut self) {
+        if matches!(self.active_popup, ActivePopup::Alias(_)) {
+            return;
+        }
         // Determine if there is an @token underneath the cursor.
         let query = match Self::current_at_token(&self.textarea) {
             Some(token) => token,
@@ -1582,6 +2128,9 @@ impl WidgetRef for ChatComposer {
         let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::Alias(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::File(popup) => {
@@ -1712,6 +2261,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::app_event::AppEvent;
+    use crate::app_event::CommitAction;
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;
@@ -1858,10 +2408,6 @@ mod tests {
 
     #[test]
     fn question_mark_only_toggles_on_first_char() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -1895,6 +2441,32 @@ mod tests {
         assert_eq!(composer.textarea.text(), "h?");
         assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
         assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
+    }
+
+    #[test]
+    fn alias_popup_opens_after_double_slash() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_aliases(vec!["deploy".to_string(), "review".to_string()]);
+
+        type_chars_humanlike(&mut composer, &['/', '/']);
+        assert!(
+            matches!(composer.active_popup, ActivePopup::Alias(_)),
+            "'//' 입력 후 별칭 팝업이 열려야 합니다."
+        );
+        if let ActivePopup::Alias(popup) = &composer.active_popup {
+            assert!(
+                popup.selected_alias().is_some(),
+                "별칭 목록이 비어 있지 않아야 합니다."
+            );
+        }
     }
 
     #[test]
@@ -2368,6 +2940,119 @@ mod tests {
         let args =
             extract_positional_args_for_prompt_line("/prompts:cmd \"with spaces\" simple", "cmd");
         assert_eq!(args, vec!["with spaces".to_string(), "simple".to_string()]);
+    }
+
+    #[test]
+    fn commit_command_without_args_dispatches_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_commit_command(""));
+
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::Perform { message, auto } => {
+                    assert!(message.is_none());
+                    assert!(!auto);
+                }
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn commit_command_with_message_dispatches_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_commit_command("Fix spacing"));
+
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::Perform { message, auto } => {
+                    assert_eq!(message, Some("Fix spacing".to_string()));
+                    assert!(!auto);
+                }
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn commit_auto_toggles_enable_and_disable() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_commit_command("auto"));
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::SetAuto { enabled } => assert!(enabled),
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+
+        assert!(composer.handle_commit_command("auto off"));
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::SetAuto { enabled } => assert!(!enabled),
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn commit_auto_with_extra_words_treated_as_message() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        assert!(composer.handle_commit_command("auto fix crash"));
+
+        match rx.try_recv() {
+            Ok(AppEvent::CommitCommand { action }) => match action {
+                CommitAction::Perform { message, auto } => {
+                    assert_eq!(message, Some("auto fix crash".to_string()));
+                    assert!(!auto);
+                }
+                other => panic!("unexpected action: {other:?}"),
+            },
+            other => panic!("expected CommitCommand event, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

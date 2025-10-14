@@ -18,6 +18,7 @@ use std::time::Duration;
 mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+mod alias_popup;
 mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
@@ -379,6 +380,11 @@ impl BottomPane {
     /// Update custom prompts available for the slash popup.
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.composer.set_custom_prompts(prompts);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_aliases(&mut self, aliases: Vec<String>) {
+        self.composer.set_aliases(aliases);
         self.request_redraw();
     }
 

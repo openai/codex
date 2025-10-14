@@ -21,10 +21,13 @@ pub enum SlashCommand {
     Init,
     Compact,
     Checkpoint,
+    Commit,
     Undo,
     Diff,
     Mention,
     Status,
+    Todo,
+    Alias,
     Mcp,
     Logout,
     Quit,
@@ -43,8 +46,11 @@ impl SlashCommand {
             SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
+            SlashCommand::Commit => "summarize and commit workspace changes to git",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Todo => "manage a shared TODO list for the session",
+            SlashCommand::Alias => "save or reuse custom prompt aliases",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::GlobalPrompt => "set or clear the prompt sent at session start",
@@ -72,11 +78,14 @@ impl SlashCommand {
             | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Approvals
+            | SlashCommand::Commit
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Status
+            | SlashCommand::Todo
+            | SlashCommand::Alias
             | SlashCommand::Mcp
             | SlashCommand::GlobalPrompt
             | SlashCommand::Alarm

@@ -259,7 +259,7 @@ fn make_chatwidget_manual() -> (
         disable_paste_burst: false,
     });
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
-    let widget = ChatWidget {
+    let mut widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
@@ -281,6 +281,10 @@ fn make_chatwidget_manual() -> (
         full_reasoning_buffer: String::new(),
         conversation_id: None,
         frame_requester: FrameRequester::test_dummy(),
+        todo_items: Vec::new(),
+        todo_auto_enabled: false,
+        auto_commit_enabled: false,
+        aliases: HashMap::new(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
@@ -292,6 +296,7 @@ fn make_chatwidget_manual() -> (
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
     };
+    widget.hydrate_aliases_from_config();
     (widget, rx, op_rx)
 }
 
@@ -331,6 +336,62 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn next_persist_aliases(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Option<HashMap<String, String>> {
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::PersistAliases { aliases }) => return Some(aliases),
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => return None,
+        }
+    }
+}
+
+#[test]
+fn store_alias_persists_aliases_to_config() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.store_alias("Deploy".to_string(), "Run deploy".to_string());
+
+    let aliases = next_persist_aliases(&mut rx).expect("persist event");
+    assert_eq!(aliases.get("Deploy"), Some(&"Run deploy".to_string()));
+    assert_eq!(
+        chat.config.prompt_aliases.get("Deploy"),
+        Some(&"Run deploy".to_string())
+    );
+}
+
+#[test]
+fn remove_alias_updates_persisted_aliases() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.store_alias("Deploy".to_string(), "Run deploy".to_string());
+    // Drain initial persist event from creation.
+    let _ = next_persist_aliases(&mut rx);
+
+    chat.remove_alias("Deploy");
+    let aliases = next_persist_aliases(&mut rx).expect("persist event after removal");
+    assert!(aliases.is_empty());
+    assert!(chat.config.prompt_aliases.is_empty());
+}
+
+#[test]
+fn hydrate_aliases_from_config_loads_entries() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+    // Clear out any pending events to avoid interference.
+    while rx.try_recv().is_ok() {}
+
+    chat.config
+        .prompt_aliases
+        .insert("Deploy".to_string(), "Run deploy".to_string());
+    chat.hydrate_aliases_from_config();
+
+    let entry = chat.aliases.get("deploy").expect("alias should load");
+    assert_eq!(entry.name, "Deploy");
+    assert_eq!(entry.prompt, "Run deploy");
 }
 
 #[test]
