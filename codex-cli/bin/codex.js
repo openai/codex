@@ -80,6 +80,10 @@ function getUpdatedPath(newDirs) {
   return updatedPath;
 }
 
+/**
+ * Use heuristics to detect the package manager that was used to install Codex
+ * in order to give the user a hint about how to update it.
+ */
 function detectPackageManager() {
   const userAgent = process.env.npm_config_user_agent || "";
   if (/\bbun\//.test(userAgent)) {
@@ -99,11 +103,7 @@ function detectPackageManager() {
     return "bun";
   }
 
-  if (userAgent) {
-    return "npm";
-  }
-
-  return null;
+  return userAgent ? "npm" : null;
 }
 
 const additionalDirs = [];
@@ -114,12 +114,8 @@ if (existsSync(pathDir)) {
 const updatedPath = getUpdatedPath(additionalDirs);
 
 const env = { ...process.env, PATH: updatedPath };
-const packageManager = detectPackageManager();
-if (packageManager === "bun") {
-  env.CODEX_MANAGED_BY_BUN = "1";
-} else {
-  env.CODEX_MANAGED_BY_NPM = "1";
-}
+const packageManagerEnvVar = detectPackageManager() === "bun" ? "CODEX_MANAGED_BY_BUN" : "CODEX_MANAGED_BY_NPM";
+env[packageManagerEnvVar] = "1";
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
