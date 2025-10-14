@@ -62,12 +62,20 @@ pub fn assess_command(
 
     // aggregate → policy → result
     match category {
-        CommandCategory::Unrecognized => evaluate_decision_policy(
-            approval_policy,
-            sandbox_policy,
-            with_escalated_permissions,
-            user_explicitly_approved,
-        ),
+        CommandCategory::Unrecognized => {
+            // For unrecognized commands, we can't assess safety, so we need to be conservative.
+            // Under DangerFullAccess, we still require approval for unknown commands
+            // to prevent wrapped dangerous commands (like "sudo rm -rf /") from bypassing checks.
+            if user_explicitly_approved {
+                CommandDecision::permit(SandboxType::None, true)
+            } else if approval_policy == AskForApproval::Never {
+                CommandDecision::deny("Unrecognized command; rejected by user approval settings")
+            } else {
+                // Unlike other categories, Unrecognized always requires approval
+                // regardless of sandbox policy, because we can't determine if it's safe
+                CommandDecision::require_approval()
+            }
+        }
 
         CommandCategory::DeletesData => {
             // Always ask unless explicitly approved; obey AskForApproval::Never

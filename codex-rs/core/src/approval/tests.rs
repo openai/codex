@@ -264,6 +264,253 @@ mod approval_tests {
                 CommandCategory::DeletesData
             );
         }
+
+        #[test]
+        fn unrecognized_commands_require_approval_under_danger_full_access() {
+            // Regression test: DangerFullAccess should not auto-permit Unrecognized commands
+            // because we can't assess their safety. This prevents wrapped dangerous commands
+            // like "sudo rm -rf /" from bypassing approval.
+            let command = cmd(&["sudo", "rm", "-rf", "/"]);
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                &approved_cache(&[]),
+                false,
+            );
+
+            // Unrecognized commands should require approval even under DangerFullAccess
+            pretty_assert_eq!(result, CommandDecision::require_approval());
+        }
+
+        #[test]
+        fn shell_wrapped_dangerous_commands_require_approval() {
+            // bash -lc "sudo rm -rf /" contains "sudo" which is Unrecognized
+            let command = cmd(&["bash", "-lc", "sudo rm -rf /"]);
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                &approved_cache(&[]),
+                false,
+            );
+
+            // Should require approval since sudo is Unrecognized
+            pretty_assert_eq!(result, CommandDecision::require_approval());
+        }
+
+        #[test]
+        fn unrecognized_with_never_policy_is_denied() {
+            // AskForApproval::Never + Unrecognized should deny (can't assess safety)
+            let command = cmd(&["sudo", "rm", "-rf", "/"]);
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::Never,
+                &SandboxPolicy::DangerFullAccess,
+                &approved_cache(&[]),
+                false,
+            );
+
+            match result {
+                CommandDecision::Reject { .. } => {} // Expected
+                other => panic!("Expected Reject, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn unless_trusted_requires_approval_for_modifying_commands() {
+            // UnlessTrusted should require approval for ModifiesVcs commands
+            let command = cmd(&["git", "commit", "-m", "test"]);
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::UnlessTrusted,
+                &SandboxPolicy::DangerFullAccess,
+                &approved_cache(&[]),
+                false,
+            );
+
+            pretty_assert_eq!(result, CommandDecision::require_approval());
+        }
+
+        #[test]
+        fn modifies_filesystem_under_danger_full_access_auto_approves() {
+            // git commit is ModifiesVcs, should auto-approve under DangerFullAccess
+            let command = cmd(&["git", "commit", "-m", "test"]);
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::OnRequest,
+                &SandboxPolicy::DangerFullAccess,
+                &approved_cache(&[]),
+                false,
+            );
+
+            pretty_assert_eq!(result, CommandDecision::permit(SandboxType::None, false));
+        }
+
+        #[test]
+        fn modifies_vcs_with_never_policy_under_danger_full_access() {
+            // git commit with Never policy + DangerFullAccess should auto-permit
+            let command = cmd(&["git", "commit", "-m", "test"]);
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::Never,
+                &SandboxPolicy::DangerFullAccess,
+                &approved_cache(&[]),
+                false,
+            );
+
+            pretty_assert_eq!(result, CommandDecision::permit(SandboxType::None, false));
+        }
+
+        #[test]
+        fn deletes_data_ignores_danger_full_access_policy() {
+            // DeletesData should ALWAYS require approval, even with DangerFullAccess + Never
+            let command = cmd(&["rm", "-rf", "/"]);
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::Never,
+                &SandboxPolicy::DangerFullAccess,
+                &approved_cache(&[]),
+                false,
+            );
+
+            // DeletesData with Never should be denied (not auto-permitted)
+            match result {
+                CommandDecision::Reject { .. } => {} // Expected
+                other => panic!("Expected Reject, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn workspace_write_policy_with_modifying_commands() {
+            // ModifiesVcs under WorkspaceWrite should use sandbox if available, or require approval
+            let command = cmd(&["git", "commit", "-m", "test"]);
+            let workspace_write = SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            };
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::OnRequest,
+                &workspace_write,
+                &approved_cache(&[]),
+                false,
+            );
+
+            // Should either be sandboxed or require approval (not DangerFullAccess auto-permit)
+            match result {
+                CommandDecision::AutoApprove { sandbox_type, .. } => {
+                    // Sandboxed approval is fine
+                    assert!(sandbox_type != SandboxType::None, "Should be sandboxed");
+                }
+                CommandDecision::AskUser => {} // Also fine
+                other => panic!("Expected sandboxed approval or AskUser, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn on_failure_policy_uses_sandbox_when_available() {
+            // OnFailure: use sandbox when available, otherwise ask user
+            let command = cmd(&["git", "commit", "-m", "test"]);
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::OnFailure,
+                &SandboxPolicy::ReadOnly,
+                &approved_cache(&[]),
+                false,
+            );
+
+            // Should either be sandboxed or require approval
+            match result {
+                CommandDecision::AutoApprove { sandbox_type, .. } => {
+                    // Sandboxed approval is fine
+                    assert!(sandbox_type != SandboxType::None, "Should be sandboxed");
+                }
+                CommandDecision::AskUser => {} // Also fine if no sandbox available
+                other => panic!("Expected sandboxed approval or AskUser, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn never_policy_with_sandbox_available_uses_sandbox() {
+            // Never policy: use sandbox when available, otherwise reject
+            let command = cmd(&["git", "commit", "-m", "test"]);
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::Never,
+                &SandboxPolicy::ReadOnly,
+                &approved_cache(&[]),
+                false,
+            );
+
+            // Should either be sandboxed or rejected (never AskUser with Never policy)
+            match result {
+                CommandDecision::AutoApprove { sandbox_type, .. } => {
+                    // Sandboxed approval is fine
+                    assert!(sandbox_type != SandboxType::None, "Should be sandboxed");
+                }
+                CommandDecision::Reject { .. } => {} // Also fine if no sandbox available
+                CommandDecision::AskUser => {
+                    panic!("Never policy should not result in AskUser")
+                }
+            }
+        }
+
+        #[test]
+        fn unrecognized_with_workspace_write_requires_approval() {
+            // Unrecognized commands should require approval regardless of sandbox policy
+            let command = cmd(&["sudo", "rm", "-rf", "/"]);
+            let workspace_write = SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            };
+            let result = policy::assess_command(
+                &command,
+                AskForApproval::OnRequest,
+                &workspace_write,
+                &approved_cache(&[]),
+                false,
+            );
+
+            // Unrecognized always requires approval
+            pretty_assert_eq!(result, CommandDecision::require_approval());
+        }
+
+        #[test]
+        fn read_only_commands_auto_approve_under_all_sandbox_policies() {
+            // Read-only commands should auto-approve regardless of sandbox policy
+            let workspace_write = SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            };
+
+            for sandbox_policy in [
+                SandboxPolicy::ReadOnly,
+                workspace_write,
+                SandboxPolicy::DangerFullAccess,
+            ] {
+                let command = cmd(&["ls", "-la"]);
+                let result = policy::assess_command(
+                    &command,
+                    AskForApproval::OnRequest,
+                    &sandbox_policy,
+                    &approved_cache(&[]),
+                    false,
+                );
+
+                pretty_assert_eq!(
+                    result,
+                    CommandDecision::permit(SandboxType::None, false),
+                    "Failed for {sandbox_policy:?}"
+                );
+            }
+        }
     }
 
     mod predicate_rule_tests {
