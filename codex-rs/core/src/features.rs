@@ -5,6 +5,8 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
+use crate::config::ConfigToml;
+use crate::config_profile::ConfigProfile;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -108,6 +110,81 @@ impl Features {
                 }
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_config(
+        cfg: &ConfigToml,
+        config_profile: &ConfigProfile,
+        include_plan_tool_override: Option<bool>,
+        include_apply_patch_tool_override: Option<bool>,
+        include_view_image_tool_override: Option<bool>,
+        override_tools_web_search_request: Option<bool>,
+    ) -> Self {
+        let mut features = Features::with_defaults();
+
+        let base_legacy = LegacyFeatureToggles {
+            experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
+            experimental_use_exec_command_tool: cfg.experimental_use_exec_command_tool,
+            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+            experimental_use_rmcp_client: cfg.experimental_use_rmcp_client,
+            tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
+            tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
+            ..Default::default()
+        };
+        base_legacy.apply(&mut features);
+
+        if let Some(base_features) = cfg.features.as_ref() {
+            features.apply_map(&base_features.entries);
+        }
+
+        let profile_legacy = LegacyFeatureToggles {
+            include_plan_tool: config_profile.include_plan_tool,
+            include_apply_patch_tool: config_profile.include_apply_patch_tool,
+            include_view_image_tool: config_profile.include_view_image_tool,
+            experimental_use_freeform_apply_patch: config_profile
+                .experimental_use_freeform_apply_patch,
+            experimental_use_exec_command_tool: config_profile.experimental_use_exec_command_tool,
+            experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
+            experimental_use_rmcp_client: config_profile.experimental_use_rmcp_client,
+            tools_web_search: config_profile.tools_web_search,
+            tools_view_image: config_profile.tools_view_image,
+        };
+        profile_legacy.apply(&mut features);
+        if let Some(profile_features) = config_profile.features.as_ref() {
+            features.apply_map(&profile_features.entries);
+        }
+
+        if let Some(v) = include_plan_tool_override {
+            if v {
+                features.enable(Feature::PlanTool);
+            } else {
+                features.disable(Feature::PlanTool);
+            }
+        }
+        if let Some(v) = include_apply_patch_tool_override {
+            if v {
+                features.enable(Feature::ApplyPatchFreeform);
+            } else {
+                features.disable(Feature::ApplyPatchFreeform);
+            }
+        }
+        if let Some(v) = include_view_image_tool_override {
+            if v {
+                features.enable(Feature::ViewImageTool);
+            } else {
+                features.disable(Feature::ViewImageTool);
+            }
+        }
+        if let Some(v) = override_tools_web_search_request {
+            if v {
+                features.enable(Feature::WebSearchRequest);
+            } else {
+                features.disable(Feature::WebSearchRequest);
+            }
+        }
+
+        features
     }
 }
 

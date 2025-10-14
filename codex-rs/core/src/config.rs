@@ -20,7 +20,6 @@ use crate::config_types::UriBasedFileOpener;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::features::FeaturesToml;
-use crate::features::LegacyFeatureToggles;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::derive_default_model_family;
@@ -1015,6 +1014,15 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
+        let features = Features::from_config(
+            &cfg,
+            &config_profile,
+            include_plan_tool_override,
+            include_apply_patch_tool_override,
+            include_view_image_tool_override,
+            override_tools_web_search_request,
+        );
+
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
         let mut model_providers = built_in_model_providers();
@@ -1059,74 +1067,6 @@ impl Config {
         };
 
         let history = cfg.history.unwrap_or_default();
-
-        // ===== Features aggregation =====
-        let mut features = Features::with_defaults();
-
-        // Legacy booleans (pre-[features]) keep working but log a migration hint.
-        let base_legacy = LegacyFeatureToggles {
-            experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
-            experimental_use_exec_command_tool: cfg.experimental_use_exec_command_tool,
-            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: cfg.experimental_use_rmcp_client,
-            tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
-            tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
-            ..Default::default()
-        };
-        base_legacy.apply(&mut features);
-
-        // 1) Base config features table overrides legacy toggles.
-        if let Some(base_features) = cfg.features.as_ref() {
-            features.apply_map(&base_features.entries);
-        }
-
-        // 2) Profile-level features override the base config.
-        let profile_legacy = LegacyFeatureToggles {
-            include_plan_tool: config_profile.include_plan_tool,
-            include_apply_patch_tool: config_profile.include_apply_patch_tool,
-            include_view_image_tool: config_profile.include_view_image_tool,
-            experimental_use_freeform_apply_patch: config_profile
-                .experimental_use_freeform_apply_patch,
-            experimental_use_exec_command_tool: config_profile.experimental_use_exec_command_tool,
-            experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: config_profile.experimental_use_rmcp_client,
-            tools_web_search: config_profile.tools_web_search,
-            tools_view_image: config_profile.tools_view_image,
-        };
-        profile_legacy.apply(&mut features);
-        if let Some(profile_features) = config_profile.features.as_ref() {
-            features.apply_map(&profile_features.entries);
-        }
-
-        // 3) CLI-style overrides (mapped from ConfigOverrides fields when present).
-        if let Some(v) = include_plan_tool_override {
-            if v {
-                features.enable(Feature::PlanTool);
-            } else {
-                features.disable(Feature::PlanTool);
-            }
-        }
-        if let Some(v) = include_apply_patch_tool_override {
-            if v {
-                features.enable(Feature::ApplyPatchFreeform);
-            } else {
-                features.disable(Feature::ApplyPatchFreeform);
-            }
-        }
-        if let Some(v) = include_view_image_tool_override {
-            if v {
-                features.enable(Feature::ViewImageTool);
-            } else {
-                features.disable(Feature::ViewImageTool);
-            }
-        }
-        if let Some(v) = override_tools_web_search_request {
-            if v {
-                features.enable(Feature::WebSearchRequest);
-            } else {
-                features.disable(Feature::WebSearchRequest);
-            }
-        }
 
         let include_plan_tool_flag = features.enabled(Feature::PlanTool);
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
