@@ -28,6 +28,7 @@ use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use crate::app_event::CheckpointAction;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
@@ -901,15 +902,31 @@ impl ChatComposer {
                 // the '/name' token and our caret-based heuristic hides the popup,
                 // but Enter should still dispatch the command rather than submit
                 // literal text.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                if let Some((name, rest)) = parse_slash_name(first_line)
-                    && rest.is_empty()
-                    && let Some((_n, cmd)) = built_in_slash_commands()
+                let first_line = self
+                    .textarea
+                    .text()
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                if let Some((name, rest)) = parse_slash_name(&first_line) {
+                    if let Some((_n, cmd)) = built_in_slash_commands()
                         .into_iter()
                         .find(|(n, _)| *n == name)
-                {
-                    self.textarea.set_text("");
-                    return (InputResult::Command(cmd), true);
+                    {
+                        if matches!(cmd, SlashCommand::Checkpoint) {
+                            let rest_owned = rest.to_string();
+                            let cleared = self.handle_checkpoint_command(&rest_owned);
+                            if cleared {
+                                self.textarea.set_text("");
+                            }
+                            return (InputResult::None, true);
+                        }
+                        if rest.is_empty() {
+                            self.textarea.set_text("");
+                            return (InputResult::Command(cmd), true);
+                        }
+                    }
                 }
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
@@ -995,6 +1012,83 @@ impl ChatComposer {
                 (InputResult::Submitted(text), true)
             }
             input => self.handle_input_basic(input),
+        }
+    }
+
+    fn handle_checkpoint_command(&mut self, rest: &str) -> bool {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    "Usage: /checkpoint <save|load> [name] or /checkpoint auto [on|off]"
+                        .to_string(),
+                    Some(
+                        "Provide a name when loading; omit it to auto-generate one when saving."
+                            .to_string(),
+                    ),
+                ),
+            )));
+            return false;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let action_token = parts.next().unwrap_or_default();
+        match action_token.to_ascii_lowercase().as_str() {
+            "save" | "load" => {
+                let action = if action_token.eq_ignore_ascii_case("save") {
+                    CheckpointAction::Save
+                } else {
+                    CheckpointAction::Load
+                };
+                let name = parts.next().map(|s| s.to_string());
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Usage: /checkpoint <save|load> [name]".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx
+                    .send(AppEvent::CheckpointCommand { action, name });
+                true
+            }
+            "auto" => {
+                let enabled = match parts.next().map(|s| s.to_ascii_lowercase()) {
+                    None => true,
+                    Some(token) => match token.as_str() {
+                        "on" | "enable" | "enabled" | "start" => true,
+                        "off" | "disable" | "disabled" | "stop" => false,
+                        other => {
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(format!(
+                                    "Invalid auto checkpoint option '{other}'. Use 'on' or 'off'."
+                                )),
+                            )));
+                            return false;
+                        }
+                    },
+                };
+                if parts.next().is_some() {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "Usage: /checkpoint auto [on|off]".to_string(),
+                        ),
+                    )));
+                    return false;
+                }
+                self.app_event_tx
+                    .send(AppEvent::SetCheckpointAutomation { enabled });
+                true
+            }
+            other => {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_error_event(format!(
+                        "Invalid checkpoint action '{other}'. Use 'save', 'load', or 'auto'."
+                    )),
+                )));
+                false
+            }
         }
     }
 
@@ -1547,8 +1641,15 @@ impl WidgetRef for ChatComposer {
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
+            let clear_rect = textarea_rect.inner(Margin::new(0, 0));
+            if clear_rect.width > 0 && clear_rect.height > 0 {
+                let fill = " ".repeat(clear_rect.width as usize);
+                for row in 0..clear_rect.height {
+                    buf.set_string(clear_rect.x, clear_rect.y + row, &fill, Style::default());
+                }
+            }
             let placeholder = Span::from(self.placeholder_text.as_str()).dim();
-            Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+            Line::from(vec![placeholder]).render_ref(clear_rect, buf);
         }
     }
 }
@@ -2290,7 +2391,7 @@ mod tests {
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
-        assert_eq!(composer.textarea.text(), "/compact ");
+        assert_eq!(composer.textarea.text(), "/checkpoint ");
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
     }
 

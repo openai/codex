@@ -965,6 +965,15 @@ pub(crate) struct PlanUpdateCell {
     plan: Vec<PlanItemArg>,
 }
 
+impl PlanUpdateCell {
+    pub(crate) fn to_update_args(&self) -> UpdatePlanArgs {
+        UpdatePlanArgs {
+            explanation: self.explanation.clone(),
+            plan: self.plan.clone(),
+        }
+    }
+}
+
 impl HistoryCell for PlanUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let render_note = |text: &str| -> Vec<Line<'static>> {

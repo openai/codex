@@ -288,6 +288,7 @@ fn make_chatwidget_manual() -> (
         is_review_mode: false,
         ghost_snapshots: Vec::new(),
         ghost_snapshots_disabled: false,
+        auto_checkpoint_enabled: false,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
     };

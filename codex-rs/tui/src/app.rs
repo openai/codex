@@ -1,5 +1,6 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+use crate::app_event::CheckpointAction;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
@@ -7,12 +8,16 @@ use crate::chatwidget::prompts_equivalent;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
+use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::PlanUpdateCell;
+use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
+use chrono::Utc;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
@@ -25,13 +30,19 @@ use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::ConversationId;
+use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::plan_tool::UpdatePlanArgs;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use rand::Rng;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use std::fmt::Write as _;
+use std::fs;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -71,6 +82,7 @@ pub(crate) struct App {
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
+    pub(crate) auto_checkpoint_enabled: bool,
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
@@ -172,6 +184,7 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            auto_checkpoint_enabled: false,
             backtrack: BacktrackState::default(),
         };
 
@@ -332,6 +345,48 @@ impl App {
                     "D I F F".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::CheckpointCommand { action, name } => match action {
+                CheckpointAction::Save => self.handle_checkpoint_save(name),
+                CheckpointAction::Load => self.handle_checkpoint_load(name),
+            },
+            AppEvent::SetCheckpointAutomation { enabled } => {
+                let previous = self.auto_checkpoint_enabled;
+                self.auto_checkpoint_enabled = enabled;
+                self.chat_widget.set_auto_checkpoint_enabled(enabled);
+                if enabled {
+                    let message = if previous {
+                        "Automatic checkpoints already enabled."
+                    } else {
+                        "Automatic checkpoints enabled."
+                    };
+                    let hint = if previous {
+                        Some("Checkpoints continue to save after each Codex response using names like YYYY-MM-DD-abc123.".to_string())
+                    } else {
+                        Some("A checkpoint will be saved after each Codex response using names like YYYY-MM-DD-abc123.".to_string())
+                    };
+                    self.chat_widget.add_info_message(message.to_string(), hint);
+                } else {
+                    let message = if previous {
+                        "Automatic checkpoints disabled."
+                    } else {
+                        "Automatic checkpoints already disabled."
+                    };
+                    let hint = if previous {
+                        Some(
+                            "Run `/checkpoint auto` to enable automatic checkpoints again."
+                                .to_string(),
+                        )
+                    } else {
+                        Some("Automatic checkpoints remain disabled.".to_string())
+                    };
+                    self.chat_widget.add_info_message(message.to_string(), hint);
+                }
+            }
+            AppEvent::AutoCheckpointTick => {
+                if self.auto_checkpoint_enabled {
+                    self.handle_auto_checkpoint_save();
+                }
             }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
@@ -516,6 +571,363 @@ impl App {
         self.config.model_reasoning_effort = effort;
     }
 
+    fn handle_checkpoint_save(&mut self, name: Option<String>) {
+        match self.create_checkpoint(name) {
+            Ok((checkpoint_name, path)) => {
+                let hint = format!("Saved to {}", path.display());
+                self.chat_widget
+                    .add_info_message(format!("Checkpoint '{checkpoint_name}' saved."), Some(hint));
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to save checkpoint: {err:#}"));
+            }
+        }
+    }
+
+    fn handle_auto_checkpoint_save(&mut self) {
+        match self.create_checkpoint(None) {
+            Ok((checkpoint_name, path)) => {
+                self.chat_widget.add_info_message(
+                    format!("Auto checkpoint '{checkpoint_name}' saved."),
+                    Some(path.display().to_string()),
+                );
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to save auto checkpoint: {err:#}"));
+            }
+        }
+    }
+
+    fn handle_checkpoint_load(&mut self, name: Option<String>) {
+        if let Some(name) = name {
+            let sanitized = Self::sanitize_checkpoint_name(&name);
+            if sanitized.is_empty() {
+                self.chat_widget.add_error_message(
+                    "Checkpoint name must contain at least one alphanumeric character.".to_string(),
+                );
+                return;
+            }
+            let path = self.checkpoint_dir().join(format!("{sanitized}.md"));
+            if !path.exists() {
+                self.chat_widget.add_error_message(format!(
+                    "Checkpoint '{sanitized}' not found in {}.",
+                    self.checkpoint_dir().display()
+                ));
+                if let Ok(names) = self.list_checkpoint_names() {
+                    if !names.is_empty() {
+                        self.chat_widget.add_info_message(
+                            "Available checkpoints:".to_string(),
+                            Some(names.join(", ")),
+                        );
+                    }
+                }
+                return;
+            }
+            match fs::read_to_string(&path) {
+                Ok(contents) => {
+                    let composer_text =
+                        format!("Continue from checkpoint `{sanitized}`.\n\n{}", contents);
+                    self.chat_widget.set_composer_text(composer_text);
+                    self.chat_widget.add_info_message(
+                        format!(
+                            "Checkpoint '{sanitized}' loaded into the composer. Review and send when ready."
+                        ),
+                        Some(path.display().to_string()),
+                    );
+                }
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to load checkpoint '{sanitized}': {err}"
+                    ));
+                }
+            }
+        } else {
+            match self.list_checkpoint_names() {
+                Ok(names) if names.is_empty() => {
+                    self.chat_widget.add_info_message(
+                        "No checkpoints saved yet.".to_string(),
+                        Some("Use `/checkpoint save` to create one.".to_string()),
+                    );
+                }
+                Ok(names) => {
+                    self.chat_widget.add_info_message(
+                        "Available checkpoints:".to_string(),
+                        Some(names.join(", ")),
+                    );
+                }
+                Err(err) => {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to enumerate checkpoints: {err:#}"));
+                }
+            }
+        }
+    }
+
+    fn create_checkpoint(&self, name: Option<String>) -> Result<(String, PathBuf)> {
+        let chosen_name = self.choose_checkpoint_name(name);
+        let dir = self.checkpoint_dir();
+        fs::create_dir_all(&dir)
+            .wrap_err_with(|| format!("failed to create checkpoint directory {}", dir.display()))?;
+        let file_path = dir.join(format!("{chosen_name}.md"));
+        let contents = self.build_checkpoint_markdown(&chosen_name);
+        fs::write(&file_path, contents)
+            .wrap_err_with(|| format!("failed to write checkpoint {}", file_path.display()))?;
+        Ok((chosen_name, file_path))
+    }
+
+    fn checkpoint_dir(&self) -> PathBuf {
+        self.config.cwd.join(".codex").join("checkpoints")
+    }
+
+    fn choose_checkpoint_name(&self, provided: Option<String>) -> String {
+        if let Some(name) = provided
+            .and_then(|n| {
+                let trimmed = n.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+            .map(|candidate| Self::sanitize_checkpoint_name(&candidate))
+            .filter(|sanitized| !sanitized.is_empty())
+        {
+            name
+        } else {
+            Self::generate_random_checkpoint_name()
+        }
+    }
+
+    fn sanitize_checkpoint_name(input: &str) -> String {
+        let mut result = String::new();
+        let mut last_was_dash = false;
+        for ch in input.chars() {
+            let normalized = if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else if ch == '_' {
+                ch
+            } else {
+                '-'
+            };
+            if normalized == '-' {
+                if result.is_empty() || last_was_dash {
+                    continue;
+                }
+                last_was_dash = true;
+                result.push(normalized);
+            } else {
+                last_was_dash = false;
+                result.push(normalized);
+            }
+            if result.len() >= 48 {
+                break;
+            }
+        }
+        while matches!(result.chars().last(), Some('-') | Some('_')) {
+            result.pop();
+        }
+        result
+    }
+
+    fn generate_random_checkpoint_name() -> String {
+        let date_prefix = Utc::now().format("%Y-%m-%d").to_string();
+        let mut rng = rand::rng();
+        let hash: String = (0..6)
+            .map(|_| {
+                let value: u8 = rng.random_range(0..36);
+                if value < 10 {
+                    (b'0' + value) as char
+                } else {
+                    (b'a' + (value - 10)) as char
+                }
+            })
+            .collect();
+        format!("{date_prefix}-{hash}")
+    }
+
+    fn build_checkpoint_markdown(&self, name: &str) -> String {
+        let mut out = String::new();
+        let timestamp = Utc::now().to_rfc3339();
+        let _ = writeln!(out, "# Checkpoint {}", name);
+        out.push('\n');
+        let _ = writeln!(out, "- Saved at: {}", timestamp);
+        let _ = writeln!(out, "- Working directory: `{}`", self.config.cwd.display());
+        if let Some(conversation_id) = self.chat_widget.conversation_id() {
+            let _ = writeln!(out, "- Conversation ID: `{}`", conversation_id);
+        }
+        out.push('\n');
+
+        let context = self.collect_checkpoint_context();
+        if context.user_prompts.is_empty()
+            && context.agent_responses.is_empty()
+            && context.plan_updates.is_empty()
+        {
+            out.push_str("_No conversation history captured yet._\n");
+            return out;
+        }
+
+        if !context.user_prompts.is_empty() {
+            out.push_str("## User Prompts\n\n");
+            for (idx, prompt) in context.user_prompts.iter().enumerate() {
+                let _ = writeln!(out, "### Prompt {}", idx + 1);
+                out.push('\n');
+                Self::append_markdown_block(&mut out, prompt);
+            }
+        }
+
+        if !context.agent_responses.is_empty() {
+            out.push_str("## Codex Responses\n\n");
+            for (idx, response) in context.agent_responses.iter().enumerate() {
+                let _ = writeln!(out, "### Response {}", idx + 1);
+                out.push('\n');
+                Self::append_markdown_block(&mut out, response);
+            }
+        }
+
+        if !context.plan_updates.is_empty() {
+            out.push_str("## Plan Updates\n\n");
+            for (idx, update) in context.plan_updates.iter().enumerate() {
+                let _ = writeln!(out, "### Update {}", idx + 1);
+                out.push('\n');
+                if let Some(expl) = update
+                    .explanation
+                    .as_ref()
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                {
+                    let _ = writeln!(out, "> {}", expl);
+                    out.push('\n');
+                }
+                if update.plan.is_empty() {
+                    out.push_str("_No steps provided._\n\n");
+                } else {
+                    for step in &update.plan {
+                        let marker = Self::step_status_marker(&step.status);
+                        let trimmed_step = step.step.trim();
+                        let _ = writeln!(out, "- [{}] {}", marker, trimmed_step);
+                    }
+                    out.push('\n');
+                }
+            }
+        }
+
+        out
+    }
+
+    fn list_checkpoint_names(&self) -> Result<Vec<String>> {
+        let dir = self.checkpoint_dir();
+        let read_dir = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => {
+                return Err(err).wrap_err_with(|| format!("failed to read {}", dir.display()));
+            }
+        };
+        let mut names: Vec<String> = Vec::new();
+        for entry in read_dir {
+            let entry = entry?;
+            let path = entry.path();
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+            {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    names.push(stem.to_string());
+                }
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    fn collect_checkpoint_context(&self) -> CheckpointContext {
+        let mut prompts: Vec<String> = Vec::new();
+        let mut responses: Vec<String> = Vec::new();
+        let mut plan_updates: Vec<UpdatePlanArgs> = Vec::new();
+
+        for cell in &self.transcript_cells {
+            let history = cell.as_ref();
+            if let Some(user) = history.as_any().downcast_ref::<UserHistoryCell>() {
+                let text = user.message.trim();
+                if !text.is_empty() {
+                    prompts.push(text.to_string());
+                }
+                continue;
+            }
+            if let Some(agent) = history.as_any().downcast_ref::<AgentMessageCell>() {
+                let lines = agent.transcript_lines(u16::MAX);
+                let plain = Self::lines_to_plain(&lines);
+                let first_segment = plain.trim_start().starts_with('•');
+                let cleaned = Self::clean_agent_text(&plain);
+                if cleaned.is_empty() {
+                    continue;
+                }
+                if !first_segment && !responses.is_empty() {
+                    let last = responses.last_mut().unwrap();
+                    if !last.ends_with('\n') {
+                        last.push('\n');
+                    }
+                    last.push_str(&cleaned);
+                } else {
+                    responses.push(cleaned);
+                }
+                continue;
+            }
+            if let Some(plan) = history.as_any().downcast_ref::<PlanUpdateCell>() {
+                plan_updates.push(plan.to_update_args());
+            }
+        }
+
+        CheckpointContext {
+            user_prompts: prompts,
+            agent_responses: responses,
+            plan_updates,
+        }
+    }
+
+    fn lines_to_plain(lines: &[Line<'static>]) -> String {
+        let mut out = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            for span in &line.spans {
+                out.push_str(span.content.as_ref());
+            }
+        }
+        out.trim().to_string()
+    }
+
+    fn clean_agent_text(text: &str) -> String {
+        let trimmed = text.trim();
+        let without_bullet = trimmed
+            .strip_prefix("• ")
+            .or_else(|| trimmed.strip_prefix('•'))
+            .unwrap_or(trimmed);
+        without_bullet.trim().to_string()
+    }
+
+    fn append_markdown_block(out: &mut String, text: &str) {
+        out.push_str("```\n");
+        out.push_str(text);
+        if !text.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("```\n\n");
+    }
+
+    fn step_status_marker(status: &StepStatus) -> &'static str {
+        match status {
+            StepStatus::Completed => "x",
+            StepStatus::InProgress => "~",
+            StepStatus::Pending => " ",
+        }
+    }
+
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -576,6 +988,12 @@ impl App {
     }
 }
 
+struct CheckpointContext {
+    user_prompts: Vec<String>,
+    agent_responses: Vec<String>,
+    plan_updates: Vec<UpdatePlanArgs>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,6 +1040,7 @@ mod tests {
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            auto_checkpoint_enabled: false,
             backtrack: BacktrackState::default(),
         }
     }
@@ -642,6 +1061,29 @@ mod tests {
         assert_eq!(
             app.chat_widget.config_ref().model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
+        );
+    }
+
+    #[test]
+    fn random_checkpoint_name_uses_date_prefix() {
+        let name = App::generate_random_checkpoint_name();
+        let today_prefix = Utc::now().format("%Y-%m-%d").to_string();
+        assert!(
+            name.starts_with(&format!("{today_prefix}-")),
+            "expected checkpoint name '{name}' to begin with '{today_prefix}-'"
+        );
+        let suffix = &name[today_prefix.len() + 1..];
+        assert_eq!(
+            suffix.len(),
+            6,
+            "expected hash suffix of length 6 but found '{}'",
+            suffix.len()
+        );
+        assert!(
+            suffix
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit()),
+            "hash suffix should be base36 but was '{suffix}'"
         );
     }
 

@@ -12,6 +12,12 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CheckpointAction {
+    Save,
+    Load,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -42,6 +48,17 @@ pub(crate) enum AppEvent {
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
+    /// Handle a `/checkpoint` command issued from the composer.
+    CheckpointCommand {
+        action: CheckpointAction,
+        name: Option<String>,
+    },
+    /// Enable or disable automatic checkpoints.
+    SetCheckpointAutomation {
+        enabled: bool,
+    },
+    /// Fired when an automatic checkpoint should be captured after a turn.
+    AutoCheckpointTick,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 

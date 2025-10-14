@@ -1704,7 +1704,9 @@ pub(crate) async fn run_task(
                 ResponseItem::Message { role, content, .. } if role == "user" => {
                     let mut buf = String::new();
                     for part in content {
-                        if let ContentItem::OutputText { text } = part {
+                        if let ContentItem::InputText { text } | ContentItem::OutputText { text } =
+                            part
+                        {
                             if !buf.is_empty() {
                                 buf.push('\n');
                             }
@@ -1875,6 +1877,7 @@ pub(crate) async fn run_task(
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
                             turn_id: sub_id.clone(),
+                            session_id: sess.conversation_id.to_string(),
                             input_messages: turn_input_messages,
                             last_assistant_message: last_agent_message.clone(),
                         });

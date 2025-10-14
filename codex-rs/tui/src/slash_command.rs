@@ -20,6 +20,7 @@ pub enum SlashCommand {
     New,
     Init,
     Compact,
+    Checkpoint,
     Undo,
     Diff,
     Mention,
@@ -48,6 +49,7 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::GlobalPrompt => "set or clear the prompt sent at session start",
             SlashCommand::Alarm => "run a custom script after each Codex response",
+            SlashCommand::Checkpoint => "save or load a checkpoint for this workspace",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
@@ -78,6 +80,7 @@ impl SlashCommand {
             | SlashCommand::Mcp
             | SlashCommand::GlobalPrompt
             | SlashCommand::Alarm
+            | SlashCommand::Checkpoint
             | SlashCommand::Quit => true,
 
             #[cfg(debug_assertions)]

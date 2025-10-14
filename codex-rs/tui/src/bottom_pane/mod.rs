@@ -11,6 +11,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::widgets::WidgetRef;
 use std::time::Duration;
 
@@ -510,6 +511,11 @@ impl WidgetRef for &BottomPane {
             // If a status indicator is active, render it above the composer.
             if let Some(status) = &self.status {
                 status.render_ref(status_area, buf);
+            } else if status_area.width > 0 && status_area.height > 0 {
+                let fill = " ".repeat(status_area.width as usize);
+                for row in 0..status_area.height {
+                    buf.set_string(status_area.x, status_area.y + row, &fill, Style::default());
+                }
             }
 
             // Render the composer in the remaining area.

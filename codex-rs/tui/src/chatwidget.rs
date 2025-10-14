@@ -301,6 +301,7 @@ pub(crate) struct ChatWidget {
     // List of ghost commits corresponding to each turn.
     ghost_snapshots: Vec<GhostCommit>,
     ghost_snapshots_disabled: bool,
+    auto_checkpoint_enabled: bool,
     // Whether to add a final message separator after the last message
     needs_final_message_separator: bool,
     last_rendered_width: std::cell::Cell<Option<usize>>,
@@ -450,6 +451,10 @@ impl ChatWidget {
         self.notify(Notification::AgentTurnComplete {
             response: response_for_notification,
         });
+
+        if self.auto_checkpoint_enabled {
+            self.app_event_tx.send(AppEvent::AutoCheckpointTick);
+        }
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -994,6 +999,7 @@ impl ChatWidget {
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
+            auto_checkpoint_enabled: false,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
         }
@@ -1070,6 +1076,7 @@ impl ChatWidget {
             is_review_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
+            auto_checkpoint_enabled: false,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
         }
@@ -1200,6 +1207,13 @@ impl ChatWidget {
             }
             SlashCommand::Alarm => {
                 self.open_alarm_script_editor();
+            }
+            SlashCommand::Checkpoint => {
+                self.add_info_message(
+                    "Usage: /checkpoint <save|load> [name] or /checkpoint auto [on|off]"
+                        .to_string(),
+                    Some("Example: /checkpoint auto".to_string()),
+                );
             }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
@@ -1941,6 +1955,10 @@ impl ChatWidget {
                 .filter(|s| !s.is_empty());
         }
         self.config.global_prompt = prompt;
+    }
+
+    pub(crate) fn set_auto_checkpoint_enabled(&mut self, enabled: bool) {
+        self.auto_checkpoint_enabled = enabled;
     }
 
     pub(crate) fn set_alarm_script(&mut self, script: Option<String>) {
