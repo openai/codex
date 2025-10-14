@@ -319,8 +319,12 @@ impl ChatComposer {
     }
 
     /// Attempt to start a burst by retro-capturing recent chars before the cursor.
-    pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, format_label: &str) {
-        let placeholder = format!("[image {width}x{height} {format_label}]");
+    pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, _format_label: &str) {
+        let file_label = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "image".to_string());
+        let placeholder = format!("[{file_label} {width}x{height}]");
         // Insert as an element to match large paste placeholder behavior:
         // styled distinctly and treated atomically for cursor/mutations.
         self.textarea.insert_element(&placeholder);
@@ -958,6 +962,7 @@ impl ChatComposer {
                 }
                 let mut text = self.textarea.text().to_string();
                 let original_input = text.clone();
+                let input_starts_with_space = original_input.starts_with(' ');
                 self.textarea.set_text("");
 
                 // Replace all pending pastes in the text
@@ -971,6 +976,35 @@ impl ChatComposer {
                 // If there is neither text nor attachments, suppress submission entirely.
                 let has_attachments = !self.attached_images.is_empty();
                 text = text.trim().to_string();
+                if let Some((name, _rest)) = parse_slash_name(&text) {
+                    let treat_as_plain_text = input_starts_with_space || name.contains('/');
+                    if !treat_as_plain_text {
+                        let is_builtin = built_in_slash_commands()
+                            .into_iter()
+                            .any(|(command_name, _)| command_name == name);
+                        let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+                        let is_known_prompt = name
+                            .strip_prefix(&prompt_prefix)
+                            .map(|prompt_name| {
+                                self.custom_prompts
+                                    .iter()
+                                    .any(|prompt| prompt.name == prompt_name)
+                            })
+                            .unwrap_or(false);
+                        if !is_builtin && !is_known_prompt {
+                            let message = format!(
+                                r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                            );
+                            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_info_event(message, None),
+                            )));
+                            self.textarea.set_text(&original_input);
+                            self.textarea.set_cursor(original_input.len());
+                            return (InputResult::None, true);
+                        }
+                    }
+                }
+
                 let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
                     Ok(expanded) => expanded,
                     Err(err) => {
@@ -2581,7 +2615,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[image 32x16 PNG] hi"),
+            InputResult::Submitted(text) => assert_eq!(text, "[image1.png 32x16] hi"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -2604,7 +2638,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "[image 10x5 PNG]"),
+            InputResult::Submitted(text) => assert_eq!(text, "[image2.png 10x5]"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -2677,7 +2711,12 @@ mod tests {
         composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
 
         assert_eq!(composer.attached_images.len(), 1);
-        assert!(composer.textarea.text().starts_with("[image 10x5 PNG]"));
+        assert!(
+            composer
+                .textarea
+                .text()
+                .starts_with("[image_multibyte.png 10x5]")
+        );
     }
 
     #[test]
@@ -2700,21 +2739,31 @@ mod tests {
         composer.handle_paste(" ".into());
         composer.attach_image(path2.clone(), 10, 5, "PNG");
 
-        let ph = composer.attached_images[0].placeholder.clone();
+        let placeholder1 = composer.attached_images[0].placeholder.clone();
+        let placeholder2 = composer.attached_images[1].placeholder.clone();
         let text = composer.textarea.text().to_string();
-        let start1 = text.find(&ph).expect("first placeholder present");
-        let end1 = start1 + ph.len();
+        let start1 = text.find(&placeholder1).expect("first placeholder present");
+        let end1 = start1 + placeholder1.len();
         composer.textarea.set_cursor(end1);
 
         // Backspace should delete the first placeholder and its mapping.
         composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
 
         let new_text = composer.textarea.text().to_string();
-        assert_eq!(1, new_text.matches(&ph).count(), "one placeholder remains");
+        assert_eq!(
+            0,
+            new_text.matches(&placeholder1).count(),
+            "first placeholder removed"
+        );
+        assert_eq!(
+            1,
+            new_text.matches(&placeholder2).count(),
+            "second placeholder remains"
+        );
         assert_eq!(
             vec![AttachedImage {
                 path: path2,
-                placeholder: "[image 10x5 PNG]".to_string()
+                placeholder: "[image_dup2.png 10x5]".to_string()
             }],
             composer.attached_images,
             "one image mapping remains"
@@ -2741,7 +2790,12 @@ mod tests {
 
         let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
         assert!(needs_redraw);
-        assert!(composer.textarea.text().starts_with("[image 3x2 PNG] "));
+        assert!(
+            composer
+                .textarea
+                .text()
+                .starts_with("[codex_tui_test_paste_image.png 3x2] ")
+        );
 
         let imgs = composer.take_recent_submission_images();
         assert_eq!(imgs, vec![tmp_path]);
@@ -2851,6 +2905,76 @@ mod tests {
             result
         );
         assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn slash_path_input_submits_without_command_error() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer
+            .textarea
+            .set_text("/Users/example/project/src/main.rs");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        if let InputResult::Submitted(text) = result {
+            assert_eq!(text, "/Users/example/project/src/main.rs");
+        } else {
+            panic!("expected Submitted");
+        }
+        assert!(composer.textarea.is_empty());
+        match rx.try_recv() {
+            Ok(event) => panic!("unexpected event: {event:?}"),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+            Err(err) => panic!("unexpected channel state: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn slash_with_leading_space_submits_as_text() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.textarea.set_text(" /this-looks-like-a-command");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        if let InputResult::Submitted(text) = result {
+            assert_eq!(text, "/this-looks-like-a-command");
+        } else {
+            panic!("expected Submitted");
+        }
+        assert!(composer.textarea.is_empty());
+        match rx.try_recv() {
+            Ok(event) => panic!("unexpected event: {event:?}"),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+            Err(err) => panic!("unexpected channel state: {err:?}"),
+        }
     }
 
     #[test]

@@ -1034,20 +1034,20 @@ impl ChatWidget {
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                code: KeyCode::Char(c),
+                modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } => {
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => {
                 self.on_ctrl_c();
                 return;
             }
             KeyEvent {
-                code: KeyCode::Char('v'),
-                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char(c),
+                modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } => {
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
                 if let Ok((path, info)) = paste_image_to_temp_png() {
                     self.attach_image(path, info.width, info.height, info.encoded_format.label());
                 }
