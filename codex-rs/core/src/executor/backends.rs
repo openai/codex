@@ -72,7 +72,7 @@ impl ExecutionBackend for ApplyPatchBackend {
     ) -> Result<ExecParams, FunctionCallError> {
         match mode {
             ExecutionMode::ApplyPatch(exec) => {
-                let path_to_codex = if let Some(exe_path) = &config.codex_linux_sandbox_exe {
+                let path_to_codex = if let Some(exe_path) = &config.codex_exe {
                     exe_path.to_string_lossy().to_string()
                 } else {
                     env::current_exe()

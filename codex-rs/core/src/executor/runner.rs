@@ -30,19 +30,19 @@ use codex_otel::otel_event_manager::ToolDecisionSource;
 pub(crate) struct ExecutorConfig {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) sandbox_cwd: PathBuf,
-    pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) codex_exe: Option<PathBuf>,
 }
 
 impl ExecutorConfig {
     pub(crate) fn new(
         sandbox_policy: SandboxPolicy,
         sandbox_cwd: PathBuf,
-        codex_linux_sandbox_exe: Option<PathBuf>,
+        codex_exe: Option<PathBuf>,
     ) -> Self {
         Self {
             sandbox_policy,
             sandbox_cwd,
-            codex_linux_sandbox_exe,
+            codex_exe,
         }
     }
 }
@@ -227,7 +227,7 @@ impl Executor {
             sandbox,
             &config.sandbox_policy,
             &config.sandbox_cwd,
-            &config.codex_linux_sandbox_exe,
+            &config.codex_exe,
             stdout_stream,
         )
         .await
