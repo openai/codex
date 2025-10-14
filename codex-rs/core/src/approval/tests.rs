@@ -506,6 +506,18 @@ mod approval_tests {
         }
 
         #[test]
+        fn parse_to_ast_strips_inner_sudo_in_shell_scripts() {
+            let ast = parser::parse_to_ast(&cmd(&["bash", "-lc", "sudo rm -rf /"]));
+            let CommandAst::Sequence(simples) = ast else {
+                panic!("expected sequence ast");
+            };
+            pretty_assert_eq!(simples.len(), 1);
+            pretty_assert_eq!(simples[0].tool, "rm");
+            let category = classifier::classify_simple_ast(&simples[0]);
+            pretty_assert_eq!(category, CommandCategory::DeletesData);
+        }
+
+        #[test]
         fn build_ast_returns_tree_for_valid_script() {
             let script = "ls -l | grep src";
             let tree = build_ast(script).expect("expected tree");
