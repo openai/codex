@@ -381,6 +381,23 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_failure_message_falls_back_to_aggregated_output() {
+        let output = ExecToolCallOutput {
+            exit_code: 101,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new("aggregate text".to_string()),
+            duration: Duration::from_millis(10),
+            timed_out: false,
+        };
+        let err = SandboxErr::Denied {
+            output: Box::new(output),
+        };
+        let message = sandbox_failure_message(err);
+        assert_eq!(message, "failed in sandbox: aggregate text");
+    }
+
+    #[test]
     fn normalize_function_error_synthesizes_payload() {
         let err = FunctionCallError::RespondToModel("boom".to_string());
         let result: Result<ExecToolCallOutput, ExecError> = Err(ExecError::Function(err));

@@ -86,6 +86,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                             expected_env_value.to_string(),
                         )])),
                     },
+                    enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
                 },
@@ -232,8 +233,9 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
                 McpServerConfig {
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: server_url,
-                        bearer_token: None,
+                        bearer_token_env_var: None,
                     },
+                    enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
                 },
@@ -412,8 +414,9 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
                 McpServerConfig {
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: server_url,
-                        bearer_token: None,
+                        bearer_token_env_var: None,
                     },
+                    enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
                 },

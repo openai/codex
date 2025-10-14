@@ -148,21 +148,15 @@ impl OtelEventManager {
         response
     }
 
-    pub async fn log_sse_event<Next, Fut, E>(
+    pub fn log_sse_event<E>(
         &self,
-        next: Next,
-    ) -> Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>
-    where
-        Next: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>>,
+        response: &Result<Option<Result<StreamEvent, StreamError<E>>>, Elapsed>,
+        duration: Duration,
+    ) where
         E: Display,
     {
-        let start = std::time::Instant::now();
-        let response = next().await;
-        let duration = start.elapsed();
-
         match response {
-            Ok(Some(Ok(ref sse))) => {
+            Ok(Some(Ok(sse))) => {
                 if sse.data.trim() == "[DONE]" {
                     self.sse_event(&sse.event, duration);
                 } else {
@@ -191,7 +185,7 @@ impl OtelEventManager {
                     }
                 }
             }
-            Ok(Some(Err(ref error))) => {
+            Ok(Some(Err(error))) => {
                 self.sse_event_failed(None, duration, error);
             }
             Ok(None) => {}
@@ -199,8 +193,6 @@ impl OtelEventManager {
                 self.sse_event_failed(None, duration, &"idle timeout waiting for SSE");
             }
         }
-
-        response
     }
 
     fn sse_event(&self, kind: &str, duration: Duration) {

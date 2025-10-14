@@ -67,12 +67,12 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             rows.push(Box::new(path));
             rows.push(Box::new(RtLine::from("")));
             rows.push(Box::new(InsetRenderable::new(
-                Box::new(row.change),
+                row.change,
                 Insets::tlbr(0, 2, 0, 0),
             )));
         }
 
-        Box::new(ColumnRenderable::new(rows))
+        Box::new(ColumnRenderable::with(rows))
     }
 }
 
