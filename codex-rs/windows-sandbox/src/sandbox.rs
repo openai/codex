@@ -123,7 +123,7 @@ pub fn spawn_command_under_windows_low_il(
     } else {
         // Temporarily disable firewall installation while investigating setup failures.
         Some(
-            firewall::install_for_user(&user)
+            crate::firewall::install_for_user(&user)
                 .context("failed to install per-user firewall block rule")?,
         )
     };
