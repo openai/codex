@@ -127,6 +127,14 @@ impl ListSelectionView {
         s
     }
 
+    /// Return the currently selected item and its actual index (pre-filter), if any.
+    pub(crate) fn selected_item_info(&self) -> Option<(usize, &SelectionItem)> {
+        let visible_idx = self.state.selected_idx?;
+        let actual_idx = *self.filtered_indices.get(visible_idx)?;
+        let item = self.items.get(actual_idx)?;
+        Some((actual_idx, item))
+    }
+
     fn visible_len(&self) -> usize {
         self.filtered_indices.len()
     }
@@ -277,6 +285,10 @@ impl ListSelectionView {
 
 impl BottomPaneView for ListSelectionView {
     fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn as_any_ref(&self) -> &dyn Any {
         self
     }
     fn handle_key_event(&mut self, key_event: KeyEvent) {

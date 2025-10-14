@@ -12,6 +12,7 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Downcast helper to allow targeted updates in tests/UX without
     /// rebuilding entire views.
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn as_any_ref(&self) -> &dyn Any;
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
     fn handle_key_event(&mut self, _key_event: KeyEvent) {}

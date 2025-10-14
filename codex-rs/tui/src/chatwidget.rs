@@ -276,6 +276,8 @@ pub(crate) struct ChatWidget {
     prune_root_active: bool,
     advanced_index_map: HashMap<usize, usize>,
     pending_advanced_plan: Option<AdvancedPendingPlan>,
+    // Manual prune: pending plan after Enter in the manual list.
+    manual_pending_plan: Option<ManualPendingPlan>,
 }
 
 #[derive(Clone, Default)]
@@ -285,6 +287,13 @@ struct AdvancedPendingPlan {
     to_delete: Vec<usize>,
     before_count: usize,
     after_count: usize,
+}
+
+#[derive(Clone, Default)]
+struct ManualPendingPlan {
+    categories: Vec<codex_core::protocol::PruneCategory>,
+    label: String,
+    freed_pct: u8,
 }
 
 struct UserMessage {
@@ -328,6 +337,23 @@ impl ChatWidget {
             }
         }
         if included_total == 0 { 0 } else { ((cat_count * 100) / included_total) as u8 }
+    }
+    fn estimate_manual_prune_freed_pct_multi(
+        &self,
+        categories: &[codex_core::protocol::PruneCategory],
+    ) -> u8 {
+        let Some(list) = &self.last_context_items else { return 0; };
+        let mut included_total: u32 = 0;
+        let mut match_count: u32 = 0;
+        for item in list.iter() {
+            if item.included {
+                included_total = included_total.saturating_add(1);
+                if categories.iter().any(|c| *c == item.category) {
+                    match_count = match_count.saturating_add(1);
+                }
+            }
+        }
+        if included_total == 0 { 0 } else { ((match_count * 100) / included_total) as u8 }
     }
     fn advanced_marker_for(&self, item: &ContextItemSummary) -> &'static str {
         if self.prune_delete_indices.contains(&item.index) {
@@ -1008,6 +1034,7 @@ impl ChatWidget {
             prune_root_active: false,
             advanced_index_map: HashMap::new(),
             pending_advanced_plan: None,
+            manual_pending_plan: None,
         }
     }
 
@@ -1083,6 +1110,7 @@ impl ChatWidget {
             prune_root_active: false,
             advanced_index_map: HashMap::new(),
             pending_advanced_plan: None,
+            manual_pending_plan: None,
         }
     }
 
@@ -1969,6 +1997,8 @@ impl ChatWidget {
         use std::collections::HashMap;
         // Clear any Advanced state before switching to manual submenu (no transitions here).
         self.reset_advanced_prune_state();
+        // Start a fresh Manual session too.
+        self.reset_manual_prune_state();
         self.prune_root_active = false;
         let mut items: Vec<SelectionItem> = Vec::new();
 
@@ -2013,13 +2043,9 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: format!("Prune {label}"),
                 description: Some(description),
-                actions: vec![Box::new(move |tx: &AppEventSender| {
-                    tx.send(AppEvent::OpenPruneManualConfirm {
-                        category: cat.clone(),
-                        label: label_owned.clone(),
-                    });
-                })],
-                dismiss_on_select: true,
+                actions: Vec::new(),
+                dismiss_on_select: false,
+                search_value: Some(format!("MANUAL_CAT:{:?}|LABEL:{}", cat, label_owned)),
                 ..Default::default()
             });
         };
@@ -2035,12 +2061,12 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Manual Prune".to_string()),
             subtitle: None,
-            footer_hint: Some(ratatui::text::Line::from("enter: prune | esc: back")),
+            footer_hint: Some(ratatui::text::Line::from("enter: select | esc: back")),
             items,
             is_searchable: false,
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select categories to prune")),
-            on_enter_event: None,
+            on_enter_event: Some(AppEvent::ConfirmManualChanges),
             // Esc/back from Manual returns to the root prune menu.
             on_complete_event: Some(AppEvent::OpenPruneRoot),
         });
@@ -2100,6 +2126,108 @@ impl ChatWidget {
             on_complete_event: Some(AppEvent::OpenPruneManual),
         });
         // No immediate user feedback here; the confirm selection posts a toast.
+    }
+
+    pub(crate) fn confirm_manual_changes(&mut self) {
+        use codex_core::protocol::PruneCategory as PC;
+        // Discover currently selected manual category from the active list view.
+        let selected = self.bottom_pane.with_active_list_selection(|list| {
+            list.selected_item_info().map(|(_, it)| it.search_value.clone())
+        }).flatten();
+        let Some(search_value) = selected else {
+            // Nothing selected; prompt user.
+            self.add_info_message("Select a category to prune (use Up/Down).".to_string(), None);
+            return;
+        };
+        // Parse MANUAL_CAT and LABEL from search_value.
+        let mut category: Option<PC> = None;
+        let mut label: String = String::new();
+        for part in search_value.split('|') {
+            if let Some(rest) = part.strip_prefix("MANUAL_CAT:") {
+                category = match rest {
+                    "ToolOutput" => Some(PC::ToolOutput),
+                    "ToolCall" => Some(PC::ToolCall),
+                    "Reasoning" => Some(PC::Reasoning),
+                    "UserMessage" => Some(PC::UserMessage),
+                    "AssistantMessage" => Some(PC::AssistantMessage),
+                    _ => None,
+                };
+            } else if let Some(rest) = part.strip_prefix("LABEL:") {
+                label = rest.to_string();
+            }
+        }
+        let Some(cat) = category else {
+            self.add_info_message("Unsupported manual category selected.".to_string(), None);
+            return;
+        };
+        let freed_pct = self.estimate_manual_prune_freed_pct(cat.clone());
+        self.manual_pending_plan = Some(ManualPendingPlan { categories: vec![cat], label: label.clone(), freed_pct });
+        self.show_manual_confirm_prompt();
+    }
+
+    fn show_manual_confirm_prompt(&mut self) {
+        use codex_core::protocol::Op;
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let mut header = String::from("Confirm prune");
+        if let Some(plan) = &self.manual_pending_plan {
+            header = format!("Estimated context freed: ~{}%", plan.freed_pct);
+        }
+        // No — go back to the manual menu
+        items.push(SelectionItem {
+            name: "No, go back".to_string(),
+            description: Some("Return to manual prune menu".to_string()),
+            actions: vec![Box::new(|tx: &AppEventSender| {
+                tx.send(AppEvent::OpenPruneManual);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        // Yes — apply prune for the selected category
+        if let Some(plan) = &self.manual_pending_plan {
+            let label_clone = plan.label.clone();
+            items.push(SelectionItem {
+                name: format!("Yes, prune {}", plan.label),
+                description: Some("Remove matching items and refresh context".to_string()),
+                actions: vec![Box::new(|tx: &AppEventSender| {
+                    tx.send(AppEvent::ApplyManualPrune);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Confirm Prune".to_string()),
+            subtitle: None,
+            footer_hint: Some(ratatui::text::Line::from("enter: select | esc: back")),
+            items,
+            is_searchable: false,
+            search_placeholder: None,
+            header: Box::new(ratatui::text::Line::from(header)),
+            on_enter_event: None,
+            // Esc/back from confirm returns to the manual menu.
+            on_complete_event: Some(AppEvent::OpenPruneManual),
+        });
+    }
+
+    pub(crate) fn apply_manual_prune(&mut self) {
+        use codex_core::protocol::Op;
+        if let Some(plan) = self.manual_pending_plan.take() {
+            if !plan.categories.is_empty() {
+                self.app_event_tx.send(AppEvent::CodexOp(Op::PruneContext {
+                    categories: plan.categories.clone(),
+                    range: codex_core::protocol::PruneRange::All,
+                }));
+            }
+            // Align to Advanced: do not force refresh; just show toast.
+            self.add_info_message(
+                format!("Pruned {} from context: ~{}% freed.", plan.label, plan.freed_pct),
+                None,
+            );
+        }
+    }
+
+    fn reset_manual_prune_state(&mut self) {
+        self.manual_pending_plan = None;
     }
 
     fn notify(&mut self, notification: Notification) {

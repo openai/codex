@@ -410,6 +410,12 @@ impl App {
             AppEvent::OpenPruneManual => {
                 self.chat_widget.open_prune_manual_menu();
             }
+            AppEvent::ConfirmManualChanges => {
+                self.chat_widget.confirm_manual_changes();
+            }
+            AppEvent::ApplyManualPrune => {
+                self.chat_widget.apply_manual_prune();
+            }
             AppEvent::OpenPruneManualConfirm { category, label } => {
                 self.chat_widget.open_prune_manual_confirm(category, label);
             }
