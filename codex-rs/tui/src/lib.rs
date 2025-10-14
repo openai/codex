@@ -79,6 +79,49 @@ pub mod test_backend;
 #[cfg(not(debug_assertions))]
 mod updates;
 
+#[cfg(not(debug_assertions))]
+#[derive(Copy, Clone)]
+enum NodePackageManager {
+    Bun,
+    Npm,
+    Yarn,
+}
+
+#[cfg(not(debug_assertions))]
+fn detect_node_package_manager() -> NodePackageManager {
+    fn parse_hint(hint: &str) -> Option<NodePackageManager> {
+        let lower = hint.to_ascii_lowercase();
+
+        if lower.contains("bun") {
+            Some(NodePackageManager::Bun)
+        } else if lower.contains("yarn") {
+            Some(NodePackageManager::Yarn)
+        } else if lower.contains("npm") {
+            Some(NodePackageManager::Npm)
+        } else {
+            None
+        }
+    }
+
+    for var in ["npm_execpath", "NPM_EXECPATH"] {
+        if let Ok(value) = std::env::var(var)
+            && let Some(package_manager) = parse_hint(&value)
+        {
+            return package_manager;
+        }
+    }
+
+    for var in ["npm_config_user_agent", "NPM_CONFIG_USER_AGENT"] {
+        if let Ok(value) = std::env::var(var)
+            && let Some(package_manager) = parse_hint(&value)
+        {
+            return package_manager;
+        }
+    }
+
+    NodePackageManager::Npm
+}
+
 use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::WSL_INSTRUCTIONS;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
@@ -311,6 +354,7 @@ async fn run_ratatui_app(
         let current_version = env!("CARGO_PKG_VERSION");
         let exe = std::env::current_exe()?;
         let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
+        let package_manager = managed_by_npm.then(detect_node_package_manager);
 
         let mut content_lines: Vec<Line<'static>> = vec![
             Line::from(vec![
@@ -330,11 +374,15 @@ async fn run_ratatui_app(
             Line::from(""),
         ];
 
-        if managed_by_npm {
-            let npm_cmd = "npm install -g @openai/codex@latest";
+        if let Some(package_manager) = package_manager {
+            let command = match package_manager {
+                NodePackageManager::Bun => "bun add -g @openai/codex@latest",
+                NodePackageManager::Npm => "npm install -g @openai/codex@latest",
+                NodePackageManager::Yarn => "yarn global add @openai/codex@latest",
+            };
             content_lines.push(Line::from(vec![
                 "Run ".into(),
-                npm_cmd.cyan(),
+                command.cyan(),
                 " to update.".into(),
             ]));
         } else if cfg!(target_os = "macos")
