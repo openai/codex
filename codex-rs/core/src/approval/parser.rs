@@ -4,24 +4,6 @@ use crate::approval::rules_index;
 use crate::approval::shell_parser;
 use std::path::Path;
 
-/// Return the subslice after dropping all leading `sudo` tokens.
-fn strip_leading_sudo_slice(argv: &[String]) -> &[String] {
-    let mut index = 0;
-    while index < argv.len() && argv[index] == "sudo" {
-        index += 1;
-    }
-    &argv[index..]
-}
-
-/// Return a new Vec without leading `sudo` tokens.
-pub(crate) fn strip_leading_sudo_vec(argv: Vec<String>) -> Vec<String> {
-    let first_non_sudo = argv
-        .iter()
-        .position(|arg| arg != "sudo")
-        .unwrap_or(argv.len());
-    argv.into_iter().skip(first_non_sudo).collect()
-}
-
 /// Parse argv into an AST:
 /// - Strip repeated leading `sudo`
 /// - Try to unwrap shell scripts (any tool with `-c` or `-lc` pattern)
@@ -32,7 +14,11 @@ pub(crate) fn parse_to_ast(argv: &[String]) -> CommandAst {
     }
 
     // Normalize away leading `sudo` (possibly repeated)
-    let argv = strip_leading_sudo_slice(argv);
+    let mut i = 0;
+    while i < argv.len() && argv[i] == "sudo" {
+        i += 1;
+    }
+    let argv = &argv[i..];
 
     if argv.is_empty() {
         return CommandAst::Unknown(vec![]);
@@ -46,11 +32,7 @@ pub(crate) fn parse_to_ast(argv: &[String]) -> CommandAst {
         && matches!(argv[1].as_str(), "-c" | "-lc")
         && let Some(simple_vecs) = shell_parser::parse_shell_script_commands(argv)
     {
-        let simples = simple_vecs
-            .into_iter()
-            .map(strip_leading_sudo_vec)
-            .map(normalize_simple)
-            .collect();
+        let simples = simple_vecs.into_iter().map(normalize_simple).collect();
         return CommandAst::Sequence(simples);
     }
 
@@ -63,19 +45,6 @@ pub(crate) fn parse_to_ast(argv: &[String]) -> CommandAst {
 /// - Split flags vs operands at `--`
 /// - Subcommand = first non-flag token before `--`
 pub fn normalize_simple(argv: Vec<String>) -> SimpleAst {
-    let argv = strip_leading_sudo_vec(argv);
-    if argv.is_empty() {
-        return SimpleAst {
-            tool: String::new(),
-            subcommand: None,
-            flags: Vec::new(),
-            operands: Vec::new(),
-            raw: Vec::new(),
-        };
-    }
-
-    let raw = argv.clone();
-
     let tool_full = argv.first().map(std::string::String::as_str).unwrap_or("");
     let tool = Path::new(tool_full)
         .file_name()
@@ -126,10 +95,10 @@ pub fn normalize_simple(argv: Vec<String>) -> SimpleAst {
         operands.extend(argv[(term + 1)..].to_vec());
     }
     SimpleAst {
-        raw,
         tool,
         subcommand,
         flags,
         operands,
+        raw: argv,
     }
 }
