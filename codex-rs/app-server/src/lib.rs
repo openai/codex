@@ -48,6 +48,8 @@ pub async fn run_main(
 
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
+    // Match the websocket bridge by bounding the outgoing queue; this avoids
+    // unbounded buffering if stdout's reader ever stalls.
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
 
     // Task: read from stdin, push to `incoming_tx`.

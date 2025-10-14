@@ -14,6 +14,8 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_protocol::protocol::SessionSource;
 
+// We keep the queues bounded so a stalled remote client cannot accumulate
+// unbounded JSON output in this process.
 const OUTGOING_MESSAGE_BUFFER: usize = 128;
 const JSON_MESSAGE_BUFFER: usize = 128;
 
@@ -30,6 +32,8 @@ pub struct AppServerEngine {
 impl AppServerEngine {
     pub fn new(config: Arc<Config>, codex_linux_sandbox_exe: Option<PathBuf>) -> Self {
         let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
+        // Sessions originating from the websocket bridge should be tagged as remote
+        // so rollouts and analytics can distinguish them from VS Code or CLI traffic.
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
             SessionSource::WSRemote,
@@ -57,6 +61,8 @@ impl AppServerEngine {
             while let Some(msg) = rx_outgoing.recv().await {
                 match serde_json::to_value(msg) {
                     Ok(value) => {
+                        // Close the task if the client has gone away; this prevents
+                        // us from queueing data the transport will never read.
                         if tx_json.send(value).await.is_err() {
                             break;
                         }
@@ -64,6 +70,7 @@ impl AppServerEngine {
                     Err(err) => {
                         // No direct logging here to keep API transport-agnostic.
                         // Dropping the message is acceptable; client cannot recover it anyway.
+                        // We still propagate a JSON error once, but bail if the receiver closed.
                         if tx_json
                             .send(serde_json::json!({
                                 "error": format!("failed to serialize outgoing message: {err}"),

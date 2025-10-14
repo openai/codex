@@ -19,6 +19,8 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 /// Sends messages to the client and manages request callbacks.
 pub(crate) struct OutgoingMessageSender {
     next_request_id: AtomicI64,
+    // Using a bounded sender keeps backpressure when the client stops draining
+    // the websocket, preventing the server from buffering unbounded messages.
     sender: mpsc::Sender<OutgoingMessage>,
     request_id_to_callback: Mutex<HashMap<RequestId, oneshot::Sender<Result>>>,
 }
@@ -47,6 +49,7 @@ impl OutgoingMessageSender {
         let outgoing_message =
             OutgoingMessage::Request(request.request_with_id(outgoing_message_id.clone()));
         if self.sender.send(outgoing_message).await.is_err() {
+            // The receiver closed, so drop the pending callback to avoid leaking it.
             let mut request_id_to_callback = self.request_id_to_callback.lock().await;
             request_id_to_callback.remove_entry(&outgoing_message_id);
         }
