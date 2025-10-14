@@ -338,23 +338,6 @@ impl ChatWidget {
         }
         if included_total == 0 { 0 } else { ((cat_count * 100) / included_total) as u8 }
     }
-    fn estimate_manual_prune_freed_pct_multi(
-        &self,
-        categories: &[codex_core::protocol::PruneCategory],
-    ) -> u8 {
-        let Some(list) = &self.last_context_items else { return 0; };
-        let mut included_total: u32 = 0;
-        let mut match_count: u32 = 0;
-        for item in list.iter() {
-            if item.included {
-                included_total = included_total.saturating_add(1);
-                if categories.iter().any(|c| *c == item.category) {
-                    match_count = match_count.saturating_add(1);
-                }
-            }
-        }
-        if included_total == 0 { 0 } else { ((match_count * 100) / included_total) as u8 }
-    }
     fn advanced_marker_for(&self, item: &ContextItemSummary) -> &'static str {
         if self.prune_delete_indices.contains(&item.index) {
             "[D]"
@@ -2040,12 +2023,18 @@ impl ChatWidget {
             };
             let label_owned = label.to_string();
 
+            let event_cat = cat.clone();
+            let event_label = label_owned.clone();
             items.push(SelectionItem {
                 name: format!("Prune {label}"),
                 description: Some(description),
-                actions: Vec::new(),
-                dismiss_on_select: false,
-                search_value: Some(format!("MANUAL_CAT:{:?}|LABEL:{}", cat, label_owned)),
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::ConfirmManualChanges {
+                        category: event_cat.clone(),
+                        label: event_label.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
                 ..Default::default()
             });
         };
@@ -2066,104 +2055,22 @@ impl ChatWidget {
             is_searchable: false,
             search_placeholder: None,
             header: Box::new(ratatui::text::Line::from("Select categories to prune")),
-            on_enter_event: Some(AppEvent::ConfirmManualChanges),
+            on_enter_event: None,
             // Esc/back or Enter complete the list; defer decision to on_prune_manual_closed.
             on_complete_event: Some(AppEvent::PruneManualClosed),
         });
     }
-
-    pub(crate) fn open_prune_manual_confirm(
+    pub(crate) fn confirm_manual_changes(
         &mut self,
         category: codex_core::protocol::PruneCategory,
         label: String,
     ) {
-        use codex_core::protocol::Op;
-        self.prune_root_active = false;
-        let mut items: Vec<SelectionItem> = Vec::new();
-        let header = format!("Confirm prune: remove all {label} from the current context?");
-
-        // No — go back to the manual menu
-        items.push(SelectionItem {
-            name: "No, go back".to_string(),
-            description: Some("Return to manual prune menu".to_string()),
-            actions: vec![Box::new(|tx: &AppEventSender| {
-                tx.send(AppEvent::OpenPruneManual);
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
+        let freed_pct = self.estimate_manual_prune_freed_pct(category.clone());
+        self.manual_pending_plan = Some(ManualPendingPlan {
+            categories: vec![category],
+            label,
+            freed_pct,
         });
-
-        // Yes — apply prune for the selected category (show estimated freed %)
-        let label_clone = label.clone();
-        let freed_pct_est = self.estimate_manual_prune_freed_pct(category.clone());
-        items.push(SelectionItem {
-            name: format!("Yes, prune {label}"),
-            description: Some("Remove matching items and refresh context".to_string()),
-            actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::CodexOp(Op::PruneContext {
-                    categories: vec![category.clone()],
-                    range: codex_core::protocol::PruneRange::All,
-                }));
-                tx.send(AppEvent::CodexOp(Op::GetContextItems));
-                tx.send(AppEvent::ShowInfoMessage(format!(
-                    "Pruned {label_clone} from context: ~{freed_pct_est}% freed."
-                )));
-            })],
-            dismiss_on_select: true,
-            ..Default::default()
-        });
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Confirm Prune".to_string()),
-            subtitle: None,
-            footer_hint: Some(ratatui::text::Line::from("enter: select | esc: back")),
-            items,
-            is_searchable: false,
-            search_placeholder: None,
-            header: Box::new(ratatui::text::Line::from(header)),
-            on_enter_event: None,
-            // Esc/back from confirm returns to the manual menu.
-            on_complete_event: Some(AppEvent::OpenPruneManual),
-        });
-        // No immediate user feedback here; the confirm selection posts a toast.
-    }
-
-    pub(crate) fn confirm_manual_changes(&mut self) {
-        use codex_core::protocol::PruneCategory as PC;
-        // Discover currently selected manual category from the active list view.
-        let selected = self
-            .bottom_pane
-            .with_active_list_selection(|list| {
-                list.selected_item_info().and_then(|(_, it)| it.search_value.clone())
-            });
-        let Some(search_value) = selected.flatten() else {
-            // Nothing selected; prompt user.
-            self.add_info_message("Select a category to prune (use Up/Down).".to_string(), None);
-            return;
-        };
-        // Parse MANUAL_CAT and LABEL from search_value.
-        let mut category: Option<PC> = None;
-        let mut label: String = String::new();
-        for part in search_value.split('|') {
-            if let Some(rest) = part.strip_prefix("MANUAL_CAT:") {
-                category = match rest {
-                    "ToolOutput" => Some(PC::ToolOutput),
-                    "ToolCall" => Some(PC::ToolCall),
-                    "Reasoning" => Some(PC::Reasoning),
-                    "UserMessage" => Some(PC::UserMessage),
-                    "AssistantMessage" => Some(PC::AssistantMessage),
-                    _ => None,
-                };
-            } else if let Some(rest) = part.strip_prefix("LABEL:") {
-                label = rest.to_string();
-            }
-        }
-        let Some(cat) = category else {
-            self.add_info_message("Unsupported manual category selected.".to_string(), None);
-            return;
-        };
-        let freed_pct = self.estimate_manual_prune_freed_pct(cat.clone());
-        self.manual_pending_plan = Some(ManualPendingPlan { categories: vec![cat], label: label.clone(), freed_pct });
         self.show_manual_confirm_prompt();
     }
 

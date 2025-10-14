@@ -403,22 +403,6 @@ impl BottomPane {
         false
     }
 
-    /// If the active view is a ListSelectionView, pass an immutable reference to it to `f`
-    /// and return the function's result.
-    pub(crate) fn with_active_list_selection<R, F>(&mut self, f: F) -> Option<R>
-    where
-        F: FnOnce(&list_selection_view::ListSelectionView) -> R,
-    {
-        if let Some(view) = self.view_stack.last_mut()
-            && let Some(list) = view
-                .as_any_ref()
-                .downcast_ref::<list_selection_view::ListSelectionView>()
-        {
-            return Some(f(list));
-        }
-        None
-    }
-
     /// Update the queued messages shown under the status header.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages = queued.clone();

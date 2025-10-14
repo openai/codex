@@ -97,17 +97,13 @@ pub(crate) enum AppEvent {
     OpenPruneManual,
     /// Manual prune list closed (via Enter or Esc).
     PruneManualClosed,
-    /// Confirm the currently selected manual prune category.
-    ConfirmManualChanges,
-    /// Apply the pending manual prune plan.
-    ApplyManualPrune,
-    /// Open the root prune menu.
-    OpenPruneRoot,
-    /// Open a confirmation dialog for manual prune of a specific category.
-    OpenPruneManualConfirm {
+    /// Confirm the chosen manual prune category.
+    ConfirmManualChanges {
         category: codex_core::protocol::PruneCategory,
         label: String,
     },
+    /// Apply the pending manual prune plan.
+    ApplyManualPrune,
     /// Close the advanced prune view.
     PruneAdvancedClosed,
     /// Root prune menu dismissed (via Esc or completion).
@@ -124,9 +120,6 @@ pub(crate) enum AppEvent {
     ConfirmAdvancedChanges,
     /// Apply staged advanced prune after user confirmation.
     ApplyAdvancedPrune,
-
-    /// Show an informational toast/message in the transcript.
-    ShowInfoMessage(String),
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),

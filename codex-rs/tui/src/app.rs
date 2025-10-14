@@ -386,12 +386,6 @@ impl App {
             AppEvent::OpenPruneAdvanced => {
                 self.chat_widget.open_prune_advanced();
             }
-            AppEvent::OpenPruneRoot => {
-                // Ensure any advanced state is cleared before showing the root menu again.
-                // Avoid calling on_prune_advanced_closed() here to prevent re-entrancy.
-                self.chat_widget.reset_advanced_prune_state();
-                self.chat_widget.open_prune_menu();
-            }
             AppEvent::PruneAdvancedClosed => {
                 self.chat_widget.on_prune_advanced_closed();
             }
@@ -413,14 +407,11 @@ impl App {
             AppEvent::PruneManualClosed => {
                 self.chat_widget.on_prune_manual_closed();
             }
-            AppEvent::ConfirmManualChanges => {
-                self.chat_widget.confirm_manual_changes();
+            AppEvent::ConfirmManualChanges { category, label } => {
+                self.chat_widget.confirm_manual_changes(category, label);
             }
             AppEvent::ApplyManualPrune => {
                 self.chat_widget.apply_manual_prune();
-            }
-            AppEvent::OpenPruneManualConfirm { category, label } => {
-                self.chat_widget.open_prune_manual_confirm(category, label);
             }
             AppEvent::ApplyAdvancedPrune => {
                 self.chat_widget.apply_advanced_prune();
@@ -428,9 +419,6 @@ impl App {
             AppEvent::FinalizePruneOnShutdown => self.finalize_prune_on_shutdown().await,
             AppEvent::RestoreContextFromBackup => {
                 self.restore_context_from_backup().await;
-            }
-            AppEvent::ShowInfoMessage(msg) => {
-                self.chat_widget.add_info_message(msg, None);
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {

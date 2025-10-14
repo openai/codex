@@ -220,7 +220,6 @@ impl ApprovalOverlay {
 
 impl BottomPaneView for ApprovalOverlay {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    fn as_any_ref(&self) -> &dyn std::any::Any { self }
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.try_handle_shortcut(&key_event) {
             return;
