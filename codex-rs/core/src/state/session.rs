@@ -243,12 +243,11 @@ fn first_text(items: &[ContentItem]) -> Option<&str> {
 }
 
 fn starts_with_case_insensitive(text: &str, prefix: &str) -> bool {
-    let tl = text.len();
     let pl = prefix.len();
-    if tl < pl {
-        return false;
+    match text.get(..pl) {
+        Some(head) => head.eq_ignore_ascii_case(prefix),
+        None => false, // not enough bytes or not on a char boundary — cannot match
     }
-    text[..pl].eq_ignore_ascii_case(prefix)
 }
 
 fn preview_for(item: &ResponseItem) -> String {

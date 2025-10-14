@@ -1625,6 +1625,9 @@ impl ChatWidget {
     /// User requested the non-destructive advanced prune view. Set a pending flag
     /// so that when the ContextItems event arrives, we render the view.
     pub(crate) fn open_prune_advanced(&mut self) {
+        // Start a fresh Advanced session: clear any previous pending plan/index map
+        // so backing out of the confirm dialog and re-entering does not trap the user.
+        self.reset_advanced_prune_state();
         self.prune_root_active = false;
         self.pending_prune_advanced = true;
         // If we already have a cached list from a recent refresh, render immediately
@@ -1636,16 +1639,16 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_prune_advanced_closed(&mut self) {
-        self.pending_prune_advanced = false;
-        self.pending_advanced_plan = None;
-        self.advanced_index_map.clear();
-        if self.closing_advanced_for_confirm {
-            // Clear flag and do not reopen the root menu; the confirm popup is now active.
-            self.closing_advanced_for_confirm = false;
-        } else {
-            // Esc/backtrack from Advanced should return to the root prune menu.
-            self.open_prune_menu();
+        // If we have a pending plan, this close was triggered by Enter to show confirm.
+        // Keep the plan intact; just let the confirm popup proceed.
+        if self.pending_advanced_plan.is_some() {
+            return;
         }
+        // Otherwise (Esc/back), clear any transient advanced state and return to chat.
+        self.reset_advanced_prune_state();
+        // Restore previous behavior: Esc from Advanced should reopen the prune root menu
+        // so the user can pick another action.
+        self.open_prune_menu();
     }
 
     pub(crate) fn on_prune_root_closed(&mut self) {
@@ -1694,7 +1697,7 @@ impl ChatWidget {
     pub(crate) fn confirm_advanced_changes(&mut self) {
         // Build plan and show confirmation dialog.
         self.pending_prune_advanced = false;
-        self.closing_advanced_for_confirm = true;
+        self.closing_advanced_for_confirm = false;
         let mut to_include: Vec<usize> = Vec::new();
         let mut to_exclude: Vec<usize> = Vec::new();
         let mut before_count: usize = 0;
@@ -1725,6 +1728,8 @@ impl ChatWidget {
             before_count,
             after_count,
         });
+        // Show the confirmation popup immediately; the BottomPane will dismiss the Advanced view
+        // right after handling Enter, and the new popup will take focus.
         self.show_advanced_confirm_prompt();
     }
 
@@ -1888,15 +1893,22 @@ impl ChatWidget {
         });
     }
 
+    /// Reset any advanced state without triggering menu transitions.
+    pub(crate) fn reset_advanced_prune_state(&mut self) {
+        self.pending_prune_advanced = false;
+        self.pending_advanced_plan = None;
+        self.advanced_index_map.clear();
+    }
+
     /// Open the prune menu with common actions: advanced, manual by category, and restore.
     pub(crate) fn open_prune_menu(&mut self) {
         use codex_core::protocol::Op;
 
         let mut items: Vec<SelectionItem> = Vec::new();
 
-        // If an advanced-prune session was pending/open, mark it closed before opening the root menu.
-        // Switching to the root menu should not cause Advanced to reopen on the next context refresh.
-        self.on_prune_advanced_closed();
+        // If an advanced-prune session was pending/open, clear state before opening the root menu.
+        // Avoid calling on_prune_advanced_closed() here to prevent re-entrancy/recursion.
+        self.reset_advanced_prune_state();
         self.prune_root_active = true;
 
         // Advanced prune (non-destructive by default)
@@ -1955,8 +1967,8 @@ impl ChatWidget {
     pub(crate) fn open_prune_manual_menu(&mut self) {
         use codex_core::protocol::PruneCategory as PC;
         use std::collections::HashMap;
-        // Close Advanced state if it was pending/open before switching to manual submenu.
-        self.on_prune_advanced_closed();
+        // Clear any Advanced state before switching to manual submenu (no transitions here).
+        self.reset_advanced_prune_state();
         self.prune_root_active = false;
         let mut items: Vec<SelectionItem> = Vec::new();
 

@@ -388,7 +388,8 @@ impl App {
             }
             AppEvent::OpenPruneRoot => {
                 // Ensure any advanced state is cleared before showing the root menu again.
-                self.chat_widget.on_prune_advanced_closed();
+                // Avoid calling on_prune_advanced_closed() here to prevent re-entrancy.
+                self.chat_widget.reset_advanced_prune_state();
                 self.chat_widget.open_prune_menu();
             }
             AppEvent::PruneAdvancedClosed => {
