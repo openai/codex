@@ -1738,16 +1738,28 @@ pub(crate) async fn run_task(
                     processed_items,
                     total_token_usage,
                 } = turn_output;
-                let limit = turn_context
+                let auto_compact_threshold = turn_context
                     .client
                     .get_auto_compact_token_limit()
-                    .unwrap_or(i64::MAX);
+                    .and_then(|limit| {
+                        if limit.is_negative() {
+                            None
+                        } else {
+                            Some(limit as u64)
+                        }
+                    });
+                let model_context_window = turn_context.client.get_model_context_window();
                 let total_usage_tokens = total_token_usage
                     .as_ref()
                     .map(TokenUsage::tokens_in_context_window);
-                let token_limit_reached = total_usage_tokens
-                    .map(|tokens| (tokens as i64) >= limit)
-                    .unwrap_or(false);
+                let context_window_reached = matches!(
+                    (total_usage_tokens, model_context_window),
+                    (Some(tokens), Some(window)) if tokens >= window
+                );
+                let auto_compact_threshold_reached = matches!(
+                    (total_usage_tokens, auto_compact_threshold),
+                    (Some(tokens), Some(threshold)) if tokens >= threshold
+                );
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
                 for processed_response_item in processed_items {
@@ -1852,8 +1864,27 @@ pub(crate) async fn run_task(
                     }
                 }
 
-                if token_limit_reached {
-                    let limit_str = limit.to_string();
+                if context_window_reached {
+                    let limit_str = model_context_window
+                        .map(|limit| limit.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let current_tokens = total_usage_tokens
+                        .map(|tokens| tokens.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let event = Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!(
+                                "Conversation reached the model context window (limit {limit_str}, current {current_tokens}). Lower your auto-compaction threshold under /auto-compact or start a new session."
+                            ),
+                        }),
+                    };
+                    sess.send_event(event).await;
+                    break;
+                } else if auto_compact_threshold_reached {
+                    let limit_str = auto_compact_threshold
+                        .map(|limit| limit.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
                     let current_tokens = total_usage_tokens
                         .map(|tokens| tokens.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
@@ -1864,7 +1895,7 @@ pub(crate) async fn run_task(
                                     id: sub_id.clone(),
                                     msg: EventMsg::Error(ErrorEvent {
                                         message: format!(
-                                            "Conversation is still above the token limit after automatic summarization (limit {limit_str}, current {current_tokens}). Please start a new session or trim your input."
+                                            "Conversation is still above the auto-compaction threshold after automatic summarization (threshold {limit_str}, current {current_tokens}). Please start a new session or trim your input."
                                         ),
                                     }),
                                 };
@@ -1884,7 +1915,7 @@ pub(crate) async fn run_task(
                                 id: sub_id.clone(),
                                 msg: EventMsg::Error(ErrorEvent {
                                     message: format!(
-                                        "Conversation reached the token limit (limit {limit_str}, current {current_tokens}). Auto-compaction is set to manual; run /compact when you are ready or start a new session."
+                                        "Conversation reached the auto-compaction threshold (threshold {limit_str}, current {current_tokens}). Auto-compaction is set to manual; run /compact when you are ready or start a new session."
                                     ),
                                 }),
                             };
@@ -1913,35 +1944,13 @@ pub(crate) async fn run_task(
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let mut error_message = e.to_string();
-                let mut handled = false;
-                if let CodexErr::Stream(message, _) = &e {
-                    if is_context_window_error(message) {
-                        match turn_context.client.get_auto_compact_mode() {
-                            AutoCompactMode::Auto => {
-                                if auto_retry_in_progress {
-                                    auto_retry_in_progress = false;
-                                    error_message = format!(
-                                        "{} Automatic summarization couldn't shrink the conversation below the limit. Try lowering the auto-compact limit, trimming your prompt, or starting a new session.",
-                                        message
-                                    );
-                                } else {
-                                    auto_retry_in_progress = true;
-                                    compact::run_inline_auto_compact_task(
-                                        sess.clone(),
-                                        turn_context.clone(),
-                                    )
-                                    .await;
-                                    handled = true;
-                                }
-                            }
-                            AutoCompactMode::Manual => {
-                                error_message = format!(
-                                    "{} Auto-compaction is set to manual; run /compact (or set a custom limit under /auto-compact) before retrying.",
-                                    message
-                                );
-                            }
-                        }
-                    }
+                let handled = false;
+                if let CodexErr::Stream(message, _) = &e
+                    && is_context_window_error(message)
+                {
+                    error_message = format!(
+                        "{message} Lower your auto-compaction threshold under /auto-compact or start a new session."
+                    );
                 }
 
                 if handled {

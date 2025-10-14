@@ -21,16 +21,17 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use wiremock::Mock;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
@@ -335,8 +336,6 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
     codex
         .submit(Op::UserInput {
             items: vec![InputItem::Text {
@@ -410,6 +409,116 @@ async fn auto_compact_runs_after_token_limit_hit() {
         last_text, SUMMARIZATION_PROMPT,
         "auto compact should send the summarization prompt as a user message",
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_window_prompts_lower_limit_when_threshold_high() {
+    skip_if_sandbox!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SECOND_LARGE_REPLY),
+        ev_completed_with_tokens("r2", 230_000),
+    ]);
+
+    let first_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(FIRST_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(first_matcher)
+        .respond_with(sse_response(sse1))
+        .mount(&server)
+        .await;
+
+    let second_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(SECOND_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(second_matcher)
+        .respond_with(sse_response(sse2))
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_auto_compact_token_limit = Some(400_000);
+    config.model_context_window = Some(200_000);
+    let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: FIRST_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: SECOND_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    let error = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::Error(ErrorEvent { message }) if message.contains(
+                "Lower your auto-compaction threshold"
+            )
+        )
+    })
+    .await;
+
+    let EventMsg::Error(ErrorEvent { message }) = error else {
+        panic!("expected error event prompting to lower limit");
+    };
+    assert!(
+        message.contains("model context window"),
+        "error message should mention the context window"
+    );
+
+    // Attempt to drain any trailing completion event, ignoring timeouts when none arrive.
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(100), codex.next_event()).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "context window hit should not trigger auto-compact request"
+    );
+    for req in &requests {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        assert!(
+            !body.contains("You have exceeded the maximum number of tokens"),
+            "context window overflow should not enqueue a summarization prompt"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -701,6 +810,9 @@ async fn auto_compact_manual_mode_emits_warning_without_compaction() {
         panic!("expected manual auto-compact warning");
     }
 
+    // Attempt to drain any trailing completion event, ignoring timeouts when none arrive.
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(100), codex.next_event()).await;
+
     let requests = server.received_requests().await.unwrap();
     assert_eq!(
         requests.len(),
@@ -710,7 +822,7 @@ async fn auto_compact_manual_mode_emits_warning_without_compaction() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_compact_retries_after_context_window_failure() {
+async fn context_window_failure_prompts_lower_limit_without_retry() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -732,16 +844,7 @@ async fn auto_compact_retries_after_context_window_failure() {
     });
 
     let sse_failure = sse(vec![failure_event]);
-    let sse_summary = sse(vec![
-        ev_assistant_message("m-summary", SUMMARY_TEXT),
-        ev_completed_with_tokens("resp_summary", 100),
-    ]);
-    let sse_success = sse(vec![
-        ev_assistant_message("m-success", FINAL_REPLY),
-        ev_completed_with_tokens("resp_success", 120_000),
-    ]);
-
-    mount_sse_sequence(&server, vec![sse_failure, sse_summary, sse_success]).await;
+    mount_sse_once(&server, sse_failure).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -768,31 +871,29 @@ async fn auto_compact_retries_after_context_window_failure() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    let error = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::Error(ErrorEvent { message }) if message.contains(
+                "Lower your auto-compaction threshold"
+            )
+        )
+    })
+    .await;
+
+    let EventMsg::Error(ErrorEvent { message }) = error else {
+        panic!("expected context-window error prompting user to lower limit");
+    };
+    assert!(
+        message.contains("context window"),
+        "context-window failure should reference the limit"
+    );
 
     let requests = server.received_requests().await.unwrap();
     assert_eq!(
         requests.len(),
-        3,
-        "context window failure should trigger inline auto-compaction and retry"
-    );
-
-    let bodies: Vec<String> = requests
-        .iter()
-        .map(|req| String::from_utf8_lossy(&req.body).into_owned())
-        .collect();
-
-    assert!(
-        bodies[1].contains("You have exceeded the maximum number of tokens"),
-        "second request should run the summarization prompt"
-    );
-    assert!(
-        !bodies[0].contains("You have exceeded the maximum number of tokens"),
-        "initial request should be the user turn"
-    );
-    assert!(
-        bodies[2].contains(FIRST_AUTO_MSG),
-        "final retry should include the original user prompt"
+        1,
+        "context-window failure should not retry automatically"
     );
 }
 

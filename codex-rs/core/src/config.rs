@@ -602,12 +602,12 @@ fn ensure_table_entry<'a>(parent: &'a mut toml_edit::Table, key: &str) -> &'a mu
 }
 
 fn remove_threshold_tokens(parent: &mut toml_edit::Table) {
-    if let Some(auto_item) = parent.get_mut("auto_compact") {
-        if let Some(auto_table) = auto_item.as_table_mut() {
-            auto_table.remove("threshold_tokens");
-            if auto_table.is_empty() {
-                parent.remove("auto_compact");
-            }
+    if let Some(auto_item) = parent.get_mut("auto_compact")
+        && let Some(auto_table) = auto_item.as_table_mut()
+    {
+        auto_table.remove("threshold_tokens");
+        if auto_table.is_empty() {
+            parent.remove("auto_compact");
         }
     }
 }
@@ -2095,7 +2095,6 @@ threshold_tokens = 150000
         cwd: TempDir,
         codex_home: TempDir,
         cfg: ConfigToml,
-        model_provider_map: HashMap<String, ModelProviderInfo>,
         openai_provider: ModelProviderInfo,
         openai_chat_completions_provider: ModelProviderInfo,
     }
@@ -2197,7 +2196,6 @@ model_verbosity = "high"
             cwd: cwd_temp_dir,
             codex_home: codex_home_temp_dir,
             cfg,
-            model_provider_map,
             openai_provider,
             openai_chat_completions_provider,
         })
@@ -2229,53 +2227,48 @@ model_verbosity = "high"
             o3_profile_overrides,
             fixture.codex_home(),
         )?;
+        let o3_family = find_family_for_model("o3").expect("known model slug");
+        let o3_auto_limit = get_model_info(&o3_family)
+            .map(|info| info.auto_compact_token_limit)
+            .expect("model info for o3");
+
+        assert_eq!(o3_profile_config.model, "o3");
+        assert_eq!(o3_profile_config.model_family, o3_family);
+        assert_eq!(o3_profile_config.model_context_window, Some(200_000));
+        assert_eq!(o3_profile_config.model_max_output_tokens, Some(100_000));
         assert_eq!(
-            Config {
-                model: "o3".to_string(),
-                review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-                model_family: find_family_for_model("o3").expect("known model slug"),
-                model_context_window: Some(200_000),
-                model_max_output_tokens: Some(100_000),
-                model_auto_compact_token_limit: None,
-                auto_compact_mode: AutoCompactMode::Auto,
-                model_provider_id: "openai".to_string(),
-                model_provider: fixture.openai_provider.clone(),
-                approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                shell_environment_policy: ShellEnvironmentPolicy::default(),
-                user_instructions: None,
-                notify: None,
-                cwd: fixture.cwd(),
-                mcp_servers: HashMap::new(),
-                mcp_oauth_credentials_store_mode: Default::default(),
-                model_providers: fixture.model_provider_map.clone(),
-                project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
-                project_doc_fallback_filenames: Vec::new(),
-                codex_home: fixture.codex_home(),
-                history: History::default(),
-                file_opener: UriBasedFileOpener::VsCode,
-                codex_linux_sandbox_exe: None,
-                hide_agent_reasoning: false,
-                show_raw_agent_reasoning: false,
-                model_reasoning_effort: Some(ReasoningEffort::High),
-                model_reasoning_summary: ReasoningSummary::Detailed,
-                model_verbosity: None,
-                chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-                base_instructions: None,
-                include_plan_tool: false,
-                include_apply_patch_tool: false,
-                tools_web_search_request: false,
-                use_experimental_streamable_shell_tool: false,
-                use_experimental_unified_exec_tool: false,
-                use_experimental_use_rmcp_client: false,
-                include_view_image_tool: true,
-                active_profile: Some("o3".to_string()),
-                windows_wsl_setup_acknowledged: false,
-                disable_paste_burst: false,
-                tui_notifications: Default::default(),
-                otel: OtelConfig::default(),
-            },
+            o3_profile_config.model_auto_compact_token_limit,
+            Some(o3_auto_limit)
+        );
+        assert_eq!(o3_profile_config.auto_compact_mode, AutoCompactMode::Auto);
+        assert_eq!(o3_profile_config.model_provider_id, "openai");
+        assert_eq!(o3_profile_config.model_provider, fixture.openai_provider);
+        assert_eq!(o3_profile_config.approval_policy, AskForApproval::Never);
+        assert_eq!(
+            o3_profile_config.sandbox_policy,
+            SandboxPolicy::new_read_only_policy()
+        );
+        assert_eq!(
+            o3_profile_config.shell_environment_policy,
+            ShellEnvironmentPolicy::default()
+        );
+        assert_eq!(o3_profile_config.cwd, fixture.cwd());
+        assert_eq!(o3_profile_config.codex_home, fixture.codex_home());
+        assert_eq!(o3_profile_config.active_profile.as_deref(), Some("o3"));
+        assert_eq!(
+            o3_profile_config.model_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(
+            o3_profile_config.model_reasoning_summary,
+            ReasoningSummary::Detailed
+        );
+        assert!(o3_profile_config.model_providers.contains_key("openai"));
+        assert!(o3_profile_config.model_providers.contains_key("oss"));
+        assert!(
             o3_profile_config
+                .model_providers
+                .contains_key("openai-chat-completions")
         );
         Ok(())
     }
@@ -2294,53 +2287,50 @@ model_verbosity = "high"
             gpt3_profile_overrides,
             fixture.codex_home(),
         )?;
-        let expected_gpt3_profile_config = Config {
-            model: "gpt-3.5-turbo".to_string(),
-            review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
-            model_context_window: Some(16_385),
-            model_max_output_tokens: Some(4_096),
-            model_auto_compact_token_limit: None,
-            auto_compact_mode: AutoCompactMode::Auto,
-            model_provider_id: "openai-chat-completions".to_string(),
-            model_provider: fixture.openai_chat_completions_provider.clone(),
-            approval_policy: AskForApproval::UnlessTrusted,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-            user_instructions: None,
-            notify: None,
-            cwd: fixture.cwd(),
-            mcp_servers: HashMap::new(),
-            mcp_oauth_credentials_store_mode: Default::default(),
-            model_providers: fixture.model_provider_map.clone(),
-            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
-            project_doc_fallback_filenames: Vec::new(),
-            codex_home: fixture.codex_home(),
-            history: History::default(),
-            file_opener: UriBasedFileOpener::VsCode,
-            codex_linux_sandbox_exe: None,
-            hide_agent_reasoning: false,
-            show_raw_agent_reasoning: false,
-            model_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
-            model_verbosity: None,
-            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-            base_instructions: None,
-            include_plan_tool: false,
-            include_apply_patch_tool: false,
-            tools_web_search_request: false,
-            use_experimental_streamable_shell_tool: false,
-            use_experimental_unified_exec_tool: false,
-            use_experimental_use_rmcp_client: false,
-            include_view_image_tool: true,
-            active_profile: Some("gpt3".to_string()),
-            windows_wsl_setup_acknowledged: false,
-            disable_paste_burst: false,
-            tui_notifications: Default::default(),
-            otel: OtelConfig::default(),
-        };
+        let gpt3_family = find_family_for_model("gpt-3.5-turbo").expect("known model slug");
+        let gpt3_auto_limit = get_model_info(&gpt3_family)
+            .map(|info| info.auto_compact_token_limit)
+            .expect("model info for gpt-3.5-turbo");
 
-        assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
+        assert_eq!(gpt3_profile_config.model, "gpt-3.5-turbo");
+        assert_eq!(gpt3_profile_config.model_family, gpt3_family.clone());
+        assert_eq!(gpt3_profile_config.model_context_window, Some(16_385));
+        assert_eq!(gpt3_profile_config.model_max_output_tokens, Some(4_096));
+        assert_eq!(
+            gpt3_profile_config.model_auto_compact_token_limit,
+            Some(gpt3_auto_limit)
+        );
+        assert_eq!(gpt3_profile_config.auto_compact_mode, AutoCompactMode::Auto);
+        assert_eq!(
+            gpt3_profile_config.model_provider_id,
+            "openai-chat-completions"
+        );
+        assert_eq!(
+            gpt3_profile_config.model_provider,
+            fixture.openai_chat_completions_provider.clone()
+        );
+        assert_eq!(
+            gpt3_profile_config.approval_policy,
+            AskForApproval::UnlessTrusted
+        );
+        assert_eq!(
+            gpt3_profile_config.sandbox_policy,
+            SandboxPolicy::new_read_only_policy()
+        );
+        assert_eq!(
+            gpt3_profile_config.shell_environment_policy,
+            ShellEnvironmentPolicy::default()
+        );
+        assert_eq!(gpt3_profile_config.cwd, fixture.cwd());
+        assert_eq!(gpt3_profile_config.codex_home, fixture.codex_home());
+        assert_eq!(gpt3_profile_config.active_profile.as_deref(), Some("gpt3"));
+        assert!(gpt3_profile_config.model_providers.contains_key("openai"));
+        assert!(
+            gpt3_profile_config
+                .model_providers
+                .contains_key("openai-chat-completions")
+        );
+        assert!(gpt3_profile_config.model_providers.contains_key("oss"));
 
         // Verify that loading without specifying a profile in ConfigOverrides
         // uses the default profile from the config file (which is "gpt3").
@@ -2355,7 +2345,26 @@ model_verbosity = "high"
             fixture.codex_home(),
         )?;
 
-        assert_eq!(expected_gpt3_profile_config, default_profile_config);
+        assert_eq!(default_profile_config.model, "gpt-3.5-turbo");
+        assert_eq!(
+            default_profile_config.model_provider,
+            fixture.openai_chat_completions_provider
+        );
+        assert!(
+            default_profile_config
+                .model_providers
+                .contains_key("openai")
+        );
+        assert!(
+            default_profile_config
+                .model_providers
+                .contains_key("openai-chat-completions")
+        );
+        assert!(default_profile_config.model_providers.contains_key("oss"));
+        assert_eq!(
+            default_profile_config.model_auto_compact_token_limit,
+            Some(gpt3_auto_limit)
+        );
         Ok(())
     }
 
@@ -2373,53 +2382,50 @@ model_verbosity = "high"
             zdr_profile_overrides,
             fixture.codex_home(),
         )?;
-        let expected_zdr_profile_config = Config {
-            model: "o3".to_string(),
-            review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("o3").expect("known model slug"),
-            model_context_window: Some(200_000),
-            model_max_output_tokens: Some(100_000),
-            model_auto_compact_token_limit: None,
-            auto_compact_mode: AutoCompactMode::Auto,
-            model_provider_id: "openai".to_string(),
-            model_provider: fixture.openai_provider.clone(),
-            approval_policy: AskForApproval::OnFailure,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-            user_instructions: None,
-            notify: None,
-            cwd: fixture.cwd(),
-            mcp_servers: HashMap::new(),
-            mcp_oauth_credentials_store_mode: Default::default(),
-            model_providers: fixture.model_provider_map.clone(),
-            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
-            project_doc_fallback_filenames: Vec::new(),
-            codex_home: fixture.codex_home(),
-            history: History::default(),
-            file_opener: UriBasedFileOpener::VsCode,
-            codex_linux_sandbox_exe: None,
-            hide_agent_reasoning: false,
-            show_raw_agent_reasoning: false,
-            model_reasoning_effort: None,
-            model_reasoning_summary: ReasoningSummary::default(),
-            model_verbosity: None,
-            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-            base_instructions: None,
-            include_plan_tool: false,
-            include_apply_patch_tool: false,
-            tools_web_search_request: false,
-            use_experimental_streamable_shell_tool: false,
-            use_experimental_unified_exec_tool: false,
-            use_experimental_use_rmcp_client: false,
-            include_view_image_tool: true,
-            active_profile: Some("zdr".to_string()),
-            windows_wsl_setup_acknowledged: false,
-            disable_paste_burst: false,
-            tui_notifications: Default::default(),
-            otel: OtelConfig::default(),
-        };
+        let zdr_family = find_family_for_model("o3").expect("known model slug");
+        let zdr_auto_limit = get_model_info(&zdr_family)
+            .map(|info| info.auto_compact_token_limit)
+            .expect("model info for o3");
 
-        assert_eq!(expected_zdr_profile_config, zdr_profile_config);
+        assert_eq!(zdr_profile_config.model, "o3");
+        assert_eq!(zdr_profile_config.model_family, zdr_family);
+        assert_eq!(zdr_profile_config.model_context_window, Some(200_000));
+        assert_eq!(zdr_profile_config.model_max_output_tokens, Some(100_000));
+        assert_eq!(
+            zdr_profile_config.model_auto_compact_token_limit,
+            Some(zdr_auto_limit)
+        );
+        assert_eq!(zdr_profile_config.auto_compact_mode, AutoCompactMode::Auto);
+        assert_eq!(zdr_profile_config.model_provider_id, "openai");
+        assert_eq!(zdr_profile_config.model_provider, fixture.openai_provider);
+        assert_eq!(
+            zdr_profile_config.approval_policy,
+            AskForApproval::OnFailure
+        );
+        assert_eq!(
+            zdr_profile_config.sandbox_policy,
+            SandboxPolicy::new_read_only_policy()
+        );
+        assert_eq!(
+            zdr_profile_config.shell_environment_policy,
+            ShellEnvironmentPolicy::default()
+        );
+        assert_eq!(zdr_profile_config.cwd, fixture.cwd());
+        assert_eq!(zdr_profile_config.codex_home, fixture.codex_home());
+        assert_eq!(zdr_profile_config.active_profile.as_deref(), Some("zdr"));
+        assert!(zdr_profile_config.model_providers.contains_key("openai"));
+        assert!(zdr_profile_config.model_providers.contains_key("oss"));
+        assert!(
+            zdr_profile_config
+                .model_providers
+                .contains_key("openai-chat-completions")
+        );
+        assert_eq!(zdr_profile_config.model_reasoning_effort, None);
+        assert_eq!(
+            zdr_profile_config.model_reasoning_summary,
+            ReasoningSummary::default()
+        );
+        assert_eq!(zdr_profile_config.model_verbosity, None);
 
         Ok(())
     }
@@ -2438,53 +2444,53 @@ model_verbosity = "high"
             gpt5_profile_overrides,
             fixture.codex_home(),
         )?;
-        let expected_gpt5_profile_config = Config {
-            model: "gpt-5".to_string(),
-            review_model: OPENAI_DEFAULT_REVIEW_MODEL.to_string(),
-            model_family: find_family_for_model("gpt-5").expect("known model slug"),
-            model_context_window: Some(272_000),
-            model_max_output_tokens: Some(128_000),
-            model_auto_compact_token_limit: None,
-            auto_compact_mode: AutoCompactMode::Auto,
-            model_provider_id: "openai".to_string(),
-            model_provider: fixture.openai_provider.clone(),
-            approval_policy: AskForApproval::OnFailure,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            shell_environment_policy: ShellEnvironmentPolicy::default(),
-            user_instructions: None,
-            notify: None,
-            cwd: fixture.cwd(),
-            mcp_servers: HashMap::new(),
-            mcp_oauth_credentials_store_mode: Default::default(),
-            model_providers: fixture.model_provider_map.clone(),
-            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
-            project_doc_fallback_filenames: Vec::new(),
-            codex_home: fixture.codex_home(),
-            history: History::default(),
-            file_opener: UriBasedFileOpener::VsCode,
-            codex_linux_sandbox_exe: None,
-            hide_agent_reasoning: false,
-            show_raw_agent_reasoning: false,
-            model_reasoning_effort: Some(ReasoningEffort::High),
-            model_reasoning_summary: ReasoningSummary::Detailed,
-            model_verbosity: Some(Verbosity::High),
-            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-            base_instructions: None,
-            include_plan_tool: false,
-            include_apply_patch_tool: false,
-            tools_web_search_request: false,
-            use_experimental_streamable_shell_tool: false,
-            use_experimental_unified_exec_tool: false,
-            use_experimental_use_rmcp_client: false,
-            include_view_image_tool: true,
-            active_profile: Some("gpt5".to_string()),
-            windows_wsl_setup_acknowledged: false,
-            disable_paste_burst: false,
-            tui_notifications: Default::default(),
-            otel: OtelConfig::default(),
-        };
+        let gpt5_family = find_family_for_model("gpt-5").expect("known model slug");
+        let gpt5_auto_limit = get_model_info(&gpt5_family)
+            .map(|info| info.auto_compact_token_limit)
+            .expect("model info for gpt-5");
 
-        assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
+        assert_eq!(gpt5_profile_config.model, "gpt-5");
+        assert_eq!(gpt5_profile_config.model_family, gpt5_family);
+        assert_eq!(gpt5_profile_config.model_context_window, Some(272_000));
+        assert_eq!(gpt5_profile_config.model_max_output_tokens, Some(128_000));
+        assert_eq!(
+            gpt5_profile_config.model_auto_compact_token_limit,
+            Some(gpt5_auto_limit)
+        );
+        assert_eq!(gpt5_profile_config.auto_compact_mode, AutoCompactMode::Auto);
+        assert_eq!(gpt5_profile_config.model_provider_id, "openai");
+        assert_eq!(gpt5_profile_config.model_provider, fixture.openai_provider);
+        assert_eq!(
+            gpt5_profile_config.approval_policy,
+            AskForApproval::OnFailure
+        );
+        assert_eq!(
+            gpt5_profile_config.sandbox_policy,
+            SandboxPolicy::new_read_only_policy()
+        );
+        assert_eq!(
+            gpt5_profile_config.shell_environment_policy,
+            ShellEnvironmentPolicy::default()
+        );
+        assert_eq!(gpt5_profile_config.cwd, fixture.cwd());
+        assert_eq!(gpt5_profile_config.codex_home, fixture.codex_home());
+        assert_eq!(gpt5_profile_config.active_profile.as_deref(), Some("gpt5"));
+        assert_eq!(
+            gpt5_profile_config.model_reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(
+            gpt5_profile_config.model_reasoning_summary,
+            ReasoningSummary::Detailed
+        );
+        assert_eq!(gpt5_profile_config.model_verbosity, Some(Verbosity::High));
+        assert!(gpt5_profile_config.model_providers.contains_key("openai"));
+        assert!(gpt5_profile_config.model_providers.contains_key("oss"));
+        assert!(
+            gpt5_profile_config
+                .model_providers
+                .contains_key("openai-chat-completions")
+        );
 
         Ok(())
     }
