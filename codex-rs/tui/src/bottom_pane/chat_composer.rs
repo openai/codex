@@ -165,8 +165,9 @@ impl ChatComposer {
             .unwrap_or_else(|| footer_height(footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
+        const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
         self.textarea
-            .desired_height(width.saturating_sub(LIVE_PREFIX_COLS))
+            .desired_height(width.saturating_sub(COLS_WITH_MARGIN))
             + 2
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
@@ -197,7 +198,9 @@ impl ChatComposer {
         let [composer_rect, popup_rect] =
             Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
         let mut textarea_rect = composer_rect;
-        textarea_rect.width = textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS);
+        textarea_rect.width = textarea_rect.width.saturating_sub(
+            LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
+        );
         textarea_rect.x = textarea_rect.x.saturating_add(LIVE_PREFIX_COLS);
         [composer_rect, textarea_rect, popup_rect]
     }
