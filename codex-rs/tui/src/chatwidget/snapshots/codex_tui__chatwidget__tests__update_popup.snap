@@ -9,5 +9,6 @@ expression: terminal.backend().vt100().screen().contents()
 
 › 1. Yes, update now
   2. No, not now
+  3. Don't remind me
 
   Press enter to confirm or esc to go back

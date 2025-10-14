@@ -87,8 +87,4 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
-
-    /// User approved to update Codex; run the update and exit.
-    #[cfg(not(debug_assertions))]
-    RunUpdateAndExit(crate::UpdateAction),
 }

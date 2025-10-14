@@ -1829,55 +1829,6 @@ impl ChatWidget {
         });
     }
 
-    /// Open a simple modal asking to update Codex when an update action is available.
-    #[cfg(not(debug_assertions))]
-    pub(crate) fn handle_update_popup(&mut self) {
-        if let Some(update_action) = crate::get_update_action() {
-            self.show_update_popup(update_action);
-        }
-    }
-
-    #[cfg(not(debug_assertions))]
-    pub(crate) fn show_update_popup(&mut self, update_action: crate::UpdateAction) {
-        use ratatui::style::Stylize as _;
-        use ratatui::text::Line;
-
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: None,
-            footer_hint: Some(standard_popup_hint_line()),
-            items: vec![
-                SelectionItem {
-                    name: "Yes, update now".to_string(),
-                    actions: vec![Box::new(move |tx: &AppEventSender| {
-                        tx.send(AppEvent::RunUpdateAndExit(update_action));
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: "No, not now".to_string(),
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            ],
-            header: Box::new(ratatui::widgets::Paragraph::new(vec![
-                Line::from(vec![
-                    crate::history_cell::padded_emoji("✨").bold().cyan(),
-                    "New version available! Would you like to update?".bold(),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    "Full release notes: ".dim(),
-                    "https://github.com/openai/codex/releases/latest"
-                        .cyan()
-                        .underlined(),
-                ]),
-                Line::from(""),
-            ])),
-            ..Default::default()
-        });
-    }
-
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
         self.config.approval_policy = policy;

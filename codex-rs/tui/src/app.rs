@@ -160,12 +160,6 @@ impl App {
             pending_update_action: None,
         };
 
-        // Show an update approval popup at startup when an update is available.
-        #[cfg(not(debug_assertions))]
-        if crate::updates::get_upgrade_version(&app.config).is_some() {
-            app.chat_widget.handle_update_popup();
-        }
-
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
 
@@ -300,11 +294,6 @@ impl App {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
             }
             AppEvent::ExitRequest => {
-                return Ok(false);
-            }
-            #[cfg(not(debug_assertions))]
-            AppEvent::RunUpdateAndExit(action) => {
-                self.pending_update_action = Some(action);
                 return Ok(false);
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),

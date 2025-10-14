@@ -59,6 +59,7 @@ mod pager_overlay;
 pub mod public_widgets;
 mod render;
 mod resume_picker;
+mod selection_list;
 mod session_log;
 mod shimmer;
 mod slash_command;
@@ -70,6 +71,7 @@ mod terminal_palette;
 mod text_formatting;
 mod tui;
 mod ui_consts;
+mod update_prompt;
 mod version;
 
 /// Update action the CLI should perform after the TUI exits.
@@ -328,6 +330,26 @@ async fn run_ratatui_app(
     terminal.clear()?;
 
     let mut tui = Tui::new(terminal);
+
+    #[cfg(not(debug_assertions))]
+    {
+        use crate::update_prompt::UpdatePromptOutcome;
+
+        let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
+        if !skip_update_prompt {
+            match update_prompt::run_update_prompt_if_needed(&mut tui, &config).await? {
+                UpdatePromptOutcome::Continue => {}
+                UpdatePromptOutcome::RunUpdate(action) => {
+                    crate::tui::restore()?;
+                    return Ok(AppExitInfo {
+                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        conversation_id: None,
+                        update_action: Some(action),
+                    });
+                }
+            }
+        }
+    }
 
     // Show update banner in terminal history (instead of stderr) so it is visible
     // within the TUI scrollback. Building spans keeps styling consistent.
