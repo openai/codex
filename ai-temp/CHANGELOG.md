@@ -16,3 +16,4 @@
 - Delegated runs now stream live output (`DelegateEvent::Delta`) through the TUI, and remaining UX follow-ups are tracked in `ai-temp/ui-ux-delegation.md`.
 - Added a dedicated status indicator while a delegate runs, restored the idle header on completion, and regression-tested streaming to prevent animation regressions.
 - Updated the sample Codex home instructions/README, ensured the critic agent uses `gpt-5-nano`, and documented the new delegation UX in `ai-temp/ui-ux-delegation.md`.
+- Documented plan-tool implementation patterns and how they inform future delegation tools (`ai-temp/tool-implementation-patterns.md`).
