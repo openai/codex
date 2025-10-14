@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Result;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -77,7 +78,7 @@ async fn shell_output_stays_json_without_freeform_apply_patch() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = false;
+        config.features.disable(Feature::ApplyPatchFreeform);
         config.model = "gpt-5".to_string();
         config.model_family = find_family_for_model("gpt-5").expect("gpt-5 is a model family");
     });
@@ -143,7 +144,7 @@ async fn shell_output_is_structured_with_freeform_apply_patch() -> Result<()> {
 
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.include_apply_patch_tool = true;
+        config.features.enable(Feature::ApplyPatchFreeform);
     });
     let test = builder.build(&server).await?;
 
