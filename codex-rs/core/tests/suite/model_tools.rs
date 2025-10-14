@@ -4,6 +4,7 @@ use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -56,12 +57,12 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     config.model = model.to_string();
     config.model_family =
         find_family_for_model(model).unwrap_or_else(|| panic!("unknown model family for {model}"));
-    config.include_plan_tool = false;
-    config.include_apply_patch_tool = false;
-    config.include_view_image_tool = false;
-    config.tools_web_search_request = false;
-    config.use_experimental_streamable_shell_tool = false;
-    config.use_experimental_unified_exec_tool = false;
+    config.features.disable(Feature::PlanTool);
+    config.features.disable(Feature::ApplyPatchFreeform);
+    config.features.disable(Feature::ViewImageTool);
+    config.features.disable(Feature::WebSearchRequest);
+    config.features.disable(Feature::StreamableShell);
+    config.features.disable(Feature::UnifiedExec);
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));

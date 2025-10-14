@@ -29,6 +29,7 @@ pub mod exec;
 mod exec_command;
 pub mod exec_env;
 pub mod executor;
+pub mod features;
 mod flags;
 pub mod git_info;
 pub mod landlock;
