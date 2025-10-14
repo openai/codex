@@ -874,7 +874,7 @@ pub struct ConfigToml {
     pub windows_wsl_setup_acknowledged: Option<bool>,
 
     /// Collection of in-product notices (different from notifications)
-    /// See `[config_types::Notices]` for more details
+    /// See [`crate::config_types::Notices`] for more details
     pub notices: Option<Notices>,
 
     /// Legacy, now use features

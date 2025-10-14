@@ -1874,7 +1874,11 @@ impl ChatWidget {
         ));
         let header = ColumnRenderable::with(header_children);
 
-        let accept_actions = Self::approval_preset_actions(approval, sandbox.clone());
+        let mut accept_actions = Self::approval_preset_actions(approval, sandbox.clone());
+        accept_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
+        }));
+
         let mut accept_and_remember_actions = Self::approval_preset_actions(approval, sandbox);
         accept_and_remember_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
