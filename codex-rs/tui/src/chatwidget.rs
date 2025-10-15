@@ -1893,7 +1893,6 @@ impl ChatWidget {
             SelectionItem {
                 name: "Accept Full Access".to_string(),
                 description: Some("Apply full access for this session".to_string()),
-                is_current: false,
                 actions: accept_actions,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -1901,7 +1900,6 @@ impl ChatWidget {
             SelectionItem {
                 name: "Accept and don't ask again".to_string(),
                 description: Some("Enable full access and remember this choice".to_string()),
-                is_current: false,
                 actions: accept_and_remember_actions,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -1909,7 +1907,6 @@ impl ChatWidget {
             SelectionItem {
                 name: "Deny".to_string(),
                 description: Some("Go back without enabling full access".to_string()),
-                is_current: false,
                 actions: deny_actions,
                 dismiss_on_select: true,
                 ..Default::default()
