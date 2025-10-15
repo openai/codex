@@ -34,6 +34,16 @@ pub(crate) enum TaskKind {
     Compact,
 }
 
+impl TaskKind {
+    pub(crate) fn header_value(self) -> &'static str {
+        match self {
+            TaskKind::Regular => "standard",
+            TaskKind::Review => "review",
+            TaskKind::Compact => "compact",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RunningTask {
     pub(crate) handle: AbortHandle,
@@ -111,5 +121,17 @@ impl ActiveTurn {
         if let Ok(mut ts) = self.turn_state.try_lock() {
             ts.clear_pending();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskKind;
+
+    #[test]
+    fn header_value_matches_expected_labels() {
+        assert_eq!(TaskKind::Regular.header_value(), "standard");
+        assert_eq!(TaskKind::Review.header_value(), "review");
+        assert_eq!(TaskKind::Compact.header_value(), "compact");
     }
 }

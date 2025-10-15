@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -42,7 +43,13 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, Value>> {
                 if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
                     let content = extract_output_text(item)
                         .ok_or_else(|| anyhow::anyhow!("missing tool output content"))?;
-                    let parsed: Value = serde_json::from_str(content)?;
+                    let trimmed = content.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let parsed: Value = serde_json::from_str(trimmed).map_err(|err| {
+                        anyhow::anyhow!("failed to parse tool output content {trimmed:?}: {err}")
+                    })?;
                     outputs.insert(call_id.to_string(), parsed);
                 }
             }
@@ -59,7 +66,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
     });
     let TestCodex {
         codex,
@@ -176,6 +183,7 @@ async fn unified_exec_streams_after_lagged_output() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
     });
     let TestCodex {
         codex,
@@ -300,7 +308,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
+        config.features.enable(Feature::UnifiedExec);
     });
     let TestCodex {
         codex,

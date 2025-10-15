@@ -21,6 +21,8 @@ use tracing::error;
 
 /// Default filename scanned for project-level docs.
 pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
+/// Preferred local override for project-level docs.
+pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
 
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
@@ -178,7 +180,8 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
 
 fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
     let mut names: Vec<&'a str> =
-        Vec::with_capacity(1 + config.project_doc_fallback_filenames.len());
+        Vec::with_capacity(2 + config.project_doc_fallback_filenames.len());
+    names.push(LOCAL_PROJECT_DOC_FILENAME);
     names.push(DEFAULT_PROJECT_DOC_FILENAME);
     for candidate in &config.project_doc_fallback_filenames {
         let candidate = candidate.as_str();
@@ -379,6 +382,29 @@ mod tests {
 
         let res = get_user_instructions(&cfg).await.expect("doc expected");
         assert_eq!(res, "root doc\n\ncrate doc");
+    }
+
+    /// AGENTS.override.md is preferred over AGENTS.md when both are present.
+    #[tokio::test]
+    async fn agents_local_md_preferred() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join(DEFAULT_PROJECT_DOC_FILENAME), "versioned").unwrap();
+        fs::write(tmp.path().join(LOCAL_PROJECT_DOC_FILENAME), "local").unwrap();
+
+        let cfg = make_config(&tmp, 4096, None);
+
+        let res = get_user_instructions(&cfg)
+            .await
+            .expect("local doc expected");
+
+        assert_eq!(res, "local");
+
+        let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
+        assert_eq!(discovery.len(), 1);
+        assert_eq!(
+            discovery[0].file_name().unwrap().to_string_lossy(),
+            LOCAL_PROJECT_DOC_FILENAME
+        );
     }
 
     /// When AGENTS.md is absent but a configured fallback exists, the fallback is used.

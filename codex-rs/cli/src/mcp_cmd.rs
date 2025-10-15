@@ -13,10 +13,12 @@ use codex_core::config::load_global_mcp_servers;
 use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
+use codex_core::features::Feature;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
+use codex_rmcp_client::supports_oauth_login;
 
 /// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
 ///
@@ -189,7 +191,10 @@ impl McpCli {
 
 async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<()> {
     // Validate any provided overrides even though they are not currently applied.
-    config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .await
+        .context("failed to load configuration")?;
 
     let AddArgs {
         name,
@@ -225,17 +230,21 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
             }
         }
         AddMcpTransportArgs {
-            streamable_http: Some(streamable_http),
+            streamable_http:
+                Some(AddMcpStreamableHttpArgs {
+                    url,
+                    bearer_token_env_var,
+                }),
             ..
         } => McpServerTransportConfig::StreamableHttp {
-            url: streamable_http.url,
-            bearer_token_env_var: streamable_http.bearer_token_env_var,
+            url,
+            bearer_token_env_var,
         },
         AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
     };
 
     let new_entry = McpServerConfig {
-        transport,
+        transport: transport.clone(),
         enabled: true,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
@@ -247,6 +256,17 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
 
     println!("Added global MCP server '{name}'.");
+
+    if let McpServerTransportConfig::StreamableHttp {
+        url,
+        bearer_token_env_var: None,
+    } = transport
+        && matches!(supports_oauth_login(&url).await, Ok(true))
+    {
+        println!("Detected OAuth support. Starting OAuth flow…");
+        perform_oauth_login(&name, &url, config.mcp_oauth_credentials_store_mode).await?;
+        println!("Successfully logged in.");
+    }
 
     Ok(())
 }
@@ -285,7 +305,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         .await
         .context("failed to load configuration")?;
 
-    if !config.use_experimental_use_rmcp_client {
+    if !config.features.enabled(Feature::RmcpClient) {
         bail!(
             "OAuth login is only supported when experimental_use_rmcp_client is true in config.toml."
         );

@@ -5,6 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use core_test_support::fs_wait;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -17,8 +18,7 @@ use responses::ev_assistant_message;
 use responses::ev_completed;
 use responses::sse;
 use responses::start_mock_server;
-use tokio::time::Duration;
-use tokio::time::sleep;
+use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() -> anyhow::Result<()> {
@@ -60,14 +60,7 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // We fork the notify script, so we need to wait for it to write to the file.
-    for _ in 0..100u32 {
-        if notify_file.exists() {
-            break;
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-
-    assert!(notify_file.exists());
+    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
 
     Ok(())
 }
