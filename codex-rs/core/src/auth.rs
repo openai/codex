@@ -56,9 +56,12 @@ impl CodexAuth {
         )
         .await?;
 
-        if let Ok(mut auth_lock) = self.auth_dot_json.lock() {
-            *auth_lock = Some(updated.clone());
-        }
+        // Update in-memory cache. If the mutex is poisoned, we should fail since
+        // this indicates a serious problem and continuing could lead to inconsistent state.
+        let mut auth_lock = self.auth_dot_json.lock().map_err(|_| {
+            std::io::Error::other("Auth mutex is poisoned, cannot update in-memory cache")
+        })?;
+        *auth_lock = Some(updated.clone());
 
         let access = match updated.tokens {
             Some(t) => t.access_token,
@@ -110,8 +113,10 @@ impl CodexAuth {
                             "Token data is not available after refresh.",
                         ))?;
 
-                    #[expect(clippy::unwrap_used)]
-                    let mut auth_lock = self.auth_dot_json.lock().unwrap();
+                    // Update in-memory cache. If the mutex is poisoned, fail gracefully.
+                    let mut auth_lock = self.auth_dot_json.lock().map_err(|_| {
+                        std::io::Error::other("Auth mutex is poisoned, cannot update in-memory cache")
+                    })?;
                     *auth_lock = Some(updated_auth_dot_json);
                 }
 
@@ -141,8 +146,14 @@ impl CodexAuth {
     }
 
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {
-        #[expect(clippy::unwrap_used)]
-        self.auth_dot_json.lock().unwrap().clone()
+        // If the mutex is poisoned, log the error and return None
+        match self.auth_dot_json.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => {
+                tracing::error!("Auth mutex is poisoned, returning None for auth data");
+                None
+            }
+        }
     }
 
     fn get_current_token_data(&self) -> Option<TokenData> {
@@ -409,6 +420,29 @@ mod tests {
     use tempfile::tempdir;
 
     const LAST_REFRESH: &str = "2025-08-06T20:41:36.232376Z";
+
+    #[test]
+    fn get_current_auth_json_handles_valid_mutex() {
+        // Test that get_current_auth_json works correctly with a valid mutex
+        use std::sync::{Arc, Mutex};
+        let test_auth = AuthDotJson {
+            openai_api_key: Some("test-key".to_string()),
+            tokens: None,
+            last_refresh: None,
+        };
+        
+        let auth_data = Arc::new(Mutex::new(Some(test_auth.clone())));
+        let auth = CodexAuth {
+            mode: AuthMode::ApiKey,
+            api_key: None,
+            auth_dot_json: auth_data,
+            auth_file: std::path::PathBuf::from("test"),
+            client: reqwest::Client::new(),
+        };
+        
+        let result = auth.get_current_auth_json();
+        assert_eq!(result, Some(test_auth));
+    }
 
     #[tokio::test]
     async fn roundtrip_auth_dot_json() {
