@@ -57,5 +57,6 @@ urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 
 [dev-dependencies]
+escargot = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

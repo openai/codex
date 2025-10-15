@@ -658,6 +658,15 @@ pub struct ListResourceTemplatesResult {
     pub resource_templates: Vec<ResourceTemplate>,
 }
 
+impl ListResourceTemplatesResult {
+    pub fn empty() -> Self {
+        Self {
+            next_cursor: None,
+            resource_templates: Vec::new(),
+        }
+    }
+}
+
 impl From<ListResourceTemplatesResult> for serde_json::Value {
     fn from(value: ListResourceTemplatesResult) -> Self {
         // Leave this as it should never fail
@@ -691,6 +700,15 @@ pub struct ListResourcesResult {
     )]
     pub next_cursor: Option<String>,
     pub resources: Vec<Resource>,
+}
+
+impl ListResourcesResult {
+    pub fn empty() -> Self {
+        Self {
+            next_cursor: None,
+            resources: Vec::new(),
+        }
+    }
 }
 
 impl From<ListResourcesResult> for serde_json::Value {

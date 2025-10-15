@@ -1354,6 +1354,7 @@ dependencies = [
  "axum",
  "codex-protocol",
  "dirs",
+ "escargot",
  "futures",
  "keyring",
  "mcp-types",

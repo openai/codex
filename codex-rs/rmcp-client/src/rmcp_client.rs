@@ -12,11 +12,18 @@ use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::InitializeRequestParams;
 use mcp_types::InitializeResult;
+use mcp_types::ListResourceTemplatesRequestParams;
+use mcp_types::ListResourceTemplatesResult;
+use mcp_types::ListResourcesRequestParams;
+use mcp_types::ListResourcesResult;
 use mcp_types::ListToolsRequestParams;
 use mcp_types::ListToolsResult;
+use mcp_types::ReadResourceRequestParams;
+use mcp_types::ReadResourceResult;
 use rmcp::model::CallToolRequestParam;
 use rmcp::model::InitializeRequestParam;
 use rmcp::model::PaginatedRequestParam;
+use rmcp::model::ReadResourceRequestParam;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::service::{self};
@@ -241,6 +248,54 @@ impl RmcpClient {
         Ok(converted)
     }
 
+    pub async fn list_resources(
+        &self,
+        params: Option<ListResourcesRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<ListResourcesResult> {
+        let service = self.service().await?;
+        let rmcp_params = params
+            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .transpose()?;
+
+        let fut = service.list_resources(rmcp_params);
+        let result = run_with_timeout(fut, timeout, "resources/list").await?;
+        let converted = convert_to_mcp(result)?;
+        self.persist_oauth_tokens().await;
+        Ok(converted)
+    }
+
+    pub async fn list_resource_templates(
+        &self,
+        params: Option<ListResourceTemplatesRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<ListResourceTemplatesResult> {
+        let service = self.service().await?;
+        let rmcp_params = params
+            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .transpose()?;
+
+        let fut = service.list_resource_templates(rmcp_params);
+        let result = run_with_timeout(fut, timeout, "resources/templates/list").await?;
+        let converted = convert_to_mcp(result)?;
+        self.persist_oauth_tokens().await;
+        Ok(converted)
+    }
+
+    pub async fn read_resource(
+        &self,
+        params: ReadResourceRequestParams,
+        timeout: Option<Duration>,
+    ) -> Result<ReadResourceResult> {
+        let service = self.service().await?;
+        let rmcp_params: ReadResourceRequestParam = convert_to_rmcp(params)?;
+        let fut = service.read_resource(rmcp_params);
+        let result = run_with_timeout(fut, timeout, "resources/read").await?;
+        let converted = convert_to_mcp(result)?;
+        self.persist_oauth_tokens().await;
+        Ok(converted)
+    }
+
     pub async fn call_tool(
         &self,
         name: String,
@@ -276,6 +331,8 @@ impl RmcpClient {
         }
     }
 
+    /// This should be called after every tool call so that if a given tool call triggered
+    /// a refresh of the OAuth tokens, they are persisted.
     async fn persist_oauth_tokens(&self) {
         if let Some(runtime) = self.oauth_persistor().await
             && let Err(error) = runtime.persist_if_needed().await

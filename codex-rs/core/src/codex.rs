@@ -27,6 +27,12 @@ use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
+use mcp_types::ListResourceTemplatesRequestParams;
+use mcp_types::ListResourceTemplatesResult;
+use mcp_types::ListResourcesRequestParams;
+use mcp_types::ListResourcesResult;
+use mcp_types::ReadResourceRequestParams;
+use mcp_types::ReadResourceResult;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -1028,6 +1034,39 @@ impl Session {
         }
     }
 
+    pub async fn list_resources(
+        &self,
+        server: &str,
+        params: Option<ListResourcesRequestParams>,
+    ) -> anyhow::Result<ListResourcesResult> {
+        self.services
+            .mcp_connection_manager
+            .list_resources(server, params)
+            .await
+    }
+
+    pub async fn list_resource_templates(
+        &self,
+        server: &str,
+        params: Option<ListResourceTemplatesRequestParams>,
+    ) -> anyhow::Result<ListResourceTemplatesResult> {
+        self.services
+            .mcp_connection_manager
+            .list_resource_templates(server, params)
+            .await
+    }
+
+    pub async fn read_resource(
+        &self,
+        server: &str,
+        params: ReadResourceRequestParams,
+    ) -> anyhow::Result<ReadResourceResult> {
+        self.services
+            .mcp_connection_manager
+            .read_resource(server, params)
+            .await
+    }
+
     pub async fn call_tool(
         &self,
         server: &str,
@@ -1390,16 +1429,23 @@ async fn submission_loop(
 
                 // This is a cheap lookup from the connection manager's cache.
                 let tools = sess.services.mcp_connection_manager.list_all_tools();
-                let auth_statuses = compute_auth_statuses(
-                    config.mcp_servers.iter(),
-                    config.mcp_oauth_credentials_store_mode,
-                )
-                .await;
+                let (auth_statuses, resources, resource_templates) = tokio::join!(
+                    compute_auth_statuses(
+                        config.mcp_servers.iter(),
+                        config.mcp_oauth_credentials_store_mode,
+                    ),
+                    sess.services.mcp_connection_manager.list_all_resources(),
+                    sess.services
+                        .mcp_connection_manager
+                        .list_all_resource_templates()
+                );
                 let event = Event {
                     id: sub_id,
                     msg: EventMsg::McpListToolsResponse(
                         crate::protocol::McpListToolsResponseEvent {
                             tools,
+                            resources,
+                            resource_templates,
                             auth_statuses,
                         },
                     ),

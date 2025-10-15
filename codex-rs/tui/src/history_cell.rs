@@ -34,7 +34,9 @@ use codex_protocol::plan_tool::UpdatePlanArgs;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
+use mcp_types::Resource;
 use mcp_types::ResourceLink;
+use mcp_types::ResourceTemplate;
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -975,6 +977,8 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
 pub(crate) fn new_mcp_tools_output(
     config: &Config,
     tools: HashMap<String, mcp_types::Tool>,
+    resources: HashMap<String, Vec<Resource>>,
+    resource_templates: HashMap<String, Vec<ResourceTemplate>>,
     auth_statuses: &HashMap<String, McpAuthStatus>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = vec![
@@ -1037,12 +1041,64 @@ pub(crate) fn new_mcp_tools_output(
         }
 
         if !cfg.enabled {
-            lines.push(vec!["    • Tools: ".into(), "(disabled)".red()].into());
-        } else if names.is_empty() {
+            let disabled = "(disabled)".red();
+            lines.push(vec!["    • Tools: ".into(), disabled.clone()].into());
+            lines.push(vec!["    • Resources: ".into(), disabled.clone()].into());
+            lines.push(vec!["    • Resource templates: ".into(), disabled].into());
+            lines.push(Line::from(""));
+            continue;
+        }
+
+        if names.is_empty() {
             lines.push("    • Tools: (none)".into());
         } else {
             lines.push(vec!["    • Tools: ".into(), names.join(", ").into()].into());
         }
+
+        let server_resources: Vec<Resource> =
+            resources.get(server.as_str()).cloned().unwrap_or_default();
+        if server_resources.is_empty() {
+            lines.push("    • Resources: (none)".into());
+        } else {
+            let mut spans: Vec<Span<'static>> = vec!["    • Resources: ".into()];
+
+            for (idx, resource) in server_resources.iter().enumerate() {
+                if idx > 0 {
+                    spans.push(", ".into());
+                }
+
+                let label = resource.title.as_ref().unwrap_or(&resource.name);
+                spans.push(label.clone().into());
+                spans.push(" ".into());
+                spans.push(format!("({})", resource.uri).dim());
+            }
+
+            lines.push(spans.into());
+        }
+
+        let server_templates: Vec<ResourceTemplate> = resource_templates
+            .get(server.as_str())
+            .cloned()
+            .unwrap_or_default();
+        if server_templates.is_empty() {
+            lines.push("    • Resource templates: (none)".into());
+        } else {
+            let mut spans: Vec<Span<'static>> = vec!["    • Resource templates: ".into()];
+
+            for (idx, template) in server_templates.iter().enumerate() {
+                if idx > 0 {
+                    spans.push(", ".into());
+                }
+
+                let label = template.title.as_ref().unwrap_or(&template.name);
+                spans.push(label.clone().into());
+                spans.push(" ".into());
+                spans.push(format!("({})", template.uri_template).dim());
+            }
+
+            lines.push(spans.into());
+        }
+
         lines.push(Line::from(""));
     }
 
