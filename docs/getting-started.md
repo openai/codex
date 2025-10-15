@@ -29,6 +29,48 @@ codex resume --last
 codex resume 7f9f9a2e-1b3c-4c7a-9b0e-123456789abc
 ```
 
+### Managing multiple authentication profiles
+
+If you log into Codex with more than one account, add `--auth-profile <NAME>`
+to any `codex` invocation to isolate credentials and history per profile. The
+CLI maps each profile to `~/.codex/profiles/<slug>`, where the slug is a
+lowercase, hyphenated form of the name (for example, `"Work Account"`
+becomes `work-account`).
+
+Using Codex without the flag keeps the legacy behaviour: state is stored in
+`~/.codex` and shared across all runs.
+
+Examples:
+
+```sh
+# Launch the TUI with a personal profile (stored at ~/.codex/profiles/personal)
+codex --auth-profile Personal
+
+# Log in with a separate work account
+codex --auth-profile "Work Account" login --api-key sk-...
+
+# Run non-interactive commands inside that profile
+codex --auth-profile "Work Account" exec "npm test"
+
+# Resume a session saved under the same profile
+codex --auth-profile "Work Account" resume --last
+```
+
+Exit messages now include the profile flag when one is active so you can
+copy/paste the suggested command, for example:
+
+```
+To continue this session, run codex --auth-profile 'Work Account' resume <SESSION_ID>.
+```
+
+When `--auth-profile` is set, Codex exports two environment variables before
+doing any work:
+
+- `CODEX_HOME` points to the profile directory
+- `CODEX_ACTIVE_AUTH_PROFILE` matches the name you passed on the command line
+
+Both variables revert to their defaults when the flag is omitted.
+
 ### Running with a prompt as input
 
 You can also run Codex CLI with a prompt as input:
