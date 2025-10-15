@@ -548,7 +548,7 @@ impl Tui {
                 crate::insert_history::insert_history_lines(
                     terminal,
                     self.pending_history_lines.clone(),
-                );
+                )?;
                 self.pending_history_lines.clear();
             }
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
