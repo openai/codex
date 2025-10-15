@@ -253,7 +253,6 @@ jobs:
             status=$(printf '%s\n' "$submission_json" | jq -r '.status // "Unknown"')
             submission_id=$(printf '%s\n' "$submission_json" | jq -r '.id // ""')
 
-            echo "$submission_json"
             if [[ -z "$submission_id" ]]; then
               echo "Failed to retrieve submission ID for $binary"
               exit 1
