@@ -236,7 +236,7 @@ impl BottomPane {
             CancellationEvent::NotHandled
         } else {
             self.view_stack.pop();
-            self.set_composer_text(String::new());
+            self.clear_composer_for_ctrl_c();
             self.show_ctrl_c_quit_hint();
             CancellationEvent::Handled
         }
@@ -267,6 +267,11 @@ impl BottomPane {
     /// Replace the composer text with `text`.
     pub(crate) fn set_composer_text(&mut self, text: String) {
         self.composer.set_text_content(text);
+        self.request_redraw();
+    }
+
+    pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
+        self.composer.clear_for_ctrl_c();
         self.request_redraw();
     }
 

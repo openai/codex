@@ -1,43 +1,8 @@
 use crate::bash::try_parse_bash;
 use crate::bash::try_parse_word_only_commands_sequence;
-use serde::Deserialize;
-use serde::Serialize;
+use codex_protocol::parse_command::ParsedCommand;
 use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub enum ParsedCommand {
-    Read {
-        cmd: String,
-        name: String,
-    },
-    ListFiles {
-        cmd: String,
-        path: Option<String>,
-    },
-    Search {
-        cmd: String,
-        query: Option<String>,
-        path: Option<String>,
-    },
-    Unknown {
-        cmd: String,
-    },
-}
-
-// Convert core's parsed command enum into the protocol's simplified type so
-// events can carry the canonical representation across process boundaries.
-impl From<ParsedCommand> for codex_protocol::parse_command::ParsedCommand {
-    fn from(v: ParsedCommand) -> Self {
-        use codex_protocol::parse_command::ParsedCommand as P;
-        match v {
-            ParsedCommand::Read { cmd, name } => P::Read { cmd, name },
-            ParsedCommand::ListFiles { cmd, path } => P::ListFiles { cmd, path },
-            ParsedCommand::Search { cmd, query, path } => P::Search { cmd, query, path },
-            ParsedCommand::Unknown { cmd } => P::Unknown { cmd },
-        }
-    }
-}
 
 fn shlex_join(tokens: &[String]) -> String {
     shlex_try_join(tokens.iter().map(String::as_str))
