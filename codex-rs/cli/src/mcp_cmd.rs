@@ -13,6 +13,7 @@ use codex_core::config::load_global_mcp_servers;
 use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
+use codex_core::git_info::resolve_root_git_project_for_trust;
 use codex_core::features::Feature;
 use codex_core::mcp::auth::compute_auth_statuses;
 use codex_core::protocol::McpAuthStatus;
@@ -84,6 +85,10 @@ pub struct AddArgs {
 
     #[command(flatten)]
     pub transport_args: AddMcpTransportArgs,
+
+    /// Write this server to the project's `.codex/config.toml` instead of global config.
+    #[arg(long)]
+    pub project: bool,
 }
 
 #[derive(Debug, clap::Args)]
@@ -107,19 +112,12 @@ pub struct AddMcpTransportArgs {
 pub struct AddMcpStdioArgs {
     /// Command to launch the MCP server.
     /// Use --url for a streamable HTTP server.
-    #[arg(
-            trailing_var_arg = true,
-            num_args = 0..,
-        )]
+    #[arg(trailing_var_arg = true, num_args = 1..)]
     pub command: Vec<String>,
 
     /// Environment variables to set when launching the server.
     /// Only valid with stdio servers.
-    #[arg(
-        long,
-        value_parser = parse_env_pair,
-        value_name = "KEY=VALUE",
-    )]
+    #[arg(long, value_parser = parse_env_pair, value_name = "KEY=VALUE")]
     pub env: Vec<(String, String)>,
 }
 
@@ -143,6 +141,10 @@ pub struct AddMcpStreamableHttpArgs {
 pub struct RemoveArgs {
     /// Name of the MCP server configuration to remove.
     pub name: String,
+
+    /// Remove from the project's `.codex/config.toml` instead of global config.
+    #[arg(long)]
+    pub project: bool,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -199,14 +201,10 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     let AddArgs {
         name,
         transport_args,
+        project,
     } = add_args;
 
     validate_server_name(&name)?;
-
-    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let mut servers = load_global_mcp_servers(&codex_home)
-        .await
-        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
     let transport = match transport_args {
         AddMcpTransportArgs {
@@ -250,6 +248,22 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         tool_timeout_sec: None,
     };
 
+    if project {
+        let cwd = std::env::current_dir().context("failed to get current directory")?;
+        let project_root = resolve_root_git_project_for_trust(&cwd).unwrap_or(cwd);
+        add_project_mcp_server(&project_root, &name, new_entry)?;
+        println!(
+            "Added project MCP server '{name}' in {}/.codex.",
+            project_root.display()
+        );
+        return Ok(());
+    }
+
+    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
+    let mut servers = load_global_mcp_servers(&codex_home)
+        .await
+        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
+
     servers.insert(name.clone(), new_entry);
 
     write_global_mcp_servers(&codex_home, &servers)
@@ -274,9 +288,24 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) -> Result<()> {
     config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
 
-    let RemoveArgs { name } = remove_args;
+    let RemoveArgs { name, project } = remove_args;
 
     validate_server_name(&name)?;
+
+    if project {
+        let cwd = std::env::current_dir().context("failed to get current directory")?;
+        let project_root = resolve_root_git_project_for_trust(&cwd).unwrap_or(cwd);
+        let removed = remove_project_mcp_server(&project_root, &name)?;
+        if removed {
+            println!(
+                "Removed project MCP server '{name}' in {}/.codex.",
+                project_root.display()
+            );
+        } else {
+            println!("No MCP server named '{name}' found.");
+        }
+        return Ok(());
+    }
 
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let mut servers = load_global_mcp_servers(&codex_home)
@@ -297,6 +326,117 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
     }
 
     Ok(())
+}
+
+fn ensure_project_codex_path(project_root: &std::path::Path) -> Result<std::path::PathBuf> {
+    let codex_dir = project_root.join(".codex");
+    std::fs::create_dir_all(&codex_dir)
+        .with_context(|| format!("failed to create {}", codex_dir.display()))?;
+    Ok(codex_dir.join("config.toml"))
+}
+
+fn add_project_mcp_server(
+    project_root: &std::path::Path,
+    name: &str,
+    entry: McpServerConfig,
+) -> Result<()> {
+    use toml_edit::Array as TomlArray;
+    use toml_edit::DocumentMut;
+    use toml_edit::Item as TomlItem;
+    use toml_edit::Table as TomlTable;
+    use toml_edit::value;
+
+    let path = ensure_project_codex_path(project_root)?;
+    let mut doc = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents.parse::<DocumentMut>().map_err(|e| anyhow!(e))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(anyhow!(e)),
+    };
+
+    if !doc.as_table().contains_key("mcp_servers") || doc["mcp_servers"].as_table().is_none() {
+        let mut table = TomlTable::new();
+        table.set_implicit(true);
+        doc["mcp_servers"] = TomlItem::Table(table);
+    }
+
+    let McpServerConfig {
+        transport,
+        startup_timeout_sec,
+        tool_timeout_sec,
+        ..
+    } = entry;
+
+    let mut entry_tbl = TomlTable::new();
+    entry_tbl.set_implicit(false);
+
+    match transport {
+        McpServerTransportConfig::Stdio { command, args, env } => {
+            entry_tbl["command"] = value(command);
+
+            if !args.is_empty() {
+                let mut args_array = TomlArray::new();
+                for arg in args {
+                    args_array.push(arg);
+                }
+                entry_tbl["args"] = TomlItem::Value(args_array.into());
+            }
+
+            if let Some(env) = env
+                && !env.is_empty() {
+                    let mut env_tbl = TomlTable::new();
+                    env_tbl.set_implicit(false);
+                    let mut pairs: Vec<_> = env.into_iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    for (key, value_str) in pairs {
+                        env_tbl.insert(&key, value(value_str));
+                    }
+                    entry_tbl["env"] = TomlItem::Table(env_tbl);
+                }
+        }
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            bearer_token_env_var,
+        } => {
+            entry_tbl["url"] = value(url);
+            if let Some(token_env) = bearer_token_env_var {
+                entry_tbl["bearer_token_env_var"] = value(token_env);
+            }
+        }
+    }
+
+    if let Some(timeout) = startup_timeout_sec {
+        entry_tbl["startup_timeout_sec"] = value(timeout.as_secs_f64());
+    }
+
+    if let Some(timeout) = tool_timeout_sec {
+        entry_tbl["tool_timeout_sec"] = value(timeout.as_secs_f64());
+    }
+
+    doc["mcp_servers"][name] = TomlItem::Table(entry_tbl);
+    std::fs::write(&path, doc.to_string())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn remove_project_mcp_server(project_root: &std::path::Path, name: &str) -> Result<bool> {
+    use toml_edit::DocumentMut;
+    let path = project_root.join(".codex").join("config.toml");
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(anyhow!(e)),
+    };
+
+    let mut doc = contents.parse::<DocumentMut>().map_err(|e| anyhow!(e))?;
+    let Some(mcp_tbl) = doc["mcp_servers"].as_table_mut() else {
+        return Ok(false);
+    };
+    let removed = mcp_tbl.remove(name).is_some();
+    if removed {
+        std::fs::write(&path, doc.to_string())
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+    Ok(removed)
 }
 
 async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs) -> Result<()> {
