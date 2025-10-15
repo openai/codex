@@ -43,11 +43,11 @@ pub struct Cli {
 
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
-    #[arg(long = "sandbox", short = 's')]
+    #[arg(long = "sandbox", short = 's', value_enum)]
     pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
 
     /// Configure when the model requires human approval before executing a command.
-    #[arg(long = "ask-for-approval", short = 'a')]
+    #[arg(long = "ask-for-approval", short = 'a', value_enum)]
     pub approval_policy: Option<ApprovalModeCliArg>,
 
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
@@ -60,7 +60,7 @@ pub struct Cli {
         long = "dangerously-bypass-approvals-and-sandbox",
         alias = "yolo",
         default_value_t = false,
-        conflicts_with_all = ["approval_policy", "full_auto"]
+        conflicts_with_all = ["approval_policy", "sandbox_mode", "full_auto"]
     )]
     pub dangerously_bypass_approvals_and_sandbox: bool,
 
