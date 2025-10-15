@@ -63,7 +63,6 @@ This document describes how to wire true sub-agent orchestration into the Codex 
 | --- | --- | --- |
 | Orchestrator instantiation | `codex-rs/tui/src/app.rs:82` | Inject an `AgentOrchestrator` alongside the existing `ConversationManager`. |
 | Slash-command parsing | `codex-rs/tui/src/slash_command.rs` & `codex-rs/tui/src/chatwidget.rs:1126` | Add `/delegate` (or `/agent`) command to open a delegate picker or dispatch a delegate request. |
-| UI → orchestrator request | `codex-rs/tui/src/chatwidget.rs:773` (user submissions) | When the message starts with `#agent:<id>` or `/delegate`, emit `AppEvent::DelegateRequest`. |
 | App event handling | `codex-rs/tui/src/app.rs:247` (`while let Some(event)`) | Route new `AppEvent::DelegateRequest` to `AgentOrchestrator::handle_request`. |
 | Event fan-in | `codex-rs/tui/src/app.rs:330` | Handle `AppEvent::DelegateUpdate` to mutate transcript/history cells. |
 | Status card | `codex-rs/tui/src/status/card.rs:68` | Pull orchestrator metrics (active agents, last run) to display in `/status`. |
@@ -88,8 +87,6 @@ This document describes how to wire true sub-agent orchestration into the Codex 
   - Add `SlashCommand::Delegate` in `codex-rs/tui/src/slash_command.rs`.  
   - In `ChatWidget::dispatch_command` (`codex-rs/tui/src/chatwidget.rs:1126`), call a new method `open_delegate_dialog()` that lists available agents via `AgentRegistry::list_agent_ids`.
 
-- **Inline mention**: allow prompts to start with `#<agent_id>` to route directly. Processing lives in `ChatWidget::submit_text_message` where we already prepare `InputItem` vectors.
-  - **Implemented**: the current TUI recognizes prompts beginning with `#agent_id` and hands them to the orchestrator, so progress and completion surface directly in the transcript without additional UI steps.
 
 ### 3.2 Transcript Presentation
 

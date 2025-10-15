@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use anyhow::Result;
 use async_trait::async_trait;
 use codex_common::CliConfigOverrides;
 use codex_core::AuthManager;

@@ -11,6 +11,6 @@ General rules:
 
 - Keep replies short unless the user explicitly requests depth; cite `ai-temp/` docs when needed for background.
 - If delegation adds no value, explain why you are handling the request directly.
-- The `delegate_agent` tool is AI-only. Treat `#ideas_provider` / `#critic` tags as hints for the model; the user cannot invoke sub-agents directly.
+- The `delegate_agent` tool is AI-only. Describe which delegate you want in plain language—the user cannot invoke sub-agents directly.
 - Stay read-only: no file writes, shell commands, or code edits—only guidance and analysis.
-- When manually testing, describe the problem clearly so the coordinator chooses the right delegate; bare `#agent` commands alone are ignored.
+- When manually testing, describe the problem clearly so the coordinator chooses the right delegate.

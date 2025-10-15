@@ -27,13 +27,13 @@ This note captures the patterns we observed while digging into the built-in plan
 - Reuse the same pattern: declare a schema-rich `ToolSpec`, keep the handler stateless, and emit structured events for the UI.
 - Guard inclusion with config or profile flags so we can stage features safely.
 - Keep UX logic (streaming, history cells) in the client; server code just transports structured data.
-- Treat delegation as an AI-triggered capability: the user cannot directly execute sub-agents; instead, the main model decides when to call the delegation tool, with `#agent_id` serving only as a hint in prompts and autocomplete.
+- Treat delegation as an AI-triggered capability: the user cannot directly execute sub-agents; instead, the main model decides when to call the delegation tool based on conversational context.
 
 ## 7. Multi-Agent Delegate Tool Blueprint
 
 ### 7.1 Invocation Model
 - The primary assistant issues a tool call (working name: `delegate_agent`) whenever it wants help from a sub-agent. Users supply plain language requests; the model chooses whether delegation is appropriate.
-- The frontend passes user text verbatim. It never intercepts hash-prefixed tokens—`#critic`, `#ideas_provider`, etc.—beyond offering them in autocomplete. Instructions explain that these tags hint which agent to choose.
+- The frontend passes user text verbatim. Guidance about which agent to choose lives in instructions rather than inline tokens.
 
 ### 7.2 Tool Spec Shape
 ```json
@@ -67,5 +67,5 @@ This note captures the patterns we observed while digging into the built-in plan
 - Because users cannot trigger the tool directly, slash commands and message preprocessing stay untouched; guidance lives in instructions and autocomplete metadata.
 
 ### 7.5 Instruction Updates
-- Primary instructions clarify that `#agent_id` tags are hints encouraging the assistant to invoke the delegation tool, not commands.
+- Primary instructions clarify how to phrase requests when the assistant should consider delegation; there are no special inline tokens required.
 - Sub-agent instructions remain focused on their specialised roles; the orchestrator constructs the prompt passed through the tool payload.

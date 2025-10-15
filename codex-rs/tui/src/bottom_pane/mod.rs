@@ -5,7 +5,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_file_search::FileMatch;
-use codex_multi_agent::DelegateSessionSummary;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -23,7 +22,6 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
-mod delegate_popup;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
@@ -490,15 +488,6 @@ impl BottomPane {
 
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
-        self.request_redraw();
-    }
-
-    pub(crate) fn on_delegate_search_result(
-        &mut self,
-        query: String,
-        matches: Vec<DelegateSessionSummary>,
-    ) {
-        self.composer.on_delegate_search_result(query, matches);
         self.request_redraw();
     }
 

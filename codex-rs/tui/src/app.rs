@@ -345,24 +345,6 @@ impl App {
                     self.file_search.on_user_query(query);
                 }
             }
-            AppEvent::StartDelegateSearch(query) => {
-                let all_sessions = self.delegate_orchestrator.active_sessions().await;
-                let query_lower = query.to_lowercase();
-                let mut matches: Vec<_> = all_sessions
-                    .into_iter()
-                    .filter(|summary| {
-                        query_lower.is_empty()
-                            || summary
-                                .agent_id
-                                .as_str()
-                                .to_lowercase()
-                                .contains(&query_lower)
-                    })
-                    .collect();
-                matches.sort_by(|a, b| b.last_interacted_at.cmp(&a.last_interacted_at));
-                self.chat_widget
-                    .apply_delegate_search_result(query, matches);
-            }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }

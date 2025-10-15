@@ -35,9 +35,6 @@ pub(crate) enum AppEvent {
     /// the `@`). Previous searches may be cancelled by the app layer so there
     /// is at most one in-flight search.
     StartFileSearch(String),
-    /// Kick off delegate suggestions for the current `#` token.
-    StartDelegateSearch(String),
-
     /// Result of a completed asynchronous file search. The `query` echoes the
     /// original search term so the UI can decide whether the results are
     /// still relevant.

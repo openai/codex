@@ -36,8 +36,6 @@
   - A status banner showing `In #<agent>` while switched, with a shortcut to return to the primary agent.
   - History cells that log switch events (`Entered #critic`, `Returned from #critic – applied adjustments`).
   - Optional shortcut `/agent return` to exit quickly.
-- Provide an autocomplete (`#agent_id · YYYY-MM-DD HH:MM`) that lists only delegates invoked during the current main-agent session so users can target the right sub-agent before switching.
-- The composer now surfaces this autocomplete automatically when typing `#`; selecting an entry both inserts `#agent_id` into the prompt and switches context to that agent.
 - While switched, show an inline footer indicator (`In #agent`) next to the context meter so the active delegate is always visible.
 - Hide picker entries whose conversations are no longer resumable (e.g., cleanup, failure). If the user attempts to switch into a stale handle, surface an error toast and keep them in the current context while logging the failure.
 - While switched, the prompt input should clearly identify the active agent (e.g., placeholder text, accent color) to avoid accidental edits.
@@ -71,7 +69,6 @@
 - `codex-rs/tui/src/status/helpers.rs` & `/status` widgets – surface the active agent stack and recent switch history.
 - `codex-rs/tui/src/slash_command.rs` – wire `/agent enter <id>` / `/agent return` (or similar) commands if we expose keyboard-driven switching.
 - `codex-rs/tui/src/tests/` – update snapshot/unit tests to cover the new event stream and UI affordances.
-- Autocomplete picker (similar to the file search UI) that lists delegates invoked during the current main-agent session as `#agent_id · YYYY-MM-DD HH:MM`, making it easy to choose the desired session before switching.
 - We explicitly skip building a “replay” browser for older delegate sessions in this iteration.
 
 ### CLI & Configuration
