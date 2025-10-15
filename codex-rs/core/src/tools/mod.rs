@@ -58,12 +58,15 @@ pub(crate) async fn handle_container_exec_with_params(
 ) -> Result<String, FunctionCallError> {
     let otel_event_manager = turn_context.client.get_otel_event_manager();
 
+    let (effective_approval, effective_sandbox) = sess
+        .effective_policies(turn_context.approval_policy, &turn_context.sandbox_policy)
+        .await;
+
     if params.with_escalated_permissions.unwrap_or(false)
-        && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
+        && !matches!(effective_approval, AskForApproval::OnRequest)
     {
         return Err(FunctionCallError::RespondToModel(format!(
-            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-            policy = turn_context.approval_policy
+            "approval policy is {effective_approval:?}; reject command — you should not ask for escalated permissions if the approval policy is {effective_approval:?}"
         )));
     }
 
@@ -129,10 +132,9 @@ pub(crate) async fn handle_container_exec_with_params(
         None => ExecutionMode::Shell,
     };
 
-    sess.services.executor.update_environment(
-        turn_context.sandbox_policy.clone(),
-        turn_context.cwd.clone(),
-    );
+    sess.services
+        .executor
+        .update_environment(effective_sandbox.clone(), turn_context.cwd.clone());
 
     let prepared_exec = PreparedExec::new(
         exec_command_context,
@@ -148,11 +150,7 @@ pub(crate) async fn handle_container_exec_with_params(
     );
 
     let output_result = sess
-        .run_exec_with_events(
-            turn_diff_tracker.clone(),
-            prepared_exec,
-            turn_context.approval_policy,
-        )
+        .run_exec_with_events(turn_diff_tracker.clone(), prepared_exec, effective_approval)
         .await;
 
     // always make sure to truncate the output if its length isn't controlled.

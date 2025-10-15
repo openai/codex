@@ -320,6 +320,11 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Allow changing approval and sandbox modes while a task is in progress.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub midturn_approval_mode_enabled: bool,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]

@@ -87,4 +87,7 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
+
+    /// Show the approval mode selection popup.
+    OpenApprovalsPopup,
 }

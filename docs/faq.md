@@ -16,7 +16,7 @@ It's possible that your [API account needs to be verified](https://help.openai.c
 
 ### How do I stop Codex from editing my files?
 
-By default, Codex can modify files in your current working directory (Auto mode). To prevent edits, run `codex` in read-only mode with the CLI flag `--sandbox read-only`. Alternatively, you can change the approval level mid-conversation with `/approvals`.
+By default, Codex can modify files in your current working directory (Auto mode). To prevent edits, run `codex` in read-only mode with the CLI flag `--sandbox read-only`. You can change the approval level mid-conversation with `/approvals`; to adjust the mode during an active task, set `[tui].midturn_approval_mode_enabled = true` in `config.toml`.
 
 ### Does it work on Windows?
 

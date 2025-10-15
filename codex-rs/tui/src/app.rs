@@ -71,6 +71,7 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    pub(crate) midturn_approval_mode_enabled: bool,
 }
 
 impl App {
@@ -94,6 +95,8 @@ impl App {
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
 
+        let midturn_approval_mode_enabled = config.tui_midturn_approval_mode_enabled;
+
         let chat_widget = match resume_selection {
             ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
@@ -104,6 +107,7 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
+                    midturn_approval_mode_enabled,
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -126,6 +130,7 @@ impl App {
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
+                    midturn_approval_mode_enabled,
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -152,6 +157,7 @@ impl App {
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            midturn_approval_mode_enabled,
         };
 
         let tui_events = tui.event_stream();
@@ -228,6 +234,7 @@ impl App {
                     initial_images: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
+                    midturn_approval_mode_enabled: self.midturn_approval_mode_enabled,
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
@@ -371,6 +378,9 @@ impl App {
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
+            }
+            AppEvent::OpenApprovalsPopup => {
+                self.chat_widget.open_approvals_popup();
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
@@ -521,6 +531,7 @@ mod tests {
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            midturn_approval_mode_enabled: false,
         }
     }
 

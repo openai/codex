@@ -748,6 +748,26 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
     }
 
+    pub(crate) async fn effective_policies(
+        &self,
+        default_approval: AskForApproval,
+        default_sandbox: &SandboxPolicy,
+    ) -> (AskForApproval, SandboxPolicy) {
+        let state = self.state.lock().await;
+        state.effective_policies(default_approval, default_sandbox)
+    }
+
+    async fn set_policy_overrides(
+        &self,
+        approval: Option<AskForApproval>,
+        sandbox: Option<SandboxPolicy>,
+    ) {
+        if approval.is_some() || sandbox.is_some() {
+            let mut state = self.state.lock().await;
+            state.set_live_policy_overrides(approval, sandbox);
+        }
+    }
+
     pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
         let mut items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
@@ -1213,8 +1233,11 @@ async fn submission_loop(
                     sess.conversation_id,
                 );
 
-                let new_approval_policy = approval_policy.unwrap_or(prev.approval_policy);
-                let new_sandbox_policy = sandbox_policy
+                let approval_override = approval_policy;
+                let sandbox_override = sandbox_policy.clone();
+
+                let new_approval_policy = approval_override.unwrap_or(prev.approval_policy);
+                let new_sandbox_policy = sandbox_override
                     .clone()
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
@@ -1241,16 +1264,19 @@ async fn submission_loop(
                 turn_context = Arc::new(new_turn_context);
 
                 // Optionally persist changes to model / effort
-                if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
+                if cwd.is_some() || approval_override.is_some() || sandbox_override.is_some() {
                     sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
                         cwd,
-                        approval_policy,
-                        sandbox_policy,
+                        approval_override,
+                        sandbox_override.clone(),
                         // Shell is not configurable from turn to turn
                         None,
                     ))])
                     .await;
                 }
+
+                sess.set_policy_overrides(approval_override, sandbox_override)
+                    .await;
             }
             Op::UserInput { items } => {
                 turn_context
@@ -1323,7 +1349,7 @@ async fn submission_loop(
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
                         approval_policy,
-                        sandbox_policy,
+                        sandbox_policy: sandbox_policy.clone(),
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
                         is_review_mode: false,
@@ -1351,6 +1377,9 @@ async fn submission_loop(
 
                     // Install the new persistent context for subsequent tasks/turns.
                     turn_context = Arc::new(fresh_turn_context);
+
+                    sess.set_policy_overrides(Some(approval_policy), Some(sandbox_policy))
+                        .await;
 
                     // no current task, spawn a new one with the per-turn context
                     sess.spawn_task(Arc::clone(&turn_context), sub.id, items, RegularTask)

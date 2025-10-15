@@ -143,6 +143,9 @@ pub struct Config {
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
 
+    /// Allow the TUI to change approval/sandbox policy mid-turn.
+    pub tui_midturn_approval_mode_enabled: bool,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -1207,6 +1210,11 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            tui_midturn_approval_mode_enabled: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.midturn_approval_mode_enabled)
+                .unwrap_or(false),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2253,6 +2261,7 @@ model_verbosity = "high"
                 windows_wsl_setup_acknowledged: false,
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                tui_midturn_approval_mode_enabled: false,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -2317,6 +2326,7 @@ model_verbosity = "high"
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_midturn_approval_mode_enabled: false,
             otel: OtelConfig::default(),
         };
 
@@ -2396,6 +2406,7 @@ model_verbosity = "high"
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_midturn_approval_mode_enabled: false,
             otel: OtelConfig::default(),
         };
 
@@ -2461,6 +2472,7 @@ model_verbosity = "high"
             windows_wsl_setup_acknowledged: false,
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            tui_midturn_approval_mode_enabled: false,
             otel: OtelConfig::default(),
         };
 

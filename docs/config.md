@@ -769,6 +769,10 @@ notifications = true
 # You can optionally filter to specific notification types.
 # Available types are "agent-turn-complete" and "approval-requested".
 notifications = [ "agent-turn-complete", "approval-requested" ]
+
+# Allow changing approval and sandbox policy while a task is running.
+# Defaults to false; set to true when you understand the security trade-offs.
+midturn_approval_mode_enabled = true
 ```
 
 > [!NOTE]
@@ -803,6 +807,7 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `mcp_servers.<id>.tool_timeout_sec`              | number                                                            | Per-tool timeout in seconds (default: 60). Accepts fractional values; omit to use the default.                             |
 | `model_providers.<id>.name`                      | string                                                            | Display name.                                                                                                              |
 | `model_providers.<id>.base_url`                  | string                                                            | API base URL.                                                                                                              |
+| `tui.midturn_approval_mode_enabled`              | boolean                                                           | Enable mid-turn approval mode changes in the TUI (defaults to false; see [live-midturn-approvals-security](./live-midturn-approvals-security.md)). |
 | `model_providers.<id>.env_key`                   | string                                                            | Env var for API key.                                                                                                       |
 | `model_providers.<id>.wire_api`                  | `chat` \| `responses`                                             | Protocol used (default: `chat`).                                                                                           |
 | `model_providers.<id>.query_params`              | map<string,string>                                                | Extra query params (e.g., Azure `api-version`).                                                                            |

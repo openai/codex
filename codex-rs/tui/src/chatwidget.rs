@@ -219,6 +219,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) midturn_approval_mode_enabled: bool,
 }
 
 pub(crate) struct ChatWidget {
@@ -267,6 +268,8 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+    midturn_approval_mode_enabled: bool,
+    mode_change_banner_pending: bool,
 }
 
 struct UserMessage {
@@ -422,6 +425,8 @@ impl ChatWidget {
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
         });
+
+        self.maybe_emit_mode_change_banner();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -524,6 +529,8 @@ impl ChatWidget {
         }
 
         self.request_redraw();
+
+        self.maybe_emit_mode_change_banner();
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -912,6 +919,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            midturn_approval_mode_enabled,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -928,6 +936,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                midturn_approval_mode_enabled,
             }),
             active_cell: None,
             config: config.clone(),
@@ -958,6 +967,8 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            midturn_approval_mode_enabled,
+            mode_change_banner_pending: false,
         }
     }
 
@@ -975,6 +986,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            midturn_approval_mode_enabled,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -993,6 +1005,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                midturn_approval_mode_enabled,
             }),
             active_cell: None,
             config: config.clone(),
@@ -1023,6 +1036,8 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            midturn_approval_mode_enabled,
+            mode_change_banner_pending: false,
         }
     }
 
@@ -1115,8 +1130,16 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn command_available_during_task(&self, cmd: SlashCommand) -> bool {
+        if self.midturn_approval_mode_enabled && matches!(cmd, SlashCommand::Approvals) {
+            true
+        } else {
+            cmd.available_during_task()
+        }
+    }
+
     fn dispatch_command(&mut self, cmd: SlashCommand) {
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if self.bottom_pane.is_task_running() && !self.command_available_during_task(cmd) {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -1579,6 +1602,28 @@ impl ChatWidget {
         self.refresh_queued_user_messages();
     }
 
+    fn maybe_emit_mode_change_banner(&mut self) {
+        if !self.midturn_approval_mode_enabled || !self.mode_change_banner_pending {
+            return;
+        }
+        let approval = self.config.approval_policy.to_string();
+        use codex_core::protocol::SandboxPolicy::*;
+        let sandbox_label = match &self.config.sandbox_policy {
+            ReadOnly => "read-only".to_string(),
+            DangerFullAccess => "danger-full-access".to_string(),
+            WorkspaceWrite { .. } => "workspace-write".to_string(),
+        };
+        let message = format!(
+            "Approval mode was updated during this turn. Current: approval={approval}, sandbox={sandbox_label}."
+        );
+        self.add_to_history(history_cell::new_info_event(
+            message,
+            Some("Use /status to view current settings".to_string()),
+        ));
+        self.mode_change_banner_pending = false;
+        self.request_redraw();
+    }
+
     /// Rebuild and update the queued user messages from the current queue.
     fn refresh_queued_user_messages(&mut self) {
         let messages: Vec<String> = self
@@ -1847,11 +1892,17 @@ impl ChatWidget {
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
         self.config.approval_policy = policy;
+        if self.midturn_approval_mode_enabled && self.bottom_pane.is_task_running() {
+            self.mode_change_banner_pending = true;
+        }
     }
 
     /// Set the sandbox policy in the widget's config copy.
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
         self.config.sandbox_policy = policy;
+        if self.midturn_approval_mode_enabled && self.bottom_pane.is_task_running() {
+            self.mode_change_banner_pending = true;
+        }
     }
 
     /// Set the reasoning effort in the widget's config copy.

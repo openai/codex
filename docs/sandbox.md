@@ -35,6 +35,9 @@ Yes, you can disable all approval prompts with `--ask-for-approval never`. This 
 
 > Note: In `workspace-write`, network is disabled by default unless enabled in config (`[sandbox_workspace_write].network_access = true`).
 
+> [!WARNING]
+> You can enable live approval-mode changes during a running task by setting `[tui].midturn_approval_mode_enabled = true` in `config.toml`. Changes take effect immediately for subsequent commands and patches—review [live-midturn-approvals-security](./live-midturn-approvals-security.md) before turning it on.
+
 #### Fine-tuning in `config.toml`
 
 ```toml

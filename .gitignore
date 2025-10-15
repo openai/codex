@@ -79,6 +79,10 @@ package.json-e
 session.ts-e
 CHANGELOG.ignore.md
 
+# local Rust toolchain caches (do not commit)
+codex-rs/.cargo/
+codex-rs/.rustup/
+
 # nix related
 .direnv
 .envrc

@@ -57,10 +57,15 @@ pub(crate) struct ApprovalOverlay {
     options: Vec<ApprovalOption>,
     current_complete: bool,
     done: bool,
+    midturn_approval_mode_enabled: bool,
 }
 
 impl ApprovalOverlay {
-    pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
+    pub fn new(
+        request: ApprovalRequest,
+        app_event_tx: AppEventSender,
+        midturn_approval_mode_enabled: bool,
+    ) -> Self {
         let mut view = Self {
             current_request: None,
             current_variant: None,
@@ -70,6 +75,7 @@ impl ApprovalOverlay {
             options: Vec::new(),
             current_complete: false,
             done: false,
+            midturn_approval_mode_enabled,
         };
         view.set_current(request);
         view
@@ -84,7 +90,8 @@ impl ApprovalOverlay {
         let ApprovalRequestState { variant, header } = ApprovalRequestState::from(request);
         self.current_variant = Some(variant.clone());
         self.current_complete = false;
-        let (options, params) = Self::build_options(variant, header);
+        let (options, params) =
+            Self::build_options(variant, header, self.midturn_approval_mode_enabled);
         self.options = options;
         self.list = ListSelectionView::new(params, self.app_event_tx.clone());
     }
@@ -92,6 +99,7 @@ impl ApprovalOverlay {
     fn build_options(
         variant: ApprovalVariant,
         header: Box<dyn Renderable>,
+        midturn_approval_mode_enabled: bool,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
             ApprovalVariant::Exec { .. } => (
@@ -120,14 +128,23 @@ impl ApprovalOverlay {
             })
             .collect();
 
+        let mut footer_spans = vec![
+            "Press ".into(),
+            key_hint::plain(KeyCode::Enter).into(),
+            " to confirm or ".into(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " to cancel".into(),
+        ];
+        if midturn_approval_mode_enabled {
+            footer_spans.extend([
+                " · Press ".into(),
+                key_hint::plain(KeyCode::Char('c')).into(),
+                " to change approval mode".into(),
+            ]);
+        }
+
         let params = SelectionViewParams {
-            footer_hint: Some(Line::from(vec![
-                "Press ".into(),
-                key_hint::plain(KeyCode::Enter).into(),
-                " to confirm or ".into(),
-                key_hint::plain(KeyCode::Esc).into(),
-                " to cancel".into(),
-            ])),
+            footer_hint: Some(Line::from(footer_spans)),
             items,
             header,
             ..Default::default()
@@ -197,6 +214,15 @@ impl ApprovalOverlay {
                 } else {
                     false
                 }
+            }
+            KeyEvent {
+                kind: KeyEventKind::Press,
+                code: KeyCode::Char('c'),
+                modifiers,
+                ..
+            } if modifiers.is_empty() && self.midturn_approval_mode_enabled => {
+                self.app_event_tx.send(AppEvent::OpenApprovalsPopup);
+                true
             }
             e => {
                 if let Some(idx) = self
@@ -411,7 +437,7 @@ mod tests {
     fn ctrl_c_aborts_and_clears_queue() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_exec_request(), tx);
+        let mut view = ApprovalOverlay::new(make_exec_request(), tx, false);
         view.enqueue_request(make_exec_request());
         assert_eq!(CancellationEvent::Handled, view.on_ctrl_c());
         assert!(view.queue.is_empty());
@@ -422,7 +448,7 @@ mod tests {
     fn shortcut_triggers_selection() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_exec_request(), tx);
+        let mut view = ApprovalOverlay::new(make_exec_request(), tx, false);
         assert!(!view.is_complete());
         view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         // We expect at least one CodexOp message in the queue.
@@ -447,7 +473,7 @@ mod tests {
             reason: None,
         };
 
-        let view = ApprovalOverlay::new(exec_request, tx);
+        let view = ApprovalOverlay::new(exec_request, tx, false);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, view.desired_height(80)));
         view.render(Rect::new(0, 0, 80, view.desired_height(80)), &mut buf);
 
@@ -498,7 +524,7 @@ mod tests {
     fn enter_sets_last_selected_index_without_dismissing() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut view = ApprovalOverlay::new(make_exec_request(), tx);
+        let mut view = ApprovalOverlay::new(make_exec_request(), tx, false);
         view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 

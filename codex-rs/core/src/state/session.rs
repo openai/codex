@@ -3,7 +3,9 @@
 use codex_protocol::models::ResponseItem;
 
 use crate::conversation_history::ConversationHistory;
+use crate::protocol::AskForApproval;
 use crate::protocol::RateLimitSnapshot;
+use crate::protocol::SandboxPolicy;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 
@@ -13,6 +15,8 @@ pub(crate) struct SessionState {
     pub(crate) history: ConversationHistory,
     pub(crate) token_info: Option<TokenUsageInfo>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) approval_policy_override: Option<AskForApproval>,
+    pub(crate) sandbox_policy_override: Option<SandboxPolicy>,
 }
 
 impl SessionState {
@@ -71,6 +75,32 @@ impl SessionState {
                 self.token_info = Some(TokenUsageInfo::full_context_window(context_window));
             }
         }
+    }
+
+    pub(crate) fn set_live_policy_overrides(
+        &mut self,
+        approval: Option<AskForApproval>,
+        sandbox: Option<SandboxPolicy>,
+    ) {
+        if let Some(approval) = approval {
+            self.approval_policy_override = Some(approval);
+        }
+        if let Some(sandbox) = sandbox {
+            self.sandbox_policy_override = Some(sandbox);
+        }
+    }
+
+    pub(crate) fn effective_policies(
+        &self,
+        default_approval: AskForApproval,
+        default_sandbox: &SandboxPolicy,
+    ) -> (AskForApproval, SandboxPolicy) {
+        let approval = self.approval_policy_override.unwrap_or(default_approval);
+        let sandbox = self
+            .sandbox_policy_override
+            .clone()
+            .unwrap_or_else(|| default_sandbox.clone());
+        (approval, sandbox)
     }
 
     // Pending input/approval moved to TurnState.
