@@ -14,16 +14,11 @@ use core_test_support::test_codex_exec::test_codex_exec;
 use serde_json::Value;
 use serde_json::json;
 
-/// With `--approve-all`, codex-exec should set approval policy to `on-request`
-/// and automatically approve any approval requests from the core harness.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approve_all_auto_accepts_exec() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
+async fn run_exec_with_args(args: &[&str]) -> Result<String> {
     let test = test_codex_exec();
 
     let call_id = "exec-approve";
-    let args = json!({
+    let exec_args = json!({
         "command": [
             if cfg!(windows) { "cmd.exe" } else { "/bin/sh" },
             if cfg!(windows) { "/C" } else { "-lc" },
@@ -36,7 +31,7 @@ async fn approve_all_auto_accepts_exec() -> Result<()> {
     let response_streams = vec![
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell", &serde_json::to_string(&args)?),
+            ev_function_call(call_id, "shell", &serde_json::to_string(&exec_args)?),
             ev_completed("resp-1"),
         ]),
         sse(vec![
@@ -48,14 +43,8 @@ async fn approve_all_auto_accepts_exec() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mock = mount_sse_sequence(&server, response_streams).await;
 
-    test.cmd_with_server(&server)
-        .arg("--skip-git-repo-check")
-        .arg("--approve-all")
-        .arg("train")
-        .assert()
-        .success();
+    test.cmd_with_server(&server).args(args).assert().success();
 
-    // The second POST to /responses should include the function_call_output for our call id.
     let requests = mock.requests();
     assert!(requests.len() >= 2, "expected at least two responses POSTs");
     let item = requests[1].function_call_output(call_id);
@@ -63,13 +52,29 @@ async fn approve_all_auto_accepts_exec() -> Result<()> {
         .get("output")
         .and_then(Value::as_str)
         .expect("function_call_output.output should be a string");
+
+    Ok(output_str.to_string())
+}
+
+/// Setting `features.approve_all=true` should switch to auto-approvals.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approve_all_auto_accepts_exec() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let output = run_exec_with_args(&[
+        "--skip-git-repo-check",
+        "-c",
+        "features.approve_all=true",
+        "train",
+    ])
+    .await?;
     assert!(
-        output_str.contains("Exit code: 0"),
-        "expected Exit code: 0 in output: {output_str}"
+        output.contains("Exit code: 0"),
+        "expected Exit code: 0 in output: {output}"
     );
     assert!(
-        output_str.contains("approve-all-ok"),
-        "expected command output in response: {output_str}"
+        output.contains("approve-all-ok"),
+        "expected command output in response: {output}"
     );
 
     Ok(())

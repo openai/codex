@@ -17,6 +17,7 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::features::Feature;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
@@ -59,7 +60,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         oss,
         config_profile,
         full_auto,
-        approve_all,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
         skip_git_repo_check,
@@ -169,13 +169,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model,
         review_model: None,
         config_profile,
-        // When --approve-all is set, use on-request and auto‑approve in the harness;
-        // otherwise default to never ask for approvals in headless mode.
-        approval_policy: Some(if approve_all {
-            AskForApproval::OnRequest
-        } else {
-            AskForApproval::Never
-        }),
+        // Default to never ask for approvals in headless mode. Feature flags can override.
+        approval_policy: Some(AskForApproval::Never),
         sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider,
@@ -197,6 +192,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+    let approve_all_enabled = config.features.enabled(Feature::ApproveAll);
 
     let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
 
@@ -365,8 +361,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }
-        // Auto-approve requests when --approve-all is enabled.
-        if approve_all {
+        // Auto-approve requests when the approve_all feature is enabled.
+        if approve_all_enabled {
             match &event.msg {
                 EventMsg::ExecApprovalRequest(_) => {
                     if let Err(e) = conversation
