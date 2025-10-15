@@ -31,6 +31,10 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Model to use for review sessions.
+    #[arg(long = "review-model")]
+    pub review_model: Option<String>,
+
     /// Convenience flag to select the local open source model provider.
     /// Equivalent to -c model_provider=oss; verifies a local Ollama server is
     /// running.

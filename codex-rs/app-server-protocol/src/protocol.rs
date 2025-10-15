@@ -201,6 +201,10 @@ pub struct NewConversationParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
+    /// Optional override for the review model name (e.g. "gpt-4o-mini").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_model: Option<String>,
+
     /// Configuration profile from config.toml to specify default options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
@@ -498,6 +502,7 @@ pub struct UserSavedConfig {
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub model: Option<String>,
+    pub review_model: Option<String>,
     /// The key in the `model_providers` map identifying the
     /// [`ModelProviderInfo`] to use.
     pub model_provider: Option<String>,
@@ -843,6 +848,7 @@ mod tests {
                 base_instructions: None,
                 include_plan_tool: None,
                 include_apply_patch_tool: None,
+                review_model: None,
             },
         };
         assert_eq!(

@@ -18,6 +18,10 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Model to use for review sessions.
+    #[arg(long = "review-model")]
+    pub review_model: Option<String>,
+
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
 

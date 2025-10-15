@@ -46,6 +46,7 @@ view_image = true
 
 [profiles.test]
 model = "gpt-4o"
+review_model = "gpt-4o-mini"
 approval_policy = "on-request"
 model_reasoning_effort = "high"
 model_reasoning_summary = "detailed"
@@ -105,6 +106,7 @@ async fn get_config_toml_parses_all_fields() {
                 "test".into(),
                 Profile {
                     model: Some("gpt-4o".into()),
+                    review_model: Some("gpt-4o-mini".into()),
                     approval_policy: Some(AskForApproval::OnRequest),
                     model_reasoning_effort: Some(ReasoningEffort::High),
                     model_reasoning_summary: Some(ReasoningSummary::Detailed),
