@@ -380,7 +380,7 @@ fn create_worker_count(num_workers: NonZero<usize>) -> WorkerCount {
 fn create_pattern(pattern: &str) -> Pattern {
     Pattern::new(
         pattern,
-        CaseMatching::Smart,
+        CaseMatching::Ignore,
         Normalization::Smart,
         AtomKind::Fuzzy,
     )
@@ -419,5 +419,15 @@ mod tests {
         ];
 
         assert_eq!(matches, expected);
+    }
+
+    #[test]
+    fn matcher_is_case_insensitive() {
+        let pattern = create_pattern("hello");
+        let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+        let mut utf32buf = Vec::<char>::new();
+        let haystack = Utf32Str::new("Sources/HelloWorld.swift", &mut utf32buf);
+
+        assert!(pattern.score(haystack, &mut matcher).is_some());
     }
 }
