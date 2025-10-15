@@ -1,4 +1,4 @@
-use crate::bash::parse_bash_lc_plain_commands;
+use crate::parse_command::parse_command_as_tokens;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
     #[cfg(target_os = "windows")]
@@ -19,7 +19,7 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
     // introduce side effects ( "&&", "||", ";", and "|" ). If every
     // individual command in the script is itself a known‑safe command, then
     // the composite expression is considered safe.
-    if let Some(all_commands) = parse_bash_lc_plain_commands(command)
+    if let Some(all_commands) = parse_command_as_tokens(command)
         && !all_commands.is_empty()
         && all_commands
             .iter()
