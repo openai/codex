@@ -550,6 +550,8 @@ pub struct SendUserTurnParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_output_json_schema: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -927,6 +929,68 @@ mod tests {
 
         let payload = ServerRequestPayload::ExecCommandApproval(params);
         assert_eq!(payload.request_with_id(RequestId::Integer(7)), request);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_send_user_turn_includes_schema_when_present() -> Result<()> {
+        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let schema = json!({"type": "object"});
+        let request = ClientRequest::SendUserTurn {
+            request_id: RequestId::Integer(9),
+            params: SendUserTurnParams {
+                conversation_id,
+                items: vec![InputItem::Text {
+                    text: "hello".to_string(),
+                }],
+                cwd: PathBuf::from("/tmp"),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                model: "gpt-5-codex".to_string(),
+                effort: Some(ReasoningEffort::Medium),
+                summary: ReasoningSummary::Auto,
+                final_output_json_schema: Some(schema.clone()),
+            },
+        };
+
+        let value = serde_json::to_value(&request)?;
+        let params = value
+            .get("params")
+            .and_then(|params| params.as_object())
+            .expect("params should be an object");
+        assert_eq!(params.get("finalOutputJsonSchema"), Some(&schema));
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_send_user_turn_omits_schema_when_absent() -> Result<()> {
+        let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let request = ClientRequest::SendUserTurn {
+            request_id: RequestId::Integer(10),
+            params: SendUserTurnParams {
+                conversation_id,
+                items: vec![InputItem::Text {
+                    text: "hello".to_string(),
+                }],
+                cwd: PathBuf::from("/tmp"),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                model: "gpt-5-codex".to_string(),
+                effort: Some(ReasoningEffort::Medium),
+                summary: ReasoningSummary::Auto,
+                final_output_json_schema: None,
+            },
+        };
+
+        let value = serde_json::to_value(&request)?;
+        let params = value
+            .get("params")
+            .and_then(|params| params.as_object())
+            .expect("params should be an object");
+        assert!(
+            !params.contains_key("finalOutputJsonSchema"),
+            "finalOutputJsonSchema should be omitted when not provided",
+        );
         Ok(())
     }
 }

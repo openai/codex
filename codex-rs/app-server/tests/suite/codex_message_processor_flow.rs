@@ -345,6 +345,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
             model: "mock-model".to_string(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            final_output_json_schema: None,
         })
         .await
         .expect("send sendUserTurn");
@@ -483,6 +484,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() {
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            final_output_json_schema: None,
         })
         .await
         .expect("send first sendUserTurn");
@@ -513,6 +515,7 @@ async fn test_send_user_turn_updates_sandbox_and_cwd_between_turns() {
             model: model.clone(),
             effort: Some(ReasoningEffort::Medium),
             summary: ReasoningSummary::Auto,
+            final_output_json_schema: None,
         })
         .await
         .expect("send second sendUserTurn");
