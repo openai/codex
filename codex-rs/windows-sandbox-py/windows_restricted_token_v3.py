@@ -10,6 +10,9 @@ import os
 import sys
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
+from env_utils import normalize_null_device_env
+from network_sandbox import NoNetConfig, apply_no_network_to_env
+
 
 # ---- Minimal SandboxPolicy model (compatible with the CLI) -------------------
 
@@ -57,7 +60,10 @@ class SandboxPolicy:
 advapi32 = c.WinDLL("advapi32", use_last_error=True)
 kernel32 = c.WinDLL("kernel32", use_last_error=True)
 secur32  = c.WinDLL("secur32", use_last_error=True)
-aclapi   = c.WinDLL("aclapi", use_last_error=True)
+try:
+    aclapi   = c.WinDLL("aclapi", use_last_error=True)
+except OSError:
+    aclapi   = c.WinDLL("advapi32", use_last_error=True)
 
 # Constants (selected)
 ERROR_SUCCESS = 0
@@ -75,7 +81,8 @@ STARTF_USESTDHANDLES       = 0x00000100
 INFINITE = 0xFFFFFFFF
 WAIT_OBJECT_0 = 0x00000000
 
-SE_GROUP_LOGON_ID = 0x000000C0000000  # high two bits set (0xC0000000)
+# Correct 32-bit mask for Logon SID attribute
+SE_GROUP_LOGON_ID = 0xC0000000
 
 # Job object
 JobObjectExtendedLimitInformation = 9
@@ -86,6 +93,16 @@ SE_FILE_OBJECT = 1
 DACL_SECURITY_INFORMATION = 0x00000004
 CONTAINER_INHERIT_ACE = 0x2
 OBJECT_INHERIT_ACE = 0x1
+SE_KERNEL_OBJECT = 6
+READ_CONTROL = 0x00020000
+WRITE_DAC = 0x00040000
+GENERIC_READ = 0x80000000
+GENERIC_WRITE = 0x40000000
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+OPEN_EXISTING = 3
+FILE_ATTRIBUTE_NORMAL = 0x00000080
+WinWorldSid = 1
 
 # ACCESS_MODE
 NOT_USED_ACCESS   = 0
@@ -104,23 +121,23 @@ FILE_GENERIC_WRITE   = 0x120116
 FILE_GENERIC_EXECUTE = 0x1200A0
 
 # structures
-class LUID(wt.Structure):
+class LUID(c.Structure):
     _fields_ = [("LowPart", wt.DWORD),
                 ("HighPart", wt.LONG)]
 
-class LUID_AND_ATTRIBUTES(wt.Structure):
+class LUID_AND_ATTRIBUTES(c.Structure):
     _fields_ = [("Luid", LUID),
                 ("Attributes", wt.DWORD)]
 
-class SID_AND_ATTRIBUTES(wt.Structure):
+class SID_AND_ATTRIBUTES(c.Structure):
     _fields_ = [("Sid", wt.LPVOID),
                 ("Attributes", wt.DWORD)]
 
-class TOKEN_GROUPS(wt.Structure):
+class TOKEN_GROUPS(c.Structure):
     _fields_ = [("GroupCount", wt.DWORD),
-                ("Groups", SID_AND_ATTRIBUTES * 1)]  # variable length; we will handle manually
+                ("Groups", SID_AND_ATTRIBUTES * 1)]  # variable length; manual handling below
 
-class STARTUPINFOW(wt.Structure):
+class STARTUPINFOW(c.Structure):
     _fields_ = [
         ("cb", wt.DWORD),
         ("lpReserved", wt.LPWSTR),
@@ -142,7 +159,7 @@ class STARTUPINFOW(wt.Structure):
         ("hStdError", wt.HANDLE),
     ]
 
-class PROCESS_INFORMATION(wt.Structure):
+class PROCESS_INFORMATION(c.Structure):
     _fields_ = [
         ("hProcess", wt.HANDLE),
         ("hThread", wt.HANDLE),
@@ -150,10 +167,10 @@ class PROCESS_INFORMATION(wt.Structure):
         ("dwThreadId", wt.DWORD),
     ]
 
-class SECURITY_DESCRIPTOR(wt.Structure):
+class SECURITY_DESCRIPTOR(c.Structure):
     _fields_ = [("_", wt.BYTE * 1)]  # opaque
 
-class TRUSTEE_W(wt.Structure):
+class TRUSTEE_W(c.Structure):
     _fields_ = [
         ("pMultipleTrustee", wt.LPVOID),
         ("MultipleTrusteeOperation", wt.DWORD),
@@ -162,7 +179,7 @@ class TRUSTEE_W(wt.Structure):
         ("ptstrName", wt.LPWSTR),
     ]
 
-class EXPLICIT_ACCESS_W(wt.Structure):
+class EXPLICIT_ACCESS_W(c.Structure):
     _fields_ = [
         ("grfAccessPermissions", wt.DWORD),
         ("grfAccessMode", wt.DWORD),
@@ -170,10 +187,10 @@ class EXPLICIT_ACCESS_W(wt.Structure):
         ("Trustee", TRUSTEE_W),
     ]
 
-class LARGE_INTEGER(wt.Union):
+class LARGE_INTEGER(c.Union):
     _fields_ = [("QuadPart", c.c_longlong)]
 
-class JOBOBJECT_BASIC_LIMIT_INFORMATION(wt.Structure):
+class JOBOBJECT_BASIC_LIMIT_INFORMATION(c.Structure):
     _fields_ = [
         ("PerProcessUserTimeLimit", LARGE_INTEGER),
         ("PerJobUserTimeLimit", LARGE_INTEGER),
@@ -186,7 +203,7 @@ class JOBOBJECT_BASIC_LIMIT_INFORMATION(wt.Structure):
         ("SchedulingClass", wt.DWORD),
     ]
 
-class IO_COUNTERS(wt.Structure):
+class IO_COUNTERS(c.Structure):
     _fields_ = [
         ("ReadOperationCount", c.c_ulonglong),
         ("WriteOperationCount", c.c_ulonglong),
@@ -196,7 +213,7 @@ class IO_COUNTERS(wt.Structure):
         ("OtherTransferCount", c.c_ulonglong),
     ]
 
-class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(wt.Structure):
+class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(c.Structure):
     _fields_ = [
         ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
         ("IoInfo", IO_COUNTERS),
@@ -213,6 +230,7 @@ advapi32.OpenProcessToken.restype  = wt.BOOL
 advapi32.GetTokenInformation.argtypes = [wt.HANDLE, wt.DWORD, wt.LPVOID, wt.DWORD, c.POINTER(wt.DWORD)]
 advapi32.GetTokenInformation.restype  = wt.BOOL
 TokenGroupsClass = 2  # TOKEN_INFORMATION_CLASS::TokenGroups
+TokenRestrictedSidsClass = 11  # TOKEN_INFORMATION_CLASS::TokenRestrictedSids
 
 advapi32.CreateRestrictedToken.argtypes = [
     wt.HANDLE, wt.DWORD,
@@ -231,6 +249,41 @@ advapi32.GetLengthSid.restype  = wt.DWORD
 
 advapi32.CopySid.argtypes = [wt.DWORD, wt.LPVOID, wt.LPVOID]
 advapi32.CopySid.restype  = wt.BOOL
+
+# Privilege APIs
+advapi32.LookupPrivilegeValueW.argtypes = [wt.LPCWSTR, wt.LPCWSTR, c.POINTER(LUID)]
+advapi32.LookupPrivilegeValueW.restype  = wt.BOOL
+
+class TOKEN_PRIVILEGES(c.Structure):
+    _fields_ = [
+        ("PrivilegeCount", wt.DWORD),
+        ("Privileges", LUID_AND_ATTRIBUTES * 1),
+    ]
+
+advapi32.AdjustTokenPrivileges.argtypes = [
+    wt.HANDLE, wt.BOOL,
+    c.POINTER(TOKEN_PRIVILEGES), wt.DWORD,
+    wt.LPVOID, c.POINTER(wt.DWORD),
+]
+advapi32.AdjustTokenPrivileges.restype  = wt.BOOL
+
+SE_PRIVILEGE_ENABLED      = 0x00000002
+SE_CHANGE_NOTIFY_NAME     = "SeChangeNotifyPrivilege"  # directory traverse / bypass traverse checking
+
+# Kernel object security (e.g., \Device\Null)
+advapi32.GetSecurityInfo.argtypes = [
+    wt.HANDLE, wt.DWORD, wt.DWORD,
+    c.POINTER(wt.LPVOID), c.POINTER(wt.LPVOID),
+    c.POINTER(wt.LPVOID), c.POINTER(wt.LPVOID),
+    c.POINTER(wt.LPVOID),
+]
+advapi32.GetSecurityInfo.restype = wt.DWORD
+
+advapi32.SetSecurityInfo.argtypes = [
+    wt.HANDLE, wt.DWORD, wt.DWORD,
+    wt.LPVOID, wt.LPVOID, wt.LPVOID, wt.LPVOID
+]
+advapi32.SetSecurityInfo.restype  = wt.DWORD
 
 kernel32.GetCurrentProcess.argtypes = []
 kernel32.GetCurrentProcess.restype  = wt.HANDLE
@@ -263,6 +316,10 @@ kernel32.SetInformationJobObject.restype  = wt.BOOL
 kernel32.AssignProcessToJobObject.argtypes = [wt.HANDLE, wt.HANDLE]
 kernel32.AssignProcessToJobObject.restype  = wt.BOOL
 
+# Effective rights from ACL (for diagnostics)
+advapi32.GetEffectiveRightsFromAclW.argtypes = [wt.LPVOID, c.POINTER(TRUSTEE_W), c.POINTER(wt.DWORD)]
+advapi32.GetEffectiveRightsFromAclW.restype  = wt.DWORD
+
 advapi32.CreateProcessAsUserW.argtypes = [
     wt.HANDLE, wt.LPCWSTR, wt.LPWSTR,
     wt.LPVOID, wt.LPVOID, wt.BOOL, wt.DWORD,
@@ -270,6 +327,9 @@ advapi32.CreateProcessAsUserW.argtypes = [
     c.POINTER(STARTUPINFOW), c.POINTER(PROCESS_INFORMATION)
 ]
 advapi32.CreateProcessAsUserW.restype  = wt.BOOL
+
+advapi32.CreateWellKnownSid.argtypes = [wt.DWORD, wt.LPVOID, wt.LPVOID, c.POINTER(wt.DWORD)]
+advapi32.CreateWellKnownSid.restype  = wt.BOOL
 
 aclapi.GetNamedSecurityInfoW.argtypes = [
     wt.LPCWSTR, wt.DWORD, wt.DWORD,
@@ -293,10 +353,88 @@ aclapi.SetNamedSecurityInfoW.restype  = wt.DWORD
 kernel32.LocalFree.argtypes = [wt.HLOCAL]
 kernel32.LocalFree.restype  = wt.HLOCAL
 
+# --- Diagnostics support -----------------------------------------------------
+
+advapi32.IsTokenRestricted.argtypes = [wt.HANDLE]
+advapi32.IsTokenRestricted.restype  = wt.BOOL
+
 secur32.ConvertSidToStringSidW = getattr(secur32, "ConvertSidToStringSidW", None)
 if secur32.ConvertSidToStringSidW:
     secur32.ConvertSidToStringSidW.argtypes = [wt.LPVOID, c.POINTER(wt.LPWSTR)]
     secur32.ConvertSidToStringSidW.restype  = wt.BOOL
+
+def _sid_str(psid: wt.LPVOID) -> str:
+    try:
+        if secur32.ConvertSidToStringSidW:
+            pw = wt.LPWSTR()
+            if secur32.ConvertSidToStringSidW(psid, c.byref(pw)):
+                s = pw.value
+                if pw:
+                    kernel32.LocalFree(pw)
+                return s
+    except Exception:
+        pass
+    return "<sid>"
+
+def _dump_restricted_sids(h_token: wt.HANDLE):
+    """Debug: list the Restricted SID set on the token."""
+    needed = wt.DWORD(0)
+    advapi32.GetTokenInformation(h_token, TokenRestrictedSidsClass, None, 0, c.byref(needed))
+    if needed.value == 0:
+        print("[sandbox:debug] restricted-sids: (none or query failed)", file=sys.stderr)
+        return
+    buf = (c.c_ubyte * needed.value)()
+    ok = advapi32.GetTokenInformation(h_token, TokenRestrictedSidsClass, buf, needed, c.byref(needed))
+    if not ok:
+        print("[sandbox:debug] restricted-sids: (query failed)", file=sys.stderr)
+        return
+    tgroups = c.cast(buf, c.POINTER(TOKEN_GROUPS)).contents
+    arr_t = SID_AND_ATTRIBUTES * tgroups.GroupCount
+    groups = c.cast(c.addressof(tgroups.Groups), c.POINTER(arr_t)).contents
+    lines = []
+    for i in range(tgroups.GroupCount):
+        lines.append(_sid_str(groups[i].Sid))
+    print(f"[sandbox:debug] restricted-sids count={tgroups.GroupCount} {lines}", file=sys.stderr)
+
+def _cwd_effective_write_report(path: str, psid_restrict: wt.LPVOID):
+    """Debug: report whether CWD grants FILE_GENERIC_WRITE to restricting SID and to Everyone."""
+    pSD = wt.LPVOID()
+    pDACL = wt.LPVOID()
+    code = aclapi.GetNamedSecurityInfoW(
+        wt.LPCWSTR(path), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+        None, None, c.byref(pDACL), None, c.byref(pSD)
+    )
+    if code != ERROR_SUCCESS or not pDACL:
+        print(f"[sandbox:debug] cwd dacl: query failed code={code}", file=sys.stderr)
+        if pSD: kernel32.LocalFree(pSD)
+        return
+    try:
+        # Build trustee for restricting SID
+        mask = wt.DWORD(0)
+        tr = TRUSTEE_W(None, 0, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, c.cast(psid_restrict, wt.LPWSTR))
+        code = advapi32.GetEffectiveRightsFromAclW(pDACL, c.byref(tr), c.byref(mask))
+        if code == ERROR_SUCCESS:
+            wr = bool(mask.value & FILE_GENERIC_WRITE)
+            print(f"[sandbox:debug] cwd write granted to restricting SID={wr} mask=0x{mask.value:08X}", file=sys.stderr)
+        else:
+            print(f"[sandbox:debug] cwd write check for restricting SID failed code={code}", file=sys.stderr)
+
+        # Build Everyone SID
+        size = wt.DWORD(0)
+        advapi32.CreateWellKnownSid(WinWorldSid, None, None, c.byref(size))
+        everyone_buf = (c.c_ubyte * size.value)()
+        if advapi32.CreateWellKnownSid(WinWorldSid, None, everyone_buf, c.byref(size)):
+            psid_everyone = c.cast(everyone_buf, wt.LPVOID)
+            mask2 = wt.DWORD(0)
+            tr2 = TRUSTEE_W(None, 0, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, c.cast(psid_everyone, wt.LPWSTR))
+            code2 = advapi32.GetEffectiveRightsFromAclW(pDACL, c.byref(tr2), c.byref(mask2))
+            if code2 == ERROR_SUCCESS:
+                wr2 = bool(mask2.value & FILE_GENERIC_WRITE)
+                print(f"[sandbox:debug] cwd write granted to Everyone={wr2} mask=0x{mask2.value:08X}", file=sys.stderr)
+            else:
+                print(f"[sandbox:debug] cwd write check for Everyone failed code={code2}", file=sys.stderr)
+    finally:
+        if pSD: kernel32.LocalFree(pSD)
 
 def _check_bool(ok: bool, fn: str):
     if not ok:
@@ -336,34 +474,133 @@ def _get_current_token_for_restriction() -> wt.HANDLE:
                 "OpenProcessToken")
     return h
 
-def _query_logon_sid_bytes(h_token: wt.HANDLE) -> bytes:
+# ---- Privilege enable helper -------------------------------------------------
+
+def _enable_single_privilege(h_token: wt.HANDLE, name: str):
+    luid = LUID()
+    _check_bool(advapi32.LookupPrivilegeValueW(None, wt.LPCWSTR(name), c.byref(luid)),
+                "LookupPrivilegeValueW")
+    tp = TOKEN_PRIVILEGES()
+    tp.PrivilegeCount = 1
+    tp.Privileges[0].Luid = luid
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED
+    _check_bool(advapi32.AdjustTokenPrivileges(h_token, False, c.byref(tp), 0, None, None),
+                "AdjustTokenPrivileges")
+    err = c.get_last_error()
+    if err != 0:  # ERROR_SUCCESS
+        raise c.WinError(err)
+
+# ---- Token group helpers -----------------------------------------------------
+
+def _get_logon_sid_bytes(h_token: wt.HANDLE) -> bytes:
     needed = wt.DWORD(0)
     advapi32.GetTokenInformation(h_token, TokenGroupsClass, None, 0, c.byref(needed))
-    if needed.value == 0:
+    if not needed.value:
         raise c.WinError(c.get_last_error())
-    buf = (c.c_byte * needed.value)()
-    _check_bool(advapi32.GetTokenInformation(h_token, TokenGroupsClass, buf,
-                                             needed, c.byref(needed)), "GetTokenInformation")
-    # Interpret TOKEN_GROUPS manually
-    # First DWORD is GroupCount, followed by GroupCount SID_AND_ATTRIBUTES
-    raw = bytearray(buf[:])
-    group_count = int.from_bytes(raw[0:4], byteorder="little")
-    base = 4
-    # SID_AND_ATTRIBUTES is pointer-sized + DWORD; but this buffer packs pointers to SIDs
-    # We can scan using ctypes to read structures; easier: cast to TOKEN_GROUPS pointer and index
+    buf = (c.c_ubyte * needed.value)()
+    _check_bool(advapi32.GetTokenInformation(h_token, TokenGroupsClass, buf, needed, c.byref(needed)),
+                "GetTokenInformation(TokenGroups)")
     tgroups = c.cast(buf, c.POINTER(TOKEN_GROUPS)).contents
-    # groups slice:
-    arr_t = SID_AND_ATTRIBUTES * group_count
+    arr_t = SID_AND_ATTRIBUTES * tgroups.GroupCount
     groups = c.cast(c.addressof(tgroups.Groups), c.POINTER(arr_t)).contents
-    for i in range(group_count):
-        attrs = groups[i].Attributes
-        if (attrs & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID:
+    for i in range(tgroups.GroupCount):
+        if (groups[i].Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID:
             sid = groups[i].Sid
             sid_len = advapi32.GetLengthSid(sid)
-            dst = (c.c_byte * sid_len)()
-            _check_bool(advapi32.CopySid(sid_len, dst, sid), "CopySid")
-            return bytes(dst)
-    raise RuntimeError("logon SID not present on token")
+            tmp = (c.c_ubyte * sid_len)()
+            _check_bool(advapi32.CopySid(sid_len, tmp, sid), "CopySid")
+            return bytes(tmp)
+    raise RuntimeError("Logon SID not present on token")
+
+# ---- Restricted token creators: strict & compat ------------------------------
+
+def _create_write_restricted_token_strict() -> Tuple[wt.HANDLE, wt.LPVOID]:
+    r"""
+    Strict mode (used for read-only): SidsToRestrict = [ Logon SID ].
+    Re-enables SeChangeNotifyPrivilege on the new token so read/exec works.
+    """
+    base = _get_current_token_for_restriction()
+    try:
+        logon_sid_bytes = _get_logon_sid_bytes(base)
+        sid_buf = c.create_string_buffer(logon_sid_bytes)          # pin PSID memory
+        psid_logon = c.cast(sid_buf, wt.LPVOID)
+        globals().setdefault("_LIVE_SID_BUFFERS", []).append(sid_buf)
+
+        restrict_entries = (SID_AND_ATTRIBUTES * 1)()
+        restrict_entries[0].Sid = psid_logon
+        restrict_entries[0].Attributes = 0
+
+        new_token = wt.HANDLE()
+        flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
+        _check_bool(advapi32.CreateRestrictedToken(
+            base, flags,
+            0, None,           # SIDs to disable
+            0, None,           # Privileges to delete
+            1, restrict_entries,
+            c.byref(new_token)
+        ), "CreateRestrictedToken")
+
+        _enable_single_privilege(new_token, SE_CHANGE_NOTIFY_NAME)
+
+        # --- Diagnostics
+        try:
+            print("[sandbox:debug] using STRICT token (Logon SID only)", file=sys.stderr)
+        except Exception:
+            pass
+
+        return new_token, psid_logon
+    finally:
+        _close_handle_safe(base)
+
+def _create_write_restricted_token_compat() -> Tuple[wt.HANDLE, wt.LPVOID]:
+    r"""
+    Compat mode (workspace-write/danger): SidsToRestrict = [ Logon SID, Everyone ].
+    Keeps Git/PowerShell/Python happy with NUL; still re-enables SeChangeNotifyPrivilege.
+    """
+    base = _get_current_token_for_restriction()
+    try:
+        logon_sid_bytes = _get_logon_sid_bytes(base)
+        sid_buf = c.create_string_buffer(logon_sid_bytes)
+        psid_logon = c.cast(sid_buf, wt.LPVOID)
+        globals().setdefault("_LIVE_SID_BUFFERS", []).append(sid_buf)
+
+        # Everyone (WORLD) SID
+        everyone_size = wt.DWORD(0)
+        advapi32.CreateWellKnownSid(WinWorldSid, None, None, c.byref(everyone_size))
+        everyone_buf = (c.c_ubyte * everyone_size.value)()
+        _check_bool(advapi32.CreateWellKnownSid(WinWorldSid, None, everyone_buf, c.byref(everyone_size)),
+                    "CreateWellKnownSid(WinWorldSid)")
+        psid_everyone = c.cast(everyone_buf, wt.LPVOID)
+
+        restrict_entries = (SID_AND_ATTRIBUTES * 2)()
+        restrict_entries[0].Sid = psid_logon
+        restrict_entries[0].Attributes = 0
+        restrict_entries[1].Sid = psid_everyone
+        restrict_entries[1].Attributes = 0
+
+        new_token = wt.HANDLE()
+        flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
+        _check_bool(advapi32.CreateRestrictedToken(
+            base, flags,
+            0, None,
+            0, None,
+            2, restrict_entries,
+            c.byref(new_token)
+        ), "CreateRestrictedToken")
+
+        _enable_single_privilege(new_token, SE_CHANGE_NOTIFY_NAME)
+
+        # --- Diagnostics
+        try:
+            print("[sandbox:debug] using COMPAT token (Logon SID + Everyone)", file=sys.stderr)
+        except Exception:
+            pass
+
+        return new_token, psid_logon
+    finally:
+        _close_handle_safe(base)
+
+# ---- Named security helpers --------------------------------------------------
 
 def _sid_to_string(sid_bytes: bytes) -> str:
     if not secur32.ConvertSidToStringSidW:
@@ -376,29 +613,6 @@ def _sid_to_string(sid_bytes: bytes) -> str:
     finally:
         if pwstr:
             kernel32.LocalFree(pwstr)
-
-def _create_write_restricted_token() -> Tuple[wt.HANDLE, wt.LPVOID]:
-    base = _get_current_token_for_restriction()
-    try:
-        sid_bytes = _query_logon_sid_bytes(base)
-        sid_mem = c.create_string_buffer(sid_bytes)
-        # Restricting SIDs list
-        restrict = SID_AND_ATTRIBUTES()
-        restrict.Sid = c.cast(sid_mem, wt.LPVOID)
-        restrict.Attributes = 0
-        new_token = wt.HANDLE()
-        flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
-        _check_bool(advapi32.CreateRestrictedToken(
-            base, flags,
-            0, None,           # SidsToDisable
-            0, None,           # PrivilegesToDelete
-            1, c.byref(restrict),  # RestrictedSids
-            c.byref(new_token)
-        ), "CreateRestrictedToken")
-        # Return token and a PSID pointer lifetime-tied to sid_mem (must keep alive)
-        return new_token, c.cast(sid_mem, wt.LPVOID)
-    finally:
-        _close_handle_safe(base)
 
 def _add_allow_ace(path: str, psid: wt.LPVOID):
     # DACL += ACE granting (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE), CI | OI
@@ -419,7 +633,7 @@ def _add_allow_ace(path: str, psid: wt.LPVOID):
             MultipleTrusteeOperation=0,
             TrusteeForm=TRUSTEE_IS_SID,
             TrusteeType=TRUSTEE_IS_UNKNOWN,
-            ptstrName=c.cast(psid, wt.LPWSTR)  # API wants LPWSTR but TRUSTEE_IS_SID uses this field as PSID
+            ptstrName=c.cast(psid, wt.LPWSTR)  # TRUSTEE_IS_SID: this field is a PSID
         )
 
         pNewDacl = wt.LPVOID()
@@ -480,6 +694,68 @@ def _revoke_ace(path: str, psid: wt.LPVOID):
         if pSD:
             kernel32.LocalFree(pSD)
 
+def _allow_null_device(psid: wt.LPVOID):
+    r"""
+    Best-effort: grant FILE_GENERIC_READ|WRITE|EXECUTE to the current Logon SID
+    on the kernel device object backing NUL (\\.\NUL). Harmless if it fails.
+    """
+    desired = READ_CONTROL | WRITE_DAC
+    h = kernel32.CreateFileW(
+        wt.LPCWSTR(r"\\.\NUL"),
+        wt.DWORD(desired),
+        wt.DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE),
+        None,
+        wt.DWORD(OPEN_EXISTING),
+        wt.DWORD(FILE_ATTRIBUTE_NORMAL),
+        None,
+    )
+    if h == 0 or h == INVALID_HANDLE_VALUE:
+        return
+    try:
+        pSD = wt.LPVOID()
+        pDACL = wt.LPVOID()
+
+        code = advapi32.GetSecurityInfo(
+            h, wt.DWORD(SE_KERNEL_OBJECT), wt.DWORD(DACL_SECURITY_INFORMATION),
+            None, None, c.byref(pDACL), None, c.byref(pSD)
+        )
+        if code != ERROR_SUCCESS:
+            return
+        try:
+            explicit = EXPLICIT_ACCESS_W()
+            explicit.grfAccessPermissions = (FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE)
+            explicit.grfAccessMode = SET_ACCESS
+            explicit.grfInheritance = 0
+            explicit.Trustee = TRUSTEE_W(
+                pMultipleTrustee=None,
+                MultipleTrusteeOperation=0,
+                TrusteeForm=TRUSTEE_IS_SID,
+                TrusteeType=TRUSTEE_IS_UNKNOWN,
+                ptstrName=c.cast(psid, wt.LPWSTR),
+            )
+
+            pNewDacl = wt.LPVOID()
+            code = aclapi.SetEntriesInAclW(1, c.byref(explicit), pDACL, c.byref(pNewDacl))
+            if code != ERROR_SUCCESS:
+                return
+            try:
+                code = advapi32.SetSecurityInfo(
+                    h, wt.DWORD(SE_KERNEL_OBJECT), wt.DWORD(DACL_SECURITY_INFORMATION),
+                    None, None, pNewDacl, None
+                )
+                if code != ERROR_SUCCESS:
+                    return
+            finally:
+                if pNewDacl:
+                    kernel32.LocalFree(pNewDacl)
+        finally:
+            if pSD:
+                kernel32.LocalFree(pSD)
+    finally:
+        kernel32.CloseHandle(h)
+
+# ---- RAII DACL guard & policy mapping ---------------------------------------
+
 class _AclGuard:
     def __init__(self, path: str, psid: wt.LPVOID):
         self.path = path
@@ -519,7 +795,7 @@ def _configure_paths(policy: SandboxPolicy, policy_cwd: str, command_cwd: str,
         if not any(command_cwd.startswith(x + os.sep) or command_cwd == x for x in allow):
             add_once(command_cwd)
 
-    # temp dirs (only if not read-only)
+    # TEMP/TMP pass-through (only if not read-only)
     if policy.mode != "read-only":
         for key in ("TEMP", "TMP"):
             val = env_map.get(key) or os.environ.get(key)
@@ -534,7 +810,12 @@ def _configure_paths(policy: SandboxPolicy, policy_cwd: str, command_cwd: str,
         except Exception as e:
             # best effort — continue
             print(f"[sandbox] failed to allow write on {p}: {e}", file=sys.stderr)
+
+    # Best-effort NUL permission for strict mode; harmless elsewhere
+    _allow_null_device(psid)
     return guards
+
+# ---- Job object --------------------------------------------------------------
 
 def _create_job_kill_on_close() -> wt.HANDLE:
     h = kernel32.CreateJobObjectW(None, None)
@@ -552,8 +833,41 @@ def _create_job_kill_on_close() -> wt.HANDLE:
         raise c.WinError(err)
     return h
 
-def _create_process_as_user(h_token: wt.HANDLE, argv: List[str], cwd: str,
-                            env: Dict[str, str]) -> Tuple[PROCESS_INFORMATION, STARTUPINFOW]:
+# ---- Pipe helpers for strict read-only stdio --------------------------------
+
+def _make_inheritable_pipe() -> Tuple[wt.HANDLE, wt.HANDLE]:
+    """Return (read_handle, write_handle), both inheritable."""
+    h_read = wt.HANDLE()
+    h_write = wt.HANDLE()
+    _check_bool(kernel32.CreatePipe(c.byref(h_read), c.byref(h_write), None, 0), "CreatePipe")
+    _check_bool(kernel32.SetHandleInformation(h_read,  HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT), "SetHandleInformation")
+    _check_bool(kernel32.SetHandleInformation(h_write, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT), "SetHandleInformation")
+    return h_read, h_write
+
+def _drain_handle_to_stream(h_read: wt.HANDLE, py_stream):
+    """Blocking drain: read all bytes from h_read and write to given Python stream."""
+    buf = (c.c_char * 8192)()
+    nread = wt.DWORD()
+    while True:
+        ok = kernel32.ReadFile(h_read, buf, len(buf), c.byref(nread), None)
+        if not ok or nread.value == 0:
+            break
+        try:
+            py_stream.buffer.write(buf[:nread.value])
+        except Exception:
+            py_stream.write(buf[:nread.value].decode(errors="replace"))
+        py_stream.flush()
+
+# ---- Process spawn -----------------------------------------------------------
+
+def _create_process_as_user(
+    h_token: wt.HANDLE,
+    argv: List[str],
+    cwd: str,
+    env: Dict[str, str],
+    *,
+    std_handles: Optional[Tuple[wt.HANDLE, wt.HANDLE, wt.HANDLE]] = None  # (stdin, stdout, stderr)
+) -> Tuple[PROCESS_INFORMATION, STARTUPINFOW]:
     # Build command line
     def quote_arg(a: str) -> str:
         if not a or any(ch in a for ch in ' \t\n\r\v"'):
@@ -582,11 +896,20 @@ def _create_process_as_user(h_token: wt.HANDLE, argv: List[str], cwd: str,
     cmdline_buf = c.create_unicode_buffer(cmdline_str)
 
     env_block = _make_env_block(env)
-    lp_env = c.c_void_p(0 if not env_block else c.addressof(c.create_string_buffer(env_block)))
+    env_buf = None
+    lp_env = None
+    if env_block:
+        env_buf = c.create_string_buffer(env_block)
+        lp_env = c.cast(env_buf, wt.LPVOID)
 
     si = STARTUPINFOW()
     si.cb = c.sizeof(STARTUPINFOW)
-    _ensure_inheritable_stdio(si)
+
+    if std_handles is None:
+        _ensure_inheritable_stdio(si)
+    else:
+        si.dwFlags |= STARTF_USESTDHANDLES
+        si.hStdInput, si.hStdOutput, si.hStdError = std_handles
 
     pi = PROCESS_INFORMATION()
 
@@ -682,16 +1005,33 @@ def main():
     policy_cwd = ns.sandbox_policy_cwd or current_dir
     env_map: Dict[str, str] = dict(os.environ)
 
-    if not policy.has_full_network_access():
-        apply_best_effort_network_block(env_map)
+    normalize_null_device_env(env_map)
+    #if not policy.has_full_network_access():
+    #    apply_best_effort_network_block(env_map)
     ensure_non_interactive_pager(env_map)
+    #if os.environ.get("SANDBOX_NO_NET") == "1":
+    apply_no_network_to_env(env_map, NoNetConfig())
 
-    # Create restricted token (WRITE_RESTRICTED + LUA), get ephemeral Logon SID
+    # Create restricted token (WRITE_RESTRICTED + LUA), choose strict/compat
     try:
-        h_token, psid = _create_write_restricted_token()
+        if policy.mode == "read-only":
+            h_token, psid = _create_write_restricted_token_strict()
+        else:
+            # workspace-write and danger-full-access
+            h_token, psid = _create_write_restricted_token_compat()
     except Exception as e:
         print(f"failed to create restricted token: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # --- Diagnostics: show token restricted flag, SID, and CWD + dump restricted SID set
+    try:
+        is_restricted = bool(advapi32.IsTokenRestricted(h_token))
+        print(f"[sandbox:debug] policy={policy.mode} restricted={is_restricted} "
+              f"logonSID={_sid_str(psid)} cwd={current_dir}", file=sys.stderr)
+        _dump_restricted_sids(h_token)
+        _cwd_effective_write_report(current_dir, psid)
+    except Exception:
+        pass
 
     # Configure writable directories by appending allow ACEs for the Logon SID
     acl_guards: List[_AclGuard] = []
@@ -726,4 +1066,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
