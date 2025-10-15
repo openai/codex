@@ -2,6 +2,7 @@ use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
+use chrono::Utc;
 use codex_core::auth::get_auth_file;
 use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
@@ -166,11 +167,13 @@ pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize
 }
 
 pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> String {
-    let time = dt.format("%H:%M");
-    if dt.date_naive() == captured_at.date_naive() {
+    let dt_utc = dt.with_timezone(&Utc);
+    let captured_at_utc = captured_at.with_timezone(&Utc);
+    let time = dt_utc.format("%H:%M");
+    if dt_utc.date_naive() == captured_at_utc.date_naive() {
         format!("{time} UTC")
     } else {
-        let date = dt.format("%-d %b");
+        let date = dt_utc.format("%-d %b");
         format!("{time} UTC on {date}")
     }
 }
