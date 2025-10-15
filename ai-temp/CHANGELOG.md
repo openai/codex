@@ -17,3 +17,4 @@
 - Added a dedicated status indicator while a delegate runs, restored the idle header on completion, and regression-tested streaming to prevent animation regressions.
 - Updated the sample Codex home instructions/README, ensured the critic agent uses `gpt-5-nano`, and documented the new delegation UX in `ai-temp/ui-ux-delegation.md`.
 - Documented plan-tool implementation patterns and how they inform future delegation tools (`ai-temp/tool-implementation-patterns.md`).
+- Observed that the coordinator remains silent between delegate runs (e.g., between `#ideas_provider` completion and the `#critic` request) because tool composition happens model-side without emitting UI events; leaving this behaviour in place for now.
