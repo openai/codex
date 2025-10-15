@@ -31,6 +31,8 @@ use supports_color::Stream;
 mod mcp_cmd;
 
 use crate::mcp_cmd::McpCli;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
 
 const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 const AUTH_PROFILE_ENV_VAR: &str = "CODEX_ACTIVE_AUTH_PROFILE";
@@ -58,6 +60,9 @@ struct MultitoolCli {
     /// isolated under `~/.codex/profiles/<profile>` (or the equivalent CODEX_HOME).
     #[arg(long = "auth-profile", value_name = "PROFILE", global = true)]
     auth_profile: Option<String>,
+
+    #[clap(flatten)]
+    pub feature_toggles: FeatureToggles,
 
     #[clap(flatten)]
     interactive: TuiCli,
@@ -111,6 +116,9 @@ enum Subcommand {
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
+
+    /// Inspect feature flags.
+    Features(FeaturesCli),
 }
 
 #[derive(Debug, Parser)]
@@ -171,9 +179,7 @@ struct LoginCommand {
     )]
     api_key: Option<String>,
 
-    /// EXPERIMENTAL: Use device code flow (not yet supported)
-    /// This feature is experimental and may changed in future releases.
-    #[arg(long = "experimental_use-device-code", hide = true)]
+    #[arg(long = "device-auth")]
     use_device_code: bool,
 
     /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced)
@@ -340,6 +346,53 @@ fn print_exit_messages(exit_info: AppExitInfo, auth_profile: Option<&str>) {
     }
 }
 
+#[derive(Debug, Default, Parser, Clone)]
+struct FeatureToggles {
+    /// Enable a feature (repeatable). Equivalent to `-c features.<name>=true`.
+    #[arg(long = "enable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
+    enable: Vec<String>,
+
+    /// Disable a feature (repeatable). Equivalent to `-c features.<name>=false`.
+    #[arg(long = "disable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
+    disable: Vec<String>,
+}
+
+impl FeatureToggles {
+    fn to_overrides(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        for k in &self.enable {
+            v.push(format!("features.{k}=true"));
+        }
+        for k in &self.disable {
+            v.push(format!("features.{k}=false"));
+        }
+        v
+    }
+}
+
+#[derive(Debug, Parser)]
+struct FeaturesCli {
+    #[command(subcommand)]
+    sub: FeaturesSubcommand,
+}
+
+#[derive(Debug, Parser)]
+enum FeaturesSubcommand {
+    /// List known features with their stage and effective state.
+    List,
+}
+
+fn stage_str(stage: codex_core::features::Stage) -> &'static str {
+    use codex_core::features::Stage;
+    match stage {
+        Stage::Experimental => "experimental",
+        Stage::Beta => "beta",
+        Stage::Stable => "stable",
+        Stage::Deprecated => "deprecated",
+        Stage::Removed => "removed",
+    }
+}
+
 /// As early as possible in the process lifecycle, apply hardening measures. We
 /// skip this in debug builds to avoid interfering with debugging.
 #[ctor::ctor]
@@ -357,13 +410,18 @@ fn main() -> anyhow::Result<()> {
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let MultitoolCli {
-        config_overrides: root_config_overrides,
+        config_overrides: mut root_config_overrides,
         auth_profile,
+        feature_toggles,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
 
     let active_auth_profile = apply_auth_profile(auth_profile.as_deref())?;
+    // Fold --enable/--disable into config overrides so they flow to all subcommands.
+    root_config_overrides
+        .raw_overrides
+        .extend(feature_toggles.to_overrides());
 
     match subcommand {
         None => {
@@ -404,7 +462,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 last,
                 config_overrides,
             );
-            codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            print_exit_messages(exit_info);
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
@@ -492,6 +551,30 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
         }
+        Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
+            FeaturesSubcommand::List => {
+                // Respect root-level `-c` overrides plus top-level flags like `--profile`.
+                let cli_kv_overrides = root_config_overrides
+                    .parse_overrides()
+                    .map_err(|e| anyhow::anyhow!(e))?;
+
+                // Thread through relevant top-level flags (at minimum, `--profile`).
+                // Also honor `--search` since it maps to a feature toggle.
+                let overrides = ConfigOverrides {
+                    config_profile: interactive.config_profile.clone(),
+                    tools_web_search_request: interactive.web_search.then_some(true),
+                    ..Default::default()
+                };
+
+                let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+                for def in codex_core::features::FEATURES.iter() {
+                    let name = def.key;
+                    let stage = stage_str(def.stage);
+                    let enabled = config.features.enabled(def.id);
+                    println!("{name}\t{stage}\t{enabled}");
+                }
+            }
+        },
     }
 
     Ok(())
@@ -596,6 +679,7 @@ mod tests {
             config_overrides: root_overrides,
             auth_profile: _,
             subcommand,
+            feature_toggles: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {

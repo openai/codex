@@ -9,6 +9,7 @@ use std::time::UNIX_EPOCH;
 
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
+use codex_core::features::Feature;
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -74,7 +75,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.use_experimental_use_rmcp_client = true;
+            config.features.enable(Feature::RmcpClient);
             config.mcp_servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
@@ -86,6 +87,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                             expected_env_value.to_string(),
                         )])),
                     },
+                    enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
                 },
@@ -226,14 +228,15 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.use_experimental_use_rmcp_client = true;
+            config.features.enable(Feature::RmcpClient);
             config.mcp_servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: server_url,
-                        bearer_token: None,
+                        bearer_token_env_var: None,
                     },
+                    enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
                 },
@@ -406,14 +409,15 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.use_experimental_use_rmcp_client = true;
+            config.features.enable(Feature::RmcpClient);
             config.mcp_servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
                     transport: McpServerTransportConfig::StreamableHttp {
                         url: server_url,
-                        bearer_token: None,
+                        bearer_token_env_var: None,
                     },
+                    enabled: true,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
                 },

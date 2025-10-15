@@ -276,6 +276,8 @@ fn make_chatwidget_manual() -> (
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
+        current_status_header: String::from("Working"),
+        retry_status_header: None,
         conversation_id: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
@@ -615,6 +617,35 @@ fn alt_up_edits_most_recent_queued_message() {
     );
 }
 
+/// Pressing Up to recall the most recent history entry and immediately queuing
+/// it while a task is running should always enqueue the same text, even when it
+/// is queued repeatedly.
+#[test]
+fn enqueueing_history_prompt_multiple_times_is_stable() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Submit an initial prompt to seed history.
+    chat.bottom_pane.set_composer_text("repeat me".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Simulate an active task so further submissions are queued.
+    chat.bottom_pane.set_task_running(true);
+
+    for _ in 0..3 {
+        // Recall the prompt from history and ensure it is what we expect.
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(chat.bottom_pane.composer_text(), "repeat me");
+
+        // Queue the prompt while the task is running.
+        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    }
+
+    assert_eq!(chat.queued_user_messages.len(), 3);
+    for message in chat.queued_user_messages.iter() {
+        assert_eq!(message.text, "repeat me");
+    }
+}
+
 #[test]
 fn streaming_final_answer_keeps_task_running_state() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual();
@@ -643,6 +674,18 @@ fn streaming_final_answer_keeps_task_running_state() {
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+}
+
+#[test]
+fn ctrl_c_shutdown_ignores_caps_lock() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
+
+    match op_rx.try_recv() {
+        Ok(Op::Shutdown) => {}
+        other => panic!("expected Op::Shutdown, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2015,9 +2058,10 @@ fn plan_update_renders_history_cell() {
 }
 
 #[test]
-fn stream_error_is_rendered_to_history() {
+fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
-    let msg = "stream error: stream disconnected before completion: idle timeout waiting for SSE; retrying 1/5 in 211ms…";
+    chat.bottom_pane.set_task_running(true);
+    let msg = "Re-connecting... 2/5";
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::StreamError(StreamErrorEvent {
@@ -2026,11 +2070,15 @@ fn stream_error_is_rendered_to_history() {
     });
 
     let cells = drain_insert_history(&mut rx);
-    assert!(!cells.is_empty(), "expected a history cell for StreamError");
-    let blob = lines_to_single_string(cells.last().unwrap());
-    assert!(blob.contains('⚠'));
-    assert!(blob.contains("stream error:"));
-    assert!(blob.contains("idle timeout waiting for SSE"));
+    assert!(
+        cells.is_empty(),
+        "expected no history cell for StreamError event"
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), msg);
 }
 
 #[test]

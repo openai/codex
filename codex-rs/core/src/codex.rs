@@ -23,7 +23,9 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
+use futures::future::BoxFuture;
 use futures::prelude::*;
+use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
 use serde_json;
 use serde_json::Value;
@@ -55,6 +57,7 @@ use crate::exec_command::WriteStdinParams;
 use crate::executor::Executor;
 use crate::executor::ExecutorConfig;
 use crate::executor::normalize_exec_result;
+use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
@@ -96,6 +99,7 @@ use crate::rollout::RolloutRecorderParams;
 use crate::shell;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
+use crate::state::TaskKind;
 use crate::tasks::CompactTask;
 use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
@@ -361,7 +365,10 @@ impl Session {
 
         let mcp_fut = McpConnectionManager::new(
             config.mcp_servers.clone(),
-            config.use_experimental_use_rmcp_client,
+            config
+                .features
+                .enabled(crate::features::Feature::RmcpClient),
+            config.mcp_oauth_credentials_store_mode,
         );
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
@@ -442,12 +449,7 @@ impl Session {
             client,
             tools_config: ToolsConfig::new(&ToolsConfigParams {
                 model_family: &config.model_family,
-                include_plan_tool: config.include_plan_tool,
-                include_apply_patch_tool: config.include_apply_patch_tool,
-                include_web_search_request: config.tools_web_search_request,
-                use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
-                include_view_image_tool: config.include_view_image_tool,
-                experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                features: &config.features,
             }),
             user_instructions,
             base_instructions,
@@ -1191,12 +1193,7 @@ async fn submission_loop(
 
                 let tools_config = ToolsConfig::new(&ToolsConfigParams {
                     model_family: &effective_family,
-                    include_plan_tool: config.include_plan_tool,
-                    include_apply_patch_tool: config.include_apply_patch_tool,
-                    include_web_search_request: config.tools_web_search_request,
-                    use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
-                    include_view_image_tool: config.include_view_image_tool,
-                    experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                    features: &config.features,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1293,14 +1290,7 @@ async fn submission_loop(
                         client,
                         tools_config: ToolsConfig::new(&ToolsConfigParams {
                             model_family: &model_family,
-                            include_plan_tool: config.include_plan_tool,
-                            include_apply_patch_tool: config.include_apply_patch_tool,
-                            include_web_search_request: config.tools_web_search_request,
-                            use_streamable_shell_tool: config
-                                .use_experimental_streamable_shell_tool,
-                            include_view_image_tool: config.include_view_image_tool,
-                            experimental_unified_exec_tool: config
-                                .use_experimental_unified_exec_tool,
+                            features: &config.features,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1400,10 +1390,18 @@ async fn submission_loop(
 
                 // This is a cheap lookup from the connection manager's cache.
                 let tools = sess.services.mcp_connection_manager.list_all_tools();
+                let auth_statuses = compute_auth_statuses(
+                    config.mcp_servers.iter(),
+                    config.mcp_oauth_credentials_store_mode,
+                )
+                .await;
                 let event = Event {
                     id: sub_id,
                     msg: EventMsg::McpListToolsResponse(
-                        crate::protocol::McpListToolsResponseEvent { tools },
+                        crate::protocol::McpListToolsResponseEvent {
+                            tools,
+                            auth_statuses,
+                        },
                     ),
                 };
                 sess.send_event(event).await;
@@ -1524,14 +1522,15 @@ async fn spawn_review_thread(
     let model = config.review_model.clone();
     let review_model_family = find_family_for_model(&model)
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
+    // For reviews, disable plan, web_search, view_image regardless of global settings.
+    let mut review_features = config.features.clone();
+    review_features.disable(crate::features::Feature::PlanTool);
+    review_features.disable(crate::features::Feature::WebSearchRequest);
+    review_features.disable(crate::features::Feature::ViewImageTool);
+    review_features.disable(crate::features::Feature::StreamableShell);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
-        include_plan_tool: false,
-        include_apply_patch_tool: config.include_apply_patch_tool,
-        include_web_search_request: false,
-        use_streamable_shell_tool: false,
-        include_view_image_tool: false,
-        experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+        features: &review_features,
     });
 
     let base_instructions = REVIEW_PROMPT.to_string();
@@ -1584,7 +1583,7 @@ async fn spawn_review_thread(
 
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<InputItem> = vec![InputItem::Text {
-        text: format!("{base_instructions}\n\n---\n\nNow, here's your task: {review_prompt}"),
+        text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
 
@@ -1622,6 +1621,7 @@ pub(crate) async fn run_task(
     turn_context: Arc<TurnContext>,
     sub_id: String,
     input: Vec<InputItem>,
+    task_kind: TaskKind,
 ) -> Option<String> {
     if input.is_empty() {
         return None;
@@ -1705,6 +1705,7 @@ pub(crate) async fn run_task(
             Arc::clone(&turn_diff_tracker),
             sub_id.clone(),
             turn_input,
+            task_kind,
         )
         .await
         {
@@ -1857,6 +1858,7 @@ pub(crate) async fn run_task(
                     );
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
+                            thread_id: sess.conversation_id.to_string(),
                             turn_id: sub_id.clone(),
                             input_messages: turn_input_messages,
                             last_assistant_message: last_agent_message.clone(),
@@ -1930,6 +1932,7 @@ async fn run_turn(
     turn_diff_tracker: SharedTurnDiffTracker,
     sub_id: String,
     input: Vec<ResponseItem>,
+    task_kind: TaskKind,
 ) -> CodexResult<TurnRunResult> {
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
     let router = Arc::new(ToolRouter::from_config(
@@ -1959,6 +1962,7 @@ async fn run_turn(
             Arc::clone(&turn_diff_tracker),
             &sub_id,
             &prompt,
+            task_kind,
         )
         .await
         {
@@ -1996,9 +2000,7 @@ async fn run_turn(
                     // at a seemingly frozen screen.
                     sess.notify_stream_error(
                         &sub_id,
-                        format!(
-                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
-                        ),
+                        format!("Re-connecting... {retries}/{max_retries}"),
                     )
                     .await;
 
@@ -2034,6 +2036,7 @@ async fn try_run_turn(
     turn_diff_tracker: SharedTurnDiffTracker,
     sub_id: &str,
     prompt: &Prompt,
+    task_kind: TaskKind,
 ) -> CodexResult<TurnRunResult> {
     // call_ids that are part of this response.
     let completed_call_ids = prompt
@@ -2099,16 +2102,21 @@ async fn try_run_turn(
         summary: turn_context.client.get_reasoning_summary(),
     });
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = turn_context.client.clone().stream(&prompt).await?;
+    let mut stream = turn_context
+        .client
+        .clone()
+        .stream_with_task_kind(prompt.as_ref(), task_kind)
+        .await?;
 
-    let mut output = Vec::new();
-    let mut tool_runtime = ToolCallRuntime::new(
+    let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
         sub_id.to_string(),
     );
+    let mut output: FuturesOrdered<BoxFuture<CodexResult<ProcessedResponseItem>>> =
+        FuturesOrdered::new();
 
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
@@ -2116,9 +2124,8 @@ async fn try_run_turn(
         // `response.completed`) bubble up and trigger the caller's retry logic.
         let event = stream.next().await;
         let event = match event {
-            Some(event) => event,
+            Some(res) => res?,
             None => {
-                tool_runtime.abort_all();
                 return Err(CodexErr::Stream(
                     "stream closed before response.completed".into(),
                     None,
@@ -2126,14 +2133,8 @@ async fn try_run_turn(
             }
         };
 
-        let event = match event {
-            Ok(ev) => ev,
-            Err(e) => {
-                tool_runtime.abort_all();
-                // Propagate the underlying stream error to the caller (run_turn), which
-                // will apply the configured `stream_max_retries` policy.
-                return Err(e);
-            }
+        let add_completed = &mut |response_item: ProcessedResponseItem| {
+            output.push_back(future::ready(Ok(response_item)).boxed());
         };
 
         match event {
@@ -2143,14 +2144,18 @@ async fn try_run_turn(
                     Ok(Some(call)) => {
                         let payload_preview = call.payload.log_payload().into_owned();
                         tracing::info!("ToolCall: {} {}", call.tool_name, payload_preview);
-                        let index = output.len();
-                        output.push(ProcessedResponseItem {
-                            item,
-                            response: None,
-                        });
-                        tool_runtime
-                            .handle_tool_call(call, index, output.as_mut_slice())
-                            .await?;
+
+                        let response = tool_runtime.handle_tool_call(call);
+
+                        output.push_back(
+                            async move {
+                                Ok(ProcessedResponseItem {
+                                    item,
+                                    response: Some(response.await?),
+                                })
+                            }
+                            .boxed(),
+                        );
                     }
                     Ok(None) => {
                         let response = handle_non_tool_response_item(
@@ -2160,7 +2165,7 @@ async fn try_run_turn(
                             item.clone(),
                         )
                         .await?;
-                        output.push(ProcessedResponseItem { item, response });
+                        add_completed(ProcessedResponseItem { item, response });
                     }
                     Err(FunctionCallError::MissingLocalShellCallId) => {
                         let msg = "LocalShellCall without call_id or id";
@@ -2177,7 +2182,7 @@ async fn try_run_turn(
                                 success: None,
                             },
                         };
-                        output.push(ProcessedResponseItem {
+                        add_completed(ProcessedResponseItem {
                             item,
                             response: Some(response),
                         });
@@ -2190,7 +2195,7 @@ async fn try_run_turn(
                                 success: None,
                             },
                         };
-                        output.push(ProcessedResponseItem {
+                        add_completed(ProcessedResponseItem {
                             item,
                             response: Some(response),
                         });
@@ -2221,7 +2226,7 @@ async fn try_run_turn(
                 sess.update_token_usage_info(sub_id, turn_context.as_ref(), token_usage.as_ref())
                     .await;
 
-                tool_runtime.resolve_pending(output.as_mut_slice()).await?;
+                let processed_items: Vec<ProcessedResponseItem> = output.try_collect().await?;
 
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;
@@ -2237,7 +2242,7 @@ async fn try_run_turn(
                 }
 
                 let result = TurnRunResult {
-                    processed_items: output,
+                    processed_items,
                     total_token_usage: token_usage.clone(),
                 };
 
@@ -2740,12 +2745,7 @@ mod tests {
         );
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &config.model_family,
-            include_plan_tool: config.include_plan_tool,
-            include_apply_patch_tool: config.include_apply_patch_tool,
-            include_web_search_request: config.tools_web_search_request,
-            use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
-            include_view_image_tool: config.include_view_image_tool,
-            experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+            features: &config.features,
         });
         let turn_context = TurnContext {
             client,
@@ -2813,12 +2813,7 @@ mod tests {
         );
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &config.model_family,
-            include_plan_tool: config.include_plan_tool,
-            include_apply_patch_tool: config.include_apply_patch_tool,
-            include_web_search_request: config.tools_web_search_request,
-            use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
-            include_view_image_tool: config.include_view_image_tool,
-            experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+            features: &config.features,
         });
         let turn_context = Arc::new(TurnContext {
             client,
