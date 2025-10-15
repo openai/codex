@@ -1,10 +1,14 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
 use codex_common::CliConfigOverrides;
 use codex_core::AuthManager;
+use codex_core::CodexConversation;
 use codex_core::ConversationManager;
+use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::delegate_tool::DelegateEventReceiver as CoreDelegateEventReceiver;
 use codex_core::delegate_tool::DelegateToolAdapter;
@@ -15,6 +19,7 @@ use codex_core::delegate_tool::DelegateToolRun;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::SessionSource;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -32,6 +37,7 @@ pub type DelegateRunId = String;
 pub struct DelegateRequest {
     pub agent_id: AgentId,
     pub prompt: DelegatePrompt,
+    pub user_initial: Vec<InputItem>,
 }
 
 /// The prompt content forwarded to the sub-agent.
@@ -82,6 +88,26 @@ pub enum OrchestratorError {
     AgentNotFound(String),
     #[error("failed to enqueue delegate: {0}")]
     DelegateSetupFailed(String),
+    #[error("delegate session `{0}` not found")]
+    SessionNotFound(String),
+}
+
+/// High-level metadata describing a delegate session available for switching.
+#[derive(Debug, Clone)]
+pub struct DelegateSessionSummary {
+    pub conversation_id: String,
+    pub agent_id: AgentId,
+    pub last_interacted_at: SystemTime,
+    pub cwd: PathBuf,
+}
+
+/// Payload returned when entering an existing delegate session.
+#[derive(Clone)]
+pub struct ActiveDelegateSession {
+    pub summary: DelegateSessionSummary,
+    pub conversation: Arc<CodexConversation>,
+    pub session_configured: Arc<SessionConfiguredEvent>,
+    pub config: Config,
 }
 
 /// Lightweight controller that spins up sub-agent conversations on demand and
@@ -94,6 +120,7 @@ pub struct AgentOrchestrator {
     config_overrides: ConfigOverrides,
     listeners: Mutex<Vec<mpsc::UnboundedSender<DelegateEvent>>>,
     active_run: Mutex<Option<DelegateRunId>>,
+    sessions: Mutex<HashMap<String, StoredDelegateSession>>,
 }
 
 impl AgentOrchestrator {
@@ -113,6 +140,7 @@ impl AgentOrchestrator {
             config_overrides,
             listeners: Mutex::new(Vec::new()),
             active_run: Mutex::new(None),
+            sessions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -169,12 +197,16 @@ impl AgentOrchestrator {
 
             match result {
                 Ok(output) => {
+                    orchestrator.store_session(&output).await;
+                    let agent_id = output.agent_id.clone();
+                    let message = output.message.clone();
+                    let duration = output.duration;
                     orchestrator
                         .emit(DelegateEvent::Completed {
                             run_id: run_id_clone.clone(),
-                            agent_id: output.agent_id,
-                            output: output.message,
-                            duration: output.duration,
+                            agent_id,
+                            output: message,
+                            duration,
                         })
                         .await;
                 }
@@ -201,6 +233,68 @@ impl AgentOrchestrator {
         listeners.retain(|tx| tx.send(event.clone()).is_ok());
     }
 
+    /// Return all active delegate sessions ordered by most recent interaction.
+    pub async fn active_sessions(&self) -> Vec<DelegateSessionSummary> {
+        let sessions = self.sessions.lock().await;
+        let mut summaries: Vec<_> = sessions
+            .values()
+            .map(|entry| entry.summary.clone())
+            .collect();
+        summaries.sort_by(|a, b| b.last_interacted_at.cmp(&a.last_interacted_at));
+        summaries
+    }
+
+    /// Enter an existing delegate session for direct interaction.
+    pub async fn enter_session(
+        &self,
+        conversation_id: &str,
+    ) -> Result<ActiveDelegateSession, OrchestratorError> {
+        let mut sessions = self.sessions.lock().await;
+        let entry = sessions
+            .get_mut(conversation_id)
+            .ok_or_else(|| OrchestratorError::SessionNotFound(conversation_id.to_string()))?;
+        entry.summary.last_interacted_at = SystemTime::now();
+        Ok(ActiveDelegateSession {
+            summary: entry.summary.clone(),
+            conversation: entry.conversation.clone(),
+            session_configured: entry.session_configured.clone(),
+            config: entry.config.clone(),
+        })
+    }
+
+    /// Remove a delegate session – used when the conversation is closed or no longer usable.
+    pub async fn remove_session(&self, conversation_id: &str) {
+        let mut sessions = self.sessions.lock().await;
+        sessions.remove(conversation_id);
+    }
+
+    /// Refresh the session's last-interacted timestamp without opening it.
+    pub async fn touch_session(&self, conversation_id: &str) {
+        let mut sessions = self.sessions.lock().await;
+        if let Some(entry) = sessions.get_mut(conversation_id) {
+            entry.summary.last_interacted_at = SystemTime::now();
+        }
+    }
+
+    async fn store_session(&self, success: &DelegateSuccess) {
+        let mut sessions = self.sessions.lock().await;
+        let summary = DelegateSessionSummary {
+            conversation_id: success.conversation_id.clone(),
+            agent_id: success.agent_id.clone(),
+            last_interacted_at: SystemTime::now(),
+            cwd: success.cwd.clone(),
+        };
+        sessions.insert(
+            success.conversation_id.clone(),
+            StoredDelegateSession {
+                summary,
+                conversation: success.conversation.clone(),
+                session_configured: success.session_configured.clone(),
+                config: success.config.clone(),
+            },
+        );
+    }
+
     async fn run_delegate_task(
         self: Arc<Self>,
         loader: AgentConfigLoader,
@@ -222,6 +316,8 @@ impl AgentOrchestrator {
             })?;
 
         let config = context.into_config();
+        let cwd = config.cwd.clone();
+        let config_clone = config.clone();
         let conversation_manager = Arc::new(ConversationManager::new(
             auth_manager.clone(),
             session_source,
@@ -234,21 +330,17 @@ impl AgentOrchestrator {
                 agent_id: agent_id.clone(),
                 error: format!("failed to start conversation: {err:#}"),
             })?;
+        let conversation_id = conversation_bundle.conversation_id.to_string();
+        let session_configured = Arc::new(conversation_bundle.session_configured);
         let conversation = conversation_bundle.conversation;
 
         let mut items = Vec::new();
+        items.extend(request.user_initial.clone());
         if !request.prompt.text.trim().is_empty() {
             items.push(InputItem::Text {
                 text: request.prompt.text.clone(),
             });
         }
-        if items.is_empty() {
-            return Err(DelegateFailure {
-                agent_id: agent_id.clone(),
-                error: "delegated prompt is empty".to_string(),
-            });
-        }
-
         conversation
             .submit(Op::UserInput { items })
             .await
@@ -296,23 +388,24 @@ impl AgentOrchestrator {
                         .last_agent_message
                         .or_else(|| (!aggregated.is_empty()).then_some(aggregated.clone()));
 
-                    let _ = conversation.submit(Op::Shutdown).await;
-
                     return Ok(DelegateSuccess {
                         agent_id,
+                        conversation_id,
+                        conversation: conversation.clone(),
+                        session_configured: session_configured.clone(),
+                        cwd: cwd.clone(),
+                        config: config_clone.clone(),
                         message,
                         duration,
                     });
                 }
                 EventMsg::Error(err) => {
-                    let _ = conversation.submit(Op::Shutdown).await;
                     return Err(DelegateFailure {
                         agent_id,
                         error: format!("delegate reported error: {}", err.message),
                     });
                 }
                 EventMsg::TurnAborted(reason) => {
-                    let _ = conversation.submit(Op::Shutdown).await;
                     return Err(DelegateFailure {
                         agent_id,
                         error: format!("delegate aborted: {:?}", reason.reason),
@@ -332,6 +425,11 @@ impl AgentOrchestrator {
 
 struct DelegateSuccess {
     agent_id: AgentId,
+    conversation_id: String,
+    conversation: Arc<CodexConversation>,
+    session_configured: Arc<SessionConfiguredEvent>,
+    cwd: PathBuf,
+    config: Config,
     message: Option<String>,
     duration: Duration,
 }
@@ -339,6 +437,13 @@ struct DelegateSuccess {
 struct DelegateFailure {
     agent_id: AgentId,
     error: String,
+}
+
+struct StoredDelegateSession {
+    summary: DelegateSessionSummary,
+    conversation: Arc<CodexConversation>,
+    session_configured: Arc<SessionConfiguredEvent>,
+    config: Config,
 }
 
 pub struct MultiAgentDelegateAdapter {
@@ -402,6 +507,9 @@ impl MultiAgentDelegateAdapter {
             OrchestratorError::DelegateSetupFailed(reason) => {
                 DelegateToolError::SetupFailed(reason)
             }
+            OrchestratorError::SessionNotFound(session_id) => {
+                DelegateToolError::SetupFailed(format!("session not found: {session_id}"))
+            }
         }
     }
 }
@@ -433,6 +541,7 @@ impl DelegateToolAdapter for MultiAgentDelegateAdapter {
             .delegate(DelegateRequest {
                 agent_id: agent_id.clone(),
                 prompt: DelegatePrompt::new(request.prompt),
+                user_initial: Vec::new(),
             })
             .await
             .map_err(Self::map_error)?;

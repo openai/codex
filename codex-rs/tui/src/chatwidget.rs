@@ -93,9 +93,13 @@ use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::StreamController;
+use std::fmt::Write;
 use std::path::Path;
+use std::time::SystemTime;
 
+use chrono::DateTime;
 use chrono::Local;
+use chrono::Utc;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
@@ -112,6 +116,7 @@ use codex_git_tooling::GitToolingError;
 use codex_git_tooling::create_ghost_commit;
 use codex_git_tooling::restore_ghost_commit;
 use codex_multi_agent::AgentId;
+use codex_multi_agent::DelegateSessionSummary;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
@@ -268,6 +273,10 @@ pub(crate) struct ChatWidget {
     delegate_had_stream: bool,
     delegate_status_claimed: bool,
     delegate_previous_status_header: Option<String>,
+    delegate_context: Option<DelegateSessionSummary>,
+    delegate_user_frames: Vec<InputItem>,
+    delegate_agent_frames: Vec<String>,
+    pending_delegate_context: Vec<String>,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
 }
@@ -275,6 +284,18 @@ pub(crate) struct ChatWidget {
 struct UserMessage {
     text: String,
     image_paths: Vec<PathBuf>,
+}
+
+#[derive(Default)]
+pub(crate) struct DelegateCapture {
+    pub user_inputs: Vec<InputItem>,
+    pub agent_outputs: Vec<String>,
+}
+
+impl DelegateCapture {
+    fn is_empty(&self) -> bool {
+        self.user_inputs.is_empty() && self.agent_outputs.is_empty()
+    }
 }
 
 impl From<String> for UserMessage {
@@ -345,6 +366,79 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn set_delegate_context(&mut self, summary: Option<DelegateSessionSummary>) {
+        let label = summary
+            .as_ref()
+            .map(|s| format!("#{}", s.agent_id.as_str()));
+        self.bottom_pane.set_delegate_label(label);
+        self.delegate_context = summary;
+        self.delegate_user_frames.clear();
+        self.delegate_agent_frames.clear();
+    }
+
+    pub(crate) fn take_delegate_capture(&mut self) -> Option<DelegateCapture> {
+        if self.delegate_user_frames.is_empty() && self.delegate_agent_frames.is_empty() {
+            return None;
+        }
+        Some(DelegateCapture {
+            user_inputs: std::mem::take(&mut self.delegate_user_frames),
+            agent_outputs: std::mem::take(&mut self.delegate_agent_frames),
+        })
+    }
+
+    pub(crate) fn apply_delegate_summary(
+        &mut self,
+        summary: &DelegateSessionSummary,
+        capture: DelegateCapture,
+    ) {
+        if capture.is_empty() {
+            self.add_info_message(
+                format!(
+                    "Returned from #{} (no new messages)",
+                    summary.agent_id.as_str()
+                ),
+                None,
+            );
+            return;
+        }
+
+        let mut context = String::new();
+        let _ = writeln!(
+            context,
+            "Context from #{} (cwd: {})",
+            summary.agent_id.as_str(),
+            summary.cwd.display()
+        );
+
+        for item in capture.user_inputs {
+            if let InputItem::Text { text } = item {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    let _ = writeln!(context, "You → {trimmed}");
+                }
+            }
+        }
+
+        for message in capture.agent_outputs {
+            let trimmed = message.trim();
+            if !trimmed.is_empty() {
+                let _ = writeln!(context, "{} → {trimmed}", summary.agent_id.as_str());
+            }
+        }
+
+        let context = context.trim().to_string();
+        if context.is_empty() {
+            return;
+        }
+
+        self.pending_delegate_context.push(context.clone());
+        self.add_to_history(history_cell::new_info_event(
+            format!("Returned from #{}", summary.agent_id.as_str()),
+            Some("Queued delegate context for next prompt.".to_string()),
+        ));
+        self.add_to_history(history_cell::new_info_event(context.clone(), None));
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -419,11 +513,20 @@ impl ChatWidget {
         self.running_commands.clear();
         self.request_redraw();
 
+        if self.delegate_context.is_some()
+            && let Some(message) = last_agent_message.as_ref()
+        {
+            if !message.trim().is_empty() {
+                self.delegate_agent_frames.push(message.clone());
+            }
+        }
+
+        let notification_response = last_agent_message.clone().unwrap_or_default();
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
-            response: last_agent_message.unwrap_or_default(),
+            response: notification_response,
         });
     }
 
@@ -964,6 +1067,10 @@ impl ChatWidget {
             delegate_had_stream: false,
             delegate_status_claimed: false,
             delegate_previous_status_header: None,
+            delegate_context: None,
+            delegate_user_frames: Vec::new(),
+            delegate_agent_frames: Vec::new(),
+            pending_delegate_context: Vec::new(),
             last_rendered_width: std::cell::Cell::new(None),
         }
     }
@@ -1033,6 +1140,10 @@ impl ChatWidget {
             delegate_had_stream: false,
             delegate_status_claimed: false,
             delegate_previous_status_header: None,
+            delegate_context: None,
+            delegate_user_frames: Vec::new(),
+            delegate_agent_frames: Vec::new(),
+            pending_delegate_context: Vec::new(),
             last_rendered_width: std::cell::Cell::new(None),
         }
     }
@@ -1189,6 +1300,9 @@ impl ChatWidget {
             SlashCommand::Mention => {
                 self.insert_str("@");
             }
+            SlashCommand::Agent => {
+                self.app_event_tx.send(AppEvent::OpenDelegatePicker);
+            }
             SlashCommand::Status => {
                 self.add_status_output();
             }
@@ -1279,9 +1393,23 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
+        let UserMessage {
+            mut text,
+            image_paths,
+        } = user_message;
         if text.is_empty() && image_paths.is_empty() {
             return;
+        }
+
+        let display_text = text.clone();
+
+        if self.delegate_context.is_some()
+            && !display_text.trim().is_empty()
+            && image_paths.is_empty()
+        {
+            self.delegate_user_frames.push(InputItem::Text {
+                text: display_text.clone(),
+            });
         }
 
         // Intercept explicit delegation commands (only support text-only submissions).
@@ -1290,6 +1418,22 @@ impl ChatWidget {
         }
 
         self.capture_ghost_snapshot();
+
+        if self.delegate_context.is_none()
+            && !self.pending_delegate_context.is_empty()
+            && !text.trim().is_empty()
+        {
+            let mut prefix = self.pending_delegate_context.join("\n\n");
+            self.pending_delegate_context.clear();
+            if !prefix.is_empty() {
+                if !prefix.ends_with('\n') {
+                    prefix.push('\n');
+                }
+                prefix.push('\n');
+            }
+            prefix.push_str(&text);
+            text = prefix;
+        }
 
         let mut items: Vec<InputItem> = Vec::new();
 
@@ -1301,24 +1445,21 @@ impl ChatWidget {
             items.push(InputItem::LocalImage { path });
         }
 
-        self.codex_op_tx
-            .send(Op::UserInput { items })
-            .unwrap_or_else(|e| {
-                tracing::error!("failed to send message: {e}");
-            });
-
-        // Persist the text to cross-session message history.
-        if !text.is_empty() {
-            self.codex_op_tx
-                .send(Op::AddToHistory { text: text.clone() })
-                .unwrap_or_else(|e| {
-                    tracing::error!("failed to send AddHistory op: {e}");
-                });
+        if let Err(e) = self.codex_op_tx.send(Op::UserInput { items }) {
+            tracing::error!("failed to send message: {e}");
         }
 
-        // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text));
+            if let Err(e) = self
+                .codex_op_tx
+                .send(Op::AddToHistory { text: text.clone() })
+            {
+                tracing::error!("failed to send AddHistory op: {e}");
+            }
+        }
+
+        if !display_text.is_empty() {
+            self.add_to_history(history_cell::new_user_prompt(display_text));
         }
         self.needs_final_message_separator = false;
     }
@@ -1805,6 +1946,76 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn open_delegate_picker(
+        &mut self,
+        mut sessions: Vec<DelegateSessionSummary>,
+        active_delegate: Option<&str>,
+    ) {
+        if sessions.is_empty() {
+            self.add_info_message(
+                "No delegate sessions available.".to_string(),
+                Some("Ask the main agent to delegate a task first.".to_string()),
+            );
+            return;
+        }
+
+        sessions.sort_by(|a, b| b.last_interacted_at.cmp(&a.last_interacted_at));
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        if active_delegate.is_some() {
+            let actions: Vec<SelectionAction> =
+                vec![Box::new(|tx| tx.send(AppEvent::ExitDelegateSession))];
+            items.push(SelectionItem {
+                name: "Return to main agent".to_string(),
+                description: None,
+                is_current: false,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        for summary in sessions {
+            let conversation_id = summary.conversation_id.clone();
+            let label = format!(
+                "#{} · {}",
+                summary.agent_id.as_str(),
+                Self::format_delegate_timestamp(summary.last_interacted_at)
+            );
+            let description = Some(summary.cwd.display().to_string());
+            let is_current = active_delegate == Some(conversation_id.as_str());
+            let conversation_id_for_action = conversation_id.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::EnterDelegateSession(
+                    conversation_id_for_action.clone(),
+                ));
+            })];
+            items.push(SelectionItem {
+                name: label,
+                description,
+                is_current,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Switch agent".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    fn format_delegate_timestamp(time: SystemTime) -> String {
+        let utc: DateTime<Utc> = time.into();
+        utc.with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string()
+    }
+
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy;
@@ -1890,6 +2101,14 @@ impl ChatWidget {
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
+    }
+
+    pub(crate) fn apply_delegate_search_result(
+        &mut self,
+        query: String,
+        matches: Vec<DelegateSessionSummary>,
+    ) {
+        self.bottom_pane.on_delegate_search_result(query, matches);
     }
 
     /// Handle Ctrl-C key press.
@@ -2169,6 +2388,8 @@ impl ChatWidget {
     pub(crate) fn on_delegate_started(&mut self, run_id: &str, agent_id: &AgentId, prompt: &str) {
         self.delegate_run = Some(run_id.to_string());
         self.delegate_had_stream = false;
+        self.delegate_user_frames.clear();
+        self.delegate_agent_frames.clear();
         self.delegate_previous_status_header = Some(self.current_status_header.clone());
         if self.bottom_pane.status_widget().is_none() {
             self.bottom_pane.set_task_running(true);

@@ -293,6 +293,10 @@ fn make_chatwidget_manual() -> (
         delegate_had_stream: false,
         delegate_status_claimed: false,
         delegate_previous_status_header: None,
+        delegate_context: None,
+        delegate_user_frames: Vec::new(),
+        delegate_agent_frames: Vec::new(),
+        pending_delegate_context: Vec::new(),
         last_rendered_width: std::cell::Cell::new(None),
     };
     (widget, rx, op_rx)

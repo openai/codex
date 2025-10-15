@@ -18,6 +18,7 @@ use ratatui::widgets::WidgetRef;
 use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
+use super::delegate_popup::DelegatePopup;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
@@ -50,6 +51,7 @@ use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
+use codex_multi_agent::DelegateSessionSummary;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -96,6 +98,8 @@ pub(crate) struct ChatComposer {
     use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
+    dismissed_delegate_popup_token: Option<String>,
+    current_delegate_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
@@ -109,6 +113,7 @@ pub(crate) struct ChatComposer {
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     context_window_percent: Option<u8>,
+    delegate_label: Option<String>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -116,6 +121,7 @@ enum ActivePopup {
     None,
     Command(CommandPopup),
     File(FileSearchPopup),
+    Delegate(DelegatePopup),
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
@@ -141,6 +147,8 @@ impl ChatComposer {
             use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
+            dismissed_delegate_popup_token: None,
+            current_delegate_query: None,
             pending_pastes: Vec::new(),
             has_focus: has_input_focus,
             attached_images: Vec::new(),
@@ -152,6 +160,7 @@ impl ChatComposer {
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             context_window_percent: None,
+            delegate_label: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -162,7 +171,7 @@ impl ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
@@ -173,6 +182,7 @@ impl ChatComposer {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
+                ActivePopup::Delegate(c) => c.calculate_required_height(),
             }
     }
 
@@ -180,7 +190,7 @@ impl ChatComposer {
         let footer_props = self.footer_props();
         let footer_hint_height = self
             .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
+            .unwrap_or_else(|| footer_height(&footer_props));
         let footer_spacing = Self::footer_spacing(footer_hint_height);
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
@@ -188,6 +198,7 @@ impl ChatComposer {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::Delegate(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::None => Constraint::Max(footer_total_height),
         };
         let mut area = area;
@@ -265,8 +276,10 @@ impl ChatComposer {
         self.sync_command_popup();
         if matches!(self.active_popup, ActivePopup::Command(_)) {
             self.dismissed_file_popup_token = None;
+            self.dismissed_delegate_popup_token = None;
         } else {
             self.sync_file_search_popup();
+            self.sync_delegate_popup();
         }
         true
     }
@@ -314,6 +327,7 @@ impl ChatComposer {
         self.textarea.set_cursor(0);
         self.sync_command_popup();
         self.sync_file_search_popup();
+        self.sync_delegate_popup();
     }
 
     /// Get the current composer text.
@@ -369,6 +383,25 @@ impl ChatComposer {
         }
     }
 
+    pub(crate) fn on_delegate_search_result(
+        &mut self,
+        query: String,
+        matches: Vec<DelegateSessionSummary>,
+    ) {
+        let current_opt = Self::current_hash_token(&self.textarea);
+        let Some(current_token) = current_opt else {
+            return;
+        };
+
+        if !current_token.starts_with(&query) {
+            return;
+        }
+
+        if let ActivePopup::Delegate(popup) = &mut self.active_popup {
+            popup.set_matches(&query, matches);
+        }
+    }
+
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
         if show {
@@ -383,6 +416,7 @@ impl ChatComposer {
         self.textarea.insert_str(text);
         self.sync_command_popup();
         self.sync_file_search_popup();
+        self.sync_delegate_popup();
     }
 
     /// Handle a key event coming from the main UI.
@@ -390,15 +424,29 @@ impl ChatComposer {
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
+            ActivePopup::Delegate(_) => self.handle_key_event_with_delegate_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
         // Update (or hide/show) popup after processing the key.
         self.sync_command_popup();
-        if matches!(self.active_popup, ActivePopup::Command(_)) {
-            self.dismissed_file_popup_token = None;
-        } else {
-            self.sync_file_search_popup();
+        match self.active_popup {
+            ActivePopup::Command(_) => {
+                self.dismissed_file_popup_token = None;
+                self.dismissed_delegate_popup_token = None;
+            }
+            ActivePopup::File(_) => {
+                self.sync_file_search_popup();
+                self.sync_delegate_popup();
+            }
+            ActivePopup::Delegate(_) => {
+                self.sync_delegate_popup();
+                self.sync_file_search_popup();
+            }
+            ActivePopup::None => {
+                self.sync_file_search_popup();
+                self.sync_delegate_popup();
+            }
         }
 
         result
@@ -688,6 +736,70 @@ impl ChatComposer {
         }
     }
 
+    fn handle_key_event_with_delegate_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        if key_event.code == KeyCode::Esc {
+            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+            if next_mode != self.footer_mode {
+                self.footer_mode = next_mode;
+                return (InputResult::None, true);
+            }
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
+        let ActivePopup::Delegate(popup) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                if let Some(tok) = Self::current_hash_token(&self.textarea) {
+                    self.dismissed_delegate_popup_token = Some(tok);
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                let Some(session) = popup.selected_session().cloned() else {
+                    self.active_popup = ActivePopup::None;
+                    return (InputResult::None, true);
+                };
+                let agent_token = session.agent_id.as_str().to_owned();
+                let conversation_id = session.conversation_id.clone();
+                self.insert_selected_delegate(agent_token.as_str());
+                self.app_event_tx
+                    .send(AppEvent::EnterDelegateSession(conversation_id));
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            input => self.handle_input_basic(input),
+        }
+    }
+
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
         lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
@@ -795,6 +907,90 @@ impl ChatComposer {
         left_at.or(right_at)
     }
 
+    fn current_hash_token(textarea: &TextArea) -> Option<String> {
+        let cursor_offset = textarea.cursor();
+        let text = textarea.text();
+
+        let mut safe_cursor = cursor_offset.min(text.len());
+        if safe_cursor < text.len() && !text.is_char_boundary(safe_cursor) {
+            safe_cursor = text
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= cursor_offset)
+                .last()
+                .unwrap_or(0);
+        }
+
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+
+        let at_whitespace = if safe_cursor < text.len() {
+            text[safe_cursor..]
+                .chars()
+                .next()
+                .map(char::is_whitespace)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        let start_left = before_cursor
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
+            .unwrap_or(0);
+        let end_left_rel = after_cursor
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(after_cursor.len());
+        let end_left = safe_cursor + end_left_rel;
+        let token_left = if start_left < end_left {
+            Some(&text[start_left..end_left])
+        } else {
+            None
+        };
+
+        let ws_len_right: usize = after_cursor
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .map(char::len_utf8)
+            .sum();
+        let start_right = safe_cursor + ws_len_right;
+        let end_right_rel = text[start_right..]
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(text.len() - start_right);
+        let end_right = start_right + end_right_rel;
+        let token_right = if start_right < end_right {
+            Some(&text[start_right..end_right])
+        } else {
+            None
+        };
+
+        let left_hash = token_left
+            .filter(|t| t.starts_with('#'))
+            .map(|t| t[1..].to_string());
+        let right_hash = token_right
+            .filter(|t| t.starts_with('#'))
+            .map(|t| t[1..].to_string());
+
+        if at_whitespace {
+            if right_hash.is_some() {
+                return right_hash;
+            }
+            if token_left.is_some_and(|t| t == "#") {
+                return None;
+            }
+            return left_hash;
+        }
+        if after_cursor.starts_with('#') {
+            return right_hash.or(left_hash);
+        }
+        left_hash.or(right_hash)
+    }
+
     /// Replace the active `@token` (the one under the cursor) with `path`.
     ///
     /// The algorithm mirrors `current_at_token` so replacement works no matter
@@ -843,6 +1039,42 @@ impl ChatComposer {
 
         self.textarea.set_text(&new_text);
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
+        self.textarea.set_cursor(new_cursor);
+    }
+
+    fn insert_selected_delegate(&mut self, agent_id: &str) {
+        let cursor_offset = self.textarea.cursor();
+        let text = self.textarea.text();
+        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+
+        let start_idx = before_cursor
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
+            .unwrap_or(0);
+        let end_rel_idx = after_cursor
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(after_cursor.len());
+        let end_idx = safe_cursor + end_rel_idx;
+
+        let replacement = format!("#{agent_id}");
+
+        let mut new_text =
+            String::with_capacity(text.len() - (end_idx - start_idx) + replacement.len() + 1);
+        new_text.push_str(&text[..start_idx]);
+        new_text.push_str(&replacement);
+        new_text.push(' ');
+        new_text.push_str(&text[end_idx..]);
+
+        self.textarea.set_text(&new_text);
+        let new_cursor = start_idx
+            .saturating_add(replacement.len())
+            .saturating_add(1);
         self.textarea.set_cursor(new_cursor);
     }
 
@@ -1374,6 +1606,7 @@ impl ChatComposer {
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             context_window_percent: self.context_window_percent,
+            delegate_label: self.delegate_label.clone(),
         }
     }
 
@@ -1496,6 +1729,63 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
     }
 
+    fn sync_delegate_popup(&mut self) {
+        let query = match Self::current_hash_token(&self.textarea) {
+            Some(token) => token,
+            None => {
+                if matches!(self.active_popup, ActivePopup::Delegate(_)) {
+                    self.active_popup = ActivePopup::None;
+                }
+                self.current_delegate_query = None;
+                self.dismissed_delegate_popup_token = None;
+                return;
+            }
+        };
+
+        if self.dismissed_delegate_popup_token.as_ref() == Some(&query) {
+            return;
+        }
+
+        if !matches!(
+            self.active_popup,
+            ActivePopup::Delegate(_) | ActivePopup::None
+        ) {
+            self.current_delegate_query = Some(query);
+            return;
+        }
+
+        if !query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartDelegateSearch(query.clone()));
+        }
+
+        match &mut self.active_popup {
+            ActivePopup::Delegate(popup) => {
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
+            }
+            ActivePopup::None => {
+                let mut popup = DelegatePopup::new();
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
+                self.active_popup = ActivePopup::Delegate(popup);
+            }
+            ActivePopup::Command(_) | ActivePopup::File(_) => {
+                // handled by outer guard
+                return;
+            }
+        }
+
+        self.current_delegate_query = Some(query);
+        self.dismissed_delegate_popup_token = None;
+    }
+
     fn set_has_focus(&mut self, has_focus: bool) {
         self.has_focus = has_focus;
     }
@@ -1508,6 +1798,14 @@ impl ChatComposer {
         if self.context_window_percent != percent {
             self.context_window_percent = percent;
         }
+    }
+
+    pub(crate) fn set_delegate_label(&mut self, label: Option<String>) -> bool {
+        if self.delegate_label == label {
+            return false;
+        }
+        self.delegate_label = label;
+        true
     }
 
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
@@ -1530,11 +1828,14 @@ impl WidgetRef for ChatComposer {
             ActivePopup::File(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
+            ActivePopup::Delegate(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
             ActivePopup::None => {
                 let footer_props = self.footer_props();
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
-                    custom_height.unwrap_or_else(|| footer_height(footer_props));
+                    custom_height.unwrap_or_else(|| footer_height(&footer_props));
                 let footer_spacing = Self::footer_spacing(footer_hint_height);
                 let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
                     let [_, hint_rect] = Layout::vertical([
@@ -1565,7 +1866,7 @@ impl WidgetRef for ChatComposer {
                         Line::from(spans).render_ref(custom_rect, buf);
                     }
                 } else {
-                    render_footer(hint_rect, buf, footer_props);
+                    render_footer(hint_rect, buf, &footer_props);
                 }
             }
         }
@@ -1730,7 +2031,7 @@ mod tests {
         );
         setup(&mut composer);
         let footer_props = composer.footer_props();
-        let footer_lines = footer_height(footer_props);
+        let footer_lines = footer_height(&footer_props);
         let footer_spacing = ChatComposer::footer_spacing(footer_lines);
         let height = footer_lines + footer_spacing + 8;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();

@@ -37,6 +37,8 @@
   - History cells that log switch events (`Entered #critic`, `Returned from #critic – applied adjustments`).
   - Optional shortcut `/agent return` to exit quickly.
 - Provide an autocomplete (`#agent_id · YYYY-MM-DD HH:MM`) that lists only delegates invoked during the current main-agent session so users can target the right sub-agent before switching.
+- The composer now surfaces this autocomplete automatically when typing `#`; selecting an entry both inserts `#agent_id` into the prompt and switches context to that agent.
+- While switched, show an inline footer indicator (`In #agent`) next to the context meter so the active delegate is always visible.
 - Hide picker entries whose conversations are no longer resumable (e.g., cleanup, failure). If the user attempts to switch into a stale handle, surface an error toast and keep them in the current context while logging the failure.
 - While switched, the prompt input should clearly identify the active agent (e.g., placeholder text, accent color) to avoid accidental edits.
 - Surface breadcrumbs in `/status` showing the current agent stack (`Main → #ideas_provider → #critic`), making nested switches easier to follow later.

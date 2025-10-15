@@ -3,6 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
+use crate::chatwidget::ChatWidgetInit;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
@@ -18,11 +19,13 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
+use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_multi_agent::AgentOrchestrator;
 use codex_multi_agent::DelegateEvent;
+use codex_multi_agent::DelegateSessionSummary;
 use codex_multi_agent::delegate_tool_adapter;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
@@ -32,12 +35,14 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use std::time::SystemTime;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
 // use uuid::Uuid;
@@ -53,6 +58,7 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) delegate_orchestrator: Arc<AgentOrchestrator>,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
@@ -74,6 +80,11 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+
+    delegate_sessions: HashMap<String, DelegateSessionState>,
+    active_delegate: Option<String>,
+    active_delegate_summary: Option<DelegateSessionSummary>,
+    primary_chat_backup: Option<ChatWidget>,
 }
 
 impl App {
@@ -157,6 +168,7 @@ impl App {
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
+            delegate_orchestrator,
             config,
             active_profile,
             file_search,
@@ -167,6 +179,10 @@ impl App {
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            delegate_sessions: HashMap::new(),
+            active_delegate: None,
+            active_delegate_summary: None,
+            primary_chat_backup: None,
         };
 
         let tui_events = tui.event_stream();
@@ -329,6 +345,24 @@ impl App {
                     self.file_search.on_user_query(query);
                 }
             }
+            AppEvent::StartDelegateSearch(query) => {
+                let all_sessions = self.delegate_orchestrator.active_sessions().await;
+                let query_lower = query.to_lowercase();
+                let mut matches: Vec<_> = all_sessions
+                    .into_iter()
+                    .filter(|summary| {
+                        query_lower.is_empty()
+                            || summary
+                                .agent_id
+                                .as_str()
+                                .to_lowercase()
+                                .contains(&query_lower)
+                    })
+                    .collect();
+                matches.sort_by(|a, b| b.last_interacted_at.cmp(&a.last_interacted_at));
+                self.chat_widget
+                    .apply_delegate_search_result(query, matches);
+            }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
@@ -389,6 +423,32 @@ impl App {
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
+            }
+            AppEvent::OpenDelegatePicker => {
+                let sessions = self.delegate_orchestrator.active_sessions().await;
+                if sessions.is_empty() {
+                    self.chat_widget.add_info_message(
+                        "No delegate sessions available.".to_string(),
+                        Some("Ask the main agent to delegate a task first.".to_string()),
+                    );
+                } else {
+                    self.chat_widget
+                        .open_delegate_picker(sessions, self.active_delegate.as_deref());
+                }
+            }
+            AppEvent::EnterDelegateSession(conversation_id) => {
+                if let Err(err) = self.activate_delegate_session(tui, conversation_id).await {
+                    tracing::error!("failed to enter delegate session: {err}");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to open delegate: {err}"));
+                }
+            }
+            AppEvent::ExitDelegateSession => {
+                if let Err(err) = self.return_to_primary(tui).await {
+                    tracing::error!("failed to return to primary agent: {err}");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to return to main agent: {err}"));
+                }
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
@@ -461,6 +521,121 @@ impl App {
                     .on_delegate_failed(&run_id, &agent_id, &error);
             }
         }
+    }
+
+    async fn activate_delegate_session(
+        &mut self,
+        tui: &mut tui::Tui,
+        conversation_id: String,
+    ) -> Result<(), String> {
+        if self.active_delegate.as_deref() == Some(conversation_id.as_str()) {
+            return Ok(());
+        }
+
+        if self.active_delegate.is_some() {
+            self.stash_active_delegate();
+        }
+
+        let state = if let Some(state) = self.delegate_sessions.remove(&conversation_id) {
+            state
+        } else {
+            let session = self
+                .delegate_orchestrator
+                .enter_session(&conversation_id)
+                .await
+                .map_err(|err| format!("{err}"))?;
+            let init = ChatWidgetInit {
+                config: session.config.clone(),
+                frame_requester: tui.frame_requester(),
+                app_event_tx: self.app_event_tx.clone(),
+                initial_prompt: None,
+                initial_images: Vec::new(),
+                enhanced_keys_supported: self.enhanced_keys_supported,
+                auth_manager: self.auth_manager.clone(),
+            };
+            let session_configured = expect_unique_session_configured(session.session_configured);
+            let mut chat_widget =
+                ChatWidget::new_from_existing(init, session.conversation, session_configured);
+            chat_widget.set_delegate_context(Some(session.summary.clone()));
+            DelegateSessionState {
+                summary: session.summary,
+                chat_widget,
+            }
+        };
+
+        let DelegateSessionState {
+            summary,
+            mut chat_widget,
+        } = state;
+        chat_widget.set_delegate_context(Some(summary.clone()));
+        let mut previous = std::mem::replace(&mut self.chat_widget, chat_widget);
+        previous.set_delegate_context(None);
+        self.primary_chat_backup = Some(previous);
+        self.active_delegate = Some(conversation_id.clone());
+        self.active_delegate_summary = Some(summary.clone());
+        self.chat_widget.set_delegate_context(Some(summary.clone()));
+        self.delegate_orchestrator
+            .touch_session(&conversation_id)
+            .await;
+        tui.frame_requester().schedule_frame();
+        Ok(())
+    }
+
+    fn stash_active_delegate(&mut self) {
+        if let Some(active_id) = self.active_delegate.take() {
+            let mut summary = self
+                .active_delegate_summary
+                .take()
+                .expect("delegate summary missing");
+            let main_chat = self
+                .primary_chat_backup
+                .take()
+                .expect("primary chat missing when stashing delegate");
+            summary.last_interacted_at = SystemTime::now();
+            let mut delegate_chat = std::mem::replace(&mut self.chat_widget, main_chat);
+            delegate_chat.set_delegate_context(Some(summary.clone()));
+            self.chat_widget.set_delegate_context(None);
+            self.delegate_sessions.insert(
+                active_id,
+                DelegateSessionState {
+                    summary,
+                    chat_widget: delegate_chat,
+                },
+            );
+        }
+    }
+
+    async fn return_to_primary(&mut self, tui: &mut tui::Tui) -> Result<(), String> {
+        if let Some(active_id) = self.active_delegate.take() {
+            let mut summary = self
+                .active_delegate_summary
+                .take()
+                .expect("delegate summary missing");
+            let capture = self.chat_widget.take_delegate_capture();
+            let main_chat = self
+                .primary_chat_backup
+                .take()
+                .ok_or_else(|| "primary conversation unavailable".to_string())?;
+            summary.last_interacted_at = SystemTime::now();
+            let mut delegate_chat = std::mem::replace(&mut self.chat_widget, main_chat);
+            delegate_chat.set_delegate_context(Some(summary.clone()));
+            self.chat_widget.set_delegate_context(None);
+            self.delegate_sessions.insert(
+                active_id.clone(),
+                DelegateSessionState {
+                    summary: summary.clone(),
+                    chat_widget: delegate_chat,
+                },
+            );
+            self.delegate_orchestrator.touch_session(&active_id).await;
+            self.primary_chat_backup = None;
+            self.active_delegate_summary = None;
+            if let Some(capture) = capture {
+                self.chat_widget.apply_delegate_summary(&summary, capture);
+            }
+            tui.frame_requester().schedule_frame();
+        }
+        Ok(())
     }
 
     fn format_delegate_duration(duration: Duration) -> String {
@@ -544,6 +719,17 @@ impl App {
     }
 }
 
+struct DelegateSessionState {
+    summary: DelegateSessionSummary,
+    chat_widget: ChatWidget,
+}
+
+fn expect_unique_session_configured(
+    session_configured: Arc<SessionConfiguredEvent>,
+) -> SessionConfiguredEvent {
+    Arc::unwrap_or_clone(session_configured)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,11 +742,14 @@ mod tests {
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
 
+    use codex_common::CliConfigOverrides;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use codex_core::config::ConfigOverrides;
 
     use codex_core::protocol::SessionConfiguredEvent;
+    use codex_core::protocol::SessionSource;
 
     use codex_protocol::ConversationId;
     use ratatui::prelude::Line;
@@ -578,12 +767,36 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let delegate_orchestrator = Arc::new(AgentOrchestrator::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            SessionSource::Cli,
+            CliConfigOverrides::default(),
+            ConfigOverrides {
+                model: None,
+                review_model: None,
+                cwd: None,
+                approval_policy: None,
+                sandbox_mode: None,
+                model_provider: None,
+                config_profile: None,
+                codex_linux_sandbox_exe: None,
+                base_instructions: None,
+                include_plan_tool: None,
+                include_delegate_tool: None,
+                include_apply_patch_tool: None,
+                include_view_image_tool: None,
+                show_raw_agent_reasoning: None,
+                tools_web_search_request: None,
+            },
+        ));
 
         App {
             server,
             app_event_tx,
             chat_widget,
             auth_manager,
+            delegate_orchestrator,
             config,
             active_profile: None,
             file_search,
@@ -594,6 +807,10 @@ mod tests {
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            delegate_sessions: HashMap::new(),
+            active_delegate: None,
+            active_delegate_summary: None,
+            primary_chat_backup: None,
         }
     }
 
@@ -676,5 +893,27 @@ mod tests {
         let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
         assert_eq!(nth, 1);
         assert_eq!(prefill, "follow-up (edited)");
+    }
+
+    #[test]
+    fn expect_unique_session_configured_clones_when_shared() {
+        let event = SessionConfiguredEvent {
+            session_id: ConversationId::new(),
+            model: "gpt-test".to_string(),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: PathBuf::new(),
+        };
+
+        let shared = Arc::new(event.clone());
+        let _other_owner = Arc::clone(&shared);
+
+        let resolved = expect_unique_session_configured(shared);
+
+        assert_eq!(resolved.model, event.model);
+        assert_eq!(resolved.history_log_id, event.history_log_id);
+        assert_eq!(resolved.history_entry_count, event.history_entry_count);
     }
 }

@@ -24,6 +24,7 @@ use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::error;
@@ -77,6 +78,60 @@ mod wrapping;
 
 #[cfg(test)]
 pub mod test_backend;
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+    use codex_core::auth::AuthDotJson;
+    use codex_core::auth::write_auth_json;
+    use tempfile::tempdir;
+
+    #[test]
+    fn login_status_uses_parent_codex_home_for_auth() {
+        let global_home = tempdir().expect("tempdir");
+        let auth_path = global_home.path().join("auth.json");
+        write_auth_json(
+            &auth_path,
+            &AuthDotJson {
+                openai_api_key: Some("sk-test".to_string()),
+                tokens: None,
+                last_refresh: None,
+            },
+        )
+        .expect("write auth.json");
+
+        let agent_home = tempdir().expect("tempdir");
+        let mut config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            agent_home.path().to_path_buf(),
+        )
+        .expect("config");
+        config.model_provider.requires_openai_auth = true;
+
+        let status = get_login_status(&config, global_home.path());
+        assert!(matches!(status, LoginStatus::AuthMode(AuthMode::ApiKey)));
+    }
+
+    #[test]
+    fn shared_auth_manager_reads_parent_auth() {
+        let global_home = tempdir().expect("tempdir");
+        let auth_path = global_home.path().join("auth.json");
+        write_auth_json(
+            &auth_path,
+            &AuthDotJson {
+                openai_api_key: Some("sk-test".to_string()),
+                tokens: None,
+                last_refresh: None,
+            },
+        )
+        .expect("write auth.json");
+
+        let manager = AuthManager::shared(global_home.path().to_path_buf(), false);
+        let auth = manager.auth().expect("auth loaded");
+        assert!(matches!(auth.mode, AuthMode::ApiKey));
+    }
+}
 
 #[cfg(not(debug_assertions))]
 mod updates;
@@ -363,15 +418,15 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&config);
 
-    let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
+    let auth_manager = AuthManager::shared(global_codex_home.clone(), false);
     let delegate_orchestrator = Arc::new(AgentOrchestrator::new(
-        global_codex_home,
+        global_codex_home.clone(),
         auth_manager.clone(),
         SessionSource::Cli,
         delegate_cli_overrides,
         delegate_config_overrides,
     ));
-    let login_status = get_login_status(&config);
+    let login_status = get_login_status(&config, &global_codex_home);
     let should_show_windows_wsl_screen =
         cfg!(target_os = "windows") && !config.windows_wsl_setup_acknowledged;
     let should_show_onboarding = should_show_onboarding(
@@ -494,12 +549,11 @@ pub enum LoginStatus {
     NotAuthenticated,
 }
 
-fn get_login_status(config: &Config) -> LoginStatus {
+fn get_login_status(config: &Config, auth_codex_home: &Path) -> LoginStatus {
     if config.model_provider.requires_openai_auth {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
-        let codex_home = config.codex_home.clone();
-        match CodexAuth::from_codex_home(&codex_home) {
+        match CodexAuth::from_codex_home(auth_codex_home) {
             Ok(Some(auth)) => LoginStatus::AuthMode(auth.mode),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {

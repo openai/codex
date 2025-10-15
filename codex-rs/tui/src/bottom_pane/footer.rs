@@ -11,13 +11,14 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<u8>,
+    pub(crate) delegate_label: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,11 +59,11 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     }
 }
 
-pub(crate) fn footer_height(props: FooterProps) -> u16 {
+pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     footer_lines(props).len() as u16
 }
 
-pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
+pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: &FooterProps) {
     Paragraph::new(prefix_lines(
         footer_lines(props),
         " ".repeat(FOOTER_INDENT_COLS).into(),
@@ -71,7 +72,7 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     .render(area, buf);
 }
 
-fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
+fn footer_lines(props: &FooterProps) -> Vec<Line<'static>> {
     // Show the context indicator on the left, appended after the primary hint
     // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
     // the shortcut hint is hidden). Hide it only for the multi-line
@@ -81,20 +82,39 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             is_task_running: props.is_task_running,
         })],
         FooterMode::ShortcutSummary => {
-            let mut line = context_window_line(props.context_window_percent);
-            line.push_span(" · ".dim());
-            line.extend(vec![
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            if let Some(label) = props.delegate_label.as_ref() {
+                spans.push(format!("In {}", label).cyan());
+                spans.push(" · ".dim());
+            }
+            let context_line = context_window_line(props.context_window_percent);
+            for span in context_line {
+                spans.push(span);
+            }
+            spans.push(" · ".dim());
+            spans.extend(vec![
                 key_hint::plain(KeyCode::Char('?')).into(),
                 " for shortcuts".dim(),
             ]);
-            vec![line]
+            vec![Line::from(spans)]
         }
         FooterMode::ShortcutOverlay => shortcut_overlay_lines(ShortcutsState {
             use_shift_enter_hint: props.use_shift_enter_hint,
             esc_backtrack_hint: props.esc_backtrack_hint,
         }),
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::ContextOnly => vec![context_window_line(props.context_window_percent)],
+        FooterMode::ContextOnly => {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            if let Some(label) = props.delegate_label.as_ref() {
+                spans.push(format!("In {}", label).cyan());
+                spans.push(" · ".dim());
+            }
+            let context_line = context_window_line(props.context_window_percent);
+            for span in context_line {
+                spans.push(span);
+            }
+            vec![Line::from(spans)]
+        }
     }
 }
 
@@ -379,12 +399,12 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        let height = footer_height(props).max(1);
+        let height = footer_height(&props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                render_footer(area, f.buffer_mut(), props);
+                render_footer(area, f.buffer_mut(), &props);
             })
             .unwrap();
         assert_snapshot!(name, terminal.backend());
@@ -400,6 +420,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                delegate_label: None,
             },
         );
 
@@ -411,6 +432,7 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 context_window_percent: None,
+                delegate_label: None,
             },
         );
 
@@ -422,6 +444,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                delegate_label: None,
             },
         );
 
@@ -433,6 +456,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: None,
+                delegate_label: None,
             },
         );
 
@@ -444,6 +468,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                delegate_label: None,
             },
         );
 
@@ -455,6 +480,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                delegate_label: None,
             },
         );
 
@@ -466,6 +492,19 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: Some(72),
+                delegate_label: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_shortcuts_delegate",
+            FooterProps {
+                mode: FooterMode::ShortcutSummary,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                context_window_percent: Some(85),
+                delegate_label: Some("#critic".to_string()),
             },
         );
     }

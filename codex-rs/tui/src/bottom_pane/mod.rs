@@ -5,6 +5,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_file_search::FileMatch;
+use codex_multi_agent::DelegateSessionSummary;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -22,6 +23,7 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
+mod delegate_popup;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
@@ -69,6 +71,7 @@ pub(crate) struct BottomPane {
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
     context_window_percent: Option<u8>,
+    delegate_label: Option<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -102,6 +105,7 @@ impl BottomPane {
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
             context_window_percent: None,
+            delegate_label: None,
         }
     }
 
@@ -360,6 +364,16 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_delegate_label(&mut self, label: Option<String>) {
+        if self.delegate_label == label {
+            return;
+        }
+        self.delegate_label = label.clone();
+        if self.composer.set_delegate_label(label) {
+            self.request_redraw();
+        }
+    }
+
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
@@ -476,6 +490,15 @@ impl BottomPane {
 
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_delegate_search_result(
+        &mut self,
+        query: String,
+        matches: Vec<DelegateSessionSummary>,
+    ) {
+        self.composer.on_delegate_search_result(query, matches);
         self.request_redraw();
     }
 

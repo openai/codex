@@ -21,6 +21,7 @@ pub enum SlashCommand {
     Undo,
     Diff,
     Mention,
+    Agent,
     Status,
     Mcp,
     Logout,
@@ -41,6 +42,7 @@ impl SlashCommand {
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
+            SlashCommand::Agent => "switch into a delegated agent session",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
@@ -70,6 +72,7 @@ impl SlashCommand {
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention
+            | SlashCommand::Agent
             | SlashCommand::Status
             | SlashCommand::Mcp
             | SlashCommand::Quit => true,
