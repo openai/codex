@@ -116,7 +116,20 @@ wire_api = "responses"
 
 Export your key before launching Codex: `export AZURE_OPENAI_API_KEY=…`
 
-#### Per-provider network tuning
+### Responses API's reasoning format
+Some providers/proxies like litellm require the Response API's reasoning IDs in the payload. You can force this through _force_responses_api_store_reasoning_ids_. Default is `false`.
+
+```toml
+[model_providers.custom]
+name = "custom"
+base_url = "<CUSTOM_BASE_URL>"
+env_key = "CUSTOM_API_KEY"
+wire_api = "responses"
+# this config forwards Response API's reasoning IDs
+force_responses_api_store_reasoning_ids = true
+```
+
+### Per-provider network tuning
 
 The following optional settings control retry behaviour and streaming idle timeouts **per model provider**. They must be specified inside the corresponding `[model_providers.<id>]` block in `config.toml`. (Older releases accepted top‑level keys; those are now ignored.)
 
@@ -858,7 +871,8 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `model_providers.<id>.name`                      | string                                                            | Display name.                                                                                                              |
 | `model_providers.<id>.base_url`                  | string                                                            | API base URL.                                                                                                              |
 | `model_providers.<id>.env_key`                   | string                                                            | Env var for API key.                                                                                                       |
-| `model_providers.<id>.wire_api`                  | `chat` \| `responses`                                             | Protocol used (default: `chat`).                                                                                           |
+| `model_providers.<id>.wire_api`                  | `chat` \| `responses`                                                 | Protocol used (default: `chat`).                                                                                           |
+| `model_providers.<id>.force_responses_api_store_reasoning_ids`   | boolean                                           | Force forwarding the Responses API's reasoning IDs. (default: `false`).                                                                                           |
 | `model_providers.<id>.query_params`              | map<string,string>                                                | Extra query params (e.g., Azure `api-version`).                                                                            |
 | `model_providers.<id>.http_headers`              | map<string,string>                                                | Additional static headers.                                                                                                 |
 | `model_providers.<id>.env_http_headers`          | map<string,string>                                                | Headers sourced from env vars.                                                                                             |
