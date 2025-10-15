@@ -1721,10 +1721,6 @@ impl ChatWidget {
         } else {
             default_choice
         };
-        let show_high_effort_warning = choices
-            .iter()
-            .any(|choice| choice.display == ReasoningEffortConfig::High);
-
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
@@ -1746,6 +1742,14 @@ impl ChatWidget {
                         .find(|preset| preset.effort == choice.stored)
                         .map(|preset| preset.description.to_string())
                 });
+
+            let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
+            let show_warning = model_slug == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
+            let selected_description = show_warning.then(|| {
+                description
+                    .as_ref()
+                    .map_or(warning.to_string(), |d| format!("{d}\n{warning}"))
+            });
 
             let model_for_action = model_slug.clone();
             let effort_for_action = choice.stored;
@@ -1776,6 +1780,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: effort_label,
                 description,
+                selected_description,
                 is_current: is_current_model && choice.stored == highlight_choice,
                 actions,
                 dismiss_on_select: true,
@@ -1784,15 +1789,9 @@ impl ChatWidget {
         }
 
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Select Reasoning Level".bold()));
         header.push(Line::from(
-            format!("Reasoning for model {model_slug}").dim(),
+            format!("Select Reasoning Level for {model_slug}").bold(),
         ));
-        if show_high_effort_warning {
-            header.push(Line::from(
-                "⚠ High reasoning effort can quickly consume Plus plan rate limits.".red(),
-            ));
-        }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             header: Box::new(header),
