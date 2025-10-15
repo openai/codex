@@ -226,13 +226,20 @@ impl ModelClient {
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
 
         // In general, we want to explicitly send `store: false` when using the Responses API,
-        // but in practice, the Azure Responses API rejects `store: false`:
+        // but in practice, some providers that implement Responses API rejects `store: false`:
         //
         // - If store = false and id is sent an error is thrown that ID is not found
         // - If store = false and id is not sent an error is thrown that ID is required
         //
-        // For Azure, we send `store: true` and preserve reasoning item IDs.
-        let azure_workaround = self.provider.is_azure_responses_endpoint();
+        // For Azure, we send `store: true` and preserve reasoning item IDs. This also happens in
+        // other custom proxies like litellm, and a custom config can be added to force this
+        // behaviour as a workaround.
+        let force_responses_api_store_reasoning_ids = self.provider.is_azure_responses_endpoint()
+            || self
+                .config
+                .model_provider
+                .force_responses_api_store_reasoning_ids
+                .unwrap_or(false);
 
         let payload = ResponsesApiRequest {
             model: &self.config.model,
@@ -242,7 +249,7 @@ impl ModelClient {
             tool_choice: "auto",
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
-            store: azure_workaround,
+            store: force_responses_api_store_reasoning_ids,
             stream: true,
             include,
             prompt_cache_key: Some(self.conversation_id.to_string()),
@@ -250,7 +257,7 @@ impl ModelClient {
         };
 
         let mut payload_json = serde_json::to_value(&payload)?;
-        if azure_workaround {
+        if force_responses_api_store_reasoning_ids {
             attach_item_ids(&mut payload_json, &input_with_instructions);
         }
 
@@ -1078,6 +1085,7 @@ mod tests {
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
             wire_api: WireApi::Responses,
+            force_responses_api_store_reasoning_ids: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -1141,6 +1149,7 @@ mod tests {
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
             wire_api: WireApi::Responses,
+            force_responses_api_store_reasoning_ids: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -1177,6 +1186,7 @@ mod tests {
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
             wire_api: WireApi::Responses,
+            force_responses_api_store_reasoning_ids: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -1215,6 +1225,7 @@ mod tests {
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
             wire_api: WireApi::Responses,
+            force_responses_api_store_reasoning_ids: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -1249,6 +1260,7 @@ mod tests {
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
             wire_api: WireApi::Responses,
+            force_responses_api_store_reasoning_ids: None,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -1352,6 +1364,7 @@ mod tests {
                 env_key: Some("TEST_API_KEY".to_string()),
                 env_key_instructions: None,
                 wire_api: WireApi::Responses,
+                force_responses_api_store_reasoning_ids: None,
                 query_params: None,
                 http_headers: None,
                 env_http_headers: None,
