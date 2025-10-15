@@ -1125,6 +1125,15 @@ impl Config {
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 
+        let mut approval_policy = approval_policy
+            .or(config_profile.approval_policy)
+            .or(cfg.approval_policy)
+            .unwrap_or_else(AskForApproval::default);
+
+        if features.enabled(Feature::ApproveAll) {
+            approval_policy = AskForApproval::OnRequest;
+        }
+
         let config = Self {
             model,
             review_model,
@@ -1135,10 +1144,7 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
-            approval_policy: approval_policy
-                .or(config_profile.approval_policy)
-                .or(cfg.approval_policy)
-                .unwrap_or_else(AskForApproval::default),
+            approval_policy,
             sandbox_policy,
             shell_environment_policy,
             notify: cfg.notify,
@@ -1430,6 +1436,26 @@ exclude_slash_tmp = true
             },
             sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
+    }
+
+    #[test]
+    fn approve_all_feature_forces_on_request_policy() -> std::io::Result<()> {
+        let cfg = r#"
+[features]
+approve_all = true
+"#;
+        let parsed = toml::from_str::<ConfigToml>(cfg)
+            .expect("TOML deserialization should succeed for approve_all feature");
+        let temp_dir = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            parsed,
+            ConfigOverrides::default(),
+            temp_dir.path().to_path_buf(),
+        )?;
+
+        assert!(config.features.enabled(Feature::ApproveAll));
+        assert_eq!(config.approval_policy, AskForApproval::OnRequest);
+        Ok(())
     }
 
     #[test]
