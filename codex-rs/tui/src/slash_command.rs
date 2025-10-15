@@ -22,6 +22,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Title,
     Mcp,
     Logout,
     Quit,
@@ -42,6 +43,7 @@ impl SlashCommand {
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Title => "set the terminal window title",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
@@ -71,6 +73,7 @@ impl SlashCommand {
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Status
+            | SlashCommand::Title
             | SlashCommand::Mcp
             | SlashCommand::Quit => true,
 
