@@ -254,7 +254,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     write_global_mcp_servers(&codex_home, &servers)
         .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
 
-    println!("Added MCP server '{name}'.");
+    println!("Added global MCP server '{name}'.");
 
     if let McpServerTransportConfig::StreamableHttp {
         url,
