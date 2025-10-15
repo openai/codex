@@ -28,6 +28,8 @@ use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
+use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
+use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use anyhow::Context;
@@ -1217,20 +1219,18 @@ impl Config {
     }
 
     fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
-        let mut p = match codex_dir {
-            Some(p) => p.to_path_buf(),
-            None => return None,
-        };
-
-        p.push("AGENTS.md");
-        std::fs::read_to_string(&p).ok().and_then(|s| {
-            let s = s.trim();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.to_string())
+        let base = codex_dir?;
+        for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
+            let mut path = base.to_path_buf();
+            path.push(candidate);
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                let trimmed = contents.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
             }
-        })
+        }
+        None
     }
 
     fn get_base_instructions(
