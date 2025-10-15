@@ -1,5 +1,7 @@
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::features::Feature;
+use crate::features::Features;
 use crate::model_family::ModelFamily;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::ApplyPatchToolType;
@@ -34,28 +36,23 @@ pub(crate) struct ToolsConfig {
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_family: &'a ModelFamily,
-    pub(crate) include_plan_tool: bool,
+    pub(crate) features: &'a Features,
     pub(crate) include_delegate_tool: bool,
-    pub(crate) include_apply_patch_tool: bool,
-    pub(crate) include_web_search_request: bool,
-    pub(crate) use_streamable_shell_tool: bool,
-    pub(crate) include_view_image_tool: bool,
-    pub(crate) experimental_unified_exec_tool: bool,
 }
 
 impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
-        let ToolsConfigParams {
-            model_family,
-            include_plan_tool,
-            include_delegate_tool,
-            include_apply_patch_tool,
-            include_web_search_request,
-            use_streamable_shell_tool,
-            include_view_image_tool,
-            experimental_unified_exec_tool,
-        } = params;
-        let shell_type = if *use_streamable_shell_tool {
+        let model_family = params.model_family;
+        let features = params.features;
+        let include_delegate_tool = params.include_delegate_tool;
+        let use_streamable_shell_tool = features.enabled(Feature::StreamableShell);
+        let experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
+        let include_plan_tool = features.enabled(Feature::PlanTool);
+        let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        let include_web_search_request = features.enabled(Feature::WebSearchRequest);
+        let include_view_image_tool = features.enabled(Feature::ViewImageTool);
+
+        let shell_type = if use_streamable_shell_tool {
             ConfigShellToolType::Streamable
         } else if model_family.uses_local_shell_tool {
             ConfigShellToolType::Local
@@ -67,7 +64,7 @@ impl ToolsConfig {
             Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
             Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
             None => {
-                if *include_apply_patch_tool {
+                if include_apply_patch_tool {
                     Some(ApplyPatchToolType::Freeform)
                 } else {
                     None
@@ -77,12 +74,12 @@ impl ToolsConfig {
 
         Self {
             shell_type,
-            plan_tool: *include_plan_tool,
-            delegate_tool: *include_delegate_tool,
+            plan_tool: include_plan_tool,
+            delegate_tool: include_delegate_tool,
             apply_patch_tool_type,
-            web_search_request: *include_web_search_request,
-            include_view_image_tool: *include_view_image_tool,
-            experimental_unified_exec_tool: *experimental_unified_exec_tool,
+            web_search_request: include_web_search_request,
+            include_view_image_tool,
+            experimental_unified_exec_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -918,15 +915,14 @@ mod tests {
     fn test_build_specs() {
         let model_family = find_family_for_model("codex-mini-latest")
             .expect("codex-mini-latest should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::PlanTool);
+        features.enable(Feature::WebSearchRequest);
+        features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: true,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: true,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: true,
-            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -939,15 +935,14 @@ mod tests {
     #[test]
     fn test_build_specs_default_shell() {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::PlanTool);
+        features.enable(Feature::WebSearchRequest);
+        features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: true,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: true,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: true,
-            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -962,15 +957,13 @@ mod tests {
     fn test_parallel_support_flags() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("codex-mini-latest should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.disable(Feature::ViewImageTool);
+        features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: false,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: false,
-            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -984,15 +977,12 @@ mod tests {
     fn test_test_model_family_includes_sync_tool() {
         let model_family = find_family_for_model("test-gpt-5-codex")
             .expect("test-gpt-5-codex should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.disable(Feature::ViewImageTool);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: false,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: false,
-            experimental_unified_exec_tool: false,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -1017,15 +1007,13 @@ mod tests {
     #[test]
     fn test_build_specs_mcp_tools() {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: true,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: true,
-            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(
             &config,
@@ -1123,15 +1111,12 @@ mod tests {
     #[test]
     fn test_build_specs_mcp_tools_sorted_by_name() {
         let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: false,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: true,
-            experimental_unified_exec_tool: true,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -1201,15 +1186,13 @@ mod tests {
     fn test_mcp_tool_property_missing_type_defaults_to_string() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("gpt-5-codex should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: true,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: true,
-            experimental_unified_exec_tool: true,
         });
 
         let (tools, _) = build_specs(
@@ -1271,15 +1254,13 @@ mod tests {
     fn test_mcp_tool_integer_normalized_to_number() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("gpt-5-codex should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: true,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: true,
-            experimental_unified_exec_tool: true,
         });
 
         let (tools, _) = build_specs(
@@ -1336,15 +1317,14 @@ mod tests {
     fn test_mcp_tool_array_without_items_gets_default_string_items() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("gpt-5-codex should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::WebSearchRequest);
+        features.enable(Feature::ApplyPatchFreeform);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: true,
-            include_web_search_request: true,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: true,
-            experimental_unified_exec_tool: true,
         });
 
         let (tools, _) = build_specs(
@@ -1404,15 +1384,13 @@ mod tests {
     fn test_mcp_tool_anyof_defaults_to_string() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("gpt-5-codex should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: true,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: true,
-            experimental_unified_exec_tool: true,
         });
 
         let (tools, _) = build_specs(
@@ -1484,15 +1462,13 @@ mod tests {
     fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("gpt-5-codex should be a valid model family");
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
+            features: &features,
             include_delegate_tool: false,
-            include_apply_patch_tool: false,
-            include_web_search_request: true,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: true,
-            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(
             &config,
@@ -1611,15 +1587,11 @@ mod tests {
     fn delegate_tool_enabled_by_flag() {
         let model_family = find_family_for_model("gpt-5-codex")
             .expect("gpt-5-codex should be a valid model family");
+        let features = Features::with_defaults();
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            include_plan_tool: false,
             include_delegate_tool: true,
-            include_apply_patch_tool: false,
-            include_web_search_request: false,
-            use_streamable_shell_tool: false,
-            include_view_image_tool: false,
-            experimental_unified_exec_tool: true,
+            features: &features,
         });
         let (tools, _) = build_specs(&config, None).build();
 

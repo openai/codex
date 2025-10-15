@@ -602,6 +602,7 @@ Specify a program that will be executed to get notified about events generated b
 ```json
 {
   "type": "agent-turn-complete",
+  "thread-id": "b5f6c1c2-1111-2222-3333-444455556666",
   "turn-id": "12345",
   "input-messages": ["Rename `foo` to `bar` and update the callsites."],
   "last-assistant-message": "Rename complete and verified `cargo build` succeeds."
@@ -609,6 +610,8 @@ Specify a program that will be executed to get notified about events generated b
 ```
 
 The `"type"` property will always be set. Currently, `"agent-turn-complete"` is the only notification type that is supported.
+
+`"thread-id"` contains a string that identifies the Codex session that produced the notification; you can use it to correlate multiple turns that belong to the same task.
 
 As an example, here is a Python script that parses the JSON and decides whether to show a desktop push notification using [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS:
 
@@ -644,6 +647,8 @@ def main() -> int:
             print(f"not sending a push notification for: {notification_type}")
             return 0
 
+    thread_id = notification.get("thread-id", "")
+
     subprocess.check_output(
         [
             "terminal-notifier",
@@ -652,7 +657,7 @@ def main() -> int:
             "-message",
             message,
             "-group",
-            "codex",
+            "codex-" + thread_id,
             "-ignoreDnD",
             "-activate",
             "com.googlecode.iterm2",
