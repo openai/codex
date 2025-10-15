@@ -23,6 +23,10 @@ pub struct CodexToolCallParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
+    /// Optional override for the review model name (e.g. "gpt-4o-mini").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_model: Option<String>,
+
     /// Configuration profile from config.toml to specify default options.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
@@ -143,6 +147,7 @@ impl CodexToolCallParam {
         let Self {
             prompt,
             model,
+            review_model,
             profile,
             cwd,
             approval_policy,
@@ -156,7 +161,7 @@ impl CodexToolCallParam {
         // Build the `ConfigOverrides` recognized by codex-core.
         let overrides = codex_core::config::ConfigOverrides {
             model,
-            review_model: None,
+            review_model,
             config_profile: profile,
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy.map(Into::into),
@@ -289,6 +294,10 @@ mod tests {
               },
               "profile": {
                 "description": "Configuration profile from config.toml to specify default options.",
+                "type": "string"
+              },
+              "review-model": {
+                "description": "Optional override for the review model name (e.g. \"gpt-4o-mini\").",
                 "type": "string"
               },
               "prompt": {

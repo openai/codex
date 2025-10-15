@@ -12,6 +12,7 @@ use codex_protocol::config_types::Verbosity;
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct ConfigProfile {
     pub model: Option<String>,
+    pub review_model: Option<String>,
     /// The key in the `model_providers` map identifying the
     /// [`ModelProviderInfo`] to use.
     pub model_provider: Option<String>,
@@ -40,6 +41,7 @@ impl From<ConfigProfile> for codex_app_server_protocol::Profile {
     fn from(config_profile: ConfigProfile) -> Self {
         Self {
             model: config_profile.model,
+            review_model: config_profile.review_model,
             model_provider: config_profile.model_provider,
             approval_policy: config_profile.approval_policy,
             model_reasoning_effort: config_profile.model_reasoning_effort,

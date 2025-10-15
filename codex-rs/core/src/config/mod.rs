@@ -1084,6 +1084,7 @@ impl Config {
 
         // Default review model when not set in config; allow CLI override to take precedence.
         let review_model = override_review_model
+            .or(config_profile.review_model)
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
 

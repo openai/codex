@@ -36,7 +36,28 @@ The model that Codex should use.
 model = "gpt-5"  # overrides the default ("gpt-5-codex" on macOS/Linux, "gpt-5" on Windows)
 ```
 
-### model_providers
+## review_model
+
+Specifies the model to use for `/review` sessions. This allows you to use a different model for code reviews than your main chat model, optimizing for speed or specialized review capabilities.
+
+Defaults to `"gpt-5-codex"` if not specified.
+
+Example:
+
+```toml
+model = "gpt-5"
+review_model = "gpt-5-codex"  # Use faster model for reviews
+```
+
+This can also be set per-profile:
+
+```toml
+[profiles.fast-review]
+model = "gpt-5"
+review_model = "gpt-4.1"  # Use different review model in this profile
+```
+
+## model_providers
 
 This option lets you add to the default set of model providers bundled with Codex. The map key becomes the value you use with `model_provider` to select the provider.
 
@@ -875,6 +896,7 @@ Valid values:
 | Key                                              | Type / Values                                                     | Notes                                                                                                                      |
 | ------------------------------------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `model`                                          | string                                                            | Model to use (e.g., `gpt-5-codex`).                                                                                        |
+| `review_model`                                   | string                                                            | Model to use for review sessions (e.g., `gpt-5-codex`).                                                                    |
 | `model_provider`                                 | string                                                            | Provider id from `model_providers` (default: `openai`).                                                                    |
 | `model_context_window`                           | number                                                            | Context window tokens.                                                                                                     |
 | `model_max_output_tokens`                        | number                                                            | Max output tokens.                                                                                                         |
