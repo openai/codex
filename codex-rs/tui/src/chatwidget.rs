@@ -53,6 +53,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
@@ -81,6 +83,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
+use crate::render::renderable::ColumnRenderable;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
@@ -1718,7 +1721,6 @@ impl ChatWidget {
         } else {
             default_choice
         };
-
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
@@ -1740,6 +1742,14 @@ impl ChatWidget {
                         .find(|preset| preset.effort == choice.stored)
                         .map(|preset| preset.description.to_string())
                 });
+
+            let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
+            let show_warning = model_slug == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
+            let selected_description = show_warning.then(|| {
+                description
+                    .as_ref()
+                    .map_or(warning.to_string(), |d| format!("{d}\n{warning}"))
+            });
 
             let model_for_action = model_slug.clone();
             let effort_for_action = choice.stored;
@@ -1770,6 +1780,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: effort_label,
                 description,
+                selected_description,
                 is_current: is_current_model && choice.stored == highlight_choice,
                 actions,
                 dismiss_on_select: true,
@@ -1777,9 +1788,13 @@ impl ChatWidget {
             });
         }
 
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(
+            format!("Select Reasoning Level for {model_slug}").bold(),
+        ));
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Reasoning Level".to_string()),
-            subtitle: Some(format!("Reasoning for model {model_slug}")),
+            header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
