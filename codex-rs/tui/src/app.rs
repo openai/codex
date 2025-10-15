@@ -220,6 +220,16 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
+                if self.overlay.is_some() {
+                    let _ = tui.leave_alt_screen();
+                    self.overlay = None;
+                }
+                self.commit_anim_running.store(false, Ordering::Release);
+                self.backtrack = BacktrackState::default();
+                self.transcript_cells.clear();
+                self.deferred_history_lines.clear();
+                self.has_emitted_history_lines = false;
+                tui.clear_history()?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
