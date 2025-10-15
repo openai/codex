@@ -44,7 +44,7 @@ pub async fn determine_streamable_http_auth_status(
 }
 
 /// Attempt to determine whether a streamable HTTP MCP server advertises OAuth login.
-async fn supports_oauth_login(url: &str) -> Result<bool> {
+pub async fn supports_oauth_login(url: &str) -> Result<bool> {
     let base_url = Url::parse(url)?;
     let client = Client::builder().timeout(DISCOVERY_TIMEOUT).build()?;
 
