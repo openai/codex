@@ -99,7 +99,7 @@ pub async fn run_main(
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
-            Some(AskForApproval::OnRequest),
+            Some(AskForApproval::OnFailure),
         )
     } else if cli.dangerously_bypass_approvals_and_sandbox {
         (
