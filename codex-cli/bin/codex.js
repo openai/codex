@@ -108,12 +108,45 @@ function getUpdatedPath(newDirs) {
   return updatedPath;
 }
 
+/**
+ * Use heuristics to detect the package manager that was used to install Codex
+ * in order to give the user a hint about how to update it.
+ */
+function detectPackageManager() {
+  const userAgent = process.env.npm_config_user_agent || "";
+  if (/\bbun\//.test(userAgent)) {
+    return "bun";
+  }
+
+  const execPath = process.env.npm_execpath || "";
+  if (execPath.includes("bun")) {
+    return "bun";
+  }
+
+  if (
+    process.env.BUN_INSTALL ||
+    process.env.BUN_INSTALL_GLOBAL_DIR ||
+    process.env.BUN_INSTALL_BIN_DIR
+  ) {
+    return "bun";
+  }
+
+  return userAgent ? "npm" : null;
+}
+
 const additionalDirs = [];
 const pathDir = path.join(archRoot, "path");
 if (existsSync(pathDir)) {
   additionalDirs.push(pathDir);
 }
 const updatedPath = getUpdatedPath(additionalDirs);
+
+const env = { ...process.env, PATH: updatedPath };
+const packageManagerEnvVar =
+  detectPackageManager() === "bun"
+    ? "CODEX_MANAGED_BY_BUN"
+    : "CODEX_MANAGED_BY_NPM";
+env[packageManagerEnvVar] = "1";
 
 let disableUpdateCheck = false;
 try {
@@ -124,14 +157,13 @@ try {
   /* ignore */
 }
 
+if (disableUpdateCheck) {
+  env.CODEX_DISABLE_UPDATE_CHECK = "1";
+}
+
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
-  env: {
-    ...process.env,
-    PATH: updatedPath,
-    CODEX_MANAGED_BY_NPM: "1",
-    ...(disableUpdateCheck ? { CODEX_DISABLE_UPDATE_CHECK: "1" } : {}),
-  },
+  env,
 });
 
 child.on("error", (err) => {

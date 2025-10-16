@@ -1,6 +1,5 @@
-# External (non-OpenAI) Pull Request Requirements
+# Pull Request Checklist
 
-Before opening this Pull Request, please read the dedicated "Contributing" markdown file or your PR may be closed:
-https://github.com/openai/codex/blob/main/docs/contributing.md
+코드 변경 사항과 관련된 주요 내용을 간단히 정리하고, 중요하거나 위험할 수 있는 변경 사항이 있다면 별도로 강조해주세요.
 
-If your PR conforms to our contribution guidelines, replace this text with a detailed and high quality description of your changes.
+가능하다면 테스트 방법(또는 테스트를 건너뛴 이유)을 적어 주시면 리뷰에 도움이 됩니다.
