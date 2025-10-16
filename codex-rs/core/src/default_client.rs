@@ -3,7 +3,6 @@ use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::Duration;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
