@@ -1154,6 +1154,7 @@ dependencies = [
  "nucleo-matcher",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

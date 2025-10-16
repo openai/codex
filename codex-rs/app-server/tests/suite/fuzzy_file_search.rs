@@ -70,6 +70,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "file_name": "abexy",
                     "score": 88,
                     "indices": [0, 1, 2],
+                    "is_directory": false,
                 },
                 {
                     "root": root_path.clone(),
@@ -77,6 +78,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "file_name": "abcde",
                     "score": 74,
                     "indices": [0, 1, 4],
+                    "is_directory": false,
                 },
                 {
                     "root": root_path.clone(),
@@ -84,6 +86,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "file_name": "abce",
                     "score": expected_score,
                     "indices": [4, 5, 7],
+                    "is_directory": false,
                 },
             ]
         })
@@ -141,6 +144,7 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0]["root"], root_path);
     assert_eq!(files[0]["path"], "alpha.txt");
+    assert_eq!(files[0]["is_directory"], false);
 
     Ok(())
 }
