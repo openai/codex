@@ -1,15 +1,13 @@
 [package]
+edition.workspace = true
 name = "codex-feedback"
 version.workspace = true
-edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-tempfile = { workspace = true }
-tracing = { workspace = true }
+codex-protocol = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-codex-protocol = { workspace = true }
 
 # Always-on Sentry support for snapshot upload
 sentry = { version = "0.34" }

@@ -1153,8 +1153,6 @@ dependencies = [
  "pretty_assertions",
  "sentry",
  "sentry-core",
- "tempfile",
- "tracing",
  "tracing-subscriber",
  "uuid",
 ]
