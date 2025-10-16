@@ -1423,6 +1423,7 @@ dependencies = [
  "textwrap 0.16.2",
  "tokio",
  "tokio-stream",
+ "toml",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
