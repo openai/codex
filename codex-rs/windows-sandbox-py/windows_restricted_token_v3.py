@@ -1179,6 +1179,15 @@ def main():
                 _log_command_success(command_preview)
             else:
                 _log_command_failure(command_preview, f"exit code {code}")
+                # Surface failure to the user on stderr so sandbox failures aren't silent.
+                try:
+                    cmd_str = " ".join(command)
+                except Exception:
+                    cmd_str = "<command>"
+                print(
+                    f"sandboxed command failed with exit code {code}: {cmd_str}",
+                    file=sys.stderr,
+                )
         finally:
             if pi.hThread:
                 kernel32.CloseHandle(pi.hThread)
