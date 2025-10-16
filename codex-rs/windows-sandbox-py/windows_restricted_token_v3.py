@@ -14,6 +14,38 @@ from env_utils import normalize_null_device_env
 from network_sandbox import NoNetConfig, apply_no_network_to_env
 
 
+LOG_FILE_PATH = os.path.join(os.path.dirname(__file__), "sandbox_commands.log")
+LOG_COMMAND_PREVIEW_LIMIT = 200
+
+
+def _append_command_log(message: str) -> None:
+    try:
+        with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
+            log_file.write(message + "\n")
+    except Exception:
+        pass
+
+
+def _format_command_for_log(command: Iterable[str]) -> str:
+    command_str = " ".join(command)
+    return command_str[:LOG_COMMAND_PREVIEW_LIMIT]
+
+
+def _log_command_start(command_preview: str) -> None:
+    _append_command_log(f"START: {command_preview}")
+
+
+def _log_command_success(command_preview: str) -> None:
+    _append_command_log(f"SUCCESS: {command_preview}")
+
+
+def _log_command_failure(command_preview: str, detail: Optional[str] = None) -> None:
+    if detail:
+        truncated_detail = detail[:LOG_COMMAND_PREVIEW_LIMIT]
+        _append_command_log(f"FAILURE: {command_preview} ({truncated_detail})")
+    else:
+        _append_command_log(f"FAILURE: {command_preview}")
+
 # ---- Minimal SandboxPolicy model (compatible with the CLI) -------------------
 
 @dataclass
@@ -381,12 +413,12 @@ def _dump_restricted_sids(h_token: wt.HANDLE):
     needed = wt.DWORD(0)
     advapi32.GetTokenInformation(h_token, TokenRestrictedSidsClass, None, 0, c.byref(needed))
     if needed.value == 0:
-        print("[sandbox:debug] restricted-sids: (none or query failed)", file=sys.stderr)
+        #print("[sandbox:debug] restricted-sids: (none or query failed)", file=sys.stderr)
         return
     buf = (c.c_ubyte * needed.value)()
     ok = advapi32.GetTokenInformation(h_token, TokenRestrictedSidsClass, buf, needed, c.byref(needed))
     if not ok:
-        print("[sandbox:debug] restricted-sids: (query failed)", file=sys.stderr)
+        #print("[sandbox:debug] restricted-sids: (query failed)", file=sys.stderr)
         return
     tgroups = c.cast(buf, c.POINTER(TOKEN_GROUPS)).contents
     arr_t = SID_AND_ATTRIBUTES * tgroups.GroupCount
@@ -394,7 +426,7 @@ def _dump_restricted_sids(h_token: wt.HANDLE):
     lines = []
     for i in range(tgroups.GroupCount):
         lines.append(_sid_str(groups[i].Sid))
-    print(f"[sandbox:debug] restricted-sids count={tgroups.GroupCount} {lines}", file=sys.stderr)
+    #print(f"[sandbox:debug] restricted-sids count={tgroups.GroupCount} {lines}", file=sys.stderr)
 
 def _cwd_effective_write_report(path: str, psid_restrict: wt.LPVOID):
     """Debug: report whether CWD grants FILE_GENERIC_WRITE to restricting SID and to Everyone."""
@@ -405,7 +437,7 @@ def _cwd_effective_write_report(path: str, psid_restrict: wt.LPVOID):
         None, None, c.byref(pDACL), None, c.byref(pSD)
     )
     if code != ERROR_SUCCESS or not pDACL:
-        print(f"[sandbox:debug] cwd dacl: query failed code={code}", file=sys.stderr)
+        #print(f"[sandbox:debug] cwd dacl: query failed code={code}", file=sys.stderr)
         if pSD: kernel32.LocalFree(pSD)
         return
     try:
@@ -415,9 +447,9 @@ def _cwd_effective_write_report(path: str, psid_restrict: wt.LPVOID):
         code = advapi32.GetEffectiveRightsFromAclW(pDACL, c.byref(tr), c.byref(mask))
         if code == ERROR_SUCCESS:
             wr = bool(mask.value & FILE_GENERIC_WRITE)
-            print(f"[sandbox:debug] cwd write granted to restricting SID={wr} mask=0x{mask.value:08X}", file=sys.stderr)
+            #print(f"[sandbox:debug] cwd write granted to restricting SID={wr} mask=0x{mask.value:08X}", file=sys.stderr)
         else:
-            print(f"[sandbox:debug] cwd write check for restricting SID failed code={code}", file=sys.stderr)
+            pass#print(f"[sandbox:debug] cwd write check for restricting SID failed code={code}", file=sys.stderr)
 
         # Build Everyone SID
         size = wt.DWORD(0)
@@ -430,9 +462,9 @@ def _cwd_effective_write_report(path: str, psid_restrict: wt.LPVOID):
             code2 = advapi32.GetEffectiveRightsFromAclW(pDACL, c.byref(tr2), c.byref(mask2))
             if code2 == ERROR_SUCCESS:
                 wr2 = bool(mask2.value & FILE_GENERIC_WRITE)
-                print(f"[sandbox:debug] cwd write granted to Everyone={wr2} mask=0x{mask2.value:08X}", file=sys.stderr)
+                #print(f"[sandbox:debug] cwd write granted to Everyone={wr2} mask=0x{mask2.value:08X}", file=sys.stderr)
             else:
-                print(f"[sandbox:debug] cwd write check for Everyone failed code={code2}", file=sys.stderr)
+                pass#print(f"[sandbox:debug] cwd write check for Everyone failed code={code2}", file=sys.stderr)
     finally:
         if pSD: kernel32.LocalFree(pSD)
 
@@ -544,7 +576,7 @@ def _create_write_restricted_token_strict() -> Tuple[wt.HANDLE, wt.LPVOID]:
 
         # --- Diagnostics
         try:
-            print("[sandbox:debug] using STRICT token (Logon SID only)", file=sys.stderr)
+            pass#print("[sandbox:debug] using STRICT token (Logon SID only)", file=sys.stderr)
         except Exception:
             pass
 
@@ -592,7 +624,7 @@ def _create_write_restricted_token_compat() -> Tuple[wt.HANDLE, wt.LPVOID]:
 
         # --- Diagnostics
         try:
-            print("[sandbox:debug] using COMPAT token (Logon SID + Everyone)", file=sys.stderr)
+            pass#print("[sandbox:debug] using COMPAT token (Logon SID + Everyone)", file=sys.stderr)
         except Exception:
             pass
 
@@ -1026,8 +1058,8 @@ def main():
     # --- Diagnostics: show token restricted flag, SID, and CWD + dump restricted SID set
     try:
         is_restricted = bool(advapi32.IsTokenRestricted(h_token))
-        print(f"[sandbox:debug] policy={policy.mode} restricted={is_restricted} "
-              f"logonSID={_sid_str(psid)} cwd={current_dir}", file=sys.stderr)
+        #print(f"[sandbox:debug] policy={policy.mode} restricted={is_restricted} "
+        #      f"logonSID={_sid_str(psid)} cwd={current_dir}", file=sys.stderr)
         _dump_restricted_sids(h_token)
         _cwd_effective_write_report(current_dir, psid)
     except Exception:
@@ -1038,18 +1070,30 @@ def main():
     try:
         acl_guards = _configure_paths(policy, policy_cwd, current_dir, psid, env_map)
         # Spawn process with inherited stdio; attach to a kill-on-close job
+        command_preview = _format_command_for_log(command)
+        _log_command_start(command_preview)
         try:
             pi, si = _create_process_as_user(h_token, command, current_dir, env_map)
         except Exception as e:
+            _log_command_failure(command_preview, f"spawn failed: {e}")
             print(f"failed to spawn process: {e}", file=sys.stderr)
             sys.exit(1)
 
+        code = 1
         h_job = None
         try:
             h_job = _create_job_kill_on_close()
             _check_bool(kernel32.AssignProcessToJobObject(h_job, pi.hProcess),
                         "AssignProcessToJobObject")
             code = _wait_process_and_exitcode(pi)
+        except Exception as e:
+            _log_command_failure(command_preview, str(e))
+            raise
+        else:
+            if code == 0:
+                _log_command_success(command_preview)
+            else:
+                _log_command_failure(command_preview, f"exit code {code}")
         finally:
             if pi.hThread:
                 kernel32.CloseHandle(pi.hThread)
