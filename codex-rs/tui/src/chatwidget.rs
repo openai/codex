@@ -7,7 +7,6 @@ use codex_core::config::Config;
 use codex_core::config_types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
-use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -54,8 +53,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
@@ -84,7 +81,6 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
-use crate::render::renderable::ColumnRenderable;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
@@ -244,10 +240,6 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
-    // Current status header shown in the status indicator.
-    current_status_header: String,
-    // Previous status header to restore after a transient stream retry.
-    retry_status_header: Option<String>,
     conversation_id: Option<ConversationId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -261,6 +253,8 @@ pub(crate) struct ChatWidget {
     pending_notification: Option<Notification>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    // Keep going mode flag
+    keep_going_mode: bool,
     // List of ghost commits corresponding to each turn.
     ghost_snapshots: Vec<GhostCommit>,
     ghost_snapshots_disabled: bool,
@@ -309,14 +303,6 @@ impl ChatWidget {
         {
             self.add_boxed_history(cell);
         }
-    }
-
-    fn set_status_header(&mut self, header: String) {
-        if self.current_status_header == header {
-            return;
-        }
-        self.current_status_header = header.clone();
-        self.bottom_pane.update_status_header(header);
     }
 
     // --- Small event handlers ---
@@ -368,7 +354,7 @@ impl ChatWidget {
 
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             // Update the shimmer header to the extracted reasoning chunk header.
-            self.set_status_header(header);
+            self.bottom_pane.update_status_header(header);
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
@@ -402,8 +388,6 @@ impl ChatWidget {
     fn on_task_started(&mut self) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
-        self.retry_status_header = None;
-        self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
@@ -417,8 +401,21 @@ impl ChatWidget {
         self.running_commands.clear();
         self.request_redraw();
 
-        // If there is a queued user message, send exactly one now to begin the next turn.
-        self.maybe_send_next_queued_input();
+        // Prefer any queued user message submitted by the user while the task was running.
+        if !self.queued_user_messages.is_empty() {
+            self.maybe_send_next_queued_input();
+        } else if self.keep_going_mode {
+            // Otherwise, if keep‑going mode is enabled, automatically continue.
+            let continuation_message =
+                "Please continue working on this task. Keep going with your current approach."
+                    .to_string();
+            let user_message = UserMessage {
+                text: continuation_message,
+                image_paths: vec![],
+            };
+            self.submit_user_message(user_message);
+        }
+
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
@@ -639,10 +636,9 @@ impl ChatWidget {
     }
 
     fn on_stream_error(&mut self, message: String) {
-        if self.retry_status_header.is_none() {
-            self.retry_status_header = Some(self.current_status_header.clone());
-        }
-        self.set_status_header(message);
+        // Show stream errors in the transcript so users see retry/backoff info.
+        self.add_to_history(history_cell::new_stream_error_event(message));
+        self.request_redraw();
     }
 
     /// Periodic tick to commit at most one queued line to history with a small delay,
@@ -947,14 +943,13 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
             pending_notification: None,
             is_review_mode: false,
+            keep_going_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
@@ -1012,14 +1007,13 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
             pending_notification: None,
             is_review_mode: false,
+            keep_going_mode: false,
             ghost_snapshots: Vec::new(),
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
@@ -1038,20 +1032,20 @@ impl ChatWidget {
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
+                code: KeyCode::Char('c'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => {
+            } => {
                 self.on_ctrl_c();
                 return;
             }
             KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
+                code: KeyCode::Char('v'),
+                modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
+            } => {
                 if let Ok((path, info)) = paste_image_to_temp_png() {
                     self.attach_image(path, info.width, info.height, info.encoded_format.label());
                 }
@@ -1131,16 +1125,18 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
             SlashCommand::Init => {
-                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
-                if init_target.exists() {
-                    let message = format!(
-                        "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
-                    );
-                    self.add_info_message(message, None);
-                    return;
-                }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_text_message(INIT_PROMPT.to_string());
+            }
+            SlashCommand::Continue => {
+                self.keep_going_mode = !self.keep_going_mode;
+                let message = if self.keep_going_mode {
+                    "Keep-going mode enabled. Codex will automatically continue working after each task completion."
+                } else {
+                    "Keep-going mode disabled."
+                };
+                self.add_to_history(history_cell::new_info_event(message.to_string(), None));
+                self.request_redraw();
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
@@ -1195,41 +1191,7 @@ impl ChatWidget {
             }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
-                use codex_core::protocol::EventMsg;
-                use std::collections::HashMap;
-
-                use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_core::protocol::FileChange;
-
-                self.app_event_tx.send(AppEvent::CodexEvent(Event {
-                    id: "1".to_string(),
-                    // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                    //     call_id: "1".to_string(),
-                    //     command: vec!["git".into(), "apply".into()],
-                    //     cwd: self.config.cwd.clone(),
-                    //     reason: Some("test".to_string()),
-                    // }),
-                    msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-                        call_id: "1".to_string(),
-                        changes: HashMap::from([
-                            (
-                                PathBuf::from("/tmp/test.txt"),
-                                FileChange::Add {
-                                    content: "test".to_string(),
-                                },
-                            ),
-                            (
-                                PathBuf::from("/tmp/test2.txt"),
-                                FileChange::Update {
-                                    unified_diff: "+test\n-test2".to_string(),
-                                    move_path: None,
-                                },
-                            ),
-                        ]),
-                        reason: None,
-                        grant_root: Some(PathBuf::from("/tmp")),
-                    }),
-                }));
+                // Test approval request functionality removed
             }
         }
     }
@@ -1404,6 +1366,11 @@ impl ChatWidget {
 
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
+            EventMsg::SessionTerminated(ev) => {
+                self.keep_going_mode = false;
+                self.add_to_history(history_cell::new_info_event(ev.message, None));
+                self.request_redraw();
+            }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
@@ -1730,6 +1697,7 @@ impl ChatWidget {
         } else {
             default_choice
         };
+
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
@@ -1751,14 +1719,6 @@ impl ChatWidget {
                         .find(|preset| preset.effort == choice.stored)
                         .map(|preset| preset.description.to_string())
                 });
-
-            let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
-            let show_warning = model_slug == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
-            let selected_description = show_warning.then(|| {
-                description
-                    .as_ref()
-                    .map_or(warning.to_string(), |d| format!("{d}\n{warning}"))
-            });
 
             let model_for_action = model_slug.clone();
             let effort_for_action = choice.stored;
@@ -1789,7 +1749,6 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: effort_label,
                 description,
-                selected_description,
                 is_current: is_current_model && choice.stored == highlight_choice,
                 actions,
                 dismiss_on_select: true,
@@ -1797,13 +1756,9 @@ impl ChatWidget {
             });
         }
 
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from(
-            format!("Select Reasoning Level for {model_slug}").bold(),
-        ));
-
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            header: Box::new(header),
+            title: Some("Select Reasoning Level".to_string()),
+            subtitle: Some(format!("Reasoning for model {model_slug}")),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -1949,11 +1904,7 @@ impl ChatWidget {
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
-        self.add_to_history(history_cell::new_mcp_tools_output(
-            &self.config,
-            ev.tools,
-            &ev.auth_statuses,
-        ));
+        self.add_to_history(history_cell::new_mcp_tools_output(&self.config, ev.tools));
     }
 
     fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {
