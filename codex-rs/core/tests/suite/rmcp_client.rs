@@ -9,6 +9,7 @@ use std::time::UNIX_EPOCH;
 
 use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::McpServerTransportConfig;
+use codex_core::features::Feature;
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -74,7 +75,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.use_experimental_use_rmcp_client = true;
+            config.features.enable(Feature::RmcpClient);
             config.mcp_servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
@@ -227,7 +228,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.use_experimental_use_rmcp_client = true;
+            config.features.enable(Feature::RmcpClient);
             config.mcp_servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
@@ -408,7 +409,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
-            config.use_experimental_use_rmcp_client = true;
+            config.features.enable(Feature::RmcpClient);
             config.mcp_servers.insert(
                 server_name.to_string(),
                 McpServerConfig {
