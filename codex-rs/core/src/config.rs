@@ -1840,10 +1840,11 @@ ZIG_VAR = "3"
     }
 
     #[tokio::test]
-    async fn write_global_mcp_servers_serializes_streamable_http() -> anyhow::Result<()> {
+    async fn write_global_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow::Result<()>
+    {
         let codex_home = TempDir::new()?;
 
-        let mut servers = BTreeMap::from([(
+        let servers = BTreeMap::from([(
             "docs".to_string(),
             McpServerConfig {
                 transport: McpServerTransportConfig::StreamableHttp {
@@ -1889,7 +1890,15 @@ startup_timeout_sec = 2.0
         }
         assert_eq!(docs.startup_timeout_sec, Some(Duration::from_secs(2)));
 
-        servers.insert(
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_streamable_http_serializes_custom_headers()
+    -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let servers = BTreeMap::from([(
             "docs".to_string(),
             McpServerConfig {
                 transport: McpServerTransportConfig::StreamableHttp {
@@ -1905,9 +1914,10 @@ startup_timeout_sec = 2.0
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
             },
-        );
+        )]);
         write_global_mcp_servers(codex_home.path(), &servers)?;
 
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
         let serialized = std::fs::read_to_string(&config_path)?;
         assert_eq!(
             serialized,
@@ -1946,6 +1956,40 @@ X-Auth = "DOCS_AUTH"
             }
             other => panic!("unexpected transport {other:?}"),
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_streamable_http_removes_optional_sections()
+    -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        let mut servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com/mcp".to_string(),
+                    bearer_token_env_var: Some("MCP_TOKEN".to_string()),
+                    http_headers: Some(HashMap::from([("X-Doc".to_string(), "42".to_string())])),
+                    env_http_headers: Some(HashMap::from([(
+                        "X-Auth".to_string(),
+                        "DOCS_AUTH".to_string(),
+                    )])),
+                },
+                enabled: true,
+                startup_timeout_sec: Some(Duration::from_secs(2)),
+                tool_timeout_sec: None,
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+        let serialized_with_optional = std::fs::read_to_string(&config_path)?;
+        assert!(serialized_with_optional.contains("bearer_token_env_var = \"MCP_TOKEN\""));
+        assert!(serialized_with_optional.contains("[mcp_servers.docs.http_headers]"));
+        assert!(serialized_with_optional.contains("[mcp_servers.docs.env_http_headers]"));
 
         servers.insert(
             "docs".to_string(),
@@ -1987,6 +2031,8 @@ url = "https://example.com/mcp"
             }
             other => panic!("unexpected transport {other:?}"),
         }
+
+        assert!(docs.startup_timeout_sec.is_none());
 
         Ok(())
     }
