@@ -8,8 +8,8 @@ expression: popup
   enabling full access. This significantly increases the risk of data loss,
   leaks, or unexpected behavior.
 
-› 1. Accept Full Access          Apply full access for this session
-  2. Accept and don't ask again  Enable full access and remember this choice
-  3. Deny                        Go back without enabling full access
+› 1. Yes, continue anyway      Apply full access for this session
+  2. Yes, and don't ask again  Enable full access and remember this choice
+  3. Deny                      Go back without enabling full access
 
   Press enter to confirm or esc to go back
