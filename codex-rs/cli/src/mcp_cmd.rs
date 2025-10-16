@@ -227,6 +227,8 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 command: command_bin,
                 args: command_args,
                 env: env_map,
+                env_vars: Vec::new(),
+                cwd: None,
             }
         }
         AddMcpTransportArgs {
@@ -377,11 +379,19 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     .copied()
                     .unwrap_or(McpAuthStatus::Unsupported);
                 let transport = match &cfg.transport {
-                    McpServerTransportConfig::Stdio { command, args, env } => serde_json::json!({
+                    McpServerTransportConfig::Stdio {
+                        command,
+                        args,
+                        env,
+                        env_vars,
+                        cwd,
+                    } => serde_json::json!({
                         "type": "stdio",
                         "command": command,
                         "args": args,
                         "env": env,
+                        "env_vars": env_vars,
+                        "cwd": cwd,
                     }),
                     McpServerTransportConfig::StreamableHttp {
                         url,
@@ -419,12 +429,18 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         return Ok(());
     }
 
-    let mut stdio_rows: Vec<[String; 6]> = Vec::new();
+    let mut stdio_rows: Vec<[String; 7]> = Vec::new();
     let mut http_rows: Vec<[String; 5]> = Vec::new();
 
     for (name, cfg) in entries {
         match &cfg.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+                ..
+            } => {
                 let args_display = if args.is_empty() {
                     "-".to_string()
                 } else {
@@ -443,6 +459,11 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                             .join(", ")
                     }
                 };
+                let cwd_display = cwd
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "-".to_string());
                 let status = if cfg.enabled {
                     "enabled".to_string()
                 } else {
@@ -458,6 +479,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     command.clone(),
                     args_display,
                     env_display,
+                    cwd_display,
                     status,
                     auth_status,
                 ]);
@@ -493,6 +515,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             "Command".len(),
             "Args".len(),
             "Env".len(),
+            "Cwd".len(),
             "Status".len(),
             "Auth".len(),
         ];
@@ -503,36 +526,40 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         }
 
         println!(
-            "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {status:<status_w$}  {auth:<auth_w$}",
+            "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {cwd:<cwd_w$}  {status:<status_w$}  {auth:<auth_w$}",
             name = "Name",
             command = "Command",
             args = "Args",
             env = "Env",
+            cwd = "Cwd",
             status = "Status",
             auth = "Auth",
             name_w = widths[0],
             cmd_w = widths[1],
             args_w = widths[2],
             env_w = widths[3],
-            status_w = widths[4],
-            auth_w = widths[5],
+            cwd_w = widths[4],
+            status_w = widths[5],
+            auth_w = widths[6],
         );
 
         for row in &stdio_rows {
             println!(
-                "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {status:<status_w$}  {auth:<auth_w$}",
+                "{name:<name_w$}  {command:<cmd_w$}  {args:<args_w$}  {env:<env_w$}  {cwd:<cwd_w$}  {status:<status_w$}  {auth:<auth_w$}",
                 name = row[0].as_str(),
                 command = row[1].as_str(),
                 args = row[2].as_str(),
                 env = row[3].as_str(),
-                status = row[4].as_str(),
-                auth = row[5].as_str(),
+                cwd = row[4].as_str(),
+                status = row[5].as_str(),
+                auth = row[6].as_str(),
                 name_w = widths[0],
                 cmd_w = widths[1],
                 args_w = widths[2],
                 env_w = widths[3],
-                status_w = widths[4],
-                auth_w = widths[5],
+                cwd_w = widths[4],
+                status_w = widths[5],
+                auth_w = widths[6],
             );
         }
     }
@@ -601,11 +628,19 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
 
     if get_args.json {
         let transport = match &server.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => serde_json::json!({
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => serde_json::json!({
                 "type": "stdio",
                 "command": command,
                 "args": args,
                 "env": env,
+                "env_vars": env_vars,
+                "cwd": cwd,
             }),
             McpServerTransportConfig::StreamableHttp {
                 url,
@@ -634,7 +669,13 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     println!("{}", get_args.name);
     println!("  enabled: {}", server.enabled);
     match &server.transport {
-        McpServerTransportConfig::Stdio { command, args, env } => {
+        McpServerTransportConfig::Stdio {
+            command,
+            args,
+            env,
+            env_vars,
+            cwd,
+        } => {
             println!("  transport: stdio");
             println!("  command: {command}");
             let args_display = if args.is_empty() {
@@ -643,6 +684,18 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                 args.join(" ")
             };
             println!("  args: {args_display}");
+            let env_vars_display = if env_vars.is_empty() {
+                "-".to_string()
+            } else {
+                env_vars.join(", ")
+            };
+            println!("  env_vars: {env_vars_display}");
+            let cwd_display = cwd
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "-".to_string());
+            println!("  cwd: {cwd_display}");
             let env_display = match env.as_ref() {
                 None => "-".to_string(),
                 Some(map) if map.is_empty() => "-".to_string(),

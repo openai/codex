@@ -70,9 +70,12 @@ where
 
 pub(crate) fn create_env_for_mcp_server(
     extra_env: Option<HashMap<String, String>>,
+    env_vars: &[String],
 ) -> HashMap<String, String> {
     DEFAULT_ENV_VARS
         .iter()
+        .copied()
+        .chain(env_vars.iter().map(String::as_str))
         .filter_map(|var| env::var(var).ok().map(|value| (var.to_string(), value)))
         .chain(extra_env.unwrap_or_default())
         .collect()
@@ -112,11 +115,57 @@ mod tests {
     use rmcp::model::CallToolResult as RmcpCallToolResult;
     use serde_json::json;
 
+    use serial_test::serial;
+    use std::ffi::OsString;
+
+    struct EnvVarGuard {
+        key: String,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                unsafe {
+                    std::env::set_var(&self.key, value);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(&self.key);
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn create_env_honors_overrides() {
         let value = "custom".to_string();
-        let env = create_env_for_mcp_server(Some(HashMap::from([("TZ".into(), value.clone())])));
+        let env =
+            create_env_for_mcp_server(Some(HashMap::from([("TZ".into(), value.clone())])), &[]);
         assert_eq!(env.get("TZ"), Some(&value));
+    }
+
+    #[test]
+    #[serial(extra_rmcp_env)]
+    fn create_env_includes_additional_whitelisted_variables() {
+        let custom_var = "EXTRA_RMCP_ENV";
+        let value = "from-env";
+        let _guard = EnvVarGuard::set(custom_var, value);
+        let env = create_env_for_mcp_server(None, &[custom_var.to_string()]);
+        assert_eq!(env.get(custom_var), Some(&value.to_string()));
     }
 
     #[test]

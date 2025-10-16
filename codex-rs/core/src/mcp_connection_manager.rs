@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -102,20 +103,33 @@ enum McpClientAdapter {
 }
 
 impl McpClientAdapter {
+    #[allow(clippy::too_many_arguments)]
     async fn new_stdio_client(
         use_rmcp_client: bool,
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
+        env_vars: Vec<String>,
+        cwd: Option<PathBuf>,
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
     ) -> Result<Self> {
         if use_rmcp_client {
-            let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
+            let client = Arc::new(
+                RmcpClient::new_stdio_client(
+                    program.clone(),
+                    args.clone(),
+                    env.clone(),
+                    &env_vars,
+                    cwd.clone(),
+                )
+                .await?,
+            );
             client.initialize(params, Some(startup_timeout)).await?;
             Ok(McpClientAdapter::Rmcp(client))
         } else {
-            let client = Arc::new(McpClient::new_stdio_client(program, args, env).await?);
+            let client =
+                Arc::new(McpClient::new_stdio_client(program, args, env, &env_vars, cwd).await?);
             client.initialize(params, Some(startup_timeout)).await?;
             Ok(McpClientAdapter::Legacy(client))
         }
@@ -246,7 +260,13 @@ impl McpConnectionManager {
                 };
 
                 let client = match transport {
-                    McpServerTransportConfig::Stdio { command, args, env } => {
+                    McpServerTransportConfig::Stdio {
+                        command,
+                        args,
+                        env,
+                        env_vars,
+                        cwd,
+                    } => {
                         let command_os: OsString = command.into();
                         let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
                         McpClientAdapter::new_stdio_client(
@@ -254,6 +274,8 @@ impl McpConnectionManager {
                             command_os,
                             args_os,
                             env,
+                            env_vars,
+                            cwd,
                             params,
                             startup_timeout,
                         )

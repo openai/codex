@@ -1013,7 +1013,13 @@ pub(crate) fn new_mcp_tools_output(
         lines.push(vec!["    • Auth: ".into(), status.to_string().into()].into());
 
         match &cfg.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
                 let args_suffix = if args.is_empty() {
                     String::new()
                 } else {
@@ -1021,6 +1027,14 @@ pub(crate) fn new_mcp_tools_output(
                 };
                 let cmd_display = format!("{command}{args_suffix}");
                 lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+
+                if let Some(cwd) = cwd.as_ref() {
+                    lines.push(vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into());
+                }
+
+                if !env_vars.is_empty() {
+                    lines.push(vec!["    • Env vars: ".into(), env_vars.join(" ").into()].into());
+                }
 
                 if let Some(env) = env.as_ref()
                     && !env.is_empty()

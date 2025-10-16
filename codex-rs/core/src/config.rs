@@ -375,7 +375,13 @@ pub fn write_global_mcp_servers(
             let mut entry = TomlTable::new();
             entry.set_implicit(false);
             match &config.transport {
-                McpServerTransportConfig::Stdio { command, args, env } => {
+                McpServerTransportConfig::Stdio {
+                    command,
+                    args,
+                    env,
+                    env_vars,
+                    cwd,
+                } => {
                     entry["command"] = toml_edit::value(command.clone());
 
                     if !args.is_empty() {
@@ -397,6 +403,15 @@ pub fn write_global_mcp_servers(
                             env_table.insert(key, toml_edit::value(value.clone()));
                         }
                         entry["env"] = TomlItem::Table(env_table);
+                    }
+
+                    if !env_vars.is_empty() {
+                        entry["env_vars"] =
+                            TomlItem::Value(env_vars.iter().collect::<TomlArray>().into());
+                    }
+
+                    if let Some(cwd) = cwd {
+                        entry["cwd"] = toml_edit::value(cwd.to_string_lossy().to_string());
                     }
                 }
                 McpServerTransportConfig::StreamableHttp {
@@ -1646,6 +1661,8 @@ approve_all = true
                     command: "echo".to_string(),
                     args: vec!["hello".to_string()],
                     env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
                 },
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(3)),
@@ -1659,10 +1676,18 @@ approve_all = true
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
                 assert_eq!(command, "echo");
                 assert_eq!(args, &vec!["hello".to_string()]);
                 assert!(env.is_none());
+                assert!(env_vars.is_empty());
+                assert!(cwd.is_none());
             }
             other => panic!("unexpected transport {other:?}"),
         }
@@ -1772,6 +1797,8 @@ bearer_token = "secret"
                         ("ZIG_VAR".to_string(), "3".to_string()),
                         ("ALPHA_VAR".to_string(), "1".to_string()),
                     ])),
+                    env_vars: Vec::new(),
+                    cwd: None,
                 },
                 enabled: true,
                 startup_timeout_sec: None,
@@ -1798,7 +1825,13 @@ ZIG_VAR = "3"
         let loaded = load_global_mcp_servers(codex_home.path()).await?;
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
-            McpServerTransportConfig::Stdio { command, args, env } => {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                env_vars,
+                cwd,
+            } => {
                 assert_eq!(command, "docs-server");
                 assert_eq!(args, &vec!["--verbose".to_string()]);
                 let env = env
@@ -1806,6 +1839,91 @@ ZIG_VAR = "3"
                     .expect("env should be preserved for stdio transport");
                 assert_eq!(env.get("ALPHA_VAR"), Some(&"1".to_string()));
                 assert_eq!(env.get("ZIG_VAR"), Some(&"3".to_string()));
+                assert!(env_vars.is_empty());
+                assert!(cwd.is_none());
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: vec!["ALPHA".to_string(), "BETA".to_string()],
+                    cwd: None,
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(
+            serialized.contains(r#"env_vars = ["ALPHA", "BETA"]"#),
+            "serialized config missing env_vars field:\n{serialized}"
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::Stdio { env_vars, .. } => {
+                assert_eq!(env_vars, &vec!["ALPHA".to_string(), "BETA".to_string()]);
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_global_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let cwd_path = PathBuf::from("/tmp/codex-mcp");
+        let servers = BTreeMap::from([(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "docs-server".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: Some(cwd_path.clone()),
+                },
+                enabled: true,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+            },
+        )]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(
+            serialized.contains(r#"cwd = "/tmp/codex-mcp""#),
+            "serialized config missing cwd field:\n{serialized}"
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::Stdio { cwd, .. } => {
+                assert_eq!(cwd.as_deref(), Some(Path::new("/tmp/codex-mcp")));
             }
             other => panic!("unexpected transport {other:?}"),
         }
@@ -1906,6 +2024,8 @@ url = "https://example.com/mcp"
                     command: "docs-server".to_string(),
                     args: Vec::new(),
                     env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
                 },
                 enabled: false,
                 startup_timeout_sec: None,

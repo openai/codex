@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,6 +77,8 @@ impl RmcpClient {
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
+        env_vars: &[String],
+        cwd: Option<PathBuf>,
     ) -> io::Result<Self> {
         let program_name = program.to_string_lossy().into_owned();
         let mut command = Command::new(&program);
@@ -84,8 +87,11 @@ impl RmcpClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .env_clear()
-            .envs(create_env_for_mcp_server(env))
+            .envs(create_env_for_mcp_server(env, env_vars))
             .args(&args);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
 
         let (transport, stderr) = TokioChildProcess::builder(command)
             .stderr(Stdio::piped())

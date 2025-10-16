@@ -359,6 +359,11 @@ env = { "API_KEY" = "value" }
 # or
 [mcp_servers.server_name.env]
 API_KEY = "value"
+# Optional: Additional list of environment variables that will be whitelisted in the MCP server's environment.
+env_vars = ["API_KEY2"]
+
+# Optional: cwd that the command will be run from
+cwd = "~/code/my-server"
 ```
 
 #### Streamable HTTP

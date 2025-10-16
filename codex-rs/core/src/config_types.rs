@@ -49,6 +49,10 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             args: Option<Vec<String>>,
             #[serde(default)]
             env: Option<HashMap<String, String>>,
+            #[serde(default)]
+            env_vars: Option<Vec<String>>,
+            #[serde(default)]
+            cwd: Option<PathBuf>,
 
             url: Option<String>,
             bearer_token: Option<String>,
@@ -92,6 +96,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 command: Some(command),
                 args,
                 env,
+                env_vars,
+                cwd,
                 url,
                 bearer_token_env_var,
                 ..
@@ -106,6 +112,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                     command,
                     args: args.unwrap_or_default(),
                     env,
+                    env_vars: env_vars.unwrap_or_default(),
+                    cwd,
                 }
             }
             RawMcpServerConfig {
@@ -115,11 +123,15 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 command,
                 args,
                 env,
+                env_vars,
+                cwd,
                 ..
             } => {
                 throw_if_set("streamable_http", "command", command.as_ref())?;
                 throw_if_set("streamable_http", "args", args.as_ref())?;
                 throw_if_set("streamable_http", "env", env.as_ref())?;
+                throw_if_set("streamable_http", "env_vars", env_vars.as_ref())?;
+                throw_if_set("streamable_http", "cwd", cwd.as_ref())?;
                 throw_if_set("streamable_http", "bearer_token", bearer_token.as_ref())?;
                 McpServerTransportConfig::StreamableHttp {
                     url,
@@ -152,6 +164,10 @@ pub enum McpServerTransportConfig {
         args: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         env: Option<HashMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env_vars: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
     },
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
@@ -468,7 +484,9 @@ mod tests {
             McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec![],
-                env: None
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
             }
         );
         assert!(cfg.enabled);
@@ -489,7 +507,9 @@ mod tests {
             McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec!["hello".to_string(), "world".to_string()],
-                env: None
+                env: None,
+                env_vars: Vec::new(),
+                cwd: None,
             }
         );
         assert!(cfg.enabled);
@@ -511,10 +531,56 @@ mod tests {
             McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec!["hello".to_string(), "world".to_string()],
-                env: Some(HashMap::from([("FOO".to_string(), "BAR".to_string())]))
+                env: Some(HashMap::from([("FOO".to_string(), "BAR".to_string())])),
+                env_vars: Vec::new(),
+                cwd: None,
             }
         );
         assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_env_vars() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            env_vars = ["FOO", "BAR"]
+        "#,
+        )
+        .expect("should deserialize command config with env_vars");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: vec!["FOO".to_string(), "BAR".to_string()],
+                cwd: None,
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_with_cwd() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            cwd = "/tmp"
+        "#,
+        )
+        .expect("should deserialize command config with cwd");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: Vec::new(),
+                cwd: Some(PathBuf::from("/tmp")),
+            }
+        );
     }
 
     #[test]

@@ -28,10 +28,18 @@ async fn add_and_remove_server_updates_global_config() -> Result<()> {
     assert_eq!(servers.len(), 1);
     let docs = servers.get("docs").expect("server should exist");
     match &docs.transport {
-        McpServerTransportConfig::Stdio { command, args, env } => {
+        McpServerTransportConfig::Stdio {
+            command,
+            args,
+            env,
+            env_vars,
+            cwd,
+        } => {
             assert_eq!(command, "echo");
             assert_eq!(args, &vec!["hello".to_string()]);
             assert!(env.is_none());
+            assert!(env_vars.is_empty());
+            assert!(cwd.is_none());
         }
         other => panic!("unexpected transport: {other:?}"),
     }
