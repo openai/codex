@@ -439,10 +439,7 @@ impl ModelClient {
                 })
             }
             Err(e) => Err(StreamAttemptError::RetryableTransportError(
-                CodexErr::ConnectionFailed(ConnectionFailedError {
-                    source: e,
-                    request_id: None,
-                }),
+                CodexErr::ConnectionFailed(ConnectionFailedError { source: e }),
             )),
         }
     }

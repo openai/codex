@@ -358,7 +358,6 @@ pub(crate) async fn stream_chat_completions(
                 if attempt > max_retries {
                     return Err(CodexErr::ConnectionFailed(ConnectionFailedError {
                         source: e,
-                        request_id: None,
                     }));
                 }
                 let delay = backoff(attempt);

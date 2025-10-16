@@ -153,20 +153,11 @@ pub enum CodexErr {
 #[derive(Debug)]
 pub struct ConnectionFailedError {
     pub source: reqwest::Error,
-    pub request_id: Option<String>,
 }
 
 impl std::fmt::Display for ConnectionFailedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Connection failed: {}{}",
-            self.source,
-            self.request_id
-                .as_ref()
-                .map(|id| format!(", request id: {id}"))
-                .unwrap_or_default()
-        )
+        write!(f, "Connection failed: {}", self.source)
     }
 }
 
