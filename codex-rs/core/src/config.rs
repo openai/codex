@@ -1077,7 +1077,7 @@ impl Config {
             .unwrap_or(ProjectConfig { trust_level: None });
 
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode, &resolved_cwd);
-        let approval_policy = approval_policy_override
+        let mut approval_policy = approval_policy_override
             .or(config_profile.approval_policy)
             .or(cfg.approval_policy)
             .unwrap_or_else(|| {
@@ -1092,7 +1092,7 @@ impl Config {
             .is_some()
             || config_profile.approval_policy.is_some()
             || cfg.approval_policy.is_some()
-            // TODO: policy.sandbox_mode is not implemented
+            // TODO(#3034): profile.sandbox_mode is not implemented
             || sandbox_mode.is_some()
             || cfg.sandbox_mode.is_some();
 
@@ -1173,11 +1173,6 @@ impl Config {
         let review_model = override_review_model
             .or(cfg.review_model)
             .unwrap_or_else(default_review_model);
-
-        let mut approval_policy = approval_policy
-            .or(config_profile.approval_policy)
-            .or(cfg.approval_policy)
-            .unwrap_or_else(AskForApproval::default);
 
         if features.enabled(Feature::ApproveAll) {
             approval_policy = AskForApproval::OnRequest;

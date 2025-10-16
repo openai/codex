@@ -571,13 +571,9 @@ fn should_show_trust_screen(config: &Config) -> bool {
         // if the user has overridden either approval policy or sandbox mode,
         // skip the trust flow
         false
-    } else if config.active_project.is_trusted() {
-        // if the current cwd project is already trusted, Config derives the policy.
-        // skip the trust flow
-        false
     } else {
-        // if none of the above conditions are met, show the trust screen
-        true
+        // otherwise, skip iff the active project is trusted
+        !config.active_project.is_trusted()
     }
 }
 
