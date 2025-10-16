@@ -6,6 +6,10 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use mcp_types::CallToolResult;
+use reqwest::ClientBuilder;
+use reqwest::header::HeaderMap;
+use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
 use rmcp::model::CallToolResult as RmcpCallToolResult;
 use rmcp::service::ServiceError;
 use serde_json::Value;
@@ -76,6 +80,75 @@ pub(crate) fn create_env_for_mcp_server(
         .filter_map(|var| env::var(var).ok().map(|value| (var.to_string(), value)))
         .chain(extra_env.unwrap_or_default())
         .collect()
+}
+
+pub(crate) fn build_default_headers(
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+
+    if let Some(static_headers) = http_headers {
+        for (name, value) in static_headers {
+            let header_name = match HeaderName::from_bytes(name.as_bytes()) {
+                Ok(name) => name,
+                Err(err) => {
+                    tracing::warn!("invalid HTTP header name `{name}`: {err}");
+                    continue;
+                }
+            };
+            let header_value = match HeaderValue::from_str(value.as_str()) {
+                Ok(value) => value,
+                Err(err) => {
+                    tracing::warn!("invalid HTTP header value for `{name}`: {err}");
+                    continue;
+                }
+            };
+            headers.insert(header_name, header_value);
+        }
+    }
+
+    if let Some(env_headers) = env_http_headers {
+        for (name, env_var) in env_headers {
+            if let Ok(value) = env::var(&env_var) {
+                if value.trim().is_empty() {
+                    continue;
+                }
+
+                let header_name = match HeaderName::from_bytes(name.as_bytes()) {
+                    Ok(name) => name,
+                    Err(err) => {
+                        tracing::warn!("invalid HTTP header name `{name}`: {err}");
+                        continue;
+                    }
+                };
+
+                let header_value = match HeaderValue::from_str(value.as_str()) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        tracing::warn!(
+                            "invalid HTTP header value read from {env_var} for `{name}`: {err}"
+                        );
+                        continue;
+                    }
+                };
+                headers.insert(header_name, header_value);
+            }
+        }
+    }
+
+    Ok(headers)
+}
+
+pub(crate) fn apply_default_headers(
+    builder: ClientBuilder,
+    default_headers: &HeaderMap,
+) -> ClientBuilder {
+    if default_headers.is_empty() {
+        builder
+    } else {
+        builder.default_headers(default_headers.clone())
+    }
 }
 
 #[cfg(unix)]

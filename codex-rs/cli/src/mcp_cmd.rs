@@ -239,6 +239,8 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         } => McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var,
+            http_headers: None,
+            env_http_headers: None,
         },
         AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
     };
@@ -260,11 +262,20 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     if let McpServerTransportConfig::StreamableHttp {
         url,
         bearer_token_env_var: None,
+        http_headers,
+        env_http_headers,
     } = transport
         && matches!(supports_oauth_login(&url).await, Ok(true))
     {
         println!("Detected OAuth support. Starting OAuth flow…");
-        perform_oauth_login(&name, &url, config.mcp_oauth_credentials_store_mode).await?;
+        perform_oauth_login(
+            &name,
+            &url,
+            config.mcp_oauth_credentials_store_mode,
+            http_headers.clone(),
+            env_http_headers.clone(),
+        )
+        .await?;
         println!("Successfully logged in.");
     }
 
@@ -317,12 +328,24 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         bail!("No MCP server named '{name}' found.");
     };
 
-    let url = match &server.transport {
-        McpServerTransportConfig::StreamableHttp { url, .. } => url.clone(),
+    let (url, http_headers, env_http_headers) = match &server.transport {
+        McpServerTransportConfig::StreamableHttp {
+            url,
+            http_headers,
+            env_http_headers,
+            ..
+        } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
         _ => bail!("OAuth login is only supported for streamable HTTP servers."),
     };
 
-    perform_oauth_login(&name, &url, config.mcp_oauth_credentials_store_mode).await?;
+    perform_oauth_login(
+        &name,
+        &url,
+        config.mcp_oauth_credentials_store_mode,
+        http_headers,
+        env_http_headers,
+    )
+    .await?;
     println!("Successfully logged in to MCP server '{name}'.");
     Ok(())
 }
@@ -386,11 +409,15 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     McpServerTransportConfig::StreamableHttp {
                         url,
                         bearer_token_env_var,
+                        http_headers,
+                        env_http_headers,
                     } => {
                         serde_json::json!({
                             "type": "streamable_http",
                             "url": url,
                             "bearer_token_env_var": bearer_token_env_var,
+                            "http_headers": http_headers,
+                            "env_http_headers": env_http_headers,
                         })
                     }
                 };
@@ -465,6 +492,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
+                ..
             } => {
                 let status = if cfg.enabled {
                     "enabled".to_string()
@@ -610,10 +638,14 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
+                http_headers,
+                env_http_headers,
             } => serde_json::json!({
                 "type": "streamable_http",
                 "url": url,
                 "bearer_token_env_var": bearer_token_env_var,
+                "http_headers": http_headers,
+                "env_http_headers": env_http_headers,
             }),
         };
         let output = serde_json::to_string_pretty(&serde_json::json!({
@@ -661,11 +693,39 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var,
+            http_headers,
+            env_http_headers,
         } => {
             println!("  transport: streamable_http");
             println!("  url: {url}");
             let env_var = bearer_token_env_var.as_deref().unwrap_or("-");
             println!("  bearer_token_env_var: {env_var}");
+            let headers_display = match http_headers {
+                Some(map) if !map.is_empty() => {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs
+                        .into_iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+                _ => "-".to_string(),
+            };
+            println!("  http_headers: {headers_display}");
+            let env_headers_display = match env_http_headers {
+                Some(map) if !map.is_empty() => {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs
+                        .into_iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+                _ => "-".to_string(),
+            };
+            println!("  env_http_headers: {env_headers_display}");
         }
     }
     if let Some(timeout) = server.startup_timeout_sec {

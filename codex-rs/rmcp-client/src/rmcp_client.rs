@@ -14,6 +14,7 @@ use mcp_types::InitializeRequestParams;
 use mcp_types::InitializeResult;
 use mcp_types::ListToolsRequestParams;
 use mcp_types::ListToolsResult;
+use reqwest::header::HeaderMap;
 use rmcp::model::CallToolRequestParam;
 use rmcp::model::InitializeRequestParam;
 use rmcp::model::PaginatedRequestParam;
@@ -38,6 +39,8 @@ use crate::logging_client_handler::LoggingClientHandler;
 use crate::oauth::OAuthCredentialsStoreMode;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::utils::apply_default_headers;
+use crate::utils::build_default_headers;
 use crate::utils::convert_call_tool_result;
 use crate::utils::convert_to_mcp;
 use crate::utils::convert_to_rmcp;
@@ -116,12 +119,17 @@ impl RmcpClient {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn new_streamable_http_client(
         server_name: &str,
         url: &str,
         bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
+        let default_headers = build_default_headers(http_headers, env_http_headers)?;
+
         let initial_oauth_tokens = match bearer_token {
             Some(_) => None,
             None => match load_oauth_tokens(server_name, url, store_mode) {
@@ -132,21 +140,30 @@ impl RmcpClient {
                 }
             },
         };
+
         let transport = if let Some(initial_tokens) = initial_oauth_tokens.clone() {
-            let (transport, oauth_persistor) =
-                create_oauth_transport_and_runtime(server_name, url, initial_tokens, store_mode)
-                    .await?;
+            let (transport, oauth_persistor) = create_oauth_transport_and_runtime(
+                server_name,
+                url,
+                initial_tokens,
+                store_mode,
+                default_headers.clone(),
+            )
+            .await?;
             PendingTransport::StreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
             }
         } else {
             let mut http_config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
-            if let Some(bearer_token) = bearer_token {
+            if let Some(bearer_token) = bearer_token.clone() {
                 http_config = http_config.auth_header(bearer_token);
             }
 
-            let transport = StreamableHttpClientTransport::from_config(http_config);
+            let http_client =
+                apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
+
+            let transport = StreamableHttpClientTransport::with_client(http_client, http_config);
             PendingTransport::StreamableHttp { transport }
         };
         Ok(Self {
@@ -290,11 +307,13 @@ async fn create_oauth_transport_and_runtime(
     url: &str,
     initial_tokens: StoredOAuthTokens,
     credentials_store: OAuthCredentialsStoreMode,
+    default_headers: HeaderMap,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<reqwest::Client>>,
     OAuthPersistor,
 )> {
-    let http_client = reqwest::Client::builder().build()?;
+    let http_client =
+        apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
     let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
 
     oauth_state

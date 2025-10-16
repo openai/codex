@@ -112,9 +112,13 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
         McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var,
+            http_headers,
+            env_http_headers,
         } => {
             assert_eq!(url, "https://example.com/mcp");
             assert!(bearer_token_env_var.is_none());
+            assert!(http_headers.is_none());
+            assert!(env_http_headers.is_none());
         }
         other => panic!("unexpected transport: {other:?}"),
     }
@@ -150,9 +154,13 @@ async fn add_streamable_http_with_custom_env_var() -> Result<()> {
         McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var,
+            http_headers,
+            env_http_headers,
         } => {
             assert_eq!(url, "https://example.com/issues");
             assert_eq!(bearer_token_env_var.as_deref(), Some("GITHUB_TOKEN"));
+            assert!(http_headers.is_none());
+            assert!(env_http_headers.is_none());
         }
         other => panic!("unexpected transport: {other:?}"),
     }

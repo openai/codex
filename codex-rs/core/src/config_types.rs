@@ -49,6 +49,10 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             args: Option<Vec<String>>,
             #[serde(default)]
             env: Option<HashMap<String, String>>,
+            #[serde(default)]
+            http_headers: Option<HashMap<String, String>>,
+            #[serde(default)]
+            env_http_headers: Option<HashMap<String, String>>,
 
             url: Option<String>,
             bearer_token: Option<String>,
@@ -94,6 +98,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 env,
                 url,
                 bearer_token_env_var,
+                http_headers,
+                env_http_headers,
                 ..
             } => {
                 throw_if_set("stdio", "url", url.as_ref())?;
@@ -102,6 +108,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                     "bearer_token_env_var",
                     bearer_token_env_var.as_ref(),
                 )?;
+                throw_if_set("stdio", "http_headers", http_headers.as_ref())?;
+                throw_if_set("stdio", "env_http_headers", env_http_headers.as_ref())?;
                 McpServerTransportConfig::Stdio {
                     command,
                     args: args.unwrap_or_default(),
@@ -115,6 +123,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 command,
                 args,
                 env,
+                http_headers,
+                env_http_headers,
                 ..
             } => {
                 throw_if_set("streamable_http", "command", command.as_ref())?;
@@ -124,6 +134,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 McpServerTransportConfig::StreamableHttp {
                     url,
                     bearer_token_env_var,
+                    http_headers,
+                    env_http_headers,
                 }
             }
             _ => return Err(SerdeError::custom("invalid transport")),
@@ -161,6 +173,12 @@ pub enum McpServerTransportConfig {
         /// The actual secret value must be provided via the environment.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bearer_token_env_var: Option<String>,
+        /// Additional HTTP headers to include in requests to this server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_headers: Option<HashMap<String, String>>,
+        /// HTTP headers where the value is sourced from an environment variable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env_http_headers: Option<HashMap<String, String>>,
     },
 }
 
@@ -543,7 +561,9 @@ mod tests {
             cfg.transport,
             McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
-                bearer_token_env_var: None
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
             }
         );
         assert!(cfg.enabled);
@@ -563,10 +583,37 @@ mod tests {
             cfg.transport,
             McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
-                bearer_token_env_var: Some("GITHUB_TOKEN".to_string())
+                bearer_token_env_var: Some("GITHUB_TOKEN".to_string()),
+                http_headers: None,
+                env_http_headers: None,
             }
         );
         assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_streamable_http_server_config_with_headers() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            url = "https://example.com/mcp"
+            http_headers = { "X-Foo" = "bar" }
+            env_http_headers = { "X-Token" = "TOKEN_ENV" }
+        "#,
+        )
+        .expect("should deserialize http config with headers");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::StreamableHttp {
+                url: "https://example.com/mcp".to_string(),
+                bearer_token_env_var: None,
+                http_headers: Some(HashMap::from([("X-Foo".to_string(), "bar".to_string())])),
+                env_http_headers: Some(HashMap::from([(
+                    "X-Token".to_string(),
+                    "TOKEN_ENV".to_string()
+                )])),
+            }
+        );
     }
 
     #[test]
@@ -589,6 +636,25 @@ mod tests {
         "#,
         )
         .expect_err("should reject env for http transport");
+    }
+
+    #[test]
+    fn deserialize_rejects_headers_for_stdio() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            http_headers = { "X-Foo" = "bar" }
+        "#,
+        )
+        .expect_err("should reject http_headers for stdio transport");
+
+        toml::from_str::<McpServerConfig>(
+            r#"
+            command = "echo"
+            env_http_headers = { "X-Foo" = "BAR_ENV" }
+        "#,
+        )
+        .expect_err("should reject env_http_headers for stdio transport");
     }
 
     #[test]

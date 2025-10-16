@@ -402,10 +402,36 @@ pub fn write_global_mcp_servers(
                 McpServerTransportConfig::StreamableHttp {
                     url,
                     bearer_token_env_var,
+                    http_headers,
+                    env_http_headers,
                 } => {
                     entry["url"] = toml_edit::value(url.clone());
                     if let Some(env_var) = bearer_token_env_var {
                         entry["bearer_token_env_var"] = toml_edit::value(env_var.clone());
+                    }
+                    if let Some(headers) = http_headers
+                        && !headers.is_empty()
+                    {
+                        let mut table = TomlTable::new();
+                        table.set_implicit(false);
+                        let mut pairs: Vec<_> = headers.iter().collect();
+                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        for (key, value) in pairs {
+                            table.insert(key, toml_edit::value(value.clone()));
+                        }
+                        entry["http_headers"] = TomlItem::Table(table);
+                    }
+                    if let Some(headers) = env_http_headers
+                        && !headers.is_empty()
+                    {
+                        let mut table = TomlTable::new();
+                        table.set_implicit(false);
+                        let mut pairs: Vec<_> = headers.iter().collect();
+                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        for (key, value) in pairs {
+                            table.insert(key, toml_edit::value(value.clone()));
+                        }
+                        entry["env_http_headers"] = TomlItem::Table(table);
                     }
                 }
             }
@@ -1823,6 +1849,8 @@ ZIG_VAR = "3"
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://example.com/mcp".to_string(),
                     bearer_token_env_var: Some("MCP_TOKEN".to_string()),
+                    http_headers: None,
+                    env_http_headers: None,
                 },
                 enabled: true,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
@@ -1849,9 +1877,13 @@ startup_timeout_sec = 2.0
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
+                http_headers,
+                env_http_headers,
             } => {
                 assert_eq!(url, "https://example.com/mcp");
                 assert_eq!(bearer_token_env_var.as_deref(), Some("MCP_TOKEN"));
+                assert!(http_headers.is_none());
+                assert!(env_http_headers.is_none());
             }
             other => panic!("unexpected transport {other:?}"),
         }
@@ -1862,7 +1894,67 @@ startup_timeout_sec = 2.0
             McpServerConfig {
                 transport: McpServerTransportConfig::StreamableHttp {
                     url: "https://example.com/mcp".to_string(),
+                    bearer_token_env_var: Some("MCP_TOKEN".to_string()),
+                    http_headers: Some(HashMap::from([("X-Doc".to_string(), "42".to_string())])),
+                    env_http_headers: Some(HashMap::from([(
+                        "X-Auth".to_string(),
+                        "DOCS_AUTH".to_string(),
+                    )])),
+                },
+                enabled: true,
+                startup_timeout_sec: Some(Duration::from_secs(2)),
+                tool_timeout_sec: None,
+            },
+        );
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert_eq!(
+            serialized,
+            r#"[mcp_servers.docs]
+url = "https://example.com/mcp"
+bearer_token_env_var = "MCP_TOKEN"
+startup_timeout_sec = 2.0
+
+[mcp_servers.docs.http_headers]
+X-Doc = "42"
+
+[mcp_servers.docs.env_http_headers]
+X-Auth = "DOCS_AUTH"
+"#
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::StreamableHttp {
+                http_headers,
+                env_http_headers,
+                ..
+            } => {
+                assert_eq!(
+                    http_headers,
+                    &Some(HashMap::from([("X-Doc".to_string(), "42".to_string())]))
+                );
+                assert_eq!(
+                    env_http_headers,
+                    &Some(HashMap::from([(
+                        "X-Auth".to_string(),
+                        "DOCS_AUTH".to_string()
+                    )]))
+                );
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        servers.insert(
+            "docs".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com/mcp".to_string(),
                     bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
                 },
                 enabled: true,
                 startup_timeout_sec: None,
@@ -1885,9 +1977,13 @@ url = "https://example.com/mcp"
             McpServerTransportConfig::StreamableHttp {
                 url,
                 bearer_token_env_var,
+                http_headers,
+                env_http_headers,
             } => {
                 assert_eq!(url, "https://example.com/mcp");
                 assert!(bearer_token_env_var.is_none());
+                assert!(http_headers.is_none());
+                assert!(env_http_headers.is_none());
             }
             other => panic!("unexpected transport {other:?}"),
         }
