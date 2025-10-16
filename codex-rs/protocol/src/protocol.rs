@@ -1178,6 +1178,7 @@ pub struct ExecApprovalRequestEvent {
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    pub parsed_cmd: Vec<ParsedCommand>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]

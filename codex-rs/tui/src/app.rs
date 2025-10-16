@@ -1,3 +1,4 @@
+use crate::UpdateAction;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -51,6 +52,7 @@ use tokio::sync::mpsc::unbounded_channel;
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
+    pub update_action: Option<UpdateAction>,
 }
 
 pub(crate) struct App {
@@ -85,6 +87,9 @@ pub(crate) struct App {
     active_delegate: Option<String>,
     active_delegate_summary: Option<DelegateSessionSummary>,
     primary_chat_backup: Option<ChatWidget>,
+
+    /// Set when the user confirms an update; propagated on exit.
+    pub(crate) pending_update_action: Option<UpdateAction>,
 }
 
 impl App {
@@ -183,6 +188,7 @@ impl App {
             active_delegate: None,
             active_delegate_summary: None,
             primary_chat_backup: None,
+            pending_update_action: None,
         };
 
         let tui_events = tui.event_stream();
@@ -202,6 +208,7 @@ impl App {
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             conversation_id: app.chat_widget.conversation_id(),
+            update_action: app.pending_update_action,
         })
     }
 
@@ -655,8 +662,9 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
-            // with an empty composer. In any other state, forward Esc so the
-            // active UI (e.g. status indicator, modals, popups) handles it.
+            // with the composer focused and empty. In any other state, forward
+            // Esc so the active UI (e.g. status indicator, modals, popups)
+            // handles it.
             KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -793,6 +801,7 @@ mod tests {
             active_delegate: None,
             active_delegate_summary: None,
             primary_chat_backup: None,
+            pending_update_action: None,
         }
     }
 
