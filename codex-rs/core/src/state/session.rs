@@ -61,8 +61,7 @@ impl SessionState {
     pub(crate) fn token_info_and_rate_limits(
         &self,
     ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
-        let rate_limits = self.latest_rate_limits.clone();
-        (self.token_info.clone(), rate_limits)
+        (self.token_info.clone(), self.latest_rate_limits.clone())
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: u64) {
