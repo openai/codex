@@ -1138,13 +1138,12 @@ impl ChatWidget {
                 let snapshot = self.feedback.snapshot();
                 match snapshot.save_to_temp_file() {
                     Ok(path) => {
-                        let view = crate::bottom_pane::FeedbackView::new(
-                            self.app_event_tx.clone(),
+                        crate::bottom_pane::FeedbackView::show(
+                            &mut self.bottom_pane,
                             path,
                             snapshot,
                             self.conversation_id,
                         );
-                        self.bottom_pane.show_view(Box::new(view));
                         self.request_redraw();
                     }
                     Err(e) => {

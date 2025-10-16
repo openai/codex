@@ -1,14 +1,18 @@
 ---
 source: tui/src/bottom_pane/feedback_view.rs
-assertion_line: 204
-expression: normalized
+expression: rendered
 ---
   Upload Codex logs to Sentry
 
-  Logs might contain the entire conversion history of this Codex proce
-  Logs are persisted for 90 days and are used exclusively to help diag
+  Logs may include the full conversation history of this Codex process
+  These logs are retained for 90 days and are used solely for troubles
 
-  You can inspect the exact content of logs to be uploaded at:
+  You can review the exact content of the logs before they’re uploaded
   <LOG_PATH>
 
-  Press Enter to upload to Sentry, or Esc to cancel
+
+› 1. Upload logs to Sentry  Share the current Codex session logs with
+                            the team for troubleshooting.
+  2. Cancel
+
+  Press enter to upload to Sentry, or esc to cancel.

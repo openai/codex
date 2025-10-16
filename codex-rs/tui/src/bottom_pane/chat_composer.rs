@@ -916,11 +916,9 @@ impl ChatComposer {
                 // but Enter should still dispatch the command rather than submit
                 // literal text.
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
-                if let Some((name, rest)) = parse_slash_name(first_line) && rest.is_empty() {
-                    if name == "feedback" {
-                        self.textarea.set_text("");
-                        return (InputResult::Command(crate::slash_command::SlashCommand::Feedback), true);
-                    }
+                if let Some((name, rest)) = parse_slash_name(first_line)
+                    && rest.is_empty()
+                {
                     if let Some((_n, cmd)) = built_in_slash_commands()
                         .into_iter()
                         .find(|(n, _)| *n == name)
