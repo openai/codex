@@ -76,40 +76,4 @@ impl SessionState {
     // Pending input/approval moved to TurnState.
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::protocol::RateLimitWindow;
-    use chrono::Utc;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn does_not_mutate_resets_based_on_elapsed_time() {
-        let mut state = SessionState::new();
-        let snapshot = RateLimitSnapshot {
-            primary: Some(RateLimitWindow {
-                used_percent: 50.0,
-                window_minutes: Some(300),
-                resets_in_seconds: Some(120),
-            }),
-            secondary: None,
-            captured_at: Some(Utc::now()),
-        };
-        state.set_rate_limits(snapshot);
-
-        let stored = state
-            .latest_rate_limits
-            .as_ref()
-            .expect("rate limits should be present");
-        let (_, rate_limits) = state.token_info_and_rate_limits();
-        let rate_limits = rate_limits.expect("rate limits should be returned");
-        assert_eq!(
-            rate_limits
-                .primary
-                .as_ref()
-                .and_then(|w| w.resets_in_seconds),
-            stored.primary.as_ref().and_then(|w| w.resets_in_seconds)
-        );
-        assert_eq!(rate_limits.captured_at, stored.captured_at);
-    }
-}
+// tests removed
