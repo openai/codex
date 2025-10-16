@@ -162,7 +162,10 @@ impl McpClientAdapter {
         timeout: Option<Duration>,
     ) -> Result<mcp_types::ListResourcesResult> {
         match self {
-            McpClientAdapter::Legacy(_) => Ok(ListResourcesResult::empty()),
+            McpClientAdapter::Legacy(_) => Ok(ListResourcesResult {
+                next_cursor: None,
+                resources: Vec::new(),
+            }),
             McpClientAdapter::Rmcp(client) => client.list_resources(params, timeout).await,
         }
     }
@@ -186,7 +189,10 @@ impl McpClientAdapter {
         timeout: Option<Duration>,
     ) -> Result<mcp_types::ListResourceTemplatesResult> {
         match self {
-            McpClientAdapter::Legacy(_) => Ok(ListResourceTemplatesResult::empty()),
+            McpClientAdapter::Legacy(_) => Ok(ListResourceTemplatesResult {
+                next_cursor: None,
+                resource_templates: Vec::new(),
+            }),
             McpClientAdapter::Rmcp(client) => client.list_resource_templates(params, timeout).await,
         }
     }
