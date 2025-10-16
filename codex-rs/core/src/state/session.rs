@@ -55,10 +55,6 @@ impl SessionState {
     }
 
     pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
-        debug_assert!(
-            snapshot.captured_at.is_some(),
-            "rate limit snapshots must include captured_at"
-        );
         self.latest_rate_limits = Some(snapshot);
     }
 
