@@ -1135,14 +1135,13 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Feedback => {
-                let snapshot = self.feedback.snapshot();
+                let snapshot = self.feedback.snapshot(self.conversation_id);
                 match snapshot.save_to_temp_file() {
                     Ok(path) => {
                         crate::bottom_pane::FeedbackView::show(
                             &mut self.bottom_pane,
                             path,
                             snapshot,
-                            self.conversation_id,
                         );
                         self.request_redraw();
                     }

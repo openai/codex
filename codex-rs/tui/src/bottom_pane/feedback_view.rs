@@ -3,7 +3,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::history_cell::PlainHistoryCell;
 use crate::render::renderable::Renderable;
-use codex_protocol::ConversationId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -22,26 +21,21 @@ impl FeedbackView {
         bottom_pane: &mut BottomPane,
         file_path: PathBuf,
         snapshot: codex_feedback::CodexLogSnapshot,
-        session_id: Option<ConversationId>,
     ) {
-        bottom_pane.show_selection_view(Self::selection_params(file_path, snapshot, session_id));
+        bottom_pane.show_selection_view(Self::selection_params(file_path, snapshot));
     }
 
     fn selection_params(
         file_path: PathBuf,
         snapshot: codex_feedback::CodexLogSnapshot,
-        session_id: Option<ConversationId>,
     ) -> SelectionViewParams {
         let header = FeedbackHeader::new(file_path);
 
         let upload_snapshot = snapshot;
-        let upload_session_id = session_id;
         let upload_action: SelectionAction = Box::new(move |tx: &AppEventSender| {
-            match upload_snapshot.upload_to_sentry(upload_session_id) {
+            match upload_snapshot.upload_to_sentry() {
                 Ok(()) => {
-                    let thread_id = upload_session_id.map(|id| id.to_string()).unwrap_or(
-                        "no-active-thread-".to_string() + &ConversationId::new().to_string(),
-                    );
+                    let thread_id = upload_snapshot.thread_id.clone();
                     let issue_url = format!(
                         "https://github.com/openai/codex/issues/new?template=2-bug-report.yml&steps=Uploaded%20thread:%20{thread_id}",
                     );
@@ -150,6 +144,7 @@ mod tests {
     use crate::bottom_pane::list_selection_view::ListSelectionView;
     use crate::style::user_message_style;
     use codex_feedback::CodexFeedback;
+    use codex_protocol::ConversationId;
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -178,11 +173,12 @@ mod tests {
     fn renders_feedback_view_header() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let app_event_tx = AppEventSender::new(tx_raw);
-        let snapshot = CodexFeedback::new().snapshot();
+        let snapshot = CodexFeedback::new().snapshot(Some(
+            ConversationId::from_string("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+        ));
         let file_path = PathBuf::from("/tmp/codex-feedback.log");
 
-        let params =
-            FeedbackView::selection_params(file_path.clone(), snapshot, /* session_id */ None);
+        let params = FeedbackView::selection_params(file_path.clone(), snapshot);
         let view = ListSelectionView::new(params, app_event_tx);
 
         let width = 72;

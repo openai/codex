@@ -45,12 +45,17 @@ impl CodexFeedback {
         }
     }
 
-    pub fn snapshot(&self) -> CodexLogSnapshot {
+    pub fn snapshot(&self, session_id: Option<ConversationId>) -> CodexLogSnapshot {
         let bytes = {
             let guard = self.inner.ring.lock().expect("mutex poisoned");
             guard.snapshot_bytes()
         };
-        CodexLogSnapshot { bytes }
+        CodexLogSnapshot {
+            bytes,
+            thread_id: session_id
+                .map(|id| id.to_string())
+                .unwrap_or("no-active-thread-".to_string() + &ConversationId::new().to_string()),
+        }
     }
 }
 
@@ -146,6 +151,7 @@ impl RingBuffer {
 
 pub struct CodexLogSnapshot {
     bytes: Vec<u8>,
+    pub thread_id: String,
 }
 
 impl CodexLogSnapshot {
@@ -161,7 +167,7 @@ impl CodexLogSnapshot {
         Ok(path)
     }
 
-    pub fn upload_to_sentry(&self, session_id: Option<ConversationId>) -> Result<()> {
+    pub fn upload_to_sentry(&self) -> Result<()> {
         use std::collections::BTreeMap;
         use std::str::FromStr;
         use std::sync::Arc;
@@ -182,13 +188,11 @@ impl CodexLogSnapshot {
             ..Default::default()
         });
 
-        let tags = session_id
-            .map(|id| BTreeMap::from([(String::from("thread_id"), id.to_string())]))
-            .unwrap_or_default();
+        let tags = BTreeMap::from([(String::from("thread_id"), self.thread_id.to_string())]);
 
         let event = Event {
             level: Level::Error,
-            message: Some("Codex Log Upload".to_string()),
+            message: Some("Codex Log Upload ".to_string() + &self.thread_id),
             tags,
             ..Default::default()
         };
@@ -220,7 +224,7 @@ mod tests {
             w.write_all(b"abcdefgh").unwrap();
             w.write_all(b"ij").unwrap();
         }
-        let snap = fb.snapshot();
+        let snap = fb.snapshot(None);
         // Capacity 8: after writing 10 bytes, we should keep the last 8.
         pretty_assertions::assert_eq!(std::str::from_utf8(snap.as_bytes()).unwrap(), "cdefghij");
     }
