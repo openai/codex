@@ -921,10 +921,10 @@ impl ChatComposer {
                     && let Some((_n, cmd)) = built_in_slash_commands()
                         .into_iter()
                         .find(|(n, _)| *n == name)
-                    {
-                        self.textarea.set_text("");
-                        return (InputResult::Command(cmd), true);
-                    }
+                {
+                    self.textarea.set_text("");
+                    return (InputResult::Command(cmd), true);
+                }
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
                 // and accumulate it rather than submitting or inserting immediately.
                 // Do not treat Enter as paste inside a slash-command context.
