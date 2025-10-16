@@ -19,6 +19,7 @@ use codex_exec::Cli as ExecCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
+use codex_tui::UpdateAction;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -208,6 +209,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let AppExitInfo {
         token_usage,
         conversation_id,
+        ..
     } = exit_info;
 
     if token_usage.is_zero() {
@@ -232,11 +234,32 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     lines
 }
 
-fn print_exit_messages(exit_info: AppExitInfo) {
+/// Handle the app exit and print the results. Optionally run the update action.
+fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
+    let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
     }
+    if let Some(action) = update_action {
+        run_update_action(action)?;
+    }
+    Ok(())
+}
+
+/// Run the update action and print the result.
+fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
+    println!();
+    let (cmd, args) = action.command_args();
+    let cmd_str = action.command_str();
+    println!("Updating Codex via `{cmd_str}`...");
+    let status = std::process::Command::new(cmd).args(args).status()?;
+    if !status.success() {
+        anyhow::bail!("`{cmd_str}` failed with status {status}");
+    }
+    println!();
+    println!("🎉 Update ran successfully! Please restart Codex.");
+    Ok(())
 }
 
 #[derive(Debug, Default, Parser, Clone)]
@@ -321,7 +344,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            print_exit_messages(exit_info);
+            handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -354,7 +377,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 config_overrides,
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            print_exit_messages(exit_info);
+            handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
@@ -595,6 +618,7 @@ mod tests {
             conversation_id: conversation
                 .map(ConversationId::from_string)
                 .map(Result::unwrap),
+            update_action: None,
         }
     }
 
@@ -603,6 +627,7 @@ mod tests {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
             conversation_id: None,
+            update_action: None,
         };
         let lines = format_exit_messages(exit_info, false);
         assert!(lines.is_empty());

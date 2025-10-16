@@ -445,6 +445,7 @@ impl Session {
             config.model.as_str(),
             config.model_family.slug.as_str(),
             auth_manager.auth().and_then(|a| a.get_account_id()),
+            auth_manager.auth().and_then(|a| a.get_account_email()),
             auth_manager.auth().map(|a| a.mode),
             config.otel.log_user_prompt,
             terminal::user_agent(),
@@ -620,6 +621,7 @@ impl Session {
             warn!("Overwriting existing pending approval for sub_id: {event_id}");
         }
 
+        let parsed_cmd = parse_command(&command);
         let event = Event {
             id: event_id,
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
@@ -627,6 +629,7 @@ impl Session {
                 command,
                 cwd,
                 reason,
+                parsed_cmd,
             }),
         };
         self.send_event(event).await;
@@ -882,10 +885,7 @@ impl Session {
                 call_id,
                 command: command_for_display.clone(),
                 cwd,
-                parsed_cmd: parse_command(&command_for_display)
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
+                parsed_cmd: parse_command(&command_for_display),
             }),
         };
         let event = Event {
@@ -2745,6 +2745,7 @@ mod tests {
             config.model.as_str(),
             config.model_family.slug.as_str(),
             None,
+            Some("test@test.com".to_string()),
             Some(AuthMode::ChatGPT),
             false,
             "test".to_string(),

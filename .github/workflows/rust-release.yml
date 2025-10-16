@@ -10,6 +10,16 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch or tag to build"
+        required: true
+        default: "main"
+      dry_run:
+        description: "Skip publishing the release (dry run)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}
@@ -20,8 +30,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch || github.ref }}
 
       - name: Validate tag matches Cargo.toml version
+        if: ${{ github.event_name == 'push' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -44,6 +57,10 @@ jobs:
 
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
+
+      - name: Skip tag validation (manual run)
+        if: ${{ github.event_name != 'push' }}
+        run: echo "Tag validation skipped for workflow_dispatch runs."
 
   build:
     needs: tag-check
@@ -77,6 +94,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch || github.ref }}
       - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}
@@ -206,6 +225,69 @@ jobs:
             codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
           done
 
+      - if: ${{ matrix.runner == 'macos-14' }}
+        name: Notarize macOS binaries
+        shell: bash
+        env:
+          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          for var in APPLE_NOTARIZATION_KEY_P8 APPLE_NOTARIZATION_KEY_ID APPLE_NOTARIZATION_ISSUER_ID; do
+            if [[ -z "${!var:-}" ]]; then
+              echo "$var is required for notarization"
+              exit 1
+            fi
+          done
+
+          notary_key_path="${RUNNER_TEMP}/notarytool.key.p8"
+          echo "$APPLE_NOTARIZATION_KEY_P8" | base64 -d > "$notary_key_path"
+          cleanup_notary() {
+            rm -f "$notary_key_path"
+          }
+          trap cleanup_notary EXIT
+
+          notarize_binary() {
+            local binary="$1"
+            local source_path="target/${{ matrix.target }}/release/${binary}"
+            local archive_path="${RUNNER_TEMP}/${binary}.zip"
+
+            if [[ ! -f "$source_path" ]]; then
+              echo "Binary $source_path not found"
+              exit 1
+            fi
+
+            rm -f "$archive_path"
+            ditto -c -k --keepParent "$source_path" "$archive_path"
+
+            submission_json=$(xcrun notarytool submit "$archive_path" \
+              --key "$notary_key_path" \
+              --key-id "$APPLE_NOTARIZATION_KEY_ID" \
+              --issuer "$APPLE_NOTARIZATION_ISSUER_ID" \
+              --output-format json \
+              --wait)
+
+            status=$(printf '%s\n' "$submission_json" | jq -r '.status // "Unknown"')
+            submission_id=$(printf '%s\n' "$submission_json" | jq -r '.id // ""')
+
+            if [[ -z "$submission_id" ]]; then
+              echo "Failed to retrieve submission ID for $binary"
+              exit 1
+            fi
+
+            echo "::notice title=Notarization::$binary submission ${submission_id} completed with status ${status}"
+
+            if [[ "$status" != "Accepted" ]]; then
+              echo "Notarization failed for ${binary} (submission ${submission_id}, status ${status})"
+              exit 1
+            fi
+          }
+
+          notarize_binary "codex"
+          notarize_binary "codex-responses-api-proxy"
+
       - name: Stage artifacts
         shell: bash
         run: |
@@ -299,6 +381,7 @@ jobs:
     needs: build
     name: release
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     permissions:
       contents: write
       actions: read
@@ -393,7 +476,7 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ needs.release.result == 'success' && needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -462,6 +545,7 @@ jobs:
       contents: write
     needs: release
     runs-on: ubuntu-latest
+    if: ${{ needs.release.result == 'success' }}
 
     steps:
       - name: Update latest-alpha-cli branch

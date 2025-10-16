@@ -1030,6 +1030,7 @@ mod tests {
             "test",
             "test",
             None,
+            Some("test@test.com".to_string()),
             Some(AuthMode::ChatGPT),
             false,
             "test".to_string(),
