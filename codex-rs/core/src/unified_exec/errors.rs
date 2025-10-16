@@ -1,4 +1,4 @@
-use crate::executor::SandboxLaunchError;
+use crate::sandboxing::SandboxLaunchError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

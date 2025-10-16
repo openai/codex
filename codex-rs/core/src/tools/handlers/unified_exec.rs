@@ -39,7 +39,7 @@ impl ToolHandler for UnifiedExecHandler {
             turn,
             sub_id,
             call_id,
-            tool_name,
+            tool_name: _tool_name,
             payload,
             ..
         } = invocation;
@@ -93,7 +93,6 @@ impl ToolHandler for UnifiedExecHandler {
                     turn: turn.as_ref(),
                     sub_id: &sub_id,
                     call_id: &call_id,
-                    tool_name: &tool_name,
                     session_id: parsed_session_id,
                 },
             )

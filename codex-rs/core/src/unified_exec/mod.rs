@@ -1,34 +1,23 @@
-//! Unified Exec: interactive PTY execution with session management.
+//! Unified Exec: interactive PTY execution orchestrated with approvals + sandboxing.
 //!
-//! Purpose and responsibilities
+//! Responsibilities
 //! - Manages interactive PTY sessions (create, reuse, buffer output with caps).
-//! - Delegates sandbox selection, approvals, and policy decisions to the
-//!   executor (single source of truth) via `prepare_execution_plan`.
-//! - Spawns the PTY using the `SandboxLaunch` produced by the plan and reuses
-//!   `ExecutionPlan::attempt_with_retry_if` to optionally retry without a
-//!   sandbox when policy allows and the user approves.
-//! - After process exit, classifies sandbox denials using the shared
-//!   `is_likely_sandbox_denied` heuristic so denial messages stay consistent.
+//! - Uses the shared ToolOrchestrator to handle approval, sandbox selection, and
+//!   retry semantics in a single, descriptive flow.
+//! - Spawns the PTY from a sandbox‑transformed `ExecEnv`; on sandbox denial,
+//!   retries without sandbox when policy allows (no re‑prompt thanks to caching).
+//! - Uses the shared `is_likely_sandbox_denied` heuristic to keep denial messages
+//!   consistent with other exec paths.
 //!
-//! Why not call `executor.run`?
-//! `executor.run` drives a non‑PTY (piped) execution flow end‑to‑end. Unified
-//! Exec needs an interactive PTY that persists across requests and supports
-//! streaming I/O. To keep policy logic centralized while still owning the PTY
-//! lifecycle, Unified Exec builds an `ExecutionRequest` with
-//! `ExecutionMode::InteractiveShell`, asks the executor for an
-//! `ExecutionPlan`, then performs the PTY spawn itself with the plan’s
-//! sandboxed command and environment.
+//! Flow at a glance (open session)
+//! 1) Build a small request `{ command, cwd }`.
+//! 2) Orchestrator: approval (bypass/cache/prompt) → select sandbox → run.
+//! 3) Runtime: transform `CommandSpec` → `ExecEnv` → spawn PTY.
+//! 4) If denial, orchestrator retries with `SandboxType::None`.
+//! 5) Session is returned with streaming output + metadata.
 //!
-//! Handoff at a glance
-//! 1) Build `ExecutionRequest` (interactive shell).
-//! 2) `executor.update_environment(turn.sandbox_policy, turn.cwd)`.
-//! 3) `plan = executor.prepare_execution_plan(request, …)`.
-//! 4) `plan.attempt_with_retry_if(|launch| spawn_pty_process(launch), retry_on_denied)`.
-//! 5) Buffer+stream output, apply timeouts, and return `UnifiedExecResult`.
-//!
-//! This structure ensures Unified Exec benefits from the same approval,
-//! sandbox selection, and escalation rules as regular exec, while keeping the
-//! PTY/session concerns isolated here.
+//! This keeps policy logic and user interaction centralized while the PTY/session
+//! concerns remain isolated here.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -43,19 +32,25 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
+use crate::approvals::Approvable;
+use crate::approvals::ApprovalCtx;
+use crate::approvals::ApprovalDecision;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
 use crate::exec_command::ExecCommandSession;
-use crate::executor::ExecutionMode;
-use crate::executor::ExecutionPlan;
-use crate::executor::ExecutionRequest;
+use crate::orchestrator::SandboxAttempt;
+use crate::orchestrator::Sandboxable;
+use crate::orchestrator::SandboxablePreference;
+use crate::orchestrator::ToolCtx;
+use crate::orchestrator::ToolError;
+use crate::orchestrator::ToolOrchestrator;
+use crate::orchestrator::ToolRuntime;
 use crate::pty::SpawnedPty;
-use crate::tools::context::ExecCommandContext;
+use crate::sandboxing::ExecEnv;
 use crate::truncate::truncate_middle;
 
 mod errors;
@@ -71,7 +66,6 @@ pub(crate) struct UnifiedExecContext<'a> {
     pub turn: &'a TurnContext,
     pub sub_id: &'a str,
     pub call_id: &'a str,
-    pub tool_name: &'a str,
     pub session_id: Option<i32>,
 }
 
@@ -289,68 +283,128 @@ impl Drop for UnifiedExecSession {
 }
 
 impl UnifiedExecSessionManager {
+    async fn open_session_with_exec_env(
+        &self,
+        env: &ExecEnv,
+    ) -> Result<UnifiedExecSession, UnifiedExecError> {
+        let spawned = crate::pty::spawn_pty_process(&env.program, &env.args, &env.env)
+            .await
+            .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
+        UnifiedExecSession::from_spawned(spawned, env.sandbox).await
+    }
+
     async fn open_session_with_sandbox(
         &self,
         command: Vec<String>,
         context: &UnifiedExecContext<'_>,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
-        let executor = &context.session.services.executor;
-        let otel_event_manager = context.turn.client.get_otel_event_manager();
-        let approval_command = command.clone();
-        let exec_context = ExecCommandContext {
+        // Orchestrated open: approval + sandbox selection + retry
+        struct OpenShellRuntime<'a> {
+            manager: &'a UnifiedExecSessionManager,
+        }
+        #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
+        struct ApprovalKey {
+            command: Vec<String>,
+            cwd: std::path::PathBuf,
+        }
+        struct OpenShellReq {
+            command: Vec<String>,
+            cwd: std::path::PathBuf,
+        }
+        impl Sandboxable for OpenShellRuntime<'_> {
+            fn sandbox_preference(&self) -> SandboxablePreference {
+                SandboxablePreference::Auto
+            }
+            fn escalate_on_failure(&self) -> bool {
+                true
+            }
+        }
+        impl Approvable<OpenShellReq> for OpenShellRuntime<'_> {
+            type ApprovalKey = ApprovalKey;
+            fn approval_key(&self, req: &OpenShellReq) -> ApprovalKey {
+                ApprovalKey {
+                    command: req.command.clone(),
+                    cwd: req.cwd.clone(),
+                }
+            }
+            fn reset_cache(&mut self) {}
+            fn approval_preview(&self, req: &OpenShellReq) -> Vec<String> {
+                vec![req.command.join(" ")]
+            }
+            fn start_approval_async<'b>(
+                &'b mut self,
+                req: &'b OpenShellReq,
+                ctx: ApprovalCtx<'b>,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'b>>
+            {
+                Box::pin(async move {
+                    ctx.session
+                        .request_command_approval(
+                            ctx.sub_id.to_string(),
+                            ctx.call_id.to_string(),
+                            req.command.clone(),
+                            req.cwd.clone(),
+                            None,
+                        )
+                        .await
+                        .into()
+                })
+            }
+        }
+        impl<'a> ToolRuntime<OpenShellReq, UnifiedExecSession> for OpenShellRuntime<'a> {
+            fn command_spec(
+                &self,
+                req: &OpenShellReq,
+            ) -> Result<crate::sandboxing::CommandSpec, ToolError> {
+                let (program, args) = req.command.split_first().ok_or_else(|| {
+                    ToolError::Rejected("missing command line for PTY".to_string())
+                })?;
+                Ok(crate::sandboxing::CommandSpec {
+                    program: program.clone(),
+                    args: args.to_vec(),
+                    cwd: req.cwd.clone(),
+                    env: HashMap::new(),
+                    timeout_ms: None,
+                    with_escalated_permissions: None,
+                    justification: None,
+                })
+            }
+            async fn run(
+                &mut self,
+                req: &OpenShellReq,
+                attempt: &SandboxAttempt<'_>,
+                _ctx: &ToolCtx<'_>,
+            ) -> Result<UnifiedExecSession, ToolError> {
+                let spec = self.command_spec(req)?;
+                let env = attempt.env_for(&spec);
+                self.manager
+                    .open_session_with_exec_env(&env)
+                    .await
+                    .map_err(|e| ToolError::Rejected(e.to_string()))
+            }
+        }
+
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = OpenShellRuntime { manager: self };
+        let req = OpenShellReq {
+            command,
+            cwd: context.turn.cwd.clone(),
+        };
+        let tool_ctx = ToolCtx {
+            session: context.session,
             sub_id: context.sub_id.to_string(),
             call_id: context.call_id.to_string(),
-            command_for_display: approval_command.clone(),
-            cwd: context.turn.cwd.clone(),
-            apply_patch: None,
-            tool_name: context.tool_name.to_string(),
-            otel_event_manager,
         };
-
-        let execution_request = ExecutionRequest {
-            params: ExecParams {
-                command,
-                cwd: context.turn.cwd.clone(),
-                timeout_ms: None,
-                env: HashMap::new(),
-                with_escalated_permissions: None,
-                justification: None,
-            },
-            approval_command,
-            mode: ExecutionMode::InteractiveShell,
-            stdout_stream: None,
-            use_shell_profile: false,
-        };
-
-        // Ensure the executor's environment reflects this turn before planning
-        executor.update_environment(
-            context.turn.sandbox_policy.clone(),
-            context.turn.cwd.clone(),
-        );
-
-        let plan: ExecutionPlan = executor
-            .prepare_execution_plan(
-                execution_request,
-                context.session,
+        orchestrator
+            .run(
+                &mut runtime,
+                &req,
+                &tool_ctx,
+                context.turn,
                 context.turn.approval_policy,
-                &exec_context,
             )
             .await
-            .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
-
-        plan.attempt_with_retry_if(
-            context.session,
-            |launch| async move {
-                let sandbox_type = launch.sandbox_type;
-                let spawned =
-                    crate::pty::spawn_pty_process(&launch.program, &launch.args, &launch.env)
-                        .await
-                        .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
-                UnifiedExecSession::from_spawned(spawned, sandbox_type).await
-            },
-            |err: &UnifiedExecError| matches!(err, UnifiedExecError::SandboxDenied { .. }),
-        )
-        .await
+            .map_err(|e| UnifiedExecError::create_session(format!("{e:?}")))
     }
 
     pub async fn handle_request(
@@ -569,7 +623,6 @@ mod tests {
                     turn: turn.as_ref(),
                     sub_id: "sub",
                     call_id: "call",
-                    tool_name: "unified_exec",
                     session_id,
                 },
             )
