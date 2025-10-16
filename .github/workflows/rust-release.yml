@@ -10,16 +10,6 @@ on:
   push:
     tags:
       - "rust-v*.*.*"
-  workflow_dispatch:
-    inputs:
-      branch:
-        description: "Branch or tag to build"
-        required: true
-        default: "main"
-      dry_run:
-        description: "Skip publishing the release (dry run)"
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}
@@ -30,11 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch || github.ref }}
 
       - name: Validate tag matches Cargo.toml version
-        if: ${{ github.event_name == 'push' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -57,10 +44,6 @@ jobs:
 
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
-
-      - name: Skip tag validation (manual run)
-        if: ${{ github.event_name != 'push' }}
-        run: echo "Tag validation skipped for workflow_dispatch runs."
 
   build:
     needs: tag-check
@@ -94,8 +77,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch || github.ref }}
       - uses: dtolnay/rust-toolchain@1.90
         with:
           targets: ${{ matrix.target }}
@@ -381,7 +362,6 @@ jobs:
     needs: build
     name: release
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') }}
     permissions:
       contents: write
       actions: read
@@ -476,7 +456,7 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.result == 'success' && needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -545,7 +525,6 @@ jobs:
       contents: write
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ needs.release.result == 'success' }}
 
     steps:
       - name: Update latest-alpha-cli branch
