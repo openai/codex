@@ -267,6 +267,9 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+
+    // When true, route tool calls directly into history (transcript mode).
+    transcript_mode_active: bool,
 }
 
 struct UserMessage {
@@ -292,6 +295,12 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
+    /// Enable or disable transcript mode. When enabled, tool calls are
+    /// recorded directly into history instead of the active explore stack.
+    pub(crate) fn set_transcript_mode(&mut self, active: bool) {
+        self.transcript_mode_active = active;
+    }
+
     fn model_description_for(slug: &str) -> Option<&'static str> {
         if slug.starts_with("gpt-5-codex") {
             Some("Optimized for coding tasks with many tools.")
@@ -724,6 +733,24 @@ impl ChatWidget {
             None => (vec![ev.call_id.clone()], Vec::new()),
         };
 
+        // In transcript mode, avoid the active explore stack and emit a
+        // completed exec cell directly to history.
+        if self.transcript_mode_active {
+            let mut cell = new_active_exec_command(ev.call_id.clone(), command, parsed);
+            cell.complete_call(
+                &ev.call_id,
+                CommandOutput {
+                    exit_code: ev.exit_code,
+                    stdout: ev.stdout.clone(),
+                    stderr: ev.stderr.clone(),
+                    formatted_output: ev.formatted_output.clone(),
+                },
+                ev.duration,
+            );
+            self.add_boxed_history(Box::new(cell));
+            return;
+        }
+
         let needs_new = self
             .active_cell
             .as_ref()
@@ -815,6 +842,11 @@ impl ChatWidget {
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
+        // In transcript mode, skip creating/updating the active explore stack.
+        if self.transcript_mode_active {
+            self.request_redraw();
+            return;
+        }
         if let Some(cell) = self
             .active_cell
             .as_mut()
@@ -841,6 +873,12 @@ impl ChatWidget {
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
+        if self.transcript_mode_active {
+            // In transcript mode, don't create an active cell; history will be
+            // emitted on the corresponding end event.
+            self.request_redraw();
+            return;
+        }
         self.flush_active_cell();
         self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
             ev.call_id,
@@ -857,6 +895,17 @@ impl ChatWidget {
             duration,
             result,
         } = ev;
+
+        // In transcript mode, bypass the active stack and emit a completed tool call.
+        if self.transcript_mode_active {
+            let mut cell = history_cell::new_active_mcp_tool_call(call_id, invocation);
+            let extra = cell.complete(duration, result);
+            self.add_boxed_history(Box::new(cell));
+            if let Some(extra_cell) = extra {
+                self.add_boxed_history(extra_cell);
+            }
+            return;
+        }
 
         let extra_cell = match self
             .active_cell
@@ -958,6 +1007,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            transcript_mode_active: false,
         }
     }
 
@@ -1023,6 +1073,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            transcript_mode_active: false,
         }
     }
 
@@ -1247,7 +1298,7 @@ impl ChatWidget {
         }
     }
 
-    fn flush_active_cell(&mut self) {
+    pub(crate) fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
