@@ -2,7 +2,7 @@
 source: tui/src/bottom_pane/feedback_view.rs
 expression: rendered
 ---
-  Upload Codex logs to Sentry
+  Do you want to upload logs before reporting issue?
 
   Logs may include the full conversation history of this Codex process
   These logs are retained for 90 days and are used solely for troubles
@@ -11,8 +11,7 @@ expression: rendered
   <LOG_PATH>
 
 
-› 1. Upload logs to Sentry  Share the current Codex session logs with
-                            the team for troubleshooting.
-  2. Cancel
-
-  Press enter to upload to Sentry, or esc to cancel.
+› 1. Yes     Share the current Codex session logs with the team for
+             troubleshooting.
+  2. No
+  3. Cancel
