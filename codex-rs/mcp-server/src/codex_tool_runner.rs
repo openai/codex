@@ -178,6 +178,7 @@ async fn run_codex_tool_session_inner(
                         cwd,
                         call_id,
                         reason: _,
+                        parsed_cmd,
                     }) => {
                         handle_exec_approval_request(
                             command,
@@ -188,6 +189,7 @@ async fn run_codex_tool_session_inner(
                             request_id_str.clone(),
                             event.id.clone(),
                             call_id,
+                            parsed_cmd,
                         )
                         .await;
                         continue;

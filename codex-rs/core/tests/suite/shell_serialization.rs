@@ -740,23 +740,11 @@ async fn shell_output_is_structured_for_nonzero_exit() -> Result<()> {
         .and_then(Value::as_str)
         .expect("shell output string");
 
-    let expected_output = r"Exit code: 42
-Wall time: 0 seconds
+    let expected_pattern = r"(?s)^Exit code: 42
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
 Output:
-";
-    assert_eq!(output, expected_output);
-    assert!(
-        serde_json::from_str::<Value>(output).is_err(),
-        "expected structured shell output to be plain text",
-    );
-    assert!(
-        output.starts_with("Exit code: 42\n"),
-        "expected non-zero exit code prefix, got {output:?}",
-    );
-    assert!(
-        output.contains("\nOutput:\n"),
-        "expected Output section, got {output:?}",
-    );
+?$";
+    assert_regex_match(expected_pattern, output);
 
     Ok(())
 }
@@ -807,18 +795,12 @@ async fn local_shell_call_output_is_structured() -> Result<()> {
         .and_then(Value::as_str)
         .expect("local shell output string");
 
-    assert!(
-        serde_json::from_str::<Value>(output).is_err(),
-        "expected structured local shell output to be plain text",
-    );
-    assert!(
-        output.starts_with("Exit code: 0\n"),
-        "expected zero exit code prefix, got {output:?}",
-    );
-    assert!(
-        output.contains("local shell"),
-        "expected command stdout to be present, got {output:?}",
-    );
+    let expected_pattern = r"(?s)^Exit code: 0
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Output:
+local shell
+?$";
+    assert_regex_match(expected_pattern, output);
 
     Ok(())
 }

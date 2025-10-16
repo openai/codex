@@ -59,6 +59,7 @@ mod pager_overlay;
 pub mod public_widgets;
 mod render;
 mod resume_picker;
+mod selection_list;
 mod session_log;
 mod shimmer;
 mod slash_command;
@@ -70,7 +71,38 @@ mod terminal_palette;
 mod text_formatting;
 mod tui;
 mod ui_consts;
+mod update_prompt;
 mod version;
+
+/// Update action the CLI should perform after the TUI exits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateAction {
+    /// Update via `npm install -g @openai/codex@latest`.
+    NpmGlobalLatest,
+    /// Update via `bun install -g @openai/codex@latest`.
+    BunGlobalLatest,
+    /// Update via `brew upgrade codex`.
+    BrewUpgrade,
+}
+
+impl UpdateAction {
+    /// Returns the list of command-line arguments for invoking the update.
+    pub fn command_args(&self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex@latest"]),
+            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex@latest"]),
+            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "codex"]),
+        }
+    }
+
+    /// Returns string representation of the command-line arguments for invoking the update.
+    pub fn command_str(&self) -> String {
+        let (command, args) = self.command_args();
+        let args_str = args.join(" ");
+        format!("{command} {args_str}")
+    }
+}
+
 mod wrapping;
 
 #[cfg(test)]
@@ -299,6 +331,26 @@ async fn run_ratatui_app(
 
     let mut tui = Tui::new(terminal);
 
+    #[cfg(not(debug_assertions))]
+    {
+        use crate::update_prompt::UpdatePromptOutcome;
+
+        let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
+        if !skip_update_prompt {
+            match update_prompt::run_update_prompt_if_needed(&mut tui, &config).await? {
+                UpdatePromptOutcome::Continue => {}
+                UpdatePromptOutcome::RunUpdate(action) => {
+                    crate::tui::restore()?;
+                    return Ok(AppExitInfo {
+                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        conversation_id: None,
+                        update_action: Some(action),
+                    });
+                }
+            }
+        }
+    }
+
     // Show update banner in terminal history (instead of stderr) so it is visible
     // within the TUI scrollback. Building spans keeps styling consistent.
     #[cfg(not(debug_assertions))]
@@ -309,9 +361,6 @@ async fn run_ratatui_app(
         use ratatui::text::Line;
 
         let current_version = env!("CARGO_PKG_VERSION");
-        let exe = std::env::current_exe()?;
-        let managed_by_bun = std::env::var_os("CODEX_MANAGED_BY_BUN").is_some();
-        let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
 
         let mut content_lines: Vec<Line<'static>> = vec![
             Line::from(vec![
@@ -331,27 +380,10 @@ async fn run_ratatui_app(
             Line::from(""),
         ];
 
-        if managed_by_bun {
-            let bun_cmd = "bun install -g @openai/codex@latest";
+        if let Some(update_action) = get_update_action() {
             content_lines.push(Line::from(vec![
                 "Run ".into(),
-                bun_cmd.cyan(),
-                " to update.".into(),
-            ]));
-        } else if managed_by_npm {
-            let npm_cmd = "npm install -g @openai/codex@latest";
-            content_lines.push(Line::from(vec![
-                "Run ".into(),
-                npm_cmd.cyan(),
-                " to update.".into(),
-            ]));
-        } else if cfg!(target_os = "macos")
-            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
-        {
-            let brew_cmd = "brew upgrade codex";
-            content_lines.push(Line::from(vec![
-                "Run ".into(),
-                brew_cmd.cyan(),
+                update_action.command_str().cyan(),
                 " to update.".into(),
             ]));
         } else {
@@ -405,6 +437,7 @@ async fn run_ratatui_app(
             return Ok(AppExitInfo {
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 conversation_id: None,
+                update_action: None,
             });
         }
         if should_show_windows_wsl_screen {
@@ -449,6 +482,7 @@ async fn run_ratatui_app(
                 return Ok(AppExitInfo {
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
+                    update_action: None,
                 });
             }
             other => other,
@@ -475,6 +509,47 @@ async fn run_ratatui_app(
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
     app_result
+}
+
+/// Get the update action from the environment.
+/// Returns `None` if not managed by npm, bun, or brew.
+#[cfg(not(debug_assertions))]
+pub(crate) fn get_update_action() -> Option<UpdateAction> {
+    let exe = std::env::current_exe().unwrap_or_default();
+    let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
+    let managed_by_bun = std::env::var_os("CODEX_MANAGED_BY_BUN").is_some();
+    if managed_by_npm {
+        Some(UpdateAction::NpmGlobalLatest)
+    } else if managed_by_bun {
+        Some(UpdateAction::BunGlobalLatest)
+    } else if cfg!(target_os = "macos")
+        && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
+    {
+        Some(UpdateAction::BrewUpgrade)
+    } else {
+        None
+    }
+}
+
+#[test]
+#[cfg(not(debug_assertions))]
+fn test_get_update_action() {
+    let prev = std::env::var_os("CODEX_MANAGED_BY_NPM");
+
+    // First: no npm var -> expect None (we do not run from brew in CI)
+    unsafe { std::env::remove_var("CODEX_MANAGED_BY_NPM") };
+    assert_eq!(get_update_action(), None);
+
+    // Then: with npm var -> expect NpmGlobalLatest
+    unsafe { std::env::set_var("CODEX_MANAGED_BY_NPM", "1") };
+    assert_eq!(get_update_action(), Some(UpdateAction::NpmGlobalLatest));
+
+    // Restore prior value to avoid leaking state
+    if let Some(v) = prev {
+        unsafe { std::env::set_var("CODEX_MANAGED_BY_NPM", v) };
+    } else {
+        unsafe { std::env::remove_var("CODEX_MANAGED_BY_NPM") };
+    }
 }
 
 #[expect(
