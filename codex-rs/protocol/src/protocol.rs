@@ -548,10 +548,15 @@ pub struct TaskStartedEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, TS)]
 pub struct TokenUsage {
+    #[ts(type = "number")]
     pub input_tokens: u64,
+    #[ts(type = "number")]
     pub cached_input_tokens: u64,
+    #[ts(type = "number")]
     pub output_tokens: u64,
+    #[ts(type = "number")]
     pub reasoning_output_tokens: u64,
+    #[ts(type = "number")]
     pub total_tokens: u64,
 }
 
@@ -559,6 +564,7 @@ pub struct TokenUsage {
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    #[ts(type = "number | null")]
     pub model_context_window: Option<u64>,
 }
 
@@ -634,8 +640,10 @@ pub struct RateLimitWindow {
     /// Percentage (0-100) of the window that has been consumed.
     pub used_percent: f64,
     /// Rolling window duration, in minutes.
+    #[ts(type = "number | null")]
     pub window_minutes: Option<u64>,
     /// Seconds until the window resets.
+    #[ts(type = "number | null")]
     pub resets_in_seconds: Option<u64>,
 }
 
@@ -1170,6 +1178,7 @@ pub struct ExecApprovalRequestEvent {
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    pub parsed_cmd: Vec<ParsedCommand>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -1192,6 +1201,11 @@ pub struct BackgroundEventEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct StreamErrorEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct StreamInfoEvent {
     pub message: String,
 }
 
@@ -1235,6 +1249,30 @@ pub struct GetHistoryEntryResponseEvent {
 pub struct McpListToolsResponseEvent {
     /// Fully qualified tool name -> tool definition.
     pub tools: std::collections::HashMap<String, McpTool>,
+    /// Authentication status for each configured MCP server.
+    pub auth_statuses: std::collections::HashMap<String, McpAuthStatus>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum McpAuthStatus {
+    Unsupported,
+    NotLoggedIn,
+    BearerToken,
+    OAuth,
+}
+
+impl fmt::Display for McpAuthStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            McpAuthStatus::Unsupported => "Unsupported",
+            McpAuthStatus::NotLoggedIn => "Not logged in",
+            McpAuthStatus::BearerToken => "Bearer token",
+            McpAuthStatus::OAuth => "OAuth",
+        };
+        f.write_str(text)
+    }
 }
 
 /// Response payload for `Op::ListCustomPrompts`.
