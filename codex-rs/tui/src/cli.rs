@@ -22,6 +22,11 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_last: bool,
 
+    /// Internal: show all conversations across all directories in the resume picker.
+    /// Set by the top-level `codex resume --all` wrapper; not exposed as a public flag.
+    #[clap(skip)]
+    pub resume_all: bool,
+
     /// Internal: resume a specific recorded session by id (UUID). Set by the
     /// top-level `codex resume <SESSION_ID>` wrapper; not exposed as a public flag.
     #[clap(skip)]

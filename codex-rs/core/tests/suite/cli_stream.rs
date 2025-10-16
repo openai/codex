@@ -75,7 +75,7 @@ async fn chat_mode_stream_cli() {
     server.verify().await;
 
     // Verify a new session rollout was created and is discoverable via list_conversations
-    let page = RolloutRecorder::list_conversations(home.path(), 10, None, &[])
+    let page = RolloutRecorder::list_conversations(home.path(), 10, None, &[], None)
         .await
         .expect("list conversations");
     assert!(
