@@ -114,7 +114,11 @@ impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        let wrap_width = width.saturating_sub(LIVE_PREFIX_COLS);
+        let wrap_width = width
+            .saturating_sub(
+                LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
+            )
+            .max(1);
 
         let style = user_message_style();
 
@@ -125,7 +129,8 @@ impl HistoryCell for UserHistoryCell {
                 .map(|l| Line::from(l).style(style))
                 .collect::<Vec<_>>(),
             // Wrap algorithm matches textarea.rs.
-            RtOptions::new(wrap_width as usize).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            RtOptions::new(usize::from(wrap_width))
+                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
         );
 
         lines.push(Line::from("").style(style));
@@ -1148,7 +1153,7 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
     if !stderr.trim().is_empty() {
-        lines.extend(output_lines(
+        let output = output_lines(
             Some(&CommandOutput {
                 exit_code: 1,
                 stdout: String::new(),
@@ -1160,7 +1165,8 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
                 include_angle_pipe: true,
                 include_prefix: true,
             },
-        ));
+        );
+        lines.extend(output.lines);
     }
 
     PlainHistoryCell { lines }
