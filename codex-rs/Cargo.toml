@@ -19,7 +19,6 @@ members = [
     "keyring-store",
     "file-search",
     "linux-sandbox",
-    "windows-sandbox",
     "login",
     "mcp-server",
     "mcp-types",
@@ -211,8 +210,8 @@ vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "6"
-wildmatch = "2.5.0"
 widestring = "1.1.0"
+wildmatch = "2.5.0"
 
 windows = { version = "0.56.0", features = [
     "Win32_Foundation",

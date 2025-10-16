@@ -111,7 +111,6 @@ pub async fn process_exec_tool_call(
         ))
     })?;
 
-<<<<<<< HEAD
     let spec = CommandSpec {
         program: program.clone(),
         args: args.to_vec(),
@@ -120,80 +119,6 @@ pub async fn process_exec_tool_call(
         timeout_ms,
         with_escalated_permissions,
         justification,
-=======
-    let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
-    {
-        SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
-        SandboxType::MacosSeatbelt => {
-            let ExecParams {
-                command,
-                cwd: command_cwd,
-                env,
-                ..
-            } = params;
-            let child = spawn_command_under_seatbelt(
-                command,
-                command_cwd,
-                sandbox_policy,
-                sandbox_cwd,
-                StdioPolicy::RedirectForShellTool,
-                env,
-            )
-            .await?;
-            consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
-        }
-        SandboxType::LinuxSeccomp => {
-            let ExecParams {
-                command,
-                cwd: command_cwd,
-                env,
-                ..
-            } = params;
-
-            let codex_linux_sandbox_exe = codex_linux_sandbox_exe
-                .as_ref()
-                .ok_or(CodexErr::LandlockSandboxExecutableNotProvided)?;
-            let child = spawn_command_under_linux_sandbox(
-                codex_linux_sandbox_exe,
-                command,
-                command_cwd,
-                sandbox_policy,
-                sandbox_cwd,
-                StdioPolicy::RedirectForShellTool,
-                env,
-            )
-            .await?;
-
-            consume_truncated_output(child, timeout_duration, stdout_stream).await
-        }
-        SandboxType::WindowsRestrictedToken => {
-            #[cfg(target_os = "windows")]
-            {
-                let ExecParams {
-                    command,
-                    cwd: command_cwd,
-                    env,
-                    ..
-                } = params;
-                let child = spawn_command_under_windows_restricted_token(
-                    command,
-                    command_cwd,
-                    sandbox_policy,
-                    sandbox_cwd,
-                    StdioPolicy::RedirectForShellTool,
-                    env,
-                )
-                .await?;
-                consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                return Err(CodexErr::UnsupportedOperation(
-                    "Windows sandbox is only available on Windows".to_string(),
-                ));
-            }
-        }
->>>>>>> c46933d80 (hookup python as windows sandbox.)
     };
 
     let manager = SandboxManager::new();
