@@ -25,3 +25,31 @@ jobs:
         uses: codespell-project/actions-codespell@406322ec52dd7b488e48c1c4b82e2a8b3a1bf630 # v2.1
         with:
           ignore_words_file: .codespellignore
+      - name: ShellCheck
+        run: |
+          set -eo pipefail
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y shellcheck
+          fi
+
+          mapfile -t shell_files < <(git ls-files '*.sh' '*.bash' '*.bats')
+          if [ "${#shell_files[@]}" -eq 0 ]; then
+            echo "No shell scripts found to lint"
+            exit 0
+          fi
+
+          shellcheck "${shell_files[@]}"
+      - name: Install actionlint
+        env:
+          GOBIN: ${{ runner.temp }}/bin
+        run: |
+          set -eo pipefail
+          mkdir -p "$GOBIN"
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      - name: actionlint
+        env:
+          ACTIONLINT_BIN: ${{ runner.temp }}/bin/actionlint
+        run: |
+          set -eo pipefail
+          "$ACTIONLINT_BIN" -color
