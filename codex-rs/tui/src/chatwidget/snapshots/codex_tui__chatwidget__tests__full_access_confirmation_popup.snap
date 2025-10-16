@@ -10,6 +10,6 @@ expression: popup
 
 › 1. Yes, continue anyway      Apply full access for this session
   2. Yes, and don't ask again  Enable full access and remember this choice
-  3. Deny                      Go back without enabling full access
+  3. Cancel                    Go back without enabling full access
 
   Press enter to confirm or esc to go back
