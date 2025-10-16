@@ -640,7 +640,7 @@ def main() -> int:
                 title = f"Codex: {assistant_message}"
             else:
                 title = "Codex: Turn Complete!"
-            input_messages = notification.get("input_messages", [])
+            input_messages = notification.get("input-messages", [])
             message = " ".join(input_messages)
             title += message
         case _:
