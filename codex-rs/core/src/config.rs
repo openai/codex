@@ -70,9 +70,21 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiAgentConfig {
     pub agents: Vec<String>,
+    pub max_concurrent_delegates: usize,
+}
+
+pub const DEFAULT_MAX_CONCURRENT_DELEGATES: usize = 5;
+
+impl Default for MultiAgentConfig {
+    fn default() -> Self {
+        Self {
+            agents: Vec::new(),
+            max_concurrent_delegates: DEFAULT_MAX_CONCURRENT_DELEGATES,
+        }
+    }
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -897,6 +909,8 @@ impl From<ToolsToml> for Tools {
 pub struct MultiAgentToml {
     #[serde(default)]
     pub agents: Vec<String>,
+    #[serde(default)]
+    pub max_concurrent_delegates: Option<usize>,
 }
 
 impl ConfigToml {
@@ -1101,6 +1115,13 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let max_concurrent_delegates = cfg
+            .multi_agent
+            .as_ref()
+            .and_then(|ma| ma.max_concurrent_delegates)
+            .unwrap_or(DEFAULT_MAX_CONCURRENT_DELEGATES)
+            .max(1);
+
         let multi_agent = MultiAgentConfig {
             agents: normalize_multi_agent_agents(
                 cfg.multi_agent
@@ -1108,6 +1129,7 @@ impl Config {
                     .map(|ma| ma.agents.clone())
                     .unwrap_or_default(),
             ),
+            max_concurrent_delegates,
         };
 
         let include_plan_tool_flag = features.enabled(Feature::PlanTool);

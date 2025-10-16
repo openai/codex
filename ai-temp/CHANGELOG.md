@@ -3,6 +3,9 @@
 > Keep this file current; it documents the evolution of the multi-agent design work. An outdated changelog breaks the orchestrator timeline.
 
 ## 2025-10-16
+- Added batched delegate execution: the core handler now accepts `batch` payloads, launches every child run concurrently (respecting the orchestrator’s concurrency cap), and returns per-agent summaries in a single response.
+- Updated the TUI delegate tree to indent siblings (two spaces per depth) and keep the status banner aligned while multiple children stream at once; adjusted snapshot/unit coverage accordingly.
+- Refreshed documentation and sample instructions (`ai-temp/parallel-delegation.md`, `ai-temp/tool-implementation-patterns.md`, example Codex home agents) to describe the batched call flow and new presentation.
 - Removed the inline `#agent` autocomplete experiment and reverted documentation to focus on the delegate picker and slash command flow.
 - Added child delegate directories (`creative_ideas`, `conservative_ideas`) to the example Codex home and updated instructions/README to describe the fixed delegation chain (main → ideas_provider → critic).
 - Auto-enabled the delegate tool whenever `[multi_agent].agents` is non-empty so sub-agents inherit delegation without toggling `include_delegate_tool`.

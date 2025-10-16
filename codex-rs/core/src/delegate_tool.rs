@@ -17,6 +17,15 @@ pub struct DelegateToolContext {
     pub hints: Vec<String>,
 }
 
+/// Single entry in a batched delegate request.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct DelegateToolBatchEntry {
+    pub agent_id: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub context: DelegateToolContext,
+}
+
 /// Payload sent by the primary agent when invoking the delegate tool.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DelegateToolRequest {
@@ -24,6 +33,10 @@ pub struct DelegateToolRequest {
     pub prompt: String,
     #[serde(default)]
     pub context: DelegateToolContext,
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_deserializing)]
+    pub caller_conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub batch: Vec<DelegateToolBatchEntry>,
 }
 
 /// Event emitted while a delegate run is in flight.
@@ -34,6 +47,7 @@ pub enum DelegateToolEvent {
         agent_id: String,
         prompt: String,
         started_at: SystemTime,
+        parent_run_id: Option<DelegateRunId>,
     },
     Delta {
         run_id: DelegateRunId,

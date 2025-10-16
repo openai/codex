@@ -45,6 +45,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -291,8 +292,8 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
         delegate_run: None,
-        delegate_had_stream: false,
-        delegate_status_claimed: false,
+        delegate_runs_with_stream: HashSet::new(),
+        delegate_status_owner: None,
         delegate_previous_status_header: None,
         delegate_context: None,
         delegate_user_frames: Vec::new(),
@@ -392,13 +393,23 @@ fn test_rate_limit_warnings_monthly() {
 fn delegate_stream_deltas_and_restore_status() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
     let agent = AgentId::parse("ideas_provider").expect("valid agent id");
+    let label = DelegateDisplayLabel {
+        depth: 0,
+        base_label: "↳ #ideas_provider".to_string(),
+    };
 
     assert!(chat.bottom_pane.status_widget().is_none());
     assert_eq!(chat.current_status_header, "Working");
 
-    chat.on_delegate_started("run-1", &agent, "sketch integration points", 0);
+    chat.on_delegate_started(
+        "run-1",
+        &agent,
+        "sketch integration points",
+        label.clone(),
+        true,
+    );
     assert_eq!(chat.delegate_run.as_deref(), Some("run-1"));
-    assert!(chat.delegate_status_claimed);
+    assert_eq!(chat.delegate_status_owner.as_deref(), Some("run-1"));
     assert!(chat.bottom_pane.status_widget().is_some());
     assert_eq!(chat.current_status_header, "Delegating to #ideas_provider");
 
@@ -429,7 +440,7 @@ fn delegate_stream_deltas_and_restore_status() {
         "expected streamed delegate output in history"
     );
 
-    let streamed = chat.on_delegate_completed("run-1", 0);
+    let streamed = chat.on_delegate_completed("run-1", &label);
     assert!(
         streamed,
         "delegate completion should report streaming output"
@@ -446,7 +457,8 @@ fn delegate_stream_deltas_and_restore_status() {
         "expected commit animation to stop after delegate completion"
     );
     assert!(chat.delegate_run.is_none());
-    assert!(!chat.delegate_status_claimed);
+    chat.clear_delegate_status_owner();
+    assert!(chat.delegate_status_owner.is_none());
     assert!(chat.bottom_pane.status_widget().is_none());
     assert_eq!(chat.current_status_header, "Working");
 }
@@ -456,9 +468,17 @@ fn nested_delegate_info_events_are_indented() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
     let outer = AgentId::parse("ideas_provider").expect("valid id");
     let inner = AgentId::parse("creative_ideas").expect("valid id");
+    let outer_label = DelegateDisplayLabel {
+        depth: 0,
+        base_label: "↳ #ideas_provider".to_string(),
+    };
+    let inner_label = DelegateDisplayLabel {
+        depth: 1,
+        base_label: "  ↳ #creative_ideas".to_string(),
+    };
 
-    chat.on_delegate_started("outer-run", &outer, "outer brief", 0);
-    chat.on_delegate_started("inner-run", &inner, "inner brief", 1);
+    chat.on_delegate_started("outer-run", &outer, "outer brief", outer_label, true);
+    chat.on_delegate_started("inner-run", &inner, "inner brief", inner_label, false);
 
     let mut messages = Vec::new();
     while let Ok(event) = rx.try_recv() {

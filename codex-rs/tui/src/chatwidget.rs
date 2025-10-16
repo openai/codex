@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -228,6 +229,12 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) auth_manager: Arc<AuthManager>,
 }
 
+#[derive(Clone, Debug)]
+pub struct DelegateDisplayLabel {
+    pub depth: usize,
+    pub base_label: String,
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -274,8 +281,8 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     delegate_run: Option<String>,
-    delegate_had_stream: bool,
-    delegate_status_claimed: bool,
+    delegate_runs_with_stream: HashSet<String>,
+    delegate_status_owner: Option<String>,
     delegate_previous_status_header: Option<String>,
     delegate_context: Option<DelegateSessionSummary>,
     delegate_user_frames: Vec<InputItem>,
@@ -1067,8 +1074,8 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             delegate_run: None,
-            delegate_had_stream: false,
-            delegate_status_claimed: false,
+            delegate_runs_with_stream: HashSet::new(),
+            delegate_status_owner: None,
             delegate_previous_status_header: None,
             delegate_context: None,
             delegate_user_frames: Vec::new(),
@@ -1140,8 +1147,8 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             delegate_run: None,
-            delegate_had_stream: false,
-            delegate_status_claimed: false,
+            delegate_runs_with_stream: HashSet::new(),
+            delegate_status_owner: None,
             delegate_previous_status_header: None,
             delegate_context: None,
             delegate_user_frames: Vec::new(),
@@ -2376,21 +2383,16 @@ impl ChatWidget {
         self.conversation_id
     }
 
-    fn delegate_label(agent_id: &AgentId, depth: usize) -> String {
-        format!("{}↳ #{}", "  ".repeat(depth), agent_id.as_str())
-    }
-
     pub(crate) fn add_delegate_completion(
         &mut self,
-        agent_id: &AgentId,
         response: Option<&str>,
         duration_hint: Option<String>,
-        depth: usize,
+        label: &DelegateDisplayLabel,
     ) {
-        let header = format!("{} completed", Self::delegate_label(agent_id, depth));
+        let header = format!("{} completed", label.base_label);
         self.add_info_message(header, duration_hint);
 
-        if depth > 0 {
+        if label.depth > 0 {
             return;
         }
 
@@ -2413,78 +2415,88 @@ impl ChatWidget {
         run_id: &str,
         agent_id: &AgentId,
         prompt: &str,
-        depth: usize,
+        label: DelegateDisplayLabel,
+        claim_status: bool,
     ) {
-        let label = Self::delegate_label(agent_id, depth);
-        if depth == 0 {
-            self.delegate_run = Some(run_id.to_string());
-            self.delegate_had_stream = false;
+        if claim_status {
+            self.set_delegate_status_owner_internal(run_id, agent_id);
+        }
+        if label.depth == 0 {
             self.delegate_user_frames.clear();
             self.delegate_agent_frames.clear();
-            self.delegate_previous_status_header = Some(self.current_status_header.clone());
-            if self.bottom_pane.status_widget().is_none() {
-                self.bottom_pane.set_task_running(true);
-                self.delegate_status_claimed = true;
-            } else {
-                self.delegate_status_claimed = false;
-            }
-            self.set_status_header(format!("Delegating to #{}", agent_id.as_str()));
         }
+        self.delegate_runs_with_stream.remove(run_id);
+        self.delegate_run = Some(run_id.to_string());
         let trimmed = prompt.trim();
         let hint = if trimmed.is_empty() {
             None
         } else {
             Some(trimmed.to_string())
         };
-        self.add_info_message(format!("{label}…"), hint);
+        self.add_info_message(format!("{}…", label.base_label), hint);
         self.request_redraw();
     }
 
     pub(crate) fn on_delegate_delta(&mut self, run_id: &str, chunk: &str) {
         if self.delegate_run.as_deref() != Some(run_id) {
-            return;
+            self.delegate_run = Some(run_id.to_string());
         }
-        self.delegate_had_stream = true;
+        self.delegate_runs_with_stream.insert(run_id.to_string());
         self.handle_streaming_delta(chunk.to_string());
     }
 
-    pub(crate) fn on_delegate_completed(&mut self, run_id: &str, depth: usize) -> bool {
-        if depth > 0 {
-            return false;
+    pub(crate) fn on_delegate_completed(
+        &mut self,
+        run_id: &str,
+        label: &DelegateDisplayLabel,
+    ) -> bool {
+        let had_stream = self.delegate_runs_with_stream.remove(run_id);
+        if self.delegate_run.as_deref() == Some(run_id) {
+            if had_stream {
+                self.flush_answer_stream_with_separator();
+                self.handle_stream_finished();
+                self.app_event_tx.send(AppEvent::StopCommitAnimation);
+            }
+            self.delegate_run = None;
         }
-        if self.delegate_run.as_deref() != Some(run_id) {
-            return false;
-        }
-        let had_stream = self.delegate_had_stream;
-        if had_stream {
-            self.flush_answer_stream_with_separator();
-            self.handle_stream_finished();
-            self.app_event_tx.send(AppEvent::StopCommitAnimation);
-        }
-        if let Some(previous) = self.delegate_previous_status_header.take() {
-            self.set_status_header(previous);
-        }
-        if self.delegate_status_claimed {
-            self.bottom_pane.set_task_running(false);
-            self.delegate_status_claimed = false;
-        }
-        self.delegate_run = None;
-        self.delegate_had_stream = false;
-        had_stream
+        label.depth == 0 && had_stream
     }
 
     pub(crate) fn on_delegate_failed(
         &mut self,
         run_id: &str,
-        agent_id: &AgentId,
+        label: &DelegateDisplayLabel,
         error: &str,
-        depth: usize,
     ) {
-        if depth == 0 {
-            let _ = self.on_delegate_completed(run_id, depth);
+        let _ = self.on_delegate_completed(run_id, label);
+        self.add_error_message(format!("{} failed: {error}", label.base_label));
+    }
+
+    pub(crate) fn set_delegate_status_owner(&mut self, run_id: &str, agent_id: &AgentId) {
+        self.set_delegate_status_owner_internal(run_id, agent_id);
+    }
+
+    pub(crate) fn clear_delegate_status_owner(&mut self) {
+        if self.delegate_status_owner.take().is_some() {
+            if let Some(previous) = self.delegate_previous_status_header.take() {
+                self.set_status_header(previous);
+            }
+            self.bottom_pane.set_task_running(false);
         }
-        let label = Self::delegate_label(agent_id, depth);
-        self.add_error_message(format!("{label} failed: {error}"));
+    }
+
+    fn set_delegate_status_owner_internal(&mut self, run_id: &str, agent_id: &AgentId) {
+        let is_same = self.delegate_status_owner.as_deref() == Some(run_id);
+        if !is_same && self.delegate_status_owner.is_none() {
+            if self.delegate_previous_status_header.is_none() {
+                self.delegate_previous_status_header = Some(self.current_status_header.clone());
+            }
+            if self.bottom_pane.status_widget().is_none() {
+                self.bottom_pane.set_task_running(true);
+            }
+        }
+        self.delegate_status_owner = Some(run_id.to_string());
+        self.set_status_header(format!("Delegating to #{}", agent_id.as_str()));
     }
 
     fn try_delegate_shortcut(&mut self, _text: &str) -> bool {

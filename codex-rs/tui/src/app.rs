@@ -5,6 +5,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ChatWidgetInit;
+use crate::chatwidget::DelegateDisplayLabel;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
@@ -91,7 +92,107 @@ pub(crate) struct App {
 
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
-    delegate_stack: Vec<(String, AgentId)>,
+    delegate_tree: DelegateTree,
+    delegate_status_owner: Option<String>,
+}
+
+#[derive(Default)]
+struct DelegateTree {
+    nodes: HashMap<String, DelegateNode>,
+    roots: Vec<String>,
+}
+
+struct DelegateNode {
+    agent_id: AgentId,
+    parent: Option<String>,
+    children: Vec<String>,
+}
+
+#[derive(Clone)]
+struct DelegateDisplay {
+    depth: usize,
+    label: DelegateDisplayLabel,
+}
+
+impl DelegateTree {
+    fn insert(
+        &mut self,
+        run_id: String,
+        agent_id: AgentId,
+        parent: Option<String>,
+    ) -> DelegateDisplay {
+        if let Some(parent_id) = parent.as_ref() {
+            if let Some(parent_node) = self.nodes.get_mut(parent_id) {
+                parent_node.children.push(run_id.clone());
+            }
+        } else {
+            self.roots.push(run_id.clone());
+        }
+
+        self.nodes.insert(
+            run_id.clone(),
+            DelegateNode {
+                agent_id: agent_id.clone(),
+                parent: parent.clone(),
+                children: Vec::new(),
+            },
+        );
+
+        self.display_for(&run_id, &agent_id)
+    }
+
+    fn display_for(&self, run_id: &str, agent_id: &AgentId) -> DelegateDisplay {
+        let depth = self.depth_of(run_id).unwrap_or(0);
+        let base_label = if depth == 0 {
+            format!("↳ #{}", agent_id.as_str())
+        } else {
+            let indent = "  ".repeat(depth);
+            format!("{indent}↳ #{}", agent_id.as_str())
+        };
+        DelegateDisplay {
+            depth,
+            label: DelegateDisplayLabel { depth, base_label },
+        }
+    }
+
+    fn depth_of(&self, run_id: &str) -> Option<usize> {
+        let mut depth = 0;
+        let mut current = run_id;
+        while let Some(node) = self.nodes.get(current) {
+            if let Some(parent) = node.parent.as_ref() {
+                depth += 1;
+                current = parent;
+            } else {
+                break;
+            }
+        }
+        if self.nodes.contains_key(run_id) || self.roots.iter().any(|r| r == run_id) {
+            Some(depth)
+        } else {
+            None
+        }
+    }
+
+    fn remove(&mut self, run_id: &str) {
+        if let Some(node) = self.nodes.remove(run_id) {
+            if let Some(parent_id) = node.parent {
+                if let Some(parent_node) = self.nodes.get_mut(&parent_id) {
+                    parent_node.children.retain(|child| child != run_id);
+                }
+            } else {
+                self.roots.retain(|root| root != run_id);
+            }
+        }
+    }
+
+    fn first_active_root(&self) -> Option<(String, AgentId)> {
+        for run_id in &self.roots {
+            if let Some(node) = self.nodes.get(run_id) {
+                return Some((run_id.clone(), node.agent_id.clone()));
+            }
+        }
+        None
+    }
 }
 
 impl App {
@@ -191,7 +292,8 @@ impl App {
             active_delegate_summary: None,
             primary_chat_backup: None,
             pending_update_action: None,
-            delegate_stack: Vec::new(),
+            delegate_tree: DelegateTree::default(),
+            delegate_status_owner: None,
         };
 
         let tui_events = tui.event_stream();
@@ -480,22 +582,30 @@ impl App {
                 run_id,
                 agent_id,
                 prompt,
+                parent_run_id,
                 ..
             } => {
-                let depth = self.delegate_stack.len();
-                self.delegate_stack.push((run_id.clone(), agent_id.clone()));
-                self.chat_widget
-                    .on_delegate_started(&run_id, &agent_id, &prompt, depth);
+                let display = self.delegate_tree.insert(
+                    run_id.clone(),
+                    agent_id.clone(),
+                    parent_run_id.clone(),
+                );
+                let claim_status = parent_run_id.is_none() && self.delegate_status_owner.is_none();
+                if claim_status {
+                    self.delegate_status_owner = Some(run_id.clone());
+                    self.chat_widget
+                        .set_delegate_status_owner(&run_id, &agent_id);
+                }
+                self.chat_widget.on_delegate_started(
+                    &run_id,
+                    &agent_id,
+                    &prompt,
+                    display.label,
+                    claim_status,
+                );
             }
             DelegateEvent::Delta { run_id, chunk, .. } => {
-                if self
-                    .delegate_stack
-                    .last()
-                    .map(|(id, _)| id == &run_id)
-                    .unwrap_or(false)
-                {
-                    self.chat_widget.on_delegate_delta(&run_id, &chunk);
-                }
+                self.chat_widget.on_delegate_delta(&run_id, &chunk);
             }
             DelegateEvent::Completed {
                 run_id,
@@ -504,42 +614,54 @@ impl App {
                 duration,
                 ..
             } => {
-                if let Some(pos) = self
-                    .delegate_stack
-                    .iter()
-                    .rposition(|(id, _)| id == &run_id)
-                {
-                    let depth = pos;
-                    self.delegate_stack.remove(pos);
-                    let streamed = self.chat_widget.on_delegate_completed(&run_id, depth);
-                    let hint = Some(format!(
-                        "finished in {}",
-                        Self::format_delegate_duration(duration)
-                    ));
-                    let response = if depth == 0 {
-                        output.as_deref().filter(|_| !streamed)
+                let display = self.delegate_tree.display_for(&run_id, &agent_id);
+                self.delegate_tree.remove(&run_id);
+                if self.delegate_status_owner.as_deref() == Some(run_id.as_str()) {
+                    self.delegate_status_owner = None;
+                    if let Some((next_run_id, next_agent)) = self.delegate_tree.first_active_root()
+                    {
+                        self.delegate_status_owner = Some(next_run_id.clone());
+                        self.chat_widget
+                            .set_delegate_status_owner(&next_run_id, &next_agent);
                     } else {
-                        None
-                    };
-                    self.chat_widget
-                        .add_delegate_completion(&agent_id, response, hint, depth);
+                        self.chat_widget.clear_delegate_status_owner();
+                    }
                 }
+                let streamed = self
+                    .chat_widget
+                    .on_delegate_completed(&run_id, &display.label);
+                let hint = Some(format!(
+                    "finished in {}",
+                    Self::format_delegate_duration(duration)
+                ));
+                let response = if display.depth == 0 {
+                    output.as_deref().filter(|_| !streamed)
+                } else {
+                    None
+                };
+                self.chat_widget
+                    .add_delegate_completion(response, hint, &display.label);
             }
             DelegateEvent::Failed {
                 run_id,
                 agent_id,
                 error,
             } => {
-                if let Some(pos) = self
-                    .delegate_stack
-                    .iter()
-                    .rposition(|(id, _)| id == &run_id)
-                {
-                    let depth = pos;
-                    self.delegate_stack.remove(pos);
-                    self.chat_widget
-                        .on_delegate_failed(&run_id, &agent_id, &error, depth);
+                let display = self.delegate_tree.display_for(&run_id, &agent_id);
+                self.delegate_tree.remove(&run_id);
+                if self.delegate_status_owner.as_deref() == Some(run_id.as_str()) {
+                    self.delegate_status_owner = None;
+                    if let Some((next_run_id, next_agent)) = self.delegate_tree.first_active_root()
+                    {
+                        self.delegate_status_owner = Some(next_run_id.clone());
+                        self.chat_widget
+                            .set_delegate_status_owner(&next_run_id, &next_agent);
+                    } else {
+                        self.chat_widget.clear_delegate_status_owner();
+                    }
                 }
+                self.chat_widget
+                    .on_delegate_failed(&run_id, &display.label, &error);
             }
         }
     }
@@ -812,6 +934,7 @@ mod tests {
                 tools_web_search_request: None,
             },
             Vec::new(),
+            config.multi_agent.max_concurrent_delegates,
         ));
 
         App {
@@ -835,7 +958,8 @@ mod tests {
             active_delegate_summary: None,
             primary_chat_backup: None,
             pending_update_action: None,
-            delegate_stack: Vec::new(),
+            delegate_tree: DelegateTree::default(),
+            delegate_status_owner: None,
         }
     }
 

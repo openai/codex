@@ -40,7 +40,6 @@ This note captures the patterns we observed while digging into the built-in plan
 ```json
 {
   "type": "object",
-  "required": ["agent_id", "prompt"],
   "properties": {
     "agent_id": { "type": "string", "pattern": "^[a-z0-9_\\-]+$" },
     "prompt": { "type": "string" },
@@ -51,20 +50,46 @@ This note captures the patterns we observed while digging into the built-in plan
         "hints": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": true
+    },
+    "batch": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["agent_id", "prompt"],
+        "properties": {
+          "agent_id": { "type": "string", "pattern": "^[a-z0-9_\\-]+$" },
+          "prompt": { "type": "string" },
+          "context": {
+            "type": "object",
+            "properties": {
+              "working_directory": { "type": "string" },
+              "hints": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
     }
-  }
+  },
+  "anyOf": [
+    { "required": ["agent_id", "prompt"] },
+    { "required": ["batch"], "properties": { "batch": { "minItems": 1 } } }
+  ],
+  "additionalProperties": false
 }
 ```
 - We can add optional fields later (timeouts, resource budgets) without breaking the schema.
 - The handler validates `agent_id` with `AgentRegistry`, loads the merged `Config`, and passes the prompt/context into the orchestrator.
+- A per-agent concurrency cap guards resource usage. `[multi_agent].max_concurrent_delegates` defaults to 5 and returns `DelegateToolError::DelegateInProgress` once the limit is hit, signalling the model to queue additional work.
 
 ### 7.3 Handler Responsibilities
-- Mirror the exec tool: enqueue the delegate run, stream progress via `DelegateEvent::Started/Delta/Completed/Failed`, and return a compact JSON result (e.g., `{ "status": "ok", "summary": "...", "session": "session-id" }`).
+- Mirror the exec tool: enqueue the delegate run, stream progress via `DelegateEvent::Started/Delta/Completed/Failed`, and return a compact JSON result. When batching requests, respond with `{"status":"ok","runs":[...]}` where each entry includes the `agent_id`, `run_id`, optional summary, and duration.
 - Errors reuse the same shape with `status: "error"` so the UI can surface them consistently.
 - The handler itself remains thin—after scheduling the work, it hands control back to the runtime.
 
 ### 7.4 Client Integration
-- The TUI reuses `StreamController` to show delegate streaming, and inserts a summary history cell once the tool completes (agent id, elapsed time, link to the sub-agent session).
+- The TUI maintains a delegate tree so nested runs display with increasing indentation (two spaces per depth) and status indicators rotate between active roots. Streaming can hop between delegates; each run keeps its own buffer before being summarized into history.
 - Because users cannot trigger the tool directly, slash commands and message preprocessing stay untouched; guidance lives in instructions and autocomplete metadata.
 
 ### 7.5 Instruction Updates

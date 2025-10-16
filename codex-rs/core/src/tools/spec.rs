@@ -781,7 +781,7 @@ pub(crate) fn build_specs(
     }
 
     if config.delegate_tool {
-        builder.push_spec(DELEGATE_TOOL.clone());
+        builder.push_spec_with_parallel_support(DELEGATE_TOOL.clone(), true);
         builder.register_handler("delegate_agent", delegate_handler);
     }
 
@@ -963,7 +963,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             features: &features,
-            include_delegate_tool: false,
+            include_delegate_tool: true,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -971,6 +971,7 @@ mod tests {
         assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
         assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
+        assert!(find_tool(&tools, "delegate_agent").supports_parallel_tool_calls);
     }
 
     #[test]

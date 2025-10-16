@@ -462,6 +462,7 @@ async fn run_ratatui_app(
         delegate_cli_overrides,
         delegate_config_overrides,
         allowed_agents,
+        config.multi_agent.max_concurrent_delegates,
     ));
     let login_status = get_login_status(&config, &global_codex_home);
     let should_show_windows_wsl_screen =

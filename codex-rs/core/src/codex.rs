@@ -552,6 +552,10 @@ impl Session {
         self.tx_event.clone()
     }
 
+    pub(crate) fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
+    }
+
     pub(crate) fn delegate_adapter(&self) -> Option<Arc<dyn DelegateToolAdapter>> {
         self.services.delegate_adapter.as_ref().map(Arc::clone)
     }

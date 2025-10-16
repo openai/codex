@@ -39,6 +39,7 @@ pub struct DelegateRequest {
     pub agent_id: AgentId,
     pub prompt: DelegatePrompt,
     pub user_initial: Vec<InputItem>,
+    pub parent_run_id: Option<DelegateRunId>,
 }
 
 /// The prompt content forwarded to the sub-agent.
@@ -61,6 +62,7 @@ pub enum DelegateEvent {
         agent_id: AgentId,
         prompt: String,
         started_at: SystemTime,
+        parent_run_id: Option<DelegateRunId>,
     },
     Delta {
         run_id: DelegateRunId,
@@ -123,6 +125,9 @@ pub struct AgentOrchestrator {
     active_runs: Mutex<Vec<DelegateRunId>>,
     sessions: Mutex<HashMap<String, StoredDelegateSession>>,
     allowed_agents: Vec<AgentId>,
+    run_conversations: Mutex<HashMap<DelegateRunId, String>>,
+    conversation_runs: Mutex<HashMap<String, DelegateRunId>>,
+    max_concurrent_runs: usize,
 }
 
 impl AgentOrchestrator {
@@ -133,6 +138,7 @@ impl AgentOrchestrator {
         cli_overrides: CliConfigOverrides,
         config_overrides: ConfigOverrides,
         allowed_agents: Vec<AgentId>,
+        max_concurrent_runs: usize,
     ) -> Self {
         let loader = AgentConfigLoader::new(global_codex_home.into());
         Self {
@@ -145,6 +151,9 @@ impl AgentOrchestrator {
             active_runs: Mutex::new(Vec::new()),
             sessions: Mutex::new(HashMap::new()),
             allowed_agents,
+            run_conversations: Mutex::new(HashMap::new()),
+            conversation_runs: Mutex::new(HashMap::new()),
+            max_concurrent_runs: max_concurrent_runs.max(1),
         }
     }
 
@@ -155,20 +164,56 @@ impl AgentOrchestrator {
         rx
     }
 
+    async fn register_run_conversation(&self, run_id: &DelegateRunId, conversation_id: &str) {
+        self.run_conversations
+            .lock()
+            .await
+            .insert(run_id.clone(), conversation_id.to_string());
+        self.conversation_runs
+            .lock()
+            .await
+            .insert(conversation_id.to_string(), run_id.clone());
+    }
+
+    async fn clear_run_conversation(&self, run_id: &DelegateRunId) {
+        if let Some(conversation_id) = self.run_conversations.lock().await.remove(run_id) {
+            self.conversation_runs.lock().await.remove(&conversation_id);
+        }
+    }
+
+    pub async fn parent_run_for_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> Option<DelegateRunId> {
+        self.conversation_runs
+            .lock()
+            .await
+            .get(conversation_id)
+            .cloned()
+    }
+
     /// Trigger a delegate run. Returns the run id if successfully enqueued.
     pub async fn delegate(
         self: &Arc<Self>,
         request: DelegateRequest,
     ) -> std::result::Result<DelegateRunId, OrchestratorError> {
         let run_id = Uuid::new_v4().to_string();
-        self.active_runs.lock().await.push(run_id.clone());
+        {
+            let mut active = self.active_runs.lock().await;
+            if active.len() >= self.max_concurrent_runs {
+                return Err(OrchestratorError::DelegateInProgress);
+            }
+            active.push(run_id.clone());
+        }
 
+        let parent_run_id = request.parent_run_id.clone();
         let prompt_text = request.prompt.text.clone();
         self.emit(DelegateEvent::Started {
             run_id: run_id.clone(),
             agent_id: request.agent_id.clone(),
             prompt: prompt_text,
             started_at: SystemTime::now(),
+            parent_run_id: parent_run_id.clone(),
         })
         .await;
 
@@ -218,6 +263,8 @@ impl AgentOrchestrator {
                         .await;
                 }
             }
+
+            orchestrator.clear_run_conversation(&run_id_clone).await;
 
             let mut active = orchestrator.active_runs.lock().await;
             if let Some(pos) = active.iter().rposition(|id| id == &run_id_clone) {
@@ -300,6 +347,7 @@ impl AgentOrchestrator {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_delegate_task(
         self: Arc<Self>,
         loader: AgentConfigLoader,
@@ -338,6 +386,8 @@ impl AgentOrchestrator {
                 error: format!("failed to start conversation: {err:#}"),
             })?;
         let conversation_id = conversation_bundle.conversation_id.to_string();
+        self.register_run_conversation(&run_id, &conversation_id)
+            .await;
         let session_configured = Arc::new(conversation_bundle.session_configured);
         let conversation = conversation_bundle.conversation;
 
@@ -469,11 +519,13 @@ impl MultiAgentDelegateAdapter {
                 agent_id,
                 prompt,
                 started_at,
+                parent_run_id,
             } => CoreDelegateToolEvent::Started {
                 run_id,
                 agent_id: agent_id.as_str().to_string(),
                 prompt,
                 started_at,
+                parent_run_id,
             },
             DelegateEvent::Delta {
                 run_id,
@@ -540,22 +592,39 @@ impl DelegateToolAdapter for MultiAgentDelegateAdapter {
         &self,
         request: DelegateToolRequest,
     ) -> Result<DelegateToolRun, DelegateToolError> {
-        let agent_id = AgentId::parse(request.agent_id.as_str())
-            .map_err(|_| DelegateToolError::AgentNotFound(request.agent_id.clone()))?;
+        let DelegateToolRequest {
+            agent_id: agent_id_str,
+            prompt,
+            context: _,
+            caller_conversation_id,
+            batch: _,
+        } = request;
+
+        let agent_id = AgentId::parse(agent_id_str.as_str())
+            .map_err(|_| DelegateToolError::AgentNotFound(agent_id_str.clone()))?;
+
+        let parent_run_id = if let Some(conversation_id) = caller_conversation_id.as_ref() {
+            self.orchestrator
+                .parent_run_for_conversation(conversation_id)
+                .await
+        } else {
+            None
+        };
 
         let run_id = self
             .orchestrator
             .delegate(DelegateRequest {
                 agent_id: agent_id.clone(),
-                prompt: DelegatePrompt::new(request.prompt),
+                prompt: DelegatePrompt::new(prompt),
                 user_initial: Vec::new(),
+                parent_run_id,
             })
             .await
             .map_err(Self::map_error)?;
 
         Ok(DelegateToolRun {
             run_id,
-            agent_id: request.agent_id,
+            agent_id: agent_id_str,
         })
     }
 }
