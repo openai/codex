@@ -810,18 +810,6 @@ async fn token_count_includes_rate_limits_snapshot() {
     };
 
     let mut rate_limit_json = serde_json::to_value(&rate_limit_only).unwrap();
-    let rate_limits_obj = rate_limit_json
-        .get_mut("rate_limits")
-        .and_then(|value| value.as_object_mut())
-        .expect("rate_limits missing from event");
-    let captured_at = rate_limits_obj
-        .remove("captured_at")
-        .expect("captured_at missing from rate limit event");
-    let captured_at = captured_at
-        .as_str()
-        .expect("captured_at should serialize as a string");
-    chrono::DateTime::parse_from_rfc3339(captured_at)
-        .expect("captured_at should be an RFC3339 timestamp");
     pretty_assertions::assert_eq!(
         rate_limit_json,
         json!({
@@ -852,18 +840,6 @@ async fn token_count_includes_rate_limits_snapshot() {
     };
     // Assert full JSON for the final token count event (usage + rate limits)
     let mut final_json = serde_json::to_value(&final_payload).unwrap();
-    let rate_limits_obj = final_json
-        .get_mut("rate_limits")
-        .and_then(|value| value.as_object_mut())
-        .expect("rate_limits missing from final token count event");
-    let final_captured_at = rate_limits_obj
-        .remove("captured_at")
-        .expect("captured_at missing from final token count event");
-    let final_captured_at = final_captured_at
-        .as_str()
-        .expect("captured_at should serialize as a string");
-    chrono::DateTime::parse_from_rfc3339(final_captured_at)
-        .expect("captured_at should be an RFC3339 timestamp");
     pretty_assertions::assert_eq!(
         final_json,
         json!({
@@ -983,18 +959,6 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
     };
 
     let mut event_json = serde_json::to_value(&event).expect("serialize token count event");
-    let rate_limits_obj = event_json
-        .get_mut("rate_limits")
-        .and_then(|value| value.as_object_mut())
-        .expect("rate_limits missing from token count event");
-    let captured_at = rate_limits_obj
-        .remove("captured_at")
-        .expect("captured_at missing from event");
-    let captured_at = captured_at
-        .as_str()
-        .expect("captured_at should serialize as a string");
-    chrono::DateTime::parse_from_rfc3339(captured_at)
-        .expect("captured_at should be an RFC3339 timestamp");
     pretty_assertions::assert_eq!(
         event_json,
         json!({
