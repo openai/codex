@@ -1152,9 +1152,7 @@ dependencies = [
  "codex-protocol",
  "pretty_assertions",
  "sentry",
- "sentry-core",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

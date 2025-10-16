@@ -6,12 +6,8 @@ version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-protocol = { workspace = true }
-tracing-subscriber = { workspace = true }
-uuid = { workspace = true }
-
-# Always-on Sentry support for snapshot upload
 sentry = { version = "0.34" }
-sentry-core = { version = "0.34" }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
