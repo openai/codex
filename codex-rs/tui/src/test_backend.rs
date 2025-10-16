@@ -91,7 +91,8 @@ impl Backend for VT100Backend {
     }
 
     fn size(&self) -> io::Result<Size> {
-        Ok(self.vt100().screen().size().into())
+        let (rows, cols) = self.vt100().screen().size();
+        Ok(Size::new(cols, rows))
     }
 
     fn window_size(&mut self) -> io::Result<WindowSize> {

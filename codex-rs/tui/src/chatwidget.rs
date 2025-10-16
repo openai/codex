@@ -7,6 +7,7 @@ use codex_core::config::Config;
 use codex_core::config_types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -53,6 +54,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
@@ -83,6 +86,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::TodoEntry;
 use crate::markdown::append_markdown;
+use crate::render::renderable::ColumnRenderable;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
@@ -316,6 +320,10 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    // Current status header shown in the status indicator.
+    current_status_header: String,
+    // Previous status header to restore after a transient stream retry.
+    retry_status_header: Option<String>,
     conversation_id: Option<ConversationId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -383,6 +391,14 @@ impl ChatWidget {
         }
     }
 
+    fn set_status_header(&mut self, header: String) {
+        if self.current_status_header == header {
+            return;
+        }
+        self.current_status_header = header.clone();
+        self.bottom_pane.update_status_header(header);
+    }
+
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
@@ -432,7 +448,7 @@ impl ChatWidget {
 
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             // Update the shimmer header to the extracted reasoning chunk header.
-            self.bottom_pane.update_status_header(header);
+            self.set_status_header(header);
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
@@ -466,6 +482,8 @@ impl ChatWidget {
     fn on_task_started(&mut self) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
+        self.retry_status_header = None;
+        self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
@@ -710,9 +728,10 @@ impl ChatWidget {
     }
 
     fn on_stream_error(&mut self, message: String) {
-        // Show stream errors in the transcript so users see retry/backoff info.
-        self.add_to_history(history_cell::new_stream_error_event(message));
-        self.request_redraw();
+        if self.retry_status_header.is_none() {
+            self.retry_status_header = Some(self.current_status_header.clone());
+        }
+        self.set_status_header(message);
     }
 
     /// Periodic tick to commit at most one queued line to history with a small delay,
@@ -1030,6 +1049,8 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            current_status_header: String::from("Working"),
+            retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             todo_items: Vec::new(),
@@ -1113,6 +1134,8 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            current_status_header: String::from("Working"),
+            retry_status_header: None,
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
             todo_items: Vec::new(),
@@ -1144,20 +1167,20 @@ impl ChatWidget {
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                code: KeyCode::Char(c),
+                modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } => {
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => {
                 self.on_ctrl_c();
                 return;
             }
             KeyEvent {
-                code: KeyCode::Char('v'),
-                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char(c),
+                modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } => {
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'v') => {
                 if let Ok((path, info)) = paste_image_to_temp_png() {
                     self.attach_image(path, info.width, info.height, info.encoded_format.label());
                 }
@@ -1237,6 +1260,14 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
             SlashCommand::Init => {
+                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
+                if init_target.exists() {
+                    let message = format!(
+                        "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
+                    );
+                    self.add_info_message(message, None);
+                    return;
+                }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_text_message(INIT_PROMPT.to_string());
             }
@@ -1909,7 +1940,6 @@ impl ChatWidget {
         } else {
             default_choice
         };
-
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
@@ -1931,6 +1961,14 @@ impl ChatWidget {
                         .find(|preset| preset.effort == choice.stored)
                         .map(|preset| preset.description.to_string())
                 });
+
+            let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
+            let show_warning = model_slug == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
+            let selected_description = show_warning.then(|| {
+                description
+                    .as_ref()
+                    .map_or(warning.to_string(), |d| format!("{d}\n{warning}"))
+            });
 
             let model_for_action = model_slug.clone();
             let effort_for_action = choice.stored;
@@ -1961,6 +1999,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: effort_label,
                 description,
+                selected_description,
                 is_current: is_current_model && choice.stored == highlight_choice,
                 actions,
                 dismiss_on_select: true,
@@ -1968,9 +2007,13 @@ impl ChatWidget {
             });
         }
 
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(
+            format!("Select Reasoning Level for {model_slug}").bold(),
+        ));
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Reasoning Level".to_string()),
-            subtitle: Some(format!("Reasoning for model {model_slug}")),
+            header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -2683,7 +2726,7 @@ impl ChatWidget {
             "Set alarm script".to_string(),
             "Enter a command to run when Codex finishes a turn (blank to disable)".to_string(),
             Some(
-                "Runs with `/bin/sh -c <script>`; use `$request` / `$response` (or CODEX_ALARM_LAST_REQUEST/RESPONSE)."
+                "Runs with `/bin/sh -c <script>`.\nTemplate variables: $request, $response, $session_id.\nEnvironment variables: request, response, session_id, CODEX_ALARM_LAST_REQUEST, CODEX_ALARM_LAST_RESPONSE, CODEX_ALARM_SESSION_ID."
                     .to_string(),
             ),
             initial_text,

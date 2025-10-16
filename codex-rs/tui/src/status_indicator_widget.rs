@@ -103,6 +103,11 @@ impl StatusIndicatorWidget {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn header(&self) -> &str {
+        &self.header
+    }
+
     /// Replace the queued messages displayed beneath the header.
     pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
         self.queued_messages = queued;

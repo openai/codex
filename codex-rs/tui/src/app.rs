@@ -1,3 +1,4 @@
+use crate::UpdateAction;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AliasAction;
 use crate::app_event::AppEvent;
@@ -67,6 +68,7 @@ use tokio::sync::mpsc::unbounded_channel;
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ConversationId>,
+    pub update_action: Option<UpdateAction>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +108,9 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+
+    /// Set when the user confirms an update; propagated on exit.
+    pub(crate) pending_update_action: Option<UpdateAction>,
 }
 
 impl App {
@@ -208,6 +213,7 @@ impl App {
             auto_checkpoint_state: None,
             auto_commit_enabled: false,
             backtrack: BacktrackState::default(),
+            pending_update_action: None,
         };
 
         let onboarding_notice = Line::from(
@@ -233,6 +239,7 @@ impl App {
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             conversation_id: app.chat_widget.conversation_id(),
+            update_action: app.pending_update_action,
         })
     }
 
@@ -948,18 +955,19 @@ impl App {
         };
 
         if category == StatusCategory::Renamed
-            && let Some(idx) = path_part.rfind("->") {
-                let old = path_part[..idx].trim();
-                let new = path_part[idx + 2..].trim();
-                if new.is_empty() {
-                    return None;
-                }
-                return Some(ParsedChange {
-                    category,
-                    path: new.to_string(),
-                    preview: format!("R {} → {}", Self::short_name(old), Self::short_name(new)),
-                });
+            && let Some(idx) = path_part.rfind("->")
+        {
+            let old = path_part[..idx].trim();
+            let new = path_part[idx + 2..].trim();
+            if new.is_empty() {
+                return None;
             }
+            return Some(ParsedChange {
+                category,
+                path: new.to_string(),
+                preview: format!("R {} → {}", Self::short_name(old), Self::short_name(new)),
+            });
+        }
 
         let path = path_part.trim().to_string();
         let label = match primary {
@@ -1586,8 +1594,9 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
-            // with an empty composer. In any other state, forward Esc so the
-            // active UI (e.g. status indicator, modals, popups) handles it.
+            // with the composer focused and empty. In any other state, forward
+            // Esc so the active UI (e.g. status indicator, modals, popups)
+            // handles it.
             KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -1704,6 +1713,7 @@ mod tests {
             auto_checkpoint_state: None,
             auto_commit_enabled: false,
             backtrack: BacktrackState::default(),
+            pending_update_action: None,
         }
     }
 

@@ -19,6 +19,7 @@ use codex_exec::Cli as ExecCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
+use codex_tui::UpdateAction;
 use owo_colors::OwoColorize;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -26,6 +27,8 @@ use supports_color::Stream;
 mod mcp_cmd;
 
 use crate::mcp_cmd::McpCli;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
 
 /// Codex CLI
 ///
@@ -44,6 +47,9 @@ use crate::mcp_cmd::McpCli;
 struct MultitoolCli {
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
+
+    #[clap(flatten)]
+    pub feature_toggles: FeatureToggles,
 
     #[clap(flatten)]
     interactive: TuiCli,
@@ -97,6 +103,9 @@ enum Subcommand {
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
+
+    /// Inspect feature flags.
+    Features(FeaturesCli),
 }
 
 #[derive(Debug, Parser)]
@@ -200,6 +209,7 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let AppExitInfo {
         token_usage,
         conversation_id,
+        ..
     } = exit_info;
 
     if token_usage.is_zero() {
@@ -224,10 +234,78 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     lines
 }
 
-fn print_exit_messages(exit_info: AppExitInfo) {
+/// Handle the app exit and print the results. Optionally run the update action.
+fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
+    let update_action = exit_info.update_action;
     let color_enabled = supports_color::on(Stream::Stdout).is_some();
     for line in format_exit_messages(exit_info, color_enabled) {
         println!("{line}");
+    }
+    if let Some(action) = update_action {
+        run_update_action(action)?;
+    }
+    Ok(())
+}
+
+/// Run the update action and print the result.
+fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
+    println!();
+    let (cmd, args) = action.command_args();
+    let cmd_str = action.command_str();
+    println!("Updating Codex via `{cmd_str}`...");
+    let status = std::process::Command::new(cmd).args(args).status()?;
+    if !status.success() {
+        anyhow::bail!("`{cmd_str}` failed with status {status}");
+    }
+    println!();
+    println!("🎉 Update ran successfully! Please restart Codex.");
+    Ok(())
+}
+
+#[derive(Debug, Default, Parser, Clone)]
+struct FeatureToggles {
+    /// Enable a feature (repeatable). Equivalent to `-c features.<name>=true`.
+    #[arg(long = "enable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
+    enable: Vec<String>,
+
+    /// Disable a feature (repeatable). Equivalent to `-c features.<name>=false`.
+    #[arg(long = "disable", value_name = "FEATURE", action = clap::ArgAction::Append, global = true)]
+    disable: Vec<String>,
+}
+
+impl FeatureToggles {
+    fn to_overrides(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        for k in &self.enable {
+            v.push(format!("features.{k}=true"));
+        }
+        for k in &self.disable {
+            v.push(format!("features.{k}=false"));
+        }
+        v
+    }
+}
+
+#[derive(Debug, Parser)]
+struct FeaturesCli {
+    #[command(subcommand)]
+    sub: FeaturesSubcommand,
+}
+
+#[derive(Debug, Parser)]
+enum FeaturesSubcommand {
+    /// List known features with their stage and effective state.
+    List,
+}
+
+fn stage_str(stage: codex_core::features::Stage) -> &'static str {
+    use codex_core::features::Stage;
+    match stage {
+        Stage::Experimental => "experimental",
+        Stage::Beta => "beta",
+        Stage::Stable => "stable",
+        Stage::Deprecated => "deprecated",
+        Stage::Removed => "removed",
     }
 }
 
@@ -248,10 +326,16 @@ fn main() -> anyhow::Result<()> {
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let MultitoolCli {
-        config_overrides: root_config_overrides,
+        config_overrides: mut root_config_overrides,
+        feature_toggles,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
+
+    // Fold --enable/--disable into config overrides so they flow to all subcommands.
+    root_config_overrides
+        .raw_overrides
+        .extend(feature_toggles.to_overrides());
 
     match subcommand {
         None => {
@@ -260,7 +344,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            print_exit_messages(exit_info);
+            handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -293,7 +377,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 config_overrides,
             );
             let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            print_exit_messages(exit_info);
+            handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
@@ -381,6 +465,30 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
         }
+        Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
+            FeaturesSubcommand::List => {
+                // Respect root-level `-c` overrides plus top-level flags like `--profile`.
+                let cli_kv_overrides = root_config_overrides
+                    .parse_overrides()
+                    .map_err(|e| anyhow::anyhow!(e))?;
+
+                // Thread through relevant top-level flags (at minimum, `--profile`).
+                // Also honor `--search` since it maps to a feature toggle.
+                let overrides = ConfigOverrides {
+                    config_profile: interactive.config_profile.clone(),
+                    tools_web_search_request: interactive.web_search.then_some(true),
+                    ..Default::default()
+                };
+
+                let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides).await?;
+                for def in codex_core::features::FEATURES.iter() {
+                    let name = def.key;
+                    let stage = stage_str(def.stage);
+                    let enabled = config.features.enabled(def.id);
+                    println!("{name}\t{stage}\t{enabled}");
+                }
+            }
+        },
     }
 
     Ok(())
@@ -484,6 +592,7 @@ mod tests {
             interactive,
             config_overrides: root_overrides,
             subcommand,
+            feature_toggles: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {
@@ -509,6 +618,7 @@ mod tests {
             conversation_id: conversation
                 .map(ConversationId::from_string)
                 .map(Result::unwrap),
+            update_action: None,
         }
     }
 
@@ -517,6 +627,7 @@ mod tests {
         let exit_info = AppExitInfo {
             token_usage: TokenUsage::default(),
             conversation_id: None,
+            update_action: None,
         };
         let lines = format_exit_messages(exit_info, false);
         assert!(lines.is_empty());
