@@ -1880,7 +1880,7 @@ impl ChatWidget {
 
     pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
         let approval = preset.approval;
-        let sandbox = preset.sandbox.clone();
+        let sandbox = preset.sandbox;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Enable full access?").bold();
         let info_line = Line::from(vec![
