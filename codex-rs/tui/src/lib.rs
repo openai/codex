@@ -269,9 +269,16 @@ pub async fn run_main(
             .try_init();
     };
 
-    run_ratatui_app(cli, config, overrides, cli_kv_overrides, active_profile, feedback)
-        .await
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(
+        cli,
+        config,
+        overrides,
+        cli_kv_overrides,
+        active_profile,
+        feedback,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(

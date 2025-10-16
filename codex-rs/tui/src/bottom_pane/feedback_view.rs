@@ -14,6 +14,8 @@ use super::SelectionAction;
 use super::SelectionItem;
 use super::SelectionViewParams;
 
+const BASE_ISSUE_URL: &str = "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
+
 pub(crate) struct FeedbackView;
 
 impl FeedbackView {
@@ -31,13 +33,14 @@ impl FeedbackView {
     ) -> SelectionViewParams {
         let header = FeedbackHeader::new(file_path);
 
-        let upload_snapshot = snapshot;
+        let thread_id = snapshot.thread_id.clone();
+
+        let upload_action_tread_id = thread_id.clone();
         let upload_action: SelectionAction = Box::new(move |tx: &AppEventSender| {
-            match upload_snapshot.upload_to_sentry() {
+            match snapshot.upload_to_sentry() {
                 Ok(()) => {
-                    let thread_id = upload_snapshot.thread_id.clone();
                     let issue_url = format!(
-                        "https://github.com/openai/codex/issues/new?template=2-bug-report.yml&steps=Uploaded%20thread:%20{thread_id}",
+                        "{BASE_ISSUE_URL}&steps=Uploaded%20thread:%20{upload_action_tread_id}",
                     );
                     tx.send(AppEvent::InsertHistoryCell(Box::new(PlainHistoryCell::new(vec![
                         Line::from(
@@ -46,7 +49,7 @@ impl FeedbackView {
                         "".into(),
                         Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
                         "".into(),
-                        Line::from(vec!["  Or mention your thread ID ".into(), thread_id.bold(),  " in an existing issue.".into()])
+                        Line::from(vec!["  Or mention your thread ID ".into(), upload_action_tread_id.clone().bold(),  " in an existing issue.".into()])
                     ]))));
                 }
                 Err(e) => {
@@ -58,12 +61,37 @@ impl FeedbackView {
         });
 
         let upload_item = SelectionItem {
-            name: "Upload logs to Sentry".to_string(),
+            name: "Yes".to_string(),
             description: Some(
                 "Share the current Codex session logs with the team for troubleshooting."
                     .to_string(),
             ),
             actions: vec![upload_action],
+            dismiss_on_select: true,
+            ..Default::default()
+        };
+
+        let no_action: SelectionAction = Box::new(move |tx: &AppEventSender| {
+            let issue_url = format!("{BASE_ISSUE_URL}&steps=Thread%20ID:%20{thread_id}",);
+
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                PlainHistoryCell::new(vec![
+                    Line::from("• Please open an issue using the following URL:"),
+                    "".into(),
+                    Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
+                    "".into(),
+                    Line::from(vec![
+                        "  Or mention your thread ID ".into(),
+                        thread_id.clone().bold(),
+                        " in an existing issue.".into(),
+                    ]),
+                ]),
+            )));
+        });
+
+        let no_item = SelectionItem {
+            name: "No".to_string(),
+            actions: vec![no_action],
             dismiss_on_select: true,
             ..Default::default()
         };
@@ -76,8 +104,7 @@ impl FeedbackView {
 
         SelectionViewParams {
             header: Box::new(header),
-            footer_hint: Some("Press enter to upload to Sentry, or esc to cancel.".into()),
-            items: vec![upload_item, cancel_item],
+            items: vec![upload_item, no_item, cancel_item],
             ..Default::default()
         }
     }
@@ -94,7 +121,7 @@ impl FeedbackHeader {
 
     fn lines(&self) -> Vec<Line<'static>> {
         vec![
-            Line::from("Upload Codex logs to Sentry".bold()),
+            Line::from("Do you want to upload logs before reporting issue?".bold()),
             "".into(),
             Line::from(
                 "Logs may include the full conversation history of this Codex process, including prompts, tool calls, and their results.",
