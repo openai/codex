@@ -18,6 +18,7 @@ use codex_app_server_protocol::ExecOneOffCommandParams;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
 use codex_app_server_protocol::FuzzyFileSearchResponse;
+use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetUserAgentResponse;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
@@ -87,6 +88,7 @@ use codex_protocol::ConversationId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_utils_json_to_toml::json_to_toml;
 use std::collections::HashMap;
@@ -238,6 +240,12 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
+            }
+            ClientRequest::GetAccountRateLimits {
+                request_id,
+                params: _,
+            } => {
+                self.get_account_rate_limits(request_id).await;
             }
         }
     }
@@ -497,6 +505,33 @@ impl CodexMessageProcessor {
         let user_agent = get_codex_user_agent();
         let response = GetUserAgentResponse { user_agent };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_account_rate_limits(&self, request_id: RequestId) {
+        match self.fetch_account_rate_limits().await {
+            Ok(rate_limits) => {
+                let response = GetAccountRateLimitsResponse { rate_limits };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn fetch_account_rate_limits(&self) -> Result<RateLimitSnapshot, JSONRPCErrorError> {
+        let Some(_auth) = self.auth_manager.auth() else {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "codex account authentication required to read rate limits".to_string(),
+                data: None,
+            });
+        };
+
+        Ok(RateLimitSnapshot {
+            primary: None,
+            secondary: None,
+        })
     }
 
     async fn get_user_saved_config(&self, request_id: RequestId) {

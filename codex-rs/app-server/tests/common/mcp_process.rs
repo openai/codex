@@ -236,6 +236,11 @@ impl McpProcess {
         self.send_request("getUserAgent", None).await
     }
 
+    /// Send an `account/rateLimits/read` JSON-RPC request.
+    pub async fn send_get_account_rate_limits_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("account/rateLimits/read", None).await
+    }
+
     /// Send a `userInfo` JSON-RPC request.
     pub async fn send_user_info_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("userInfo", None).await
