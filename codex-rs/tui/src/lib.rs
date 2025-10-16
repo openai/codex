@@ -290,7 +290,7 @@ async fn run_ratatui_app(
 
         let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
         if !skip_update_prompt {
-            match update_prompt::run_update_prompt_if_needed(&mut tui, &config).await? {
+            match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
                 UpdatePromptOutcome::Continue => {}
                 UpdatePromptOutcome::RunUpdate(action) => {
                     crate::tui::restore()?;
