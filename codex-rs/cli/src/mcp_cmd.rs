@@ -6,6 +6,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use clap::ArgGroup;
 use codex_common::CliConfigOverrides;
+use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
@@ -438,27 +439,15 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 command,
                 args,
                 env,
+                env_vars,
                 cwd,
-                ..
             } => {
                 let args_display = if args.is_empty() {
                     "-".to_string()
                 } else {
                     args.join(" ")
                 };
-                let env_display = match env.as_ref() {
-                    None => "-".to_string(),
-                    Some(map) if map.is_empty() => "-".to_string(),
-                    Some(map) => {
-                        let mut pairs: Vec<_> = map.iter().collect();
-                        pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                        pairs
-                            .into_iter()
-                            .map(|(k, v)| format!("{k}={v}"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }
-                };
+                let env_display = format_env_display(env.as_ref(), env_vars);
                 let cwd_display = cwd
                     .as_ref()
                     .map(|path| path.display().to_string())
@@ -684,31 +673,13 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
                 args.join(" ")
             };
             println!("  args: {args_display}");
-            let env_vars_display = if env_vars.is_empty() {
-                "-".to_string()
-            } else {
-                env_vars.join(", ")
-            };
-            println!("  env_vars: {env_vars_display}");
             let cwd_display = cwd
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "-".to_string());
             println!("  cwd: {cwd_display}");
-            let env_display = match env.as_ref() {
-                None => "-".to_string(),
-                Some(map) if map.is_empty() => "-".to_string(),
-                Some(map) => {
-                    let mut pairs: Vec<_> = map.iter().collect();
-                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-                    pairs
-                        .into_iter()
-                        .map(|(k, v)| format!("{k}={v}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                }
-            };
+            let env_display = format_env_display(env.as_ref(), env_vars);
             println!("  env: {env_display}");
         }
         McpServerTransportConfig::StreamableHttp {

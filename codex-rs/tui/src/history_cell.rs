@@ -20,6 +20,7 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
 use base64::Engine;
+use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config_types::McpServerTransportConfig;
 use codex_core::config_types::ReasoningSummaryFormat;
@@ -1032,17 +1033,9 @@ pub(crate) fn new_mcp_tools_output(
                     lines.push(vec!["    • Cwd: ".into(), cwd.display().to_string().into()].into());
                 }
 
-                if !env_vars.is_empty() {
-                    lines.push(vec!["    • Env vars: ".into(), env_vars.join(" ").into()].into());
-                }
-
-                if let Some(env) = env.as_ref()
-                    && !env.is_empty()
-                {
-                    let mut env_pairs: Vec<String> =
-                        env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                    env_pairs.sort();
-                    lines.push(vec!["    • Env: ".into(), env_pairs.join(" ").into()].into());
+                let env_display = format_env_display(env.as_ref(), env_vars);
+                if env_display != "-" {
+                    lines.push(vec!["    • Env: ".into(), env_display.into()].into());
                 }
             }
             McpServerTransportConfig::StreamableHttp { url, .. } => {
@@ -1062,7 +1055,6 @@ pub(crate) fn new_mcp_tools_output(
 
     PlainHistoryCell { lines }
 }
-
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
     let mut line = vec!["• ".dim(), message.into()];
     if let Some(hint) = hint {
