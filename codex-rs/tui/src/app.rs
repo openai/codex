@@ -313,6 +313,15 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UserCommandOutput {
+                command,
+                exit_code,
+                stdout,
+                stderr,
+            } => {
+                self.chat_widget
+                    .handle_user_command_output(command, exit_code, stdout, stderr);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);

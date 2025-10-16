@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::CommandInvocation;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -22,6 +23,7 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::InputItem;
 use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
@@ -1165,7 +1167,7 @@ fn disabled_slash_command_while_task_running_snapshot() {
     chat.bottom_pane.set_task_running(true);
 
     // Dispatch a command that is unavailable while a task runs (e.g., /model)
-    chat.dispatch_command(SlashCommand::Model);
+    chat.dispatch_command(CommandInvocation::new(SlashCommand::Model, ""));
 
     // Drain history and snapshot the rendered error line(s)
     let cells = drain_insert_history(&mut rx);
@@ -1175,6 +1177,96 @@ fn disabled_slash_command_while_task_running_snapshot() {
     );
     let blob = lines_to_single_string(cells.last().unwrap());
     assert_snapshot!(blob);
+}
+
+#[test]
+fn slash_command_requires_argument() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(CommandInvocation::new(SlashCommand::Command, ""));
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected usage message when /command is invoked without arguments"
+    );
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(
+        blob.contains("Usage: /command"),
+        "unexpected usage message: {blob}"
+    );
+}
+
+#[test]
+fn slash_command_result_submits_user_message() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    chat.handle_user_command_output(
+        vec!["echo".into(), "hello".into()],
+        0,
+        "hello\n".to_string(),
+        String::new(),
+    );
+
+    let history_cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        history_cells.len(),
+        2,
+        "expected command prompt cell followed by output cell"
+    );
+    let prompt_rendered = lines_to_single_string(&history_cells[0]);
+    assert!(
+        prompt_rendered.contains("/command echo hello"),
+        "history should include command invocation, got:\n{prompt_rendered}"
+    );
+    let output_rendered = lines_to_single_string(&history_cells[1]);
+    assert!(
+        output_rendered.contains("hello"),
+        "history should include stdout content, got:\n{output_rendered}"
+    );
+
+    let user_input = op_rx.try_recv().expect("user input op");
+    match user_input {
+        Op::UserInput { items } => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                InputItem::Text { text } => {
+                    assert!(
+                        text.starts_with("/command echo hello"),
+                        "expected command prefix in message: {text}"
+                    );
+                    assert!(
+                        text.contains("stdout:\nhello"),
+                        "expected stdout content in message: {text}"
+                    );
+                    assert!(
+                        text.contains("exit code: 0"),
+                        "expected exit code line in message: {text}"
+                    );
+                }
+                other => panic!("expected text item, got {other:?}"),
+            }
+        }
+        other => panic!("expected user input op, got {other:?}"),
+    }
+
+    let add_history = op_rx.try_recv().expect("history op");
+    let history_text = match add_history {
+        Op::AddToHistory { text } => text,
+        other => panic!("expected AddToHistory op, got {other:?}"),
+    };
+    assert!(
+        history_text.starts_with("/command echo hello"),
+        "history log should include slash command text: {history_text}"
+    );
+    assert!(
+        history_text.contains("stdout:\nhello"),
+        "history log should include stdout content: {history_text}"
+    );
+    assert!(
+        history_text.contains("exit code: 0"),
+        "history log should include exit-code line: {history_text}"
+    );
 }
 
 #[tokio::test]

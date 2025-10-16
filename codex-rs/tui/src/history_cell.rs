@@ -36,6 +36,7 @@ use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
 use mcp_types::ResourceLink;
 use ratatui::prelude::*;
+use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
@@ -1064,6 +1065,57 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
     let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_user_command_output(
+    stdout: &str,
+    stderr: &str,
+    exit_code: i32,
+) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let block_lines = |content: &str, style: Style| -> Vec<Line<'static>> {
+        content
+            .lines()
+            .map(|raw| {
+                let mut span = Span::from(raw.to_string());
+                span = span.set_style(style);
+                Line::from(vec!["  ".into(), span])
+            })
+            .collect()
+    };
+
+    let stdout_trimmed = stdout.trim_end();
+    if !stdout_trimmed.is_empty() {
+        lines.extend(block_lines(stdout_trimmed, Style::default()));
+    }
+
+    let stderr_trimmed = stderr.trim_end();
+    if !stderr_trimmed.is_empty() {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.extend(block_lines(stderr_trimmed, Style::default().fg(Color::Red)));
+    }
+
+    if exit_code != 0 {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.push(
+            vec![
+                "  ".into(),
+                Span::from(format!("(exit code {exit_code})")).dim(),
+            ]
+            .into(),
+        );
+    }
+
+    if lines.is_empty() {
+        lines.push(vec!["  (no output)".dim()].into());
+    }
+
     PlainHistoryCell { lines }
 }
 

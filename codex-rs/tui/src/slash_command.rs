@@ -18,6 +18,7 @@ pub enum SlashCommand {
     New,
     Init,
     Compact,
+    Command,
     Undo,
     Diff,
     Mention,
@@ -37,6 +38,7 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
+            SlashCommand::Command => "run a shell command immediately",
             SlashCommand::Undo => "restore the workspace to the last Codex snapshot",
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -69,6 +71,7 @@ impl SlashCommand {
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
+            | SlashCommand::Command
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
@@ -77,6 +80,14 @@ impl SlashCommand {
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => true,
         }
+    }
+
+    pub fn accepts_arguments(self) -> bool {
+        matches!(self, SlashCommand::Command)
+    }
+
+    pub fn requires_arguments(self) -> bool {
+        matches!(self, SlashCommand::Command)
     }
 }
 

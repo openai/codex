@@ -87,4 +87,12 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
+
+    /// Result of a `/command` executed directly by the user.
+    UserCommandOutput {
+        command: Vec<String>,
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+    },
 }

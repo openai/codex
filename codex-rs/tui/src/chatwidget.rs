@@ -67,6 +67,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::CommandInvocation;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
@@ -1092,8 +1093,8 @@ impl ChatWidget {
                             self.submit_user_message(user_message);
                         }
                     }
-                    InputResult::Command(cmd) => {
-                        self.dispatch_command(cmd);
+                    InputResult::Command(invocation) => {
+                        self.dispatch_command(invocation);
                     }
                     InputResult::None => {}
                 }
@@ -1116,12 +1117,20 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand) {
+    fn dispatch_command(&mut self, invocation: CommandInvocation) {
+        let cmd = invocation.command();
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
             );
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        }
+        if cmd.requires_arguments() && !invocation.has_args() {
+            let command = cmd.command();
+            let message = format!("Usage: /{command} <command>");
             self.add_to_history(history_cell::new_error_event(message));
             self.request_redraw();
             return;
@@ -1193,6 +1202,9 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::Command => {
+                self.run_user_shell_command(invocation.args());
+            }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
@@ -1232,6 +1244,122 @@ impl ChatWidget {
                 }));
             }
         }
+    }
+
+    fn run_user_shell_command(&mut self, raw_args: &str) {
+        let command_text = raw_args.trim();
+        let Some(args) = shlex::split(command_text) else {
+            let message =
+                "Could not parse /command arguments. Check your quoting and try again.".to_string();
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        };
+        if args.is_empty() {
+            let message = "Usage: /command <command>".to_string();
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        }
+
+        let tx = self.app_event_tx.clone();
+        let cwd = self.config.cwd.clone();
+        let command_vec = args;
+        let command_for_event = command_vec.clone();
+
+        let joined_display = shlex::try_join(command_vec.iter().map(String::as_str))
+            .unwrap_or_else(|_| command_vec.join(" "));
+        let display_text = if joined_display.is_empty() {
+            "/command".to_string()
+        } else {
+            format!("/command {joined_display}")
+        };
+        self.add_info_message(format!("Running {display_text}"), None);
+
+        tokio::spawn(async move {
+            let output = tokio::process::Command::new(&command_vec[0])
+                .args(&command_vec[1..])
+                .current_dir(&cwd)
+                .output()
+                .await;
+
+            let (exit_code, stdout, stderr) = match output {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    let code = output
+                        .status
+                        .code()
+                        .unwrap_or_else(|| if output.status.success() { 0 } else { 1 });
+                    (code, stdout, stderr)
+                }
+                Err(err) => (127, String::new(), format!("failed to run command: {err}")),
+            };
+
+            tx.send(AppEvent::UserCommandOutput {
+                command: command_for_event,
+                exit_code,
+                stdout,
+                stderr,
+            });
+        });
+    }
+
+    pub(crate) fn handle_user_command_output(
+        &mut self,
+        command: Vec<String>,
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+    ) {
+        let joined = shlex::try_join(command.iter().map(String::as_str))
+            .unwrap_or_else(|_| command.join(" "));
+
+        let display_text = if joined.is_empty() {
+            "/command".to_string()
+        } else {
+            format!("/command {joined}")
+        };
+
+        let mut model_sections = Vec::new();
+        model_sections.push(display_text.clone());
+        if !stdout.trim().is_empty() {
+            model_sections.push(format!("stdout:\n{}", stdout.trim_end()));
+        }
+        if !stderr.trim().is_empty() {
+            model_sections.push(format!("stderr:\n{}", stderr.trim_end()));
+        }
+        model_sections.push(format!("exit code: {exit_code}"));
+        let message_for_model = model_sections.join("\n\n");
+
+        self.capture_ghost_snapshot();
+
+        self.codex_op_tx
+            .send(Op::UserInput {
+                items: vec![InputItem::Text {
+                    text: message_for_model.clone(),
+                }],
+            })
+            .unwrap_or_else(|e| {
+                tracing::error!("failed to send message: {e}");
+            });
+
+        self.codex_op_tx
+            .send(Op::AddToHistory {
+                text: message_for_model,
+            })
+            .unwrap_or_else(|e| {
+                tracing::error!("failed to send AddHistory op: {e}");
+            });
+
+        self.add_to_history(history_cell::new_user_prompt(display_text));
+        self.add_to_history(history_cell::new_user_command_output(
+            stdout.as_str(),
+            stderr.as_str(),
+            exit_code,
+        ));
+        self.needs_final_message_separator = false;
+        self.request_redraw();
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {

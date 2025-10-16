@@ -40,6 +40,7 @@ pub(crate) enum CancellationEvent {
 }
 
 pub(crate) use chat_composer::ChatComposer;
+pub(crate) use chat_composer::CommandInvocation;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
