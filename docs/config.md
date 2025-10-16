@@ -509,7 +509,7 @@ crate—the events listed below—is forwarded to the exporter.
 
 Every event shares a common set of metadata fields: `event.timestamp`,
 `conversation.id`, `app.version`, `auth_mode` (when available),
-`user.account_id` (when available), `terminal.type`, `model`, and `slug`.
+`user.account_id` (when available), `user.email` (when available), `terminal.type`, `model`, and `slug`.
 
 With OTEL enabled Codex emits the following event types (in addition to the
 metadata above):
