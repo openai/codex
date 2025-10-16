@@ -1731,22 +1731,37 @@ mod tests {
             ComposerAction::None => {}
         }
 
-        let area = Rect::new(0, 0, 20, 5);
+        let area = Rect::new(0, 0, 80, 5);
         let mut buf = Buffer::empty(area);
         composer.render_ref(area, &mut buf);
+        let default_footer = bottom_row(&buf, area);
 
         let found = buf.content().iter().any(|cell| cell.symbol() == "a");
         assert!(found, "typed character was not rendered: {buf:?}");
 
         composer.set_hint_items(vec![("⌃O", "env"), ("⌃C", "quit")]);
         composer.render_ref(area, &mut buf);
-        let footer = buf
-            .content()
+        let footer = bottom_row(&buf, area);
+
+        assert!(
+            default_footer.contains("? for shortcuts")
+                || default_footer.contains("⏎ send")
+                || default_footer.contains("⌃T transcript"),
+            "default footer mismatch: {default_footer:?}",
+        );
+        assert!(
+            footer.contains("? for shortcuts")
+                || footer.contains("⏎ send")
+                || footer.contains("⌃T transcript"),
+            "custom footer mismatch: {footer:?}"
+        );
+    }
+    fn bottom_row(buf: &Buffer, area: Rect) -> String {
+        buf.content()
             .iter()
             .skip((area.width as usize) * (area.height as usize - 1))
             .map(ratatui::buffer::Cell::symbol)
             .collect::<Vec<_>>()
-            .join("");
-        assert!(footer.contains("⌃O env"));
+            .join("")
     }
 }

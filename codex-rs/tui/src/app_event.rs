@@ -87,4 +87,10 @@ pub(crate) enum AppEvent {
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
+    /// Update repository information shown in the bottom pane footer.
+    /// If not in a Git repo, both values are None and the footer hides them.
+    UpdateRepoInfo {
+        repo_name: Option<String>,
+        git_branch: Option<String>,
+    },
 }
