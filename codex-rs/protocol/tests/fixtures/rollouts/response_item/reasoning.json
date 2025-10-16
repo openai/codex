@@ -1,0 +1,21 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "response_item",
+  "payload": {
+    "type": "reasoning",
+    "id": "reasoning-1",
+    "summary": [
+      {
+        "type": "summary_text",
+        "text": "Summarized thoughts"
+      }
+    ],
+    "content": [
+      {
+        "type": "reasoning_text",
+        "text": "Detailed reasoning"
+      }
+    ],
+    "encrypted_content": "encrypted"
+  }
+}

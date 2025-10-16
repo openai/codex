@@ -1,0 +1,20 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "turn_context",
+  "payload": {
+    "cwd": "/workspace",
+    "approval_policy": "on-request",
+    "sandbox_policy": {
+      "mode": "workspace-write",
+      "writable_roots": [
+        "/workspace/tmp"
+      ],
+      "network_access": true,
+      "exclude_tmpdir_env_var": false,
+      "exclude_slash_tmp": true
+    },
+    "model": "gpt-5",
+    "effort": "high",
+    "summary": "detailed"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "response_item",
+  "payload": {
+    "type": "message",
+    "id": "legacy-message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "output_text",
+        "text": "Hello from assistant"
+      }
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "event_msg",
+  "payload": {
+    "type": "agent_reasoning_raw_content",
+    "text": "raw reasoning"
+  }
+}

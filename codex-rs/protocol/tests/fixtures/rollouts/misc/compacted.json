@@ -1,0 +1,7 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "compacted",
+  "payload": {
+    "message": "Turn summary"
+  }
+}

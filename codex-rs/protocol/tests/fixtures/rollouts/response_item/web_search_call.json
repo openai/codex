@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "response_item",
+  "payload": {
+    "type": "web_search_call",
+    "id": "legacy-search",
+    "status": "completed",
+    "action": {
+      "type": "search",
+      "query": "weather in SF"
+    }
+  }
+}
