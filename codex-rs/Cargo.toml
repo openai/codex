@@ -6,6 +6,7 @@ members = [
     "app-server-protocol",
     "apply-patch",
     "arg0",
+    "feedback",
     "codex-backend-openapi-models",
     "cloud-tasks",
     "cloud-tasks-client",
@@ -55,6 +56,7 @@ codex-arg0 = { path = "arg0" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
+codex-feedback = { path = "feedback" }
 codex-exec = { path = "exec" }
 codex-file-search = { path = "file-search" }
 codex-git-tooling = { path = "git-tooling" }

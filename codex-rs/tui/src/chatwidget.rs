@@ -216,6 +216,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) feedback: codex_feedback::CodexFeedback,
 }
 
 pub(crate) struct ChatWidget {
@@ -260,6 +261,8 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+    // Feedback sink for /feedback
+    feedback: codex_feedback::CodexFeedback,
 }
 
 struct UserMessage {
@@ -894,6 +897,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            feedback,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -938,6 +942,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            feedback,
         }
     }
 
@@ -955,6 +960,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            feedback,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1001,6 +1007,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            feedback,
         }
     }
 
@@ -1104,6 +1111,27 @@ impl ChatWidget {
             return;
         }
         match cmd {
+            SlashCommand::Feedback => {
+                let snapshot = self.feedback.snapshot();
+                match snapshot.save_to_temp_file() {
+                    Ok(path) => {
+                        let view = crate::bottom_pane::FeedbackView::new(
+                            self.app_event_tx.clone(),
+                            path,
+                            snapshot,
+                            self.conversation_id,
+                        );
+                        self.bottom_pane.show_view(Box::new(view));
+                        self.request_redraw();
+                    }
+                    Err(e) => {
+                        self.add_to_history(history_cell::new_error_event(format!(
+                            "Failed to save feedback logs: {e}"
+                        )));
+                        self.request_redraw();
+                    }
+                }
+            }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }

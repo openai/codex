@@ -27,11 +27,13 @@ mod footer;
 mod list_selection_view;
 mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
+mod feedback_view;
 mod paste_burst;
 pub mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
+pub(crate) use feedback_view::FeedbackView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
