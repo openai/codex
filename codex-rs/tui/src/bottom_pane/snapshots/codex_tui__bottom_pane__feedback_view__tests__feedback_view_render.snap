@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/feedback_view.rs
+assertion_line: 204
+expression: normalized
+---
+  Upload Codex logs to Sentry
+
+  Logs might contain the entire conversion history of this Codex proce
+  Logs are persisted for 90 days and are used exclusively to help diag
+
+  You can inspect the exact content of logs to be uploaded at:
+  <LOG_PATH>
+
+  Press Enter to upload to Sentry, or Esc to cancel

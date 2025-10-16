@@ -6,6 +6,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::render::renderable::Renderable;
+use crate::style::user_message_style;
 use codex_protocol::ConversationId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -16,6 +17,8 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Block;
+use ratatui::widgets::Widget;
 use std::path::PathBuf;
 
 pub(crate) struct FeedbackView {
@@ -85,6 +88,12 @@ impl FeedbackView {
 
 impl Renderable for FeedbackView {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        Block::default()
+            .style(user_message_style())
+            .render(area, buf);
         let inner = area.inset(Insets::vh(1, 2));
         self.render_inner(inner, buf);
     }
@@ -148,5 +157,75 @@ impl BottomPaneView for FeedbackView {
 
     fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::style::user_message_style;
+    use codex_feedback::CodexFeedback;
+    use insta::assert_snapshot;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+    use std::path::PathBuf;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn buffer_to_string(buffer: &Buffer) -> String {
+        (0..buffer.area.height)
+            .map(|row| {
+                let mut line = String::new();
+                for col in 0..buffer.area.width {
+                    let symbol = buffer[(buffer.area.x + col, buffer.area.y + row)].symbol();
+                    if symbol.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(symbol);
+                    }
+                }
+                line.trim_end().to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn renders_feedback_view_header() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let app_event_tx = AppEventSender::new(tx_raw);
+        let snapshot = CodexFeedback::new().snapshot();
+        let file_path = PathBuf::from("/tmp/codex-feedback.log");
+
+        let view = FeedbackView::new(
+            app_event_tx,
+            file_path.clone(),
+            snapshot,
+            /* session_id */ None,
+        );
+
+        let width = 72;
+        let height = view.desired_height(width).max(1);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, width, height);
+                view.render(area, frame.buffer_mut());
+            })
+            .unwrap();
+
+        let rendered = buffer_to_string(terminal.backend().buffer())
+            .replace(&file_path.display().to_string(), "<LOG_PATH>");
+        assert_snapshot!("feedback_view_render", rendered);
+
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let cell_style = buf[(area.x, area.y)].style();
+        let expected_bg = user_message_style().bg.unwrap_or(Color::Reset);
+        assert_eq!(cell_style.bg.unwrap_or(Color::Reset), expected_bg);
     }
 }
