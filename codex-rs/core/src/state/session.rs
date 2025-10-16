@@ -1,5 +1,6 @@
 //! Session-wide mutable state.
 
+use codex_git_tooling::GhostCommit;
 use codex_protocol::models::ResponseItem;
 
 use crate::conversation_history::ConversationHistory;
@@ -13,6 +14,9 @@ pub(crate) struct SessionState {
     pub(crate) history: ConversationHistory,
     pub(crate) token_info: Option<TokenUsageInfo>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    /// Core-managed undo snapshots for `/undo` (ring buffer; bounded for memory control).
+    pub(crate) undo_snapshots: Vec<GhostCommit>,
+    pub(crate) undo_snapshots_disabled: bool,
 }
 
 impl SessionState {
@@ -20,6 +24,8 @@ impl SessionState {
     pub(crate) fn new() -> Self {
         Self {
             history: ConversationHistory::new(),
+            undo_snapshots: Vec::new(),
+            undo_snapshots_disabled: false,
             ..Default::default()
         }
     }
@@ -62,6 +68,23 @@ impl SessionState {
         &self,
     ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
         (self.token_info.clone(), self.latest_rate_limits.clone())
+    }
+
+    // Undo snapshot ring helpers
+    pub(crate) fn push_undo_snapshot(&mut self, gc: GhostCommit) {
+        const MAX_TRACKED_GHOST_COMMITS: usize = 20;
+        self.undo_snapshots.push(gc);
+        if self.undo_snapshots.len() > MAX_TRACKED_GHOST_COMMITS {
+            self.undo_snapshots.remove(0);
+        }
+    }
+
+    pub(crate) fn pop_undo_snapshot(&mut self) -> Option<GhostCommit> {
+        self.undo_snapshots.pop()
+    }
+
+    pub(crate) fn push_back_undo_snapshot(&mut self, gc: GhostCommit) {
+        self.undo_snapshots.push(gc);
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: u64) {

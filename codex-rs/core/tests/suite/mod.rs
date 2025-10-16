@@ -28,6 +28,7 @@ mod stream_no_completed;
 mod tool_harness;
 mod tool_parallelism;
 mod tools;
+mod undo;
 mod unified_exec;
 mod user_notification;
 mod view_image;

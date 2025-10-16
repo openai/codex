@@ -174,6 +174,10 @@ pub enum Op {
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
+    /// Restore the workspace to the most recent core-managed ghost snapshot, if any.
+    /// A concise status update is emitted via `EventMsg::BackgroundEvent`.
+    UndoLastSnapshot,
+
     /// Request to shut down codex instance.
     Shutdown,
 }

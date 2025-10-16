@@ -7,6 +7,8 @@ use tokio::sync::Mutex;
 use tokio::task::AbortHandle;
 
 use codex_protocol::models::ResponseInputItem;
+use codex_utils_readiness::ReadinessFlag;
+use codex_utils_readiness::Token;
 use tokio::sync::oneshot;
 
 use crate::protocol::ReviewDecision;
@@ -71,6 +73,9 @@ impl ActiveTurn {
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
+    // Pre-tool readiness gating (ghost snapshot, etc.)
+    pub(crate) pretool_flag: Option<Arc<ReadinessFlag>>,
+    pub(crate) pretool_sub_token: Option<Token>,
 }
 
 impl TurnState {

@@ -113,6 +113,7 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+// Ghost snapshot/undo logic resides in `undo.rs` via inherent methods on `Session`.
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -122,6 +123,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
+// Readiness types used only inside `undo.rs`.
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -243,7 +245,7 @@ use crate::state::SessionState;
 pub(crate) struct Session {
     conversation_id: ConversationId,
     tx_event: Sender<Event>,
-    state: Mutex<SessionState>,
+    pub(crate) state: Mutex<SessionState>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
@@ -857,6 +859,8 @@ impl Session {
         turn_diff_tracker: SharedTurnDiffTracker,
         exec_command_context: ExecCommandContext,
     ) {
+        // Ensure core pre-tool readiness (e.g., ghost snapshot) before the first tool call.
+        self.await_pretool_ready().await;
         let ExecCommandContext {
             sub_id,
             call_id,
@@ -1163,6 +1167,14 @@ async fn submission_loop(
         match sub.op {
             Op::Interrupt => {
                 sess.interrupt_task().await;
+            }
+            Op::UndoLastSnapshot => {
+                let cwd = turn_context.cwd.clone();
+                let sub_id = sub.id.clone();
+                let sess2 = Arc::clone(&sess);
+                tokio::spawn(async move {
+                    sess2.undo_last_snapshot(&cwd, &sub_id).await;
+                });
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -1662,6 +1674,9 @@ pub(crate) async fn run_task(
         }),
     };
     sess.send_event(event).await;
+
+    // Initialize pre-tool readiness and kick off the ghost snapshot worker in the background.
+    sess.init_pretool_from_turn(turn_context.as_ref()).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     // For review threads, keep an isolated in-memory history so the

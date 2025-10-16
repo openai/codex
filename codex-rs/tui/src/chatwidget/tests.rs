@@ -15,6 +15,7 @@ use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -178,6 +179,31 @@ fn entered_review_mode_defaults_to_current_changes_banner() {
     assert!(chat.is_review_mode);
 }
 
+/// Background events produce a visible info cell in the history.
+#[test]
+fn background_event_renders_in_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "bg".to_string(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Restored workspace to snapshot deadbeef".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected a single background event cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Restored workspace to snapshot deadbeef"),
+        "background event text should be present"
+    );
+    assert!(
+        rendered.starts_with("• "),
+        "background events should use a bullet prefix"
+    );
+}
+
 /// Completing review with findings shows the selection popup and finishes with
 /// the closing banner while clearing review mode state.
 #[test]
@@ -286,8 +312,6 @@ fn make_chatwidget_manual() -> (
         suppress_session_configured_redraw: false,
         pending_notification: None,
         is_review_mode: false,
-        ghost_snapshots: Vec::new(),
-        ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
     };
