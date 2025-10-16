@@ -2,9 +2,11 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Confirm Full Access?
-  Full access removes sandbox protections and comes with increased risk of
-  data loss. Please confirm you understand the risks.
+  Enable full access?
+  When Codex runs with full access, it can edit any file on your computer and
+  run commands with network, without your approval. Exercise caution when
+  enabling full access. This significantly increases the risk of data loss,
+  leaks, or unexpected behavior.
 
 › 1. Accept Full Access          Apply full access for this session
   2. Accept and don't ask again  Enable full access and remember this choice

@@ -1882,16 +1882,16 @@ impl ChatWidget {
         let approval = preset.approval;
         let sandbox = preset.sandbox.clone();
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
-        let title_line = Line::from(format!("Confirm {}?", preset.label)).bold();
-        let warning_lines = vec![
-            Line::from(
-                "Full access removes sandbox protections and comes with increased risk of data loss. Please confirm you understand the risks.",
-            )
-            .fg(Color::Red),
-        ];
+        let title_line = Line::from("Enable full access?").bold();
+        let info_line = Line::from(vec![
+            "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
+                .into(),
+            "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
+                .fg(Color::Red),
+        ]);
         header_children.push(Box::new(title_line));
         header_children.push(Box::new(
-            Paragraph::new(warning_lines).wrap(Wrap { trim: false }),
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
         ));
         let header = ColumnRenderable::with(header_children);
 
