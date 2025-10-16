@@ -1912,21 +1912,21 @@ impl ChatWidget {
 
         let items = vec![
             SelectionItem {
-                name: "Accept Full Access".to_string(),
+                name: "Yes, continue anyway".to_string(),
                 description: Some("Apply full access for this session".to_string()),
                 actions: accept_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Accept and don't ask again".to_string(),
+                name: "Yes, and don't ask again".to_string(),
                 description: Some("Enable full access and remember this choice".to_string()),
                 actions: accept_and_remember_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
-                name: "Deny".to_string(),
+                name: "Cancel".to_string(),
                 description: Some("Go back without enabling full access".to_string()),
                 actions: deny_actions,
                 dismiss_on_select: true,
