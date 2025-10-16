@@ -52,7 +52,7 @@ impl FeedbackView {
                         "".into(),
                         Line::from(vec!["  ".into(), issue_url.cyan().underlined()]),
                         "".into(),
-                        Line::from(vec!["  Or mention your thread ID ".into(), thread_id.bold(),  " in the existing issue.".into()])
+                        Line::from(vec!["  Or mention your thread ID ".into(), thread_id.bold(),  " in an existing issue.".into()])
                     ]))));
                 }
                 Err(e) => {
