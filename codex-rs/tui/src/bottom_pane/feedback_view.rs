@@ -92,7 +92,6 @@ impl FeedbackHeader {
         Self { file_path }
     }
 
-    ///
     fn lines(&self) -> Vec<Line<'static>> {
         vec![
             Line::from("Upload Codex logs to Sentry".bold()),
