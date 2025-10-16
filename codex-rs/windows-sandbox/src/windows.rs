@@ -6,6 +6,7 @@
 
 use clap::Parser;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_windows_sandbox::windows_restricted_token;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
@@ -141,7 +142,7 @@ mod imp {
         }
         ensure_non_interactive_pager(&mut env_map);
 
-        crate::windows_restricted_token_v2::spawn_command_under_restricted_token_v2(
+        windows_restricted_token::spawn_command_under_restricted_token(
             command,
             command_cwd,
             policy,
@@ -151,9 +152,9 @@ mod imp {
         )
     }
 
-    fn map_stdio_policy(policy: StdioPolicy) -> crate::windows_restricted_token_v2::StdioPolicy {
+    fn map_stdio_policy(policy: StdioPolicy) -> windows_restricted_token::StdioPolicy {
         match policy {
-            StdioPolicy::Inherit => crate::windows_restricted_token_v2::StdioPolicy::Inherit,
+            StdioPolicy::Inherit => windows_restricted_token::StdioPolicy::Inherit,
         }
     }
 

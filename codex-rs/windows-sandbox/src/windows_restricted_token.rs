@@ -24,7 +24,7 @@ struct WindowsSandboxCommand {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum StdioPolicy {
+pub enum StdioPolicy {
     Inherit,
 }
 
@@ -1027,10 +1027,10 @@ mod imp {
 }
 
 #[cfg(target_os = "windows")]
-use imp::spawn_command_under_restricted_token;
+pub use imp::spawn_command_under_restricted_token;
 
 #[cfg(not(target_os = "windows"))]
-fn spawn_command_under_restricted_token(
+pub fn spawn_command_under_restricted_token(
     _command: Vec<String>,
     _command_cwd: PathBuf,
     _sandbox_policy: &SandboxPolicy,

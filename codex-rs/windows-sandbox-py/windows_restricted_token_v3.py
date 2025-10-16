@@ -1,4 +1,3 @@
-# windows_restricted_token_v2.py
 # Run a command inside a Windows restricted-token sandbox (no admin).
 # Python re-implementation of the Rust file you shared.
 
