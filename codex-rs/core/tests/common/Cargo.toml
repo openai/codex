@@ -7,6 +7,7 @@ version = { workspace = true }
 path = "lib.rs"
 
 [dependencies]
+async-trait = { workspace = true }
 anyhow = { workspace = true }
 assert_cmd = { workspace = true }
 codex-core = { workspace = true }

@@ -12,6 +12,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::delegate_tool::DelegateEventReceiver as CoreDelegateEventReceiver;
+use codex_core::delegate_tool::DelegateInvocationMode;
 use codex_core::delegate_tool::DelegateToolAdapter;
 use codex_core::delegate_tool::DelegateToolError;
 use codex_core::delegate_tool::DelegateToolEvent as CoreDelegateToolEvent;
@@ -30,6 +31,16 @@ use uuid::Uuid;
 use crate::AgentConfigLoader;
 use crate::AgentId;
 
+fn prompt_preview(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    const MAX_LEN: usize = 120;
+    let preview = trimmed.chars().take(MAX_LEN).collect::<String>();
+    Some(preview)
+}
+
 /// Identifier used to correlate delegate runs.
 pub type DelegateRunId = String;
 
@@ -40,6 +51,7 @@ pub struct DelegateRequest {
     pub prompt: DelegatePrompt,
     pub user_initial: Vec<InputItem>,
     pub parent_run_id: Option<DelegateRunId>,
+    pub mode: DelegateInvocationMode,
 }
 
 /// The prompt content forwarded to the sub-agent.
@@ -63,6 +75,7 @@ pub enum DelegateEvent {
         prompt: String,
         started_at: SystemTime,
         parent_run_id: Option<DelegateRunId>,
+        mode: DelegateSessionMode,
     },
     Delta {
         run_id: DelegateRunId,
@@ -74,11 +87,13 @@ pub enum DelegateEvent {
         agent_id: AgentId,
         output: Option<String>,
         duration: Duration,
+        mode: DelegateSessionMode,
     },
     Failed {
         run_id: DelegateRunId,
         agent_id: AgentId,
         error: String,
+        mode: DelegateSessionMode,
     },
 }
 
@@ -87,6 +102,8 @@ pub enum DelegateEvent {
 pub enum OrchestratorError {
     #[error("another delegate is already running")]
     DelegateInProgress,
+    #[error("delegate queue is full")]
+    QueueFull,
     #[error("agent `{0}` not found")]
     AgentNotFound(String),
     #[error("failed to enqueue delegate: {0}")]
@@ -102,6 +119,32 @@ pub struct DelegateSessionSummary {
     pub agent_id: AgentId,
     pub last_interacted_at: SystemTime,
     pub cwd: PathBuf,
+    pub mode: DelegateSessionMode,
+}
+
+/// Indicates whether a session originated from a detached run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DelegateSessionMode {
+    Standard,
+    Detached,
+}
+
+#[derive(Debug, Clone)]
+pub struct DetachedRunSummary {
+    pub run_id: String,
+    pub agent_id: AgentId,
+    pub started_at: SystemTime,
+    pub prompt_preview: Option<String>,
+    pub status: DetachedRunStatusSummary,
+}
+
+#[derive(Debug, Clone)]
+pub enum DetachedRunStatusSummary {
+    Pending,
+    Failed {
+        error: String,
+        finished_at: SystemTime,
+    },
 }
 
 /// Payload returned when entering an existing delegate session.
@@ -127,6 +170,7 @@ pub struct AgentOrchestrator {
     allowed_agents: Vec<AgentId>,
     run_conversations: Mutex<HashMap<DelegateRunId, String>>,
     conversation_runs: Mutex<HashMap<String, DelegateRunId>>,
+    detached_runs: Mutex<HashMap<DelegateRunId, DetachedRunRecord>>,
     max_concurrent_runs: usize,
 }
 
@@ -153,6 +197,7 @@ impl AgentOrchestrator {
             allowed_agents,
             run_conversations: Mutex::new(HashMap::new()),
             conversation_runs: Mutex::new(HashMap::new()),
+            detached_runs: Mutex::new(HashMap::new()),
             max_concurrent_runs: max_concurrent_runs.max(1),
         }
     }
@@ -198,12 +243,29 @@ impl AgentOrchestrator {
         request: DelegateRequest,
     ) -> std::result::Result<DelegateRunId, OrchestratorError> {
         let run_id = Uuid::new_v4().to_string();
+        let session_mode = match request.mode {
+            DelegateInvocationMode::Detached => DelegateSessionMode::Detached,
+            _ => DelegateSessionMode::Standard,
+        };
         {
             let mut active = self.active_runs.lock().await;
             if active.len() >= self.max_concurrent_runs {
-                return Err(OrchestratorError::DelegateInProgress);
+                return Err(OrchestratorError::QueueFull);
             }
             active.push(run_id.clone());
+        }
+        if session_mode == DelegateSessionMode::Detached {
+            let mut registry = self.detached_runs.lock().await;
+            registry.insert(
+                run_id.clone(),
+                DetachedRunRecord {
+                    agent_id: request.agent_id.clone(),
+                    started_at: SystemTime::now(),
+                    prompt_preview: prompt_preview(&request.prompt.text),
+                    cwd: None,
+                    status: DetachedRunStatus::Pending,
+                },
+            );
         }
 
         let parent_run_id = request.parent_run_id.clone();
@@ -214,6 +276,7 @@ impl AgentOrchestrator {
             prompt: prompt_text,
             started_at: SystemTime::now(),
             parent_run_id: parent_run_id.clone(),
+            mode: session_mode,
         })
         .await;
 
@@ -241,6 +304,9 @@ impl AgentOrchestrator {
             match result {
                 Ok(output) => {
                     orchestrator.store_session(&output).await;
+                    orchestrator
+                        .mark_detached_ready(&run_id_clone, &output)
+                        .await;
                     let agent_id = output.agent_id.clone();
                     let message = output.message.clone();
                     let duration = output.duration;
@@ -250,15 +316,20 @@ impl AgentOrchestrator {
                             agent_id,
                             output: message,
                             duration,
+                            mode: output.mode,
                         })
                         .await;
                 }
                 Err(err) => {
                     orchestrator
+                        .mark_detached_failed(&run_id_clone, &err.error)
+                        .await;
+                    orchestrator
                         .emit(DelegateEvent::Failed {
                             run_id: run_id_clone.clone(),
                             agent_id: err.agent_id,
                             error: err.error,
+                            mode: err.mode,
                         })
                         .await;
                 }
@@ -294,6 +365,67 @@ impl AgentOrchestrator {
             .collect();
         summaries.sort_by(|a, b| b.last_interacted_at.cmp(&a.last_interacted_at));
         summaries
+    }
+
+    /// Return detached runs that are not yet ready to attach or have failed.
+    pub async fn detached_runs(&self) -> Vec<DetachedRunSummary> {
+        let registry = self.detached_runs.lock().await;
+        let mut summaries: Vec<DetachedRunSummary> = registry
+            .iter()
+            .filter_map(|(run_id, record)| match &record.status {
+                DetachedRunStatus::Pending => Some(DetachedRunSummary {
+                    run_id: run_id.clone(),
+                    agent_id: record.agent_id.clone(),
+                    started_at: record.started_at,
+                    prompt_preview: record.prompt_preview.clone(),
+                    status: DetachedRunStatusSummary::Pending,
+                }),
+                DetachedRunStatus::Failed { error, finished_at } => Some(DetachedRunSummary {
+                    run_id: run_id.clone(),
+                    agent_id: record.agent_id.clone(),
+                    started_at: record.started_at,
+                    prompt_preview: record.prompt_preview.clone(),
+                    status: DetachedRunStatusSummary::Failed {
+                        error: error.clone(),
+                        finished_at: *finished_at,
+                    },
+                }),
+                DetachedRunStatus::Ready { .. } => None,
+            })
+            .collect();
+        summaries.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        summaries
+    }
+
+    /// Remove a detached run from the registry and drop any stored session if present.
+    pub async fn dismiss_detached_run(&self, run_id: &str) -> Result<(), String> {
+        let conversation_to_remove = {
+            let mut registry = self.detached_runs.lock().await;
+            let record = registry
+                .get(run_id)
+                .ok_or_else(|| format!("detached run `{run_id}` not found"))?;
+            match &record.status {
+                DetachedRunStatus::Pending => {
+                    return Err("run is still in progress".to_string());
+                }
+                DetachedRunStatus::Ready {
+                    conversation_id, ..
+                } => {
+                    let conversation_id = conversation_id.clone();
+                    registry.remove(run_id);
+                    Some(conversation_id)
+                }
+                DetachedRunStatus::Failed { .. } => {
+                    registry.remove(run_id);
+                    None
+                }
+            }
+        };
+
+        if let Some(conversation_id) = conversation_to_remove {
+            self.remove_session(&conversation_id).await;
+        }
+        Ok(())
     }
 
     /// Enter an existing delegate session for direct interaction.
@@ -335,6 +467,7 @@ impl AgentOrchestrator {
             agent_id: success.agent_id.clone(),
             last_interacted_at: SystemTime::now(),
             cwd: success.cwd.clone(),
+            mode: success.mode,
         };
         sessions.insert(
             success.conversation_id.clone(),
@@ -345,6 +478,29 @@ impl AgentOrchestrator {
                 config: success.config.clone(),
             },
         );
+    }
+
+    async fn mark_detached_ready(&self, run_id: &DelegateRunId, success: &DelegateSuccess) {
+        let mut registry = self.detached_runs.lock().await;
+        if let Some(record) = registry.get_mut(run_id) {
+            record.cwd = Some(success.cwd.clone());
+            record.status = DetachedRunStatus::Ready {
+                conversation_id: success.conversation_id.clone(),
+                _summary: success.message.clone(),
+                _duration: success.duration,
+                _finished_at: SystemTime::now(),
+            };
+        }
+    }
+
+    async fn mark_detached_failed(&self, run_id: &DelegateRunId, error: &str) {
+        let mut registry = self.detached_runs.lock().await;
+        if let Some(record) = registry.get_mut(run_id) {
+            record.status = DetachedRunStatus::Failed {
+                error: error.to_string(),
+                finished_at: SystemTime::now(),
+            };
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -360,12 +516,17 @@ impl AgentOrchestrator {
     ) -> std::result::Result<DelegateSuccess, DelegateFailure> {
         let start = SystemTime::now();
         let agent_id = request.agent_id.clone();
+        let session_mode = match request.mode {
+            DelegateInvocationMode::Detached => DelegateSessionMode::Detached,
+            _ => DelegateSessionMode::Standard,
+        };
         let context = loader
             .load(Some(&agent_id), &cli_overrides, config_overrides)
             .await
             .map_err(|err| DelegateFailure {
                 agent_id: agent_id.clone(),
                 error: format!("failed to load agent config: {err:#}"),
+                mode: session_mode,
             })?;
 
         let config = context.into_config();
@@ -384,6 +545,7 @@ impl AgentOrchestrator {
             .map_err(|err| DelegateFailure {
                 agent_id: agent_id.clone(),
                 error: format!("failed to start conversation: {err:#}"),
+                mode: session_mode,
             })?;
         let conversation_id = conversation_bundle.conversation_id.to_string();
         self.register_run_conversation(&run_id, &conversation_id)
@@ -404,6 +566,7 @@ impl AgentOrchestrator {
             .map_err(|err| DelegateFailure {
                 agent_id: agent_id.clone(),
                 error: format!("failed to submit delegate prompt: {err:#}"),
+                mode: session_mode,
             })?;
 
         let mut aggregated = String::new();
@@ -414,6 +577,7 @@ impl AgentOrchestrator {
                 .map_err(|err| DelegateFailure {
                     agent_id: agent_id.clone(),
                     error: format!("failed to read delegate events: {err:#}"),
+                    mode: session_mode,
                 })?;
 
             match event.msg {
@@ -454,18 +618,21 @@ impl AgentOrchestrator {
                         config: config_clone.clone(),
                         message,
                         duration,
+                        mode: session_mode,
                     });
                 }
                 EventMsg::Error(err) => {
                     return Err(DelegateFailure {
                         agent_id,
                         error: format!("delegate reported error: {}", err.message),
+                        mode: session_mode,
                     });
                 }
                 EventMsg::TurnAborted(reason) => {
                     return Err(DelegateFailure {
                         agent_id,
                         error: format!("delegate aborted: {:?}", reason.reason),
+                        mode: session_mode,
                     });
                 }
                 EventMsg::ShutdownComplete => break,
@@ -476,6 +643,7 @@ impl AgentOrchestrator {
         Err(DelegateFailure {
             agent_id,
             error: "delegate ended unexpectedly".to_string(),
+            mode: session_mode,
         })
     }
 }
@@ -489,11 +657,13 @@ struct DelegateSuccess {
     config: Config,
     message: Option<String>,
     duration: Duration,
+    mode: DelegateSessionMode,
 }
 
 struct DelegateFailure {
     agent_id: AgentId,
     error: String,
+    mode: DelegateSessionMode,
 }
 
 struct StoredDelegateSession {
@@ -501,6 +671,28 @@ struct StoredDelegateSession {
     conversation: Arc<CodexConversation>,
     session_configured: Arc<SessionConfiguredEvent>,
     config: Config,
+}
+
+struct DetachedRunRecord {
+    agent_id: AgentId,
+    started_at: SystemTime,
+    prompt_preview: Option<String>,
+    cwd: Option<PathBuf>,
+    status: DetachedRunStatus,
+}
+
+enum DetachedRunStatus {
+    Pending,
+    Ready {
+        conversation_id: String,
+        _summary: Option<String>,
+        _duration: Duration,
+        _finished_at: SystemTime,
+    },
+    Failed {
+        error: String,
+        finished_at: SystemTime,
+    },
 }
 
 pub struct MultiAgentDelegateAdapter {
@@ -520,6 +712,7 @@ impl MultiAgentDelegateAdapter {
                 prompt,
                 started_at,
                 parent_run_id,
+                mode: _,
             } => CoreDelegateToolEvent::Started {
                 run_id,
                 agent_id: agent_id.as_str().to_string(),
@@ -541,6 +734,7 @@ impl MultiAgentDelegateAdapter {
                 agent_id,
                 output,
                 duration,
+                mode: _,
             } => CoreDelegateToolEvent::Completed {
                 run_id,
                 agent_id: agent_id.as_str().to_string(),
@@ -551,6 +745,7 @@ impl MultiAgentDelegateAdapter {
                 run_id,
                 agent_id,
                 error,
+                mode: _,
             } => CoreDelegateToolEvent::Failed {
                 run_id,
                 agent_id: agent_id.as_str().to_string(),
@@ -562,6 +757,7 @@ impl MultiAgentDelegateAdapter {
     fn map_error(err: OrchestratorError) -> DelegateToolError {
         match err {
             OrchestratorError::DelegateInProgress => DelegateToolError::DelegateInProgress,
+            OrchestratorError::QueueFull => DelegateToolError::QueueFull,
             OrchestratorError::AgentNotFound(agent) => DelegateToolError::AgentNotFound(agent),
             OrchestratorError::DelegateSetupFailed(reason) => {
                 DelegateToolError::SetupFailed(reason)
@@ -597,7 +793,8 @@ impl DelegateToolAdapter for MultiAgentDelegateAdapter {
             prompt,
             context: _,
             caller_conversation_id,
-            batch: _,
+            mode,
+            ..
         } = request;
 
         let agent_id = AgentId::parse(agent_id_str.as_str())
@@ -618,6 +815,7 @@ impl DelegateToolAdapter for MultiAgentDelegateAdapter {
                 prompt: DelegatePrompt::new(prompt),
                 user_initial: Vec::new(),
                 parent_run_id,
+                mode,
             })
             .await
             .map_err(Self::map_error)?;

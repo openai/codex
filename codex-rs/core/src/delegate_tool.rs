@@ -17,6 +17,22 @@ pub struct DelegateToolContext {
     pub hints: Vec<String>,
 }
 
+/// Invocation strategy for the delegate tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DelegateInvocationMode {
+    /// Blocks the caller until the delegate completes, returning its summary.
+    Immediate,
+    /// Starts the delegate in the background and returns immediately.
+    Detached,
+}
+
+impl Default for DelegateInvocationMode {
+    fn default() -> Self {
+        Self::Immediate
+    }
+}
+
 /// Single entry in a batched delegate request.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct DelegateToolBatchEntry {
@@ -24,6 +40,8 @@ pub struct DelegateToolBatchEntry {
     pub prompt: String,
     #[serde(default)]
     pub context: DelegateToolContext,
+    #[serde(default)]
+    pub mode: DelegateInvocationMode,
 }
 
 /// Payload sent by the primary agent when invoking the delegate tool.
@@ -35,6 +53,8 @@ pub struct DelegateToolRequest {
     pub context: DelegateToolContext,
     #[serde(default, skip_serializing_if = "Option::is_none", skip_deserializing)]
     pub caller_conversation_id: Option<String>,
+    #[serde(default)]
+    pub mode: DelegateInvocationMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub batch: Vec<DelegateToolBatchEntry>,
 }
@@ -78,6 +98,8 @@ pub struct DelegateToolRun {
 pub enum DelegateToolError {
     #[error("another delegate is already running")]
     DelegateInProgress,
+    #[error("delegate queue is full")]
+    QueueFull,
     #[error("agent `{0}` not found")]
     AgentNotFound(String),
     #[error("delegate setup failed: {0}")]

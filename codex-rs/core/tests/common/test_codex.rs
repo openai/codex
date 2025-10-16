@@ -2,6 +2,8 @@ use std::mem::swap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
@@ -9,10 +11,56 @@ use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::delegate_tool::DelegateEventReceiver;
+use codex_core::delegate_tool::DelegateToolAdapter;
+use codex_core::delegate_tool::DelegateToolError;
+use codex_core::delegate_tool::DelegateToolEvent;
+use codex_core::delegate_tool::DelegateToolRequest;
+use codex_core::delegate_tool::DelegateToolRun;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::SessionSource;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 use crate::load_default_config_for_test;
+
+#[derive(Default)]
+struct TestDelegateAdapter {
+    sender: Mutex<Option<mpsc::UnboundedSender<DelegateToolEvent>>>,
+    counter: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl DelegateToolAdapter for TestDelegateAdapter {
+    async fn subscribe(&self) -> DelegateEventReceiver {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *self.sender.lock().await = Some(tx);
+        rx
+    }
+
+    async fn delegate(
+        &self,
+        request: DelegateToolRequest,
+    ) -> Result<DelegateToolRun, DelegateToolError> {
+        let idx = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let run_id = format!("test-run-{idx}");
+        if let Some(sender) = self.sender.lock().await.as_ref() {
+            let _ = sender.send(DelegateToolEvent::Completed {
+                run_id: run_id.clone(),
+                agent_id: request.agent_id.clone(),
+                output: Some(request.prompt.clone()),
+                duration: std::time::Duration::from_millis(1),
+            });
+        }
+        Ok(DelegateToolRun {
+            run_id,
+            agent_id: request.agent_id,
+        })
+    }
+}
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 
@@ -52,7 +100,20 @@ impl TestCodexBuilder {
         for mutator in mutators {
             mutator(&mut config)
         }
-        let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+
+        let delegate_adapter: Option<Arc<dyn DelegateToolAdapter>> = if config.include_delegate_tool
+        {
+            Some(Arc::new(TestDelegateAdapter::default()))
+        } else {
+            None
+        };
+
+        let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+        let conversation_manager = ConversationManager::with_delegate(
+            auth_manager.clone(),
+            SessionSource::Exec,
+            delegate_adapter,
+        );
         let NewConversation {
             conversation,
             session_configured,

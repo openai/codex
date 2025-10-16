@@ -30,14 +30,42 @@ approaches for synchronous, parallel, and detached (fire-and-forget) sub-agent r
 - Remaining task: expand prompts/docs so agents understand that parallel delegates are available, how
   the UI surfaces them, and when to leverage concurrency.
 
-## 3. Detached Delegation (Status: future work)
-- Requires a non-blocking variant (e.g., `delegate_agent_async`) that returns immediately with a
-  `run_id` and relies on the orchestrator’s event stream for progress.
-- Must surface background activity in the UI: notification list, optional “attach to run”
-  command, and stored sessions leveraging `AgentOrchestrator::store_session`.
-- Needs policy for auto-cleanup and rate limiting so runaway agents do not flood the orchestrator.
-- Join-on-demand flow could reuse existing session switching helpers once a run finishes or when
-  the user opts in.
+## 3. Detached Delegation (Status: implemented)
+- Introduce `delegate_agent_async` (or `delegate_agent` with `mode: "detached"`) that returns an
+  immediate acknowledgement (`{"status":"accepted"}`) without exposing a `run_id`; the model resumes
+  its turn while the user decides when to inspect the run.
+- The orchestrator now keeps a detached-run registry keyed by run id (pending/ready/failed) with agent
+  id, prompt preview, timestamps, and any conversation handle; completion hooks still fan updates into
+  the notification bus so the UI can show progress without blocking the caller.
+- Surface detached runs in the TUI via notifications plus the existing `/agent` picker: pending entries
+  appear as informational rows (with prompt preview) until they finish, failed entries gain a dismissal
+  action, and ready runs appear alongside other delegate sessions with an extra "Dismiss detached run"
+  option; returning to the main agent can either move the full conversation back into the primary
+  transcript or discard it entirely, matching the current non-detached behavior.
+- Reuse `[multi_agent].max_concurrent_delegates` as the throttle for detached work while a run is
+  actively executing; once it finishes and awaits user review it no longer counts toward the cap.
+  When the cap is reached, return a `queue_full` error through the tool response so agents can
+  apologize or retry later; do not auto-expire completed runs—only user dismissal removes them.
+- Update prompts/docs so agents know when to choose async delegation (long-running tasks, optional
+  review) versus synchronous/parallel paths, and capture open questions about acknowledgement metadata
+  (beyond `status`/`session_id`/`conversation_id`) and whether summaries should ever auto-inject into
+  the main transcript.
+- Hook completion into both notification systems:
+  - TUI: add a new `Notification::DetachedRunFinished` variant so unfocused terminals surface the
+    alert when detached work completes (subject to `tui.notifications` filters).
+  - External: extend `UserNotification` to emit a `detached-run-finished` payload when `config.notify`
+    is set, keeping headless/automation users in the loop.
+- Surface detached sessions in the existing `/agent` picker by reusing `DelegateSessionSummary`:
+  mark summaries spawned from detached runs with a `Detached` mode, prefix their labels (e.g.,
+  “Detached · #agent · pending/finished”), keep the existing `last_interacted_at` ordering, and
+  dispatch the same `AppEvent::EnterDelegateSession` so users attach to the run through the normal
+  agent-switch flow. Returning follows the current summary flow (apply vs. dismiss); no additional
+  grouping or status-card integration is planned for v1.
+- Implementation status: core/tooling now accepts `mode = "detached"`, the orchestrator both tracks
+  run mode and maintains the detached-run registry, synchronous responses still stream summaries, the
+  TUI renders detached sessions with prefixed labels plus desktop notifications when they finish or
+  fail, and external `config.notify` hooks emit `detached-run-finished` payloads (failures populate the
+  `error` field rather than using a distinct type).
 
 ## 4. Next Decisions
 1. Pick a parallelization strategy (simple flag + UI refactor vs. dedicated helper).

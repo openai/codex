@@ -85,6 +85,12 @@ pub(crate) enum AppEvent {
     /// Return from the active delegate session to the main agent.
     ExitDelegateSession,
 
+    /// Dismiss a detached delegate run from the registry.
+    DismissDetachedRun(String),
+
+    /// Inject text into the main composer as if the user typed it.
+    InsertUserTextMessage(String),
+
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
 

@@ -1594,6 +1594,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "async-trait",
  "codex-core",
  "notify",
  "regex-lite",

@@ -355,7 +355,10 @@ pub use orchestrator::DelegateEvent;
 pub use orchestrator::DelegatePrompt;
 pub use orchestrator::DelegateRequest;
 pub use orchestrator::DelegateRunId;
+pub use orchestrator::DelegateSessionMode;
 pub use orchestrator::DelegateSessionSummary;
+pub use orchestrator::DetachedRunStatusSummary;
+pub use orchestrator::DetachedRunSummary;
 use orchestrator::MultiAgentDelegateAdapter;
 pub use orchestrator::OrchestratorError;
 

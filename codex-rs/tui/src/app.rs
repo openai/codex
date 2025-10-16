@@ -28,7 +28,9 @@ use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_multi_agent::AgentId;
 use codex_multi_agent::AgentOrchestrator;
 use codex_multi_agent::DelegateEvent;
+use codex_multi_agent::DelegateSessionMode;
 use codex_multi_agent::DelegateSessionSummary;
+use codex_multi_agent::DetachedRunSummary;
 use codex_multi_agent::delegate_tool_adapter;
 use codex_protocol::ConversationId;
 use color_eyre::eyre::Result;
@@ -520,15 +522,25 @@ impl App {
             }
             AppEvent::OpenDelegatePicker => {
                 let sessions = self.delegate_orchestrator.active_sessions().await;
-                if sessions.is_empty() {
-                    self.chat_widget.add_info_message(
-                        "No delegate sessions available.".to_string(),
-                        Some("Ask the main agent to delegate a task first.".to_string()),
-                    );
-                } else {
-                    self.chat_widget
-                        .open_delegate_picker(sessions, self.active_delegate.as_deref());
+                let detached_runs: Vec<DetachedRunSummary> =
+                    self.delegate_orchestrator.detached_runs().await;
+                let mut picker_sessions = Vec::with_capacity(sessions.len());
+                for summary in sessions {
+                    let run_id = if summary.mode == DelegateSessionMode::Detached {
+                        self.delegate_orchestrator
+                            .parent_run_for_conversation(summary.conversation_id.as_str())
+                            .await
+                    } else {
+                        None
+                    };
+                    picker_sessions
+                        .push(crate::chatwidget::DelegatePickerSession { summary, run_id });
                 }
+                self.chat_widget.open_delegate_picker(
+                    picker_sessions,
+                    detached_runs,
+                    self.active_delegate.as_deref(),
+                );
             }
             AppEvent::EnterDelegateSession(conversation_id) => {
                 if let Err(err) = self.activate_delegate_session(tui, conversation_id).await {
@@ -543,6 +555,21 @@ impl App {
                     self.chat_widget
                         .add_error_message(format!("Failed to return to main agent: {err}"));
                 }
+            }
+            AppEvent::DismissDetachedRun(run_id) => {
+                match self
+                    .delegate_orchestrator
+                    .dismiss_detached_run(&run_id)
+                    .await
+                {
+                    Ok(()) => self
+                        .chat_widget
+                        .add_info_message(format!("Dismissed detached run {run_id}"), None),
+                    Err(err) => self.chat_widget.add_error_message(err),
+                }
+            }
+            AppEvent::InsertUserTextMessage(text) => {
+                self.chat_widget.submit_text_message(text);
             }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
@@ -583,6 +610,7 @@ impl App {
                 agent_id,
                 prompt,
                 parent_run_id,
+                mode,
                 ..
             } => {
                 let display = self.delegate_tree.insert(
@@ -602,6 +630,7 @@ impl App {
                     &prompt,
                     display.label,
                     claim_status,
+                    mode,
                 );
             }
             DelegateEvent::Delta { run_id, chunk, .. } => {
@@ -612,7 +641,7 @@ impl App {
                 agent_id,
                 output,
                 duration,
-                ..
+                mode,
             } => {
                 let display = self.delegate_tree.display_for(&run_id, &agent_id);
                 self.delegate_tree.remove(&run_id);
@@ -641,11 +670,20 @@ impl App {
                 };
                 self.chat_widget
                     .add_delegate_completion(response, hint, &display.label);
+                if mode == DelegateSessionMode::Detached {
+                    self.chat_widget.notify_detached_completion(&display.label);
+                    self.chat_widget.show_detached_completion_actions(
+                        &agent_id,
+                        &run_id,
+                        output.as_deref(),
+                    );
+                }
             }
             DelegateEvent::Failed {
                 run_id,
                 agent_id,
                 error,
+                mode,
             } => {
                 let display = self.delegate_tree.display_for(&run_id, &agent_id);
                 self.delegate_tree.remove(&run_id);
@@ -662,6 +700,10 @@ impl App {
                 }
                 self.chat_widget
                     .on_delegate_failed(&run_id, &display.label, &error);
+                if mode == DelegateSessionMode::Detached {
+                    self.chat_widget
+                        .notify_detached_failure(&display.label, &error);
+                }
             }
         }
     }
@@ -726,14 +768,14 @@ impl App {
 
     fn stash_active_delegate(&mut self) {
         if let Some(active_id) = self.active_delegate.take() {
-            let mut summary = self
-                .active_delegate_summary
-                .take()
-                .expect("delegate summary missing");
-            let main_chat = self
-                .primary_chat_backup
-                .take()
-                .expect("primary chat missing when stashing delegate");
+            let mut summary = match self.active_delegate_summary.take() {
+                Some(summary) => summary,
+                None => return,
+            };
+            let Some(main_chat) = self.primary_chat_backup.take() else {
+                self.active_delegate_summary = Some(summary);
+                return;
+            };
             summary.last_interacted_at = SystemTime::now();
             let mut delegate_chat = std::mem::replace(&mut self.chat_widget, main_chat);
             delegate_chat.set_delegate_context(Some(summary.clone()));
@@ -750,10 +792,9 @@ impl App {
 
     async fn return_to_primary(&mut self, tui: &mut tui::Tui) -> Result<(), String> {
         if let Some(active_id) = self.active_delegate.take() {
-            let mut summary = self
-                .active_delegate_summary
-                .take()
-                .expect("delegate summary missing");
+            let Some(mut summary) = self.active_delegate_summary.take() else {
+                return Err("delegate summary missing".to_string());
+            };
             let capture = self.chat_widget.take_delegate_capture();
             let main_chat = self
                 .primary_chat_backup

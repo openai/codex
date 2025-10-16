@@ -1,6 +1,8 @@
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::codex::Session;
 use crate::delegate_tool::DelegateEventReceiver;
+use crate::delegate_tool::DelegateInvocationMode;
 use crate::delegate_tool::DelegateToolAdapter;
 use crate::delegate_tool::DelegateToolContext;
 use crate::delegate_tool::DelegateToolError;
@@ -14,6 +16,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::user_notification::UserNotification;
 use async_trait::async_trait;
 use codex_protocol::ConversationId;
 use serde::Deserialize;
@@ -21,6 +24,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -58,6 +62,16 @@ pub static DELEGATE_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         },
     );
     batch_entry_props.insert(
+        "mode".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Invocation mode. Use \"immediate\" for blocking delegation (default) or \
+                 \"detached\" to run in the background."
+                    .to_string(),
+            ),
+        },
+    );
+    batch_entry_props.insert(
         "context".to_string(),
         JsonSchema::Object {
             properties: context_props.clone(),
@@ -85,6 +99,16 @@ pub static DELEGATE_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
             properties: context_props,
             required: None,
             additional_properties: Some(false.into()),
+        },
+    );
+    properties.insert(
+        "mode".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Invocation mode. Use \"immediate\" for blocking delegation (default) or \
+                 \"detached\" to run in the background."
+                    .to_string(),
+            ),
         },
     );
     properties.insert(
@@ -126,6 +150,8 @@ struct DelegateToolArgs {
     #[serde(default)]
     context: Option<DelegateToolArgsContext>,
     #[serde(default)]
+    mode: Option<DelegateInvocationMode>,
+    #[serde(default)]
     batch: Vec<DelegateToolBatchArgs>,
 }
 
@@ -142,6 +168,8 @@ struct DelegateToolBatchArgs {
     prompt: String,
     #[serde(default)]
     context: Option<DelegateToolArgsContext>,
+    #[serde(default)]
+    mode: Option<DelegateInvocationMode>,
 }
 
 impl From<DelegateToolArgsContext> for DelegateToolContext {
@@ -156,8 +184,10 @@ impl From<DelegateToolArgsContext> for DelegateToolContext {
 #[derive(Debug, Serialize)]
 struct DelegateToolResponse {
     status: &'static str,
-    agent_id: String,
-    run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -210,6 +240,13 @@ impl ToolHandler for DelegateToolHandler {
             ));
         }
 
+        if !args.batch.is_empty() && args.mode.is_some() {
+            return Err(FunctionCallError::RespondToModel(
+                "`mode` cannot be combined with `batch`; set the mode on each batch entry instead"
+                    .into(),
+            ));
+        }
+
         let adapter = session.delegate_adapter().ok_or_else(|| {
             FunctionCallError::RespondToModel("delegate tool is not available".to_string())
         })?;
@@ -240,15 +277,43 @@ impl ToolHandler for DelegateToolHandler {
             FunctionCallError::RespondToModel("missing `prompt` for delegate_agent call".into())
         })?;
 
+        let mode = args.mode.unwrap_or_default();
+
         let request = DelegateToolRequest {
             agent_id: agent_id.clone(),
             prompt: prompt.clone(),
             context: args.context.unwrap_or_default().into(),
             caller_conversation_id: Some(conversation_id.to_string()),
+            mode,
             batch: Vec::new(),
         };
 
         let run = adapter.delegate(request).await.map_err(map_adapter_error)?;
+
+        if mode == DelegateInvocationMode::Detached {
+            let response = DelegateToolResponse {
+                status: "accepted",
+                agent_id: None,
+                run_id: None,
+                summary: None,
+                duration_ms: None,
+            };
+            let content = serde_json::to_string(&response).map_err(|e| {
+                FunctionCallError::Fatal(format!("failed to serialize response: {e}"))
+            })?;
+
+            let session_clone = Arc::clone(&session);
+            let run_id = run.run_id.clone();
+            let agent_id = run.agent_id.clone();
+            tokio::spawn(async move {
+                monitor_detached_run(events, session_clone, run_id, agent_id).await;
+            });
+
+            return Ok(ToolOutput::Function {
+                content,
+                success: Some(true),
+            });
+        }
 
         let (summary, duration) = wait_for_completion(&mut events, &run)
             .await
@@ -256,8 +321,8 @@ impl ToolHandler for DelegateToolHandler {
 
         let response = DelegateToolResponse {
             status: "ok",
-            agent_id: run.agent_id,
-            run_id: run.run_id,
+            agent_id: Some(run.agent_id),
+            run_id: Some(run.run_id),
             summary,
             duration_ms: duration.map(|d| d.as_millis() as u64),
         };
@@ -329,11 +394,19 @@ async fn handle_batch_entries(
     let conversation_id = conversation_id.to_string();
 
     for entry in batch {
+        let mode = entry.mode.unwrap_or_default();
+        if mode == DelegateInvocationMode::Detached {
+            return Err(FunctionCallError::RespondToModel(
+                "detached delegation is not supported within `batch` requests".to_string(),
+            ));
+        }
+
         let request = DelegateToolRequest {
             agent_id: entry.agent_id.clone(),
             prompt: entry.prompt.clone(),
             context: entry.context.unwrap_or_default().into(),
             caller_conversation_id: Some(conversation_id.clone()),
+            mode,
             batch: Vec::new(),
         };
 
@@ -400,11 +473,77 @@ fn map_adapter_error(err: DelegateToolError) -> FunctionCallError {
             "another delegate is already running; wait for it to finish before delegating again"
                 .to_string(),
         ),
+        DelegateToolError::QueueFull => FunctionCallError::RespondToModel(
+            "delegate queue is full; wait for background delegates to finish before delegating again"
+                .to_string(),
+        ),
         DelegateToolError::AgentNotFound(agent_id) => FunctionCallError::RespondToModel(format!(
             "delegate agent `{agent_id}` is not configured"
         )),
         DelegateToolError::SetupFailed(reason) => {
             FunctionCallError::RespondToModel(format!("failed to start delegate: {reason}"))
+        }
+    }
+}
+
+async fn monitor_detached_run(
+    mut events: DelegateEventReceiver,
+    session: Arc<Session>,
+    run_id: String,
+    agent_id: String,
+) {
+    let mut collected = String::new();
+
+    while let Some(event) = events.recv().await {
+        if event_run_id(&event) != run_id.as_str() {
+            continue;
+        }
+
+        match event {
+            DelegateToolEvent::Delta { chunk, .. } => {
+                collected.push_str(&chunk);
+            }
+            DelegateToolEvent::Completed {
+                output, duration, ..
+            } => {
+                let summary = output.or_else(|| {
+                    if collected.trim().is_empty() {
+                        None
+                    } else {
+                        Some(collected.clone())
+                    }
+                });
+                session
+                    .notifier()
+                    .notify(&UserNotification::DetachedRunFinished {
+                        agent_id: agent_id.clone(),
+                        run_id: run_id.clone(),
+                        conversation_id: Some(session.conversation_id().to_string()),
+                        summary,
+                        duration_ms: Some(duration.as_millis() as u64),
+                        error: None,
+                    });
+                break;
+            }
+            DelegateToolEvent::Failed { error, .. } => {
+                let summary = if collected.trim().is_empty() {
+                    None
+                } else {
+                    Some(collected.clone())
+                };
+                session
+                    .notifier()
+                    .notify(&UserNotification::DetachedRunFinished {
+                        agent_id: agent_id.clone(),
+                        run_id: run_id.clone(),
+                        conversation_id: Some(session.conversation_id().to_string()),
+                        summary,
+                        duration_ms: None,
+                        error: Some(error),
+                    });
+                break;
+            }
+            _ => {}
         }
     }
 }
@@ -469,11 +608,13 @@ mod tests {
                 agent_id: "alpha".into(),
                 prompt: "one".into(),
                 context: None,
+                mode: None,
             },
             DelegateToolBatchArgs {
                 agent_id: "bravo".into(),
                 prompt: "two".into(),
                 context: None,
+                mode: None,
             },
         ];
 

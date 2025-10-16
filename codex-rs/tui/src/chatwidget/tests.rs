@@ -36,6 +36,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_multi_agent::AgentId;
+use codex_multi_agent::DelegateSessionMode;
 use codex_protocol::ConversationId;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -407,6 +408,7 @@ fn delegate_stream_deltas_and_restore_status() {
         "sketch integration points",
         label.clone(),
         true,
+        DelegateSessionMode::Standard,
     );
     assert_eq!(chat.delegate_run.as_deref(), Some("run-1"));
     assert_eq!(chat.delegate_status_owner.as_deref(), Some("run-1"));
@@ -477,8 +479,22 @@ fn nested_delegate_info_events_are_indented() {
         base_label: "  ↳ #creative_ideas".to_string(),
     };
 
-    chat.on_delegate_started("outer-run", &outer, "outer brief", outer_label, true);
-    chat.on_delegate_started("inner-run", &inner, "inner brief", inner_label, false);
+    chat.on_delegate_started(
+        "outer-run",
+        &outer,
+        "outer brief",
+        outer_label,
+        true,
+        DelegateSessionMode::Standard,
+    );
+    chat.on_delegate_started(
+        "inner-run",
+        &inner,
+        "inner brief",
+        inner_label,
+        false,
+        DelegateSessionMode::Standard,
+    );
 
     let mut messages = Vec::new();
     while let Ok(event) = rx.try_recv() {
