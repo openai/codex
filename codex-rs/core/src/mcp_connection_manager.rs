@@ -115,16 +115,8 @@ impl McpClientAdapter {
         startup_timeout: Duration,
     ) -> Result<Self> {
         if use_rmcp_client {
-            let client = Arc::new(
-                RmcpClient::new_stdio_client(
-                    program.clone(),
-                    args.clone(),
-                    env.clone(),
-                    &env_vars,
-                    cwd.clone(),
-                )
-                .await?,
-            );
+            let client =
+                Arc::new(RmcpClient::new_stdio_client(program, args, env, &env_vars, cwd).await?);
             client.initialize(params, Some(startup_timeout)).await?;
             Ok(McpClientAdapter::Rmcp(client))
         } else {

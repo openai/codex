@@ -363,7 +363,7 @@ API_KEY = "value"
 env_vars = ["API_KEY2"]
 
 # Optional: cwd that the command will be run from
-cwd = "~/code/my-server"
+cwd = "/Users/<user>/code/my-server"
 ```
 
 #### Streamable HTTP
