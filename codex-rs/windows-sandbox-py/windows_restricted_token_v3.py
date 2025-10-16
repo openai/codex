@@ -384,6 +384,50 @@ aclapi.SetNamedSecurityInfoW.restype  = wt.DWORD
 kernel32.LocalFree.argtypes = [wt.HLOCAL]
 kernel32.LocalFree.restype  = wt.HLOCAL
 
+# --- ACL/ACE enumeration helpers --------------------------------------------
+
+class ACL(c.Structure):
+    _fields_ = [
+        ("AclRevision", wt.BYTE),
+        ("Sbz1", wt.BYTE),
+        ("AclSize", wt.WORD),
+        ("AceCount", wt.WORD),
+        ("Sbz2", wt.WORD),
+    ]
+
+class ACL_SIZE_INFORMATION(c.Structure):
+    _fields_ = [
+        ("AceCount", wt.DWORD),
+        ("AclBytesInUse", wt.DWORD),
+        ("AclBytesFree", wt.DWORD),
+    ]
+
+class ACE_HEADER(c.Structure):
+    _fields_ = [
+        ("AceType", wt.BYTE),
+        ("AceFlags", wt.BYTE),
+        ("AceSize", wt.WORD),
+    ]
+
+class ACCESS_ALLOWED_ACE(c.Structure):
+    _fields_ = [
+        ("Header", ACE_HEADER),
+        ("Mask", wt.DWORD),
+        ("SidStart", wt.DWORD),  # first DWORD of SID; rest follows
+    ]
+
+ACCESS_ALLOWED_ACE_TYPE = 0x00
+
+advapi32.GetAclInformation.argtypes = [wt.LPVOID, wt.LPVOID, wt.DWORD, wt.DWORD]
+advapi32.GetAclInformation.restype  = wt.BOOL
+AclSizeInformation = 2  # ACL_INFORMATION_CLASS
+
+advapi32.GetAce.argtypes = [wt.LPVOID, wt.DWORD, c.POINTER(wt.LPVOID)]
+advapi32.GetAce.restype  = wt.BOOL
+
+advapi32.EqualSid.argtypes = [wt.LPVOID, wt.LPVOID]
+advapi32.EqualSid.restype  = wt.BOOL
+
 # --- Diagnostics support -----------------------------------------------------
 
 advapi32.IsTokenRestricted.argtypes = [wt.HANDLE]
@@ -645,7 +689,39 @@ def _sid_to_string(sid_bytes: bytes) -> str:
         if pwstr:
             kernel32.LocalFree(pwstr)
 
-def _add_allow_ace(path: str, psid: wt.LPVOID):
+def _dacl_has_write_allow_for_sid(pDACL: wt.LPVOID, psid: wt.LPVOID) -> bool:
+    """Return True if DACL already contains an ACCESS_ALLOWED ACE for psid granting write."""
+    if not pDACL:
+        return False
+    size = ACL_SIZE_INFORMATION()
+    ok = advapi32.GetAclInformation(pDACL, c.byref(size), wt.DWORD(c.sizeof(ACL_SIZE_INFORMATION)), wt.DWORD(AclSizeInformation))
+    if not ok:
+        return False
+    count = int(size.AceCount)
+    for i in range(count):
+        pAce = wt.LPVOID()
+        if not advapi32.GetAce(pDACL, wt.DWORD(i), c.byref(pAce)):
+            continue
+        hdr = c.cast(pAce, c.POINTER(ACE_HEADER)).contents
+        if hdr.AceType != ACCESS_ALLOWED_ACE_TYPE:
+            continue
+        aa_ptr = c.cast(pAce, c.POINTER(ACCESS_ALLOWED_ACE))
+        # Access mask
+        mask = aa_ptr.contents.Mask
+        # Compute pointer to SID: immediately after header + mask
+        base_addr = c.cast(pAce, c.c_void_p).value or 0
+        sid_addr = base_addr + c.sizeof(ACE_HEADER) + c.sizeof(wt.DWORD)
+        sid_ptr = c.c_void_p(sid_addr)
+        try:
+            if advapi32.EqualSid(sid_ptr, psid) and (mask & FILE_GENERIC_WRITE):
+                return True
+        except Exception:
+            # If EqualSid fails for any reason, be conservative and continue.
+            continue
+    return False
+
+def _add_allow_ace(path: str, psid: wt.LPVOID) -> bool:
+    """Ensure DACL grants read/write/execute to psid. Returns True if an ACE was added."""
     # DACL += ACE granting (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE), CI | OI
     pSD = wt.LPVOID()
     pDACL = wt.LPVOID()
@@ -655,6 +731,14 @@ def _add_allow_ace(path: str, psid: wt.LPVOID):
     ), "GetNamedSecurityInfoW")
 
     try:
+        # If an allow ACE with write already exists for this SID, skip
+        try:
+            if _dacl_has_write_allow_for_sid(pDACL, psid):
+                return False
+        except Exception:
+            # If the check fails, proceed to set (original behavior).
+            pass
+
         explicit = EXPLICIT_ACCESS_W()
         explicit.grfAccessPermissions = (FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE)
         explicit.grfAccessMode = SET_ACCESS
@@ -676,6 +760,7 @@ def _add_allow_ace(path: str, psid: wt.LPVOID):
                 wt.LPWSTR(path), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
                 None, None, pNewDacl, None
             ), "SetNamedSecurityInfoW")
+            return True
         finally:
             if pNewDacl:
                 kernel32.LocalFree(pNewDacl)
@@ -836,8 +921,9 @@ def _configure_paths(policy: SandboxPolicy, policy_cwd: str, command_cwd: str,
     guards: List[_AclGuard] = []
     for p in allow:
         try:
-            _add_allow_ace(p, psid)
-            guards.append(_AclGuard(p, psid))
+            added = _add_allow_ace(p, psid)
+            if added:
+                guards.append(_AclGuard(p, psid))
         except Exception as e:
             # best effort — continue
             print(f"[sandbox] failed to allow write on {p}: {e}", file=sys.stderr)
