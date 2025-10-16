@@ -344,8 +344,8 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
 mod tests {
     use super::*;
     use crate::exec::StreamOutput;
-    use codex_protocol::protocol::RateLimitWindow;
     use chrono::Utc;
+    use codex_protocol::protocol::RateLimitWindow;
     use pretty_assertions::assert_eq;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
