@@ -2038,6 +2038,101 @@ url = "https://example.com/mcp"
     }
 
     #[tokio::test]
+    async fn write_global_mcp_servers_streamable_http_isolates_headers_between_servers()
+    -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        let servers = BTreeMap::from([
+            (
+                "docs".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::StreamableHttp {
+                        url: "https://example.com/mcp".to_string(),
+                        bearer_token_env_var: Some("MCP_TOKEN".to_string()),
+                        http_headers: Some(HashMap::from([(
+                            "X-Doc".to_string(),
+                            "42".to_string(),
+                        )])),
+                        env_http_headers: Some(HashMap::from([(
+                            "X-Auth".to_string(),
+                            "DOCS_AUTH".to_string(),
+                        )])),
+                    },
+                    enabled: true,
+                    startup_timeout_sec: Some(Duration::from_secs(2)),
+                    tool_timeout_sec: None,
+                },
+            ),
+            (
+                "logs".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: "logs-server".to_string(),
+                        args: vec!["--follow".to_string()],
+                        env: None,
+                    },
+                    enabled: true,
+                    startup_timeout_sec: None,
+                    tool_timeout_sec: None,
+                },
+            ),
+        ]);
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let serialized = std::fs::read_to_string(&config_path)?;
+        assert!(
+            serialized.contains("[mcp_servers.docs.http_headers]"),
+            "serialized config missing docs headers section:\n{serialized}"
+        );
+        assert!(
+            !serialized.contains("[mcp_servers.logs.http_headers]"),
+            "serialized config should not add logs headers section:\n{serialized}"
+        );
+        assert!(
+            !serialized.contains("[mcp_servers.logs.env_http_headers]"),
+            "serialized config should not add logs env headers section:\n{serialized}"
+        );
+        assert!(
+            !serialized.contains("mcp_servers.logs.bearer_token_env_var"),
+            "serialized config should not add bearer token to logs:\n{serialized}"
+        );
+
+        let loaded = load_global_mcp_servers(codex_home.path()).await?;
+        let docs = loaded.get("docs").expect("docs entry");
+        match &docs.transport {
+            McpServerTransportConfig::StreamableHttp {
+                http_headers,
+                env_http_headers,
+                ..
+            } => {
+                assert_eq!(
+                    http_headers,
+                    &Some(HashMap::from([("X-Doc".to_string(), "42".to_string())]))
+                );
+                assert_eq!(
+                    env_http_headers,
+                    &Some(HashMap::from([(
+                        "X-Auth".to_string(),
+                        "DOCS_AUTH".to_string()
+                    )]))
+                );
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+        let logs = loaded.get("logs").expect("logs entry");
+        match &logs.transport {
+            McpServerTransportConfig::Stdio { env, .. } => {
+                assert!(env.is_none());
+            }
+            other => panic!("unexpected transport {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn write_global_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
