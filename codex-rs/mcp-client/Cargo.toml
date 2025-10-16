@@ -21,3 +21,7 @@ tokio = { workspace = true, features = [
     "sync",
     "time",
 ] }
+which = "6"
+
+[dev-dependencies]
+tempfile = "3"

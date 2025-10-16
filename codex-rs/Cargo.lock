@@ -1222,9 +1222,11 @@ dependencies = [
  "mcp-types",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "which",
 ]
 
 [[package]]
