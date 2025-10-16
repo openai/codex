@@ -8,6 +8,7 @@ use crate::auth::CodexAuth;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use bytes::Bytes;
+use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::ConversationId;
 use eventsource_stream::Eventsource;
@@ -606,7 +607,11 @@ fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
         "x-codex-secondary-reset-after-seconds",
     );
 
-    Some(RateLimitSnapshot { primary, secondary })
+    Some(RateLimitSnapshot {
+        primary,
+        secondary,
+        captured_at: Some(Utc::now()),
+    })
 }
 
 fn parse_rate_limit_window(

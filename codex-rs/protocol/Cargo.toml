@@ -29,6 +29,7 @@ ts-rs = { workspace = true, features = [
     "no-serde-warnings",
 ] }
 uuid = { workspace = true, features = ["serde", "v7"] }
+chrono = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

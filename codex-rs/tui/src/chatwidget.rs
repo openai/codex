@@ -457,7 +457,12 @@ impl ChatWidget {
                     .and_then(|window| window.window_minutes),
             );
 
-            let display = crate::status::rate_limit_snapshot_display(&snapshot, Local::now());
+            let captured_at = snapshot
+                .captured_at
+                .as_ref()
+                .map(|dt| dt.with_timezone(&Local))
+                .unwrap_or_else(Local::now);
+            let display = crate::status::rate_limit_snapshot_display(&snapshot, captured_at);
             self.rate_limit_snapshot = Some(display);
 
             if !warnings.is_empty() {

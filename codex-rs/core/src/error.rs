@@ -345,6 +345,7 @@ mod tests {
     use super::*;
     use crate::exec::StreamOutput;
     use codex_protocol::protocol::RateLimitWindow;
+    use chrono::Utc;
     use pretty_assertions::assert_eq;
 
     fn rate_limit_snapshot() -> RateLimitSnapshot {
@@ -359,6 +360,7 @@ mod tests {
                 window_minutes: Some(120),
                 resets_in_seconds: Some(7200),
             }),
+            captured_at: Some(Utc::now()),
         }
     }
 

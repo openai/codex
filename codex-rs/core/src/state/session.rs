@@ -1,5 +1,6 @@
 //! Session-wide mutable state.
 
+use chrono::Utc;
 use codex_protocol::models::ResponseItem;
 
 use crate::conversation_history::ConversationHistory;
@@ -55,13 +56,37 @@ impl SessionState {
     }
 
     pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
+        debug_assert!(
+            snapshot.captured_at.is_some(),
+            "rate limit snapshots must include captured_at"
+        );
         self.latest_rate_limits = Some(snapshot);
     }
 
     pub(crate) fn token_info_and_rate_limits(
         &self,
     ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
-        (self.token_info.clone(), self.latest_rate_limits.clone())
+        let rate_limits = self.latest_rate_limits.as_ref().map(|snapshot| {
+            let mut snapshot = snapshot.clone();
+            if let Some(captured_at) = snapshot.captured_at {
+                let elapsed = Utc::now()
+                    .signed_duration_since(captured_at)
+                    .num_seconds()
+                    .max(0) as u64;
+                if elapsed > 0 {
+                    for window in [snapshot.primary.as_mut(), snapshot.secondary.as_mut()]
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(secs) = window.resets_in_seconds {
+                            window.resets_in_seconds = Some(secs.saturating_sub(elapsed));
+                        }
+                    }
+                }
+            }
+            snapshot
+        });
+        (self.token_info.clone(), rate_limits)
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: u64) {
@@ -74,4 +99,84 @@ impl SessionState {
     }
 
     // Pending input/approval moved to TurnState.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::RateLimitWindow;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn adjusts_rate_limit_reset_for_elapsed_time() {
+        let mut state = SessionState::new();
+        let snapshot = RateLimitSnapshot {
+            primary: Some(RateLimitWindow {
+                used_percent: 50.0,
+                window_minutes: Some(300),
+                resets_in_seconds: Some(120),
+            }),
+            secondary: None,
+            captured_at: Some(Utc::now()),
+        };
+        state.set_rate_limits(snapshot);
+
+        // Pretend 30 seconds have passed since the snapshot was captured.
+        if let Some(limits) = state.latest_rate_limits.as_mut() {
+            if let Some(captured_at) = &mut limits.captured_at {
+                *captured_at -= chrono::Duration::seconds(30);
+            } else {
+                panic!("Expected captured_at to be present");
+            }
+        } else {
+            panic!("Expected rate limits to be present");
+        }
+
+        let (_, rate_limits) = state.token_info_and_rate_limits();
+        let rate_limits = rate_limits.expect("rate limits should be returned");
+        let captured_at = rate_limits
+            .captured_at
+            .expect("captured_at should be returned");
+        assert_eq!(
+            rate_limits
+                .primary
+                .expect("primary window missing")
+                .resets_in_seconds,
+            Some(90)
+        );
+        let stored_after_first = state
+            .latest_rate_limits
+            .as_ref()
+            .expect("rate limits should still be stored")
+            .captured_at
+            .expect("stored snapshot should retain captured_at");
+        assert_eq!(stored_after_first, captured_at);
+
+        // Saturate at zero once the elapsed time exceeds the reset duration.
+        if let Some(limits) = state.latest_rate_limits.as_mut()
+            && let Some(captured_at) = &mut limits.captured_at
+        {
+            *captured_at -= chrono::Duration::seconds(1_000);
+        }
+
+        let (_, rate_limits) = state.token_info_and_rate_limits();
+        let rate_limits = rate_limits.expect("rate limits should be returned");
+        assert_eq!(
+            rate_limits
+                .primary
+                .expect("primary window missing")
+                .resets_in_seconds,
+            Some(0)
+        );
+        let captured_at_again = rate_limits
+            .captured_at
+            .expect("captured_at should remain present");
+        let stored_after_second = state
+            .latest_rate_limits
+            .as_ref()
+            .expect("rate limits should still be stored")
+            .captured_at
+            .expect("stored snapshot should retain captured_at");
+        assert_eq!(stored_after_second, captured_at_again);
+    }
 }
