@@ -9,7 +9,7 @@ This document describes how to wire true sub-agent orchestration into the Codex 
 ### 1.1 Components
 
 - **`codex-multi-agent` crate (`codex-rs/multi-agent/src/lib.rs`)**  
-  Already exposes `AgentId`, `AgentRegistry`, and async loaders that return `AgentContext` values (merged `ConfigToml` + `Config`). We extend this crate with an orchestration module to keep agent resolution and config cloning isolated from the rest of the app.
+  Already exposes `AgentId`, `AgentRegistry`, and async loaders that return `AgentContext` values (merged `ConfigToml` + `Config`). We extend this crate with an orchestration module to keep agent resolution and config cloning isolated from the rest of the app. Each `AgentContext` now captures its own `multi_agent.agents` list so child delegates inherit the correct allowlist automatically.
 
 - **Orchestrator core (new)**  
   Proposed module `codex-rs/multi-agent/src/orchestrator.rs` exporting:
@@ -17,8 +17,9 @@ This document describes how to wire true sub-agent orchestration into the Codex 
   - `DelegateRequest`: SPA-style struct describing who/what to run (`agent_id`, prompt payload, optional working directory override).
   - `AgentOrchestrator`: stateful controller that owns:
     - A primary `AgentHandle` (mirrors currently running conversation).
-    - A per-agent `ConversationManager` + `UnboundedSender<Op>` pair created via `ConversationManager::new_conversation` (`codex-rs/core/src/conversation_manager.rs:57`).
+    - A per-agent `ConversationManager` + `UnboundedSender<Op>` pair created via `ConversationManager::with_delegate` so child runs can spawn their own delegates.
     - Result channels to stream `Event` values back to the primary UI after post-processing.
+    - A stack of active run ids so nested delegates can execute concurrently.
 
 - **`ConversationManager` reuse**  
   Sub-agent sessions use the same `ConversationManager` entry points. The orchestrator calls `ConversationManager::new_conversation` with the agent-specific `Config` so all persistence automatically lands in `~/.codex/agents/<id>/` (per §2.2).
@@ -34,7 +35,7 @@ This document describes how to wire true sub-agent orchestration into the Codex 
 
 2. **Agent resolution**  
    - `AgentOrchestrator::resolve_agent` calls `AgentConfigLoader::load` with the requested `AgentId`.
-   - On success, the orchestrator instantiates / reuses a `ConversationManager` scoped to that agent. Authentication stays shared (`AuthManager` from the primary session) per current design docs.
+   - On success, the orchestrator instantiates / reuses a `ConversationManager` scoped to that agent. Authentication stays shared (`AuthManager` from the primary session) per current design docs. The returned `AgentContext` also defines which downstream agents this delegate is allowed to call.
 
 3. **Conversation bootstrap**  
    - Call `ConversationManager::new_conversation` with the agent `Config`.
@@ -44,7 +45,7 @@ This document describes how to wire true sub-agent orchestration into the Codex 
    - The orchestrator forwards the translated prompt into the sub-agent conversation (`conversation.submit`).  
    - Streamed `Event` values are intercepted before they reach the UI. For every event:
      - Persist to the sub-agent transcript as normal (handled by core).
-     - Convert to orchestrator messages (`DelegateProgress`, `DelegateOutput`), then forward to the primary session via a new `AppEvent::DelegateUpdate`.
+     - Convert to orchestrator messages (`DelegateProgress`, `DelegateOutput`), then forward to the primary session via a new `AppEvent::DelegateUpdate`. Nested runs simply push additional `Started` events with greater depth.
 
 5. **Completion and summary**  
    - When `EventMsg::TaskComplete` fires, the orchestrator synthesizes a summary cell (e.g., `history_cell::AgentMessageCell`) and injects it into the primary transcript via `AppEvent::InsertHistoryCell`.
@@ -156,7 +157,7 @@ This document describes how to wire true sub-agent orchestration into the Codex 
 
 ## 6. Decisions & Open Questions
 
-- **Concurrent delegates**: Launch one delegate at a time. The orchestrator stores requests in a FIFO queue and short-circuits when the active run completes so parallelism can be enabled later without redesign (keep the queue abstraction in place).
+- **Concurrent delegates**: The orchestrator now maintains a stack of active runs so delegates can invoke their own delegates; the UI surfaces the stack depth with indented history entries.
 - **Prompt hand-off semantics**: The primary agent composes the sub-agent prompt with all relevant context before invoking `delegate()`. The orchestrator forwards the prompt verbatim without trimming history.
 - **Return payload**: Still open. Default plan remains to summarize results in the primary transcript while exposing a “view details” action to open the sub-agent session.
 - **Auth isolation**: Shared. All agents continue to use the primary `AuthManager`; per-agent credentials are out of scope unless a future requirement emerges.

@@ -519,9 +519,10 @@ impl ChatWidget {
 
         if self.delegate_context.is_some()
             && let Some(message) = last_agent_message.as_ref()
-            && !message.trim().is_empty() {
-                self.delegate_agent_frames.push(message.clone());
-            }
+            && !message.trim().is_empty()
+        {
+            self.delegate_agent_frames.push(message.clone());
+        }
 
         let notification_response = last_agent_message.unwrap_or_default();
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -1463,9 +1464,9 @@ impl ChatWidget {
             && let Err(e) = self
                 .codex_op_tx
                 .send(Op::AddToHistory { text: text.clone() })
-            {
-                tracing::error!("failed to send AddHistory op: {e}");
-            }
+        {
+            tracing::error!("failed to send AddHistory op: {e}");
+        }
 
         if !display_text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(display_text));
@@ -2375,14 +2376,23 @@ impl ChatWidget {
         self.conversation_id
     }
 
+    fn delegate_label(agent_id: &AgentId, depth: usize) -> String {
+        format!("{}↳ #{}", "  ".repeat(depth), agent_id.as_str())
+    }
+
     pub(crate) fn add_delegate_completion(
         &mut self,
         agent_id: &AgentId,
         response: Option<&str>,
         duration_hint: Option<String>,
+        depth: usize,
     ) {
-        let header = format!("↳ #{agent} completed", agent = agent_id.as_str());
+        let header = format!("{} completed", Self::delegate_label(agent_id, depth));
         self.add_info_message(header, duration_hint);
+
+        if depth > 0 {
+            return;
+        }
 
         let Some(text) = response.map(str::trim).filter(|s| !s.is_empty()) else {
             return;
@@ -2398,26 +2408,35 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn on_delegate_started(&mut self, run_id: &str, agent_id: &AgentId, prompt: &str) {
-        self.delegate_run = Some(run_id.to_string());
-        self.delegate_had_stream = false;
-        self.delegate_user_frames.clear();
-        self.delegate_agent_frames.clear();
-        self.delegate_previous_status_header = Some(self.current_status_header.clone());
-        if self.bottom_pane.status_widget().is_none() {
-            self.bottom_pane.set_task_running(true);
-            self.delegate_status_claimed = true;
-        } else {
-            self.delegate_status_claimed = false;
+    pub(crate) fn on_delegate_started(
+        &mut self,
+        run_id: &str,
+        agent_id: &AgentId,
+        prompt: &str,
+        depth: usize,
+    ) {
+        let label = Self::delegate_label(agent_id, depth);
+        if depth == 0 {
+            self.delegate_run = Some(run_id.to_string());
+            self.delegate_had_stream = false;
+            self.delegate_user_frames.clear();
+            self.delegate_agent_frames.clear();
+            self.delegate_previous_status_header = Some(self.current_status_header.clone());
+            if self.bottom_pane.status_widget().is_none() {
+                self.bottom_pane.set_task_running(true);
+                self.delegate_status_claimed = true;
+            } else {
+                self.delegate_status_claimed = false;
+            }
+            self.set_status_header(format!("Delegating to #{}", agent_id.as_str()));
         }
-        self.set_status_header(format!("Delegating to #{}", agent_id.as_str()));
         let trimmed = prompt.trim();
         let hint = if trimmed.is_empty() {
             None
         } else {
             Some(trimmed.to_string())
         };
-        self.add_info_message(format!("↳ #{agent}…", agent = agent_id.as_str()), hint);
+        self.add_info_message(format!("{label}…"), hint);
         self.request_redraw();
     }
 
@@ -2429,7 +2448,10 @@ impl ChatWidget {
         self.handle_streaming_delta(chunk.to_string());
     }
 
-    pub(crate) fn on_delegate_completed(&mut self, run_id: &str) -> bool {
+    pub(crate) fn on_delegate_completed(&mut self, run_id: &str, depth: usize) -> bool {
+        if depth > 0 {
+            return false;
+        }
         if self.delegate_run.as_deref() != Some(run_id) {
             return false;
         }
@@ -2451,13 +2473,18 @@ impl ChatWidget {
         had_stream
     }
 
-    pub(crate) fn on_delegate_failed(&mut self, run_id: &str, agent_id: &AgentId, error: &str) {
-        let _ = self.on_delegate_completed(run_id);
-        self.add_error_message(format!(
-            "Delegation to #{} failed: {}",
-            agent_id.as_str(),
-            error
-        ));
+    pub(crate) fn on_delegate_failed(
+        &mut self,
+        run_id: &str,
+        agent_id: &AgentId,
+        error: &str,
+        depth: usize,
+    ) {
+        if depth == 0 {
+            let _ = self.on_delegate_completed(run_id, depth);
+        }
+        let label = Self::delegate_label(agent_id, depth);
+        self.add_error_message(format!("{label} failed: {error}"));
     }
 
     fn try_delegate_shortcut(&mut self, _text: &str) -> bool {

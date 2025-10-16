@@ -44,6 +44,7 @@ use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
@@ -68,6 +69,11 @@ pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MultiAgentConfig {
+    pub agents: Vec<String>,
+}
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -226,6 +232,9 @@ pub struct Config {
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
+
+    /// Multi-agent options derived from config.toml.
+    pub multi_agent: MultiAgentConfig,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
@@ -811,6 +820,9 @@ pub struct ConfigToml {
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
+    /// Configuration for multi-agent delegation.
+    pub multi_agent: Option<MultiAgentToml>,
+
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
     pub features: Option<FeaturesToml>,
@@ -879,6 +891,12 @@ impl From<ToolsToml> for Tools {
             view_image: tools_toml.view_image,
         }
     }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct MultiAgentToml {
+    #[serde(default)]
+    pub agents: Vec<String>,
 }
 
 impl ConfigToml {
@@ -1031,6 +1049,13 @@ impl Config {
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
 
+        let include_delegate_tool_flag = include_delegate_tool.unwrap_or_else(|| {
+            cfg.multi_agent
+                .as_ref()
+                .map(|ma| !ma.agents.is_empty())
+                .unwrap_or(false)
+        });
+
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
         let mut model_providers = built_in_model_providers();
@@ -1075,6 +1100,15 @@ impl Config {
         };
 
         let history = cfg.history.unwrap_or_default();
+
+        let multi_agent = MultiAgentConfig {
+            agents: normalize_multi_agent_agents(
+                cfg.multi_agent
+                    .as_ref()
+                    .map(|ma| ma.agents.clone())
+                    .unwrap_or_default(),
+            ),
+        };
 
         let include_plan_tool_flag = features.enabled(Feature::PlanTool);
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
@@ -1197,13 +1231,14 @@ impl Config {
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             include_plan_tool: include_plan_tool_flag,
-            include_delegate_tool: include_delegate_tool.unwrap_or(false),
+            include_delegate_tool: include_delegate_tool_flag,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
             use_experimental_streamable_shell_tool,
             use_experimental_unified_exec_tool,
             use_experimental_use_rmcp_client,
             include_view_image_tool: include_view_image_tool_flag,
+            multi_agent,
             features,
             active_profile: active_profile_name,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
@@ -1286,6 +1321,25 @@ impl Config {
             Ok(Some(s))
         }
     }
+}
+
+fn normalize_multi_agent_agents(raw_agents: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+
+    for value in raw_agents {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let agent = trimmed.to_string();
+        if seen.insert(agent.clone()) {
+            normalized.push(agent);
+        }
+    }
+
+    normalized
 }
 
 fn default_model() -> String {
@@ -2255,6 +2309,7 @@ model_verbosity = "high"
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,
                 include_view_image_tool: true,
+                multi_agent: MultiAgentConfig::default(),
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
                 windows_wsl_setup_acknowledged: false,
@@ -2320,6 +2375,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            multi_agent: MultiAgentConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
             windows_wsl_setup_acknowledged: false,
@@ -2400,6 +2456,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            multi_agent: MultiAgentConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
             windows_wsl_setup_acknowledged: false,
@@ -2466,6 +2523,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             use_experimental_use_rmcp_client: false,
             include_view_image_tool: true,
+            multi_agent: MultiAgentConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
             windows_wsl_setup_acknowledged: false,

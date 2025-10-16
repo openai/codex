@@ -4,6 +4,11 @@
 
 ## 2025-10-16
 - Removed the inline `#agent` autocomplete experiment and reverted documentation to focus on the delegate picker and slash command flow.
+- Added child delegate directories (`creative_ideas`, `conservative_ideas`) to the example Codex home and updated instructions/README to describe the fixed delegation chain (main → ideas_provider → critic).
+- Auto-enabled the delegate tool whenever `[multi_agent].agents` is non-empty so sub-agents inherit delegation without toggling `include_delegate_tool`.
+- Updated `AgentOrchestrator` to spawn sub-agent conversations via `ConversationManager::with_delegate`, enabling delegates to invoke their own delegates.
+- Switched delegate execution tracking to a stack; the TUI now shows nested runs with indented history lines.
+- Added focused unit tests covering the new config flag behaviour and UI indentation to prevent regressions.
 
 ## 2025-10-14
 - Captured the baseline design artifacts (`AGENTS.md`, `config-design.md`, `instruction-design.md`, `persistence-design.md`, `error-handling.md`) compiled during the planning phase.

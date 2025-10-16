@@ -7,10 +7,10 @@
 
 ## Existing Implementation Survey
 
-### Config and `CODEX_HOME`
 - `codex-rs/core/src/config.rs` owns the `Config` struct, the `find_codex_home` helper, and `Config::load_from_base_config_with_overrides`, which lets us inject a custom `codex_home` path when constructing a configuration. `Config::log_dir` and related helpers derive paths by appending to `codex_home`, so moving to a per-agent directory is automatically supported.
 - `codex-rs/core/src/config_loader/mod.rs` implements layered config loading (`config.toml`, managed overrides, CLI overrides). It already accepts an arbitrary base directory, so we can reuse it for sub-agent trees by pointing it at `~/.codex/agents/<agent_id>`.
 - `codex-rs/common/src/config_override.rs` parses `-c key=value` overrides. Those overrides can continue to target agent-specific settings as long as we resolve them against the sub-agent config before the run starts.
+- The `multi_agent.agents = ["…"]` list in each `config.toml` now controls delegate availability. When the list is non-empty the delegate tool auto-enables; when empty it stays hidden, eliminating the need for manual `include_delegate_tool` flags.
 
 ### Project instructions (`AGENTS.md`)
 - `Config::load_instructions` in `codex-rs/core/src/config.rs` reads `AGENTS.md` at the root of `codex_home`. That gives us a place to put per-agent doctrine without touching repo-level instructions.

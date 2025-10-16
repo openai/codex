@@ -3,3 +3,6 @@ sandbox_mode = "workspace-write"
 
 [history]
 persistence = "save-all"
+
+[multi_agent]
+agents = ["creative_ideas", "conservative_ideas"]

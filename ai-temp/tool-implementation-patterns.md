@@ -17,7 +17,8 @@ This note captures the patterns we observed while digging into the built-in plan
 
 ## 4. Config-Driven Inclusion
 - `Config.include_plan_tool` toggles availability. Front ends (CLI, TUI, app server) set this flag through `ConfigOverrides`.
-- When disabled, the tool spec and handler never register, preventing accidental invocation.
+- For delegation we piggyback on `[multi_agent].agents`: the flag is auto-enabled whenever that list is non-empty, so child agents gain the delegate tool without extra overrides.
+- When the feature is disabled, the tool spec and handler never register, preventing accidental invocation.
 
 ## 5. Client-Side Presentation
 - The TUI listens for `EventMsg::PlanUpdate` to render a checklist-style history cell.

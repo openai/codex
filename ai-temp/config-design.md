@@ -15,7 +15,7 @@
 2. Load the user’s global `ConfigToml` (including managed layers) from that directory.
 3. If an `agent_id` is provided, resolve `~/.codex/agents/<agent_id>` and load its `config.toml`. Merge this table on top of the global config.
 4. Apply CLI overrides (`CliConfigOverrides::parse_overrides`) so one-off adjustments still work per session.
-5. Instantiate the final `Config` via `Config::load_from_base_config_with_overrides`, passing the resolved agent `codex_home` when present; otherwise fall back to the global Codex home.
+5. Instantiate the final `Config` via `Config::load_from_base_config_with_overrides`, passing the resolved agent `codex_home` when present; otherwise fall back to the global Codex home. During this step we automatically enable the delegate tool when the merged `[multi_agent].agents` list is non-empty, so sub-agents inherit delegation capabilities without extra flags.
 
 This yields inherited behaviour by default while letting each agent override keys explicitly.
 

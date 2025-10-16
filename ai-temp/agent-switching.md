@@ -44,7 +44,7 @@
 
 ## Edge Cases & Safeguards
 - **Aborted delegate sessions** – If the orchestrator or sub-agent errors while you are switched in, emit a `DelegateEvent::Failed`, append an error history cell in the main transcript, and automatically return the user to the main agent. Also write the detailed failure to `codex-tui.log`.
-- **Active-run guard** – Maintain the existing single-run invariant: attempts to start a fresh delegate while another is active (including while switched) should yield `DelegateInProgress` and a user-facing notice.
+- **Active-run visibility** – The orchestrator now tracks a stack of in-flight delegates. Surface the full stack in the UI so users know which nested agents are working; only the top-most run streams output.
 - **Multi-agent hopping** – Switching among multiple delegates is hub-and-spoke: you can move main ↔ #ideas ↔ main ↔ #critic freely. Future “delegate chains” (sub-agents invoking their own sub-agents) remain out of scope; note this in breadcrumbs/help text so expectations stay clear.
 - **Undo/redo** – Codex does not provide an orchestrator-level undo stack. Any manual file edits a user performs while switched should be managed through their VCS tooling.
 - **Tool overlap** – Each sub-agent carries its own tool registry (e.g., plan tool). Streaming results during the switch stay in the sub-agent transcript; summaries injected on return should mention any plan updates so the main agent context is accurate.

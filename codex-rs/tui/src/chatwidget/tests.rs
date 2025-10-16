@@ -396,7 +396,7 @@ fn delegate_stream_deltas_and_restore_status() {
     assert!(chat.bottom_pane.status_widget().is_none());
     assert_eq!(chat.current_status_header, "Working");
 
-    chat.on_delegate_started("run-1", &agent, "sketch integration points");
+    chat.on_delegate_started("run-1", &agent, "sketch integration points", 0);
     assert_eq!(chat.delegate_run.as_deref(), Some("run-1"));
     assert!(chat.delegate_status_claimed);
     assert!(chat.bottom_pane.status_widget().is_some());
@@ -429,7 +429,7 @@ fn delegate_stream_deltas_and_restore_status() {
         "expected streamed delegate output in history"
     );
 
-    let streamed = chat.on_delegate_completed("run-1");
+    let streamed = chat.on_delegate_completed("run-1", 0);
     assert!(
         streamed,
         "delegate completion should report streaming output"
@@ -449,6 +449,36 @@ fn delegate_stream_deltas_and_restore_status() {
     assert!(!chat.delegate_status_claimed);
     assert!(chat.bottom_pane.status_widget().is_none());
     assert_eq!(chat.current_status_header, "Working");
+}
+
+#[test]
+fn nested_delegate_info_events_are_indented() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let outer = AgentId::parse("ideas_provider").expect("valid id");
+    let inner = AgentId::parse("creative_ideas").expect("valid id");
+
+    chat.on_delegate_started("outer-run", &outer, "outer brief", 0);
+    chat.on_delegate_started("inner-run", &inner, "inner brief", 1);
+
+    let mut messages = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            messages.push(lines_to_single_string(&cell.display_lines(120)));
+        }
+    }
+
+    assert!(
+        messages
+            .iter()
+            .any(|line| line.contains("↳ #ideas_provider…")),
+        "expected top-level delegate entry"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|line| line.contains("  ↳ #creative_ideas…")),
+        "expected indented nested delegate entry"
+    );
 }
 
 // (removed experimental resize snapshot test)

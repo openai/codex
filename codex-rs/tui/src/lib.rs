@@ -19,6 +19,7 @@ use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
+use codex_multi_agent::AgentId;
 use codex_multi_agent::AgentOrchestrator;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
@@ -240,7 +241,7 @@ pub async fn run_main(
         tools_web_search_request: cli.web_search.then_some(true),
     };
     let mut delegate_config_overrides = overrides.clone();
-    delegate_config_overrides.include_delegate_tool = Some(false);
+    delegate_config_overrides.include_delegate_tool = None;
     let delegate_cli_overrides = cli.config_overrides.clone();
     #[allow(clippy::print_stderr)]
     let agent_context = match codex_multi_agent::load_agent_context(
@@ -256,6 +257,7 @@ pub async fn run_main(
             std::process::exit(1);
         }
     };
+    let allowed_agents = agent_context.allowed_agents().to_vec();
     let global_codex_home = agent_context.global_codex_home().to_path_buf();
     let config_toml = agent_context.config_toml().clone();
     let mut config = agent_context.into_config();
@@ -346,6 +348,7 @@ pub async fn run_main(
         global_codex_home,
         delegate_cli_overrides,
         delegate_config_overrides,
+        allowed_agents,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
@@ -359,6 +362,7 @@ async fn run_ratatui_app(
     global_codex_home: PathBuf,
     delegate_cli_overrides: CliConfigOverrides,
     delegate_config_overrides: ConfigOverrides,
+    allowed_agents: Vec<AgentId>,
 ) -> color_eyre::Result<AppExitInfo> {
     let mut config = config;
     color_eyre::install()?;
@@ -457,6 +461,7 @@ async fn run_ratatui_app(
         SessionSource::Cli,
         delegate_cli_overrides,
         delegate_config_overrides,
+        allowed_agents,
     ));
     let login_status = get_login_status(&config, &global_codex_home);
     let should_show_windows_wsl_screen =

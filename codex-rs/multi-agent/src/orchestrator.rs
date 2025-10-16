@@ -120,8 +120,9 @@ pub struct AgentOrchestrator {
     cli_overrides: CliConfigOverrides,
     config_overrides: ConfigOverrides,
     listeners: Mutex<Vec<mpsc::UnboundedSender<DelegateEvent>>>,
-    active_run: Mutex<Option<DelegateRunId>>,
+    active_runs: Mutex<Vec<DelegateRunId>>,
     sessions: Mutex<HashMap<String, StoredDelegateSession>>,
+    allowed_agents: Vec<AgentId>,
 }
 
 impl AgentOrchestrator {
@@ -131,6 +132,7 @@ impl AgentOrchestrator {
         session_source: SessionSource,
         cli_overrides: CliConfigOverrides,
         config_overrides: ConfigOverrides,
+        allowed_agents: Vec<AgentId>,
     ) -> Self {
         let loader = AgentConfigLoader::new(global_codex_home.into());
         Self {
@@ -140,8 +142,9 @@ impl AgentOrchestrator {
             cli_overrides,
             config_overrides,
             listeners: Mutex::new(Vec::new()),
-            active_run: Mutex::new(None),
+            active_runs: Mutex::new(Vec::new()),
             sessions: Mutex::new(HashMap::new()),
+            allowed_agents,
         }
     }
 
@@ -157,14 +160,8 @@ impl AgentOrchestrator {
         self: &Arc<Self>,
         request: DelegateRequest,
     ) -> std::result::Result<DelegateRunId, OrchestratorError> {
-        let mut active = self.active_run.lock().await;
-        if active.is_some() {
-            return Err(OrchestratorError::DelegateInProgress);
-        }
-
         let run_id = Uuid::new_v4().to_string();
-        *active = Some(run_id.clone());
-        drop(active);
+        self.active_runs.lock().await.push(run_id.clone());
 
         let prompt_text = request.prompt.text.clone();
         self.emit(DelegateEvent::Started {
@@ -222,8 +219,10 @@ impl AgentOrchestrator {
                 }
             }
 
-            let mut active = orchestrator.active_run.lock().await;
-            *active = None;
+            let mut active = orchestrator.active_runs.lock().await;
+            if let Some(pos) = active.iter().rposition(|id| id == &run_id_clone) {
+                active.remove(pos);
+            }
         });
 
         Ok(run_id)
@@ -232,6 +231,11 @@ impl AgentOrchestrator {
     async fn emit(&self, event: DelegateEvent) {
         let mut listeners = self.listeners.lock().await;
         listeners.retain(|tx| tx.send(event.clone()).is_ok());
+    }
+
+    /// Return the list of configured agent ids available for delegation.
+    pub fn allowed_agents(&self) -> &[AgentId] {
+        &self.allowed_agents
     }
 
     /// Return all active delegate sessions ordered by most recent interaction.
@@ -319,9 +323,11 @@ impl AgentOrchestrator {
         let config = context.into_config();
         let cwd = config.cwd.clone();
         let config_clone = config.clone();
-        let conversation_manager = Arc::new(ConversationManager::new(
+        let delegate_adapter = crate::delegate_tool_adapter(Arc::clone(&self));
+        let conversation_manager = Arc::new(ConversationManager::with_delegate(
             auth_manager.clone(),
             session_source,
+            Some(delegate_adapter),
         ));
 
         let conversation_bundle = conversation_manager

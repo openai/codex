@@ -24,6 +24,7 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_multi_agent::AgentId;
 use codex_multi_agent::AgentOrchestrator;
 use codex_multi_agent::DelegateEvent;
 use codex_multi_agent::DelegateSessionSummary;
@@ -90,6 +91,7 @@ pub(crate) struct App {
 
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
+    delegate_stack: Vec<(String, AgentId)>,
 }
 
 impl App {
@@ -189,6 +191,7 @@ impl App {
             active_delegate_summary: None,
             primary_chat_backup: None,
             pending_update_action: None,
+            delegate_stack: Vec::new(),
         };
 
         let tui_events = tui.event_stream();
@@ -479,11 +482,20 @@ impl App {
                 prompt,
                 ..
             } => {
+                let depth = self.delegate_stack.len();
+                self.delegate_stack.push((run_id.clone(), agent_id.clone()));
                 self.chat_widget
-                    .on_delegate_started(&run_id, &agent_id, &prompt);
+                    .on_delegate_started(&run_id, &agent_id, &prompt, depth);
             }
             DelegateEvent::Delta { run_id, chunk, .. } => {
-                self.chat_widget.on_delegate_delta(&run_id, &chunk);
+                if self
+                    .delegate_stack
+                    .last()
+                    .map(|(id, _)| id == &run_id)
+                    .unwrap_or(false)
+                {
+                    self.chat_widget.on_delegate_delta(&run_id, &chunk);
+                }
             }
             DelegateEvent::Completed {
                 run_id,
@@ -492,22 +504,42 @@ impl App {
                 duration,
                 ..
             } => {
-                let streamed = self.chat_widget.on_delegate_completed(&run_id);
-                let hint = Some(format!(
-                    "finished in {}",
-                    Self::format_delegate_duration(duration)
-                ));
-                let response = output.as_deref().filter(|_| !streamed);
-                self.chat_widget
-                    .add_delegate_completion(&agent_id, response, hint);
+                if let Some(pos) = self
+                    .delegate_stack
+                    .iter()
+                    .rposition(|(id, _)| id == &run_id)
+                {
+                    let depth = pos;
+                    self.delegate_stack.remove(pos);
+                    let streamed = self.chat_widget.on_delegate_completed(&run_id, depth);
+                    let hint = Some(format!(
+                        "finished in {}",
+                        Self::format_delegate_duration(duration)
+                    ));
+                    let response = if depth == 0 {
+                        output.as_deref().filter(|_| !streamed)
+                    } else {
+                        None
+                    };
+                    self.chat_widget
+                        .add_delegate_completion(&agent_id, response, hint, depth);
+                }
             }
             DelegateEvent::Failed {
                 run_id,
                 agent_id,
                 error,
             } => {
-                self.chat_widget
-                    .on_delegate_failed(&run_id, &agent_id, &error);
+                if let Some(pos) = self
+                    .delegate_stack
+                    .iter()
+                    .rposition(|(id, _)| id == &run_id)
+                {
+                    let depth = pos;
+                    self.delegate_stack.remove(pos);
+                    self.chat_widget
+                        .on_delegate_failed(&run_id, &agent_id, &error, depth);
+                }
             }
         }
     }
@@ -779,6 +811,7 @@ mod tests {
                 show_raw_agent_reasoning: None,
                 tools_web_search_request: None,
             },
+            Vec::new(),
         ));
 
         App {
@@ -802,6 +835,7 @@ mod tests {
             active_delegate_summary: None,
             primary_chat_backup: None,
             pending_update_action: None,
+            delegate_stack: Vec::new(),
         }
     }
 

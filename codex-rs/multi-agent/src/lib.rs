@@ -145,6 +145,7 @@ pub struct AgentContext {
     global_codex_home: PathBuf,
     config_toml: ConfigToml,
     config: Config,
+    allowed_agents: Vec<AgentId>,
 }
 
 impl AgentContext {
@@ -154,6 +155,7 @@ impl AgentContext {
         global_codex_home: PathBuf,
         config_toml: ConfigToml,
         config: Config,
+        allowed_agents: Vec<AgentId>,
     ) -> Self {
         Self {
             agent_id,
@@ -161,6 +163,7 @@ impl AgentContext {
             global_codex_home,
             config_toml,
             config,
+            allowed_agents,
         }
     }
 
@@ -187,6 +190,11 @@ impl AgentContext {
     /// Provides the resolved [`Config`] for this context.
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Returns the configured sub-agent ids this context is allowed to invoke.
+    pub fn allowed_agents(&self) -> &[AgentId] {
+        &self.allowed_agents
     }
 
     /// Consume the context and return the inner [`Config`].
@@ -294,12 +302,20 @@ impl AgentConfigLoader {
             )
         })?;
 
+        let allowed_agents = config
+            .multi_agent
+            .agents
+            .iter()
+            .map(|agent| AgentId::parse(agent))
+            .collect::<Result<Vec<_>>>()?;
+
         Ok(AgentContext::new(
             agent_id_owned,
             agent_codex_home,
             self.registry.global_codex_home().to_path_buf(),
             config_toml,
             config,
+            allowed_agents,
         ))
     }
 }
@@ -383,6 +399,7 @@ mod tests {
         assert!(context.agent_id().is_none());
         assert_eq!(context.codex_home(), global.as_path());
         assert_eq!(context.config().model, "o2", "CLI override should win");
+        assert!(context.allowed_agents().is_empty());
 
         let agent_id = AgentId::parse("rust_test_writer").expect("parse");
         let agent_dir = loader
@@ -409,6 +426,52 @@ mod tests {
         assert_eq!(
             context.config().sandbox_policy,
             SandboxPolicy::DangerFullAccess
+        );
+        assert!(context.allowed_agents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn allowed_agents_follow_multi_agent_list() {
+        let temp_home = tempdir().expect("tempdir");
+        let global = temp_home.path().join("global");
+        let agents_root = global.join("agents");
+        fs::create_dir_all(global.join("log")).expect("log dir");
+        fs::create_dir_all(global.join("sessions")).expect("sessions dir");
+        fs::create_dir_all(global.join("history")).expect("history dir");
+        fs::create_dir_all(global.join("mcp")).expect("mcp dir");
+        fs::create_dir_all(global.join("tmp")).expect("tmp dir");
+        fs::create_dir_all(&agents_root).expect("agents dir");
+
+        fs::write(
+            global.join("config.toml"),
+            r#"
+model = "gpt-5"
+
+[multi_agent]
+agents = ["ideas_provider", "critic"]
+"#,
+        )
+        .expect("write global config");
+
+        let loader = AgentConfigLoader::new(global.clone());
+        let context = loader
+            .load_by_slug(
+                None,
+                &CliConfigOverrides::default(),
+                ConfigOverrides::default(),
+            )
+            .await
+            .expect("load context with multi-agent list");
+
+        let allowed: Vec<_> = context
+            .allowed_agents()
+            .iter()
+            .map(|id| id.as_str().to_string())
+            .collect();
+        assert_eq!(allowed, ["ideas_provider", "critic"]);
+        assert!(
+            context.config().include_delegate_tool,
+            "delegate tool automatically enabled when agents are configured"
         );
     }
 
