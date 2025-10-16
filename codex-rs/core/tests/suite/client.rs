@@ -809,7 +809,7 @@ async fn token_count_includes_rate_limits_snapshot() {
         _ => unreachable!(),
     };
 
-    let mut rate_limit_json = serde_json::to_value(&rate_limit_only).unwrap();
+    let rate_limit_json = serde_json::to_value(&rate_limit_only).unwrap();
     pretty_assertions::assert_eq!(
         rate_limit_json,
         json!({
@@ -839,7 +839,7 @@ async fn token_count_includes_rate_limits_snapshot() {
         _ => unreachable!(),
     };
     // Assert full JSON for the final token count event (usage + rate limits)
-    let mut final_json = serde_json::to_value(&final_payload).unwrap();
+    let final_json = serde_json::to_value(&final_payload).unwrap();
     pretty_assertions::assert_eq!(
         final_json,
         json!({
@@ -958,7 +958,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         unreachable!();
     };
 
-    let mut event_json = serde_json::to_value(&event).expect("serialize token count event");
+    let event_json = serde_json::to_value(&event).expect("serialize token count event");
     pretty_assertions::assert_eq!(
         event_json,
         json!({
