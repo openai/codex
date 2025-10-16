@@ -79,7 +79,9 @@ fn list_and_get_render_expected_output() -> Result<()> {
               ],
               "env": {
                 "TOKEN": "secret"
-              }
+              },
+              "env_vars": [],
+              "cwd": null
             },
             "startup_timeout_sec": null,
             "tool_timeout_sec": null,
