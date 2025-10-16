@@ -75,5 +75,3 @@ impl SessionState {
 
     // Pending input/approval moved to TurnState.
 }
-
-// tests removed
