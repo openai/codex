@@ -11,6 +11,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::DisabledTool;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
@@ -551,6 +552,8 @@ pub struct SendUserTurnParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
+    #[serde(default = "DisabledTool::defaults")]
+    pub disabled_tools: Vec<DisabledTool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]

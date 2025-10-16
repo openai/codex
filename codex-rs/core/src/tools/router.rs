@@ -16,6 +16,8 @@ use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
+use codex_protocol::protocol::DisabledTool;
+use serde_json::json;
 
 #[derive(Clone)]
 pub struct ToolCall {
@@ -45,6 +47,31 @@ impl ToolRouter {
             .iter()
             .map(|config| config.spec.clone())
             .collect()
+    }
+
+    pub fn allowed_tools(
+        &self,
+        disabled_tools: Option<&[DisabledTool]>,
+    ) -> Option<Vec<serde_json::Value>> {
+        let disabled = disabled_tools.unwrap_or(&[]);
+        if disabled.is_empty() {
+            return None;
+        }
+
+        let mut allowed = Vec::new();
+        for config in &self.specs {
+            let name = config.spec.name();
+            if disabled.iter().any(|tool| tool.matches_tool_name(name)) {
+                continue;
+            }
+            allowed.push(json!({"type": "function", "name": name}));
+        }
+
+        if allowed.len() == self.specs.len() {
+            None
+        } else {
+            Some(allowed)
+        }
     }
 
     pub fn tool_supports_parallel(&self, tool_name: &str) -> bool {

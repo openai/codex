@@ -37,6 +37,72 @@ pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum DisabledToolKind {
+    WebSearch,
+    ViewImage,
+    UnifiedExec,
+    UpdatePlan,
+    Shell,
+    ApplyPatch,
+    GrepFiles,
+    ReadFile,
+    ListDir,
+    LocalShell,
+}
+
+impl DisabledToolKind {
+    pub fn raw_name(self) -> &'static str {
+        match self {
+            DisabledToolKind::WebSearch => "web_search",
+            DisabledToolKind::ViewImage => "view_image",
+            DisabledToolKind::UnifiedExec => "unified_exec",
+            DisabledToolKind::UpdatePlan => "update_plan",
+            DisabledToolKind::Shell => "shell",
+            DisabledToolKind::ApplyPatch => "apply_patch",
+            DisabledToolKind::GrepFiles => "grep_files",
+            DisabledToolKind::ReadFile => "read_file",
+            DisabledToolKind::ListDir => "list_dir",
+            DisabledToolKind::LocalShell => "local_shell",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(untagged)]
+pub enum DisabledTool {
+    Known(DisabledToolKind),
+    Other(String),
+}
+
+impl From<DisabledToolKind> for DisabledTool {
+    fn from(kind: DisabledToolKind) -> Self {
+        DisabledTool::Known(kind)
+    }
+}
+
+impl DisabledTool {
+    /// Default disabled tools used when clients do not explicitly supply one.
+    pub fn defaults() -> Vec<Self> {
+        vec![DisabledToolKind::WebSearch.into()]
+    }
+
+    pub fn raw_name(&self) -> &str {
+        match self {
+            DisabledTool::Known(kind) => kind.raw_name(),
+            DisabledTool::Other(name) => name.as_str(),
+        }
+    }
+
+    pub fn matches_tool_name(&self, tool_name: &str) -> bool {
+        match self {
+            DisabledTool::Known(kind) => kind.raw_name() == tool_name,
+            DisabledTool::Other(name) => name == tool_name,
+        }
+    }
+}
+
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Submission {
@@ -90,6 +156,9 @@ pub enum Op {
         summary: ReasoningSummaryConfig,
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
+        // disables tools
+        #[serde(default = "DisabledTool::defaults")]
+        disabled_tools: Vec<DisabledTool>,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
@@ -125,6 +194,10 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// Updated disabled tools.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        disabled_tools: Option<Vec<DisabledTool>>,
     },
 
     /// Approve a command execution

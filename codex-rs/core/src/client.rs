@@ -241,7 +241,7 @@ impl ModelClient {
             instructions: &full_instructions,
             input: &input_with_instructions,
             tools: &tools_json,
-            tool_choice: "auto",
+            tool_choice: prompt.tool_choice(),
             parallel_tool_calls: prompt.parallel_tool_calls,
             reasoning,
             store: azure_workaround,

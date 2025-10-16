@@ -1015,6 +1015,7 @@ impl CodexMessageProcessor {
             model,
             effort,
             summary,
+            disabled_tools,
         } = params;
 
         let Ok(conversation) = self
@@ -1050,6 +1051,7 @@ impl CodexMessageProcessor {
                 effort,
                 summary,
                 final_output_json_schema: None,
+                disabled_tools,
             })
             .await;
 

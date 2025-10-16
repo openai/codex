@@ -12,6 +12,7 @@ use codex_core::config_types::McpServerTransportConfig;
 use codex_core::features::Feature;
 
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::DisabledTool;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -110,6 +111,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 
@@ -259,6 +261,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 
@@ -440,6 +443,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 

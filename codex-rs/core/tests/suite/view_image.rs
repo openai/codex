@@ -3,6 +3,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::DisabledTool;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -100,6 +101,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 
@@ -199,6 +201,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 
@@ -264,6 +267,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 

@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::DisabledTool;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -38,6 +39,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 

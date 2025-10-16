@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::DisabledTool;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -76,6 +77,7 @@ async fn list_dir_tool_returns_entries() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 
@@ -181,6 +183,7 @@ async fn list_dir_tool_depth_one_omits_children() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 
@@ -293,6 +296,7 @@ async fn list_dir_tool_depth_two_includes_children_only() -> anyhow::Result<()> 
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 
@@ -408,6 +412,7 @@ async fn list_dir_tool_depth_three_includes_grandchildren() -> anyhow::Result<()
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 

@@ -1158,6 +1158,7 @@ mod tests {
             &tools,
             &[
                 "unified_exec",
+                "web_search",
                 "view_image",
                 "test_server/cool",
                 "test_server/do",

@@ -4,6 +4,7 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
+use codex_core::protocol::DisabledTool;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -45,6 +46,7 @@ async fn submit_turn(test: &TestCodex, prompt: &str, sandbox_policy: SandboxPoli
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            disabled_tools: DisabledTool::defaults(),
         })
         .await?;
 
