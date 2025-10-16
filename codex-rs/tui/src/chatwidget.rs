@@ -442,7 +442,7 @@ impl ChatWidget {
             format!("Returned from #{}", summary.agent_id.as_str()),
             Some("Queued delegate context for next prompt.".to_string()),
         ));
-        self.add_to_history(history_cell::new_info_event(context.clone(), None));
+        self.add_to_history(history_cell::new_info_event(context, None));
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -519,13 +519,11 @@ impl ChatWidget {
 
         if self.delegate_context.is_some()
             && let Some(message) = last_agent_message.as_ref()
-        {
-            if !message.trim().is_empty() {
+            && !message.trim().is_empty() {
                 self.delegate_agent_frames.push(message.clone());
             }
-        }
 
-        let notification_response = last_agent_message.clone().unwrap_or_default();
+        let notification_response = last_agent_message.unwrap_or_default();
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
@@ -1461,14 +1459,13 @@ impl ChatWidget {
             tracing::error!("failed to send message: {e}");
         }
 
-        if !text.is_empty() {
-            if let Err(e) = self
+        if !text.is_empty()
+            && let Err(e) = self
                 .codex_op_tx
                 .send(Op::AddToHistory { text: text.clone() })
             {
                 tracing::error!("failed to send AddHistory op: {e}");
             }
-        }
 
         if !display_text.is_empty() {
             self.add_to_history(history_cell::new_user_prompt(display_text));

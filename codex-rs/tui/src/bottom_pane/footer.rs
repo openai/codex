@@ -84,7 +84,7 @@ fn footer_lines(props: &FooterProps) -> Vec<Line<'static>> {
         FooterMode::ShortcutSummary => {
             let mut spans: Vec<Span<'static>> = Vec::new();
             if let Some(label) = props.delegate_label.as_ref() {
-                spans.push(format!("In {}", label).cyan());
+                spans.push(format!("In {label}").cyan());
                 spans.push(" · ".dim());
             }
             let context_line = context_window_line(props.context_window_percent);
@@ -106,7 +106,7 @@ fn footer_lines(props: &FooterProps) -> Vec<Line<'static>> {
         FooterMode::ContextOnly => {
             let mut spans: Vec<Span<'static>> = Vec::new();
             if let Some(label) = props.delegate_label.as_ref() {
-                spans.push(format!("In {}", label).cyan());
+                spans.push(format!("In {label}").cyan());
                 spans.push(" · ".dim());
             }
             let context_line = context_window_line(props.context_window_percent);
