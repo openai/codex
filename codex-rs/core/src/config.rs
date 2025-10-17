@@ -923,8 +923,6 @@ pub struct ConfigToml {
     /// OTEL configuration.
     pub otel: Option<crate::config_types::OtelConfigToml>,
 
-    pub force_responses_api_store: Option<bool>,
-
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: Option<bool>,
 
