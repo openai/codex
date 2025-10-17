@@ -426,13 +426,16 @@ impl Session {
         // Surface individual client start-up failures to the user.
         if !failed_clients.is_empty() {
             for (server_name, err) in failed_clients {
+                let auth_status = auth_statuses.get(&server_name);
+                let requires_login = match auth_status {
+                    Some(McpAuthStatus::NotLoggedIn) => true,
+                    Some(McpAuthStatus::OAuth) => is_mcp_client_auth_required_error(&err),
+                    _ => false,
+                };
                 let log_message =
                     format!("MCP client for `{server_name}` failed to start: {err:#}");
                 error!("{log_message}");
-                let display_message = if matches!(
-                    auth_statuses.get(&server_name),
-                    Some(McpAuthStatus::NotLoggedIn)
-                ) {
+                let display_message = if requires_login {
                     format!(
                         "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}` to log in."
                     )
@@ -2522,6 +2525,11 @@ pub(crate) async fn exit_review_mode(
             content: vec![ContentItem::InputText { text: user_message }],
         }])
         .await;
+}
+
+fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
+    // StreamableHttpError::AuthRequired from the MCP SDK.
+    error.to_string().contains("Auth required")
 }
 
 use crate::executor::errors::ExecError;
