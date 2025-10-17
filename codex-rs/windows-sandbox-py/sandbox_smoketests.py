@@ -6,10 +6,12 @@ import os
 import sys
 import shutil
 import subprocess
+import argparse
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 SANDBOX_SCRIPT = str(Path(__file__).parent / "windows_restricted_token_v3.py")
+RUST_EXE = str((Path(__file__).parent.parent / "windows-sandbox-rs" / "target" / "release" / "codex-windows-sandbox.exe"))
 PY = sys.executable
 TIMEOUT_SEC = 20
 
@@ -22,12 +24,18 @@ class CaseResult:
     def __init__(self, name: str, ok: bool, detail: str = ""):
         self.name, self.ok, self.detail = name, ok, detail
 
+USE_RUST = False
+
+
 def run_sbx(policy: str, cmd_argv: List[str], cwd: Path, env_extra: Optional[dict] = None) -> Tuple[int, str, str]:
     env = os.environ.copy()
     env.update(ENV_BASE)
     if env_extra:
         env.update(env_extra)
-    argv = [PY, SANDBOX_SCRIPT, policy, "--", *cmd_argv]
+    if USE_RUST:
+        argv = [RUST_EXE, "--sandbox-policy-cwd", str(cwd), policy, "--", *cmd_argv]
+    else:
+        argv = [PY, SANDBOX_SCRIPT, policy, "--", *cmd_argv]
     cp = subprocess.run(argv, cwd=str(cwd), env=env,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                         timeout=TIMEOUT_SEC, text=True)
@@ -73,6 +81,11 @@ def summarize(results: List[CaseResult]) -> int:
     return 0 if ok == total else 1
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rust", action="store_true", help="Use Rust sandbox instead of Python")
+    ns, _ = parser.parse_known_args()
+    global USE_RUST
+    USE_RUST = bool(ns.rust)
     results: List[CaseResult] = []
     make_dir_clean(WS_ROOT)
     OUTSIDE.mkdir(exist_ok=True)
