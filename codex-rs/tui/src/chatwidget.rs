@@ -7,6 +7,7 @@ use codex_core::config::Config;
 use codex_core::config_types::Notifications;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
+use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -53,8 +54,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
@@ -81,6 +87,8 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::markdown::append_markdown;
+use crate::render::renderable::ColumnRenderable;
+use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
@@ -216,6 +224,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) feedback: codex_feedback::CodexFeedback,
 }
 
 pub(crate) struct ChatWidget {
@@ -264,6 +273,8 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+    // Feedback sink for /feedback
+    feedback: codex_feedback::CodexFeedback,
 }
 
 struct UserMessage {
@@ -909,6 +920,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            feedback,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -955,6 +967,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            feedback,
         }
     }
 
@@ -972,6 +985,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            feedback,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1020,6 +1034,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            feedback,
         }
     }
 
@@ -1123,10 +1138,37 @@ impl ChatWidget {
             return;
         }
         match cmd {
+            SlashCommand::Feedback => {
+                let snapshot = self.feedback.snapshot(self.conversation_id);
+                match snapshot.save_to_temp_file() {
+                    Ok(path) => {
+                        crate::bottom_pane::FeedbackView::show(
+                            &mut self.bottom_pane,
+                            path,
+                            snapshot,
+                        );
+                        self.request_redraw();
+                    }
+                    Err(e) => {
+                        self.add_to_history(history_cell::new_error_event(format!(
+                            "Failed to save feedback logs: {e}"
+                        )));
+                        self.request_redraw();
+                    }
+                }
+            }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
             SlashCommand::Init => {
+                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
+                if init_target.exists() {
+                    let message = format!(
+                        "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
+                    );
+                    self.add_info_message(message, None);
+                    return;
+                }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_text_message(INIT_PROMPT.to_string());
             }
@@ -1718,7 +1760,6 @@ impl ChatWidget {
         } else {
             default_choice
         };
-
         let mut items: Vec<SelectionItem> = Vec::new();
         for choice in choices.iter() {
             let effort = choice.display;
@@ -1740,6 +1781,14 @@ impl ChatWidget {
                         .find(|preset| preset.effort == choice.stored)
                         .map(|preset| preset.description.to_string())
                 });
+
+            let warning = "⚠ High reasoning effort can quickly consume Plus plan rate limits.";
+            let show_warning = model_slug == "gpt-5-codex" && effort == ReasoningEffortConfig::High;
+            let selected_description = show_warning.then(|| {
+                description
+                    .as_ref()
+                    .map_or(warning.to_string(), |d| format!("{d}\n{warning}"))
+            });
 
             let model_for_action = model_slug.clone();
             let effort_for_action = choice.stored;
@@ -1770,6 +1819,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: effort_label,
                 description,
+                selected_description,
                 is_current: is_current_model && choice.stored == highlight_choice,
                 actions,
                 dismiss_on_select: true,
@@ -1777,9 +1827,13 @@ impl ChatWidget {
             });
         }
 
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(
+            format!("Select Reasoning Level for {model_slug}").bold(),
+        ));
+
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Reasoning Level".to_string()),
-            subtitle: Some(format!("Reasoning for model {model_slug}")),
+            header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -1795,22 +1849,24 @@ impl ChatWidget {
         for preset in presets.into_iter() {
             let is_current =
                 current_approval == preset.approval && current_sandbox == preset.sandbox;
-            let approval = preset.approval;
-            let sandbox = preset.sandbox.clone();
             let name = preset.label.to_string();
             let description = Some(preset.description.to_string());
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                    cwd: None,
-                    approval_policy: Some(approval),
-                    sandbox_policy: Some(sandbox.clone()),
-                    model: None,
-                    effort: None,
-                    summary: None,
-                }));
-                tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-                tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
-            })];
+            let requires_confirmation = preset.id == "full-access"
+                && !self
+                    .config
+                    .notices
+                    .hide_full_access_warning
+                    .unwrap_or(false);
+            let actions: Vec<SelectionAction> = if requires_confirmation {
+                let preset_clone = preset.clone();
+                vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenFullAccessConfirmation {
+                        preset: preset_clone.clone(),
+                    });
+                })]
+            } else {
+                Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+            };
             items.push(SelectionItem {
                 name,
                 description,
@@ -1829,6 +1885,89 @@ impl ChatWidget {
         });
     }
 
+    fn approval_preset_actions(
+        approval: AskForApproval,
+        sandbox: SandboxPolicy,
+    ) -> Vec<SelectionAction> {
+        vec![Box::new(move |tx| {
+            let sandbox_clone = sandbox.clone();
+            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: Some(approval),
+                sandbox_policy: Some(sandbox_clone.clone()),
+                model: None,
+                effort: None,
+                summary: None,
+            }));
+            tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
+            tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
+        })]
+    }
+
+    pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
+        let approval = preset.approval;
+        let sandbox = preset.sandbox;
+        let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
+        let title_line = Line::from("Enable full access?").bold();
+        let info_line = Line::from(vec![
+            "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
+                .into(),
+            "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
+                .fg(Color::Red),
+        ]);
+        header_children.push(Box::new(title_line));
+        header_children.push(Box::new(
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
+        ));
+        let header = ColumnRenderable::with(header_children);
+
+        let mut accept_actions = Self::approval_preset_actions(approval, sandbox.clone());
+        accept_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
+        }));
+
+        let mut accept_and_remember_actions = Self::approval_preset_actions(approval, sandbox);
+        accept_and_remember_actions.push(Box::new(|tx| {
+            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
+            tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
+        }));
+
+        let deny_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
+            tx.send(AppEvent::OpenApprovalsPopup);
+        })];
+
+        let items = vec![
+            SelectionItem {
+                name: "Yes, continue anyway".to_string(),
+                description: Some("Apply full access for this session".to_string()),
+                actions: accept_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Yes, and don't ask again".to_string(),
+                description: Some("Enable full access and remember this choice".to_string()),
+                actions: accept_and_remember_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Cancel".to_string(),
+                description: Some("Go back without enabling full access".to_string()),
+                actions: deny_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(header),
+            ..Default::default()
+        });
+    }
+
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
         self.config.approval_policy = policy;
@@ -1837,6 +1976,10 @@ impl ChatWidget {
     /// Set the sandbox policy in the widget's config copy.
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
         self.config.sandbox_policy = policy;
+    }
+
+    pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
+        self.config.notices.hide_full_access_warning = Some(acknowledged);
     }
 
     /// Set the reasoning effort in the widget's config copy.
@@ -1928,6 +2071,8 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_mcp_tools_output(
             &self.config,
             ev.tools,
+            ev.resources,
+            ev.resource_templates,
             &ev.auth_statuses,
         ));
     }

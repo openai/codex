@@ -278,6 +278,7 @@ fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
         FunctionCallError::RespondToModel(msg) => {
             FunctionCallError::RespondToModel(format_exec_output(&msg))
         }
+        FunctionCallError::Denied(msg) => FunctionCallError::Denied(format_exec_output(&msg)),
         FunctionCallError::Fatal(msg) => FunctionCallError::Fatal(format_exec_output(&msg)),
         other => other,
     }

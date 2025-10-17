@@ -17,6 +17,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -27,6 +28,12 @@ use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
+use mcp_types::ListResourceTemplatesRequestParams;
+use mcp_types::ListResourceTemplatesResult;
+use mcp_types::ListResourcesRequestParams;
+use mcp_types::ListResourcesResult;
+use mcp_types::ReadResourceRequestParams;
+use mcp_types::ReadResourceResult;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -362,10 +369,25 @@ impl Session {
         );
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
+        let auth_statuses_fut = compute_auth_statuses(
+            config.mcp_servers.iter(),
+            config.mcp_oauth_credentials_store_mode,
+        );
 
         // Join all independent futures.
-        let (rollout_recorder, mcp_res, default_shell, (history_log_id, history_entry_count)) =
-            tokio::join!(rollout_fut, mcp_fut, default_shell_fut, history_meta_fut);
+        let (
+            rollout_recorder,
+            mcp_res,
+            default_shell,
+            (history_log_id, history_entry_count),
+            auth_statuses,
+        ) = tokio::join!(
+            rollout_fut,
+            mcp_fut,
+            default_shell_fut,
+            history_meta_fut,
+            auth_statuses_fut
+        );
 
         let rollout_recorder = rollout_recorder.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
@@ -392,11 +414,24 @@ impl Session {
         // Surface individual client start-up failures to the user.
         if !failed_clients.is_empty() {
             for (server_name, err) in failed_clients {
-                let message = format!("MCP client for `{server_name}` failed to start: {err:#}");
-                error!("{message}");
+                let log_message =
+                    format!("MCP client for `{server_name}` failed to start: {err:#}");
+                error!("{log_message}");
+                let display_message = if matches!(
+                    auth_statuses.get(&server_name),
+                    Some(McpAuthStatus::NotLoggedIn)
+                ) {
+                    format!(
+                        "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}` to log in."
+                    )
+                } else {
+                    log_message
+                };
                 post_session_configured_error_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Error(ErrorEvent { message }),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: display_message,
+                    }),
                 });
             }
         }
@@ -406,6 +441,7 @@ impl Session {
             config.model.as_str(),
             config.model_family.slug.as_str(),
             auth_manager.auth().and_then(|a| a.get_account_id()),
+            auth_manager.auth().and_then(|a| a.get_account_email()),
             auth_manager.auth().map(|a| a.mode),
             config.otel.log_user_prompt,
             terminal::user_agent(),
@@ -576,6 +612,7 @@ impl Session {
             warn!("Overwriting existing pending approval for sub_id: {event_id}");
         }
 
+        let parsed_cmd = parse_command(&command);
         let event = Event {
             id: event_id,
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
@@ -583,6 +620,7 @@ impl Session {
                 command,
                 cwd,
                 reason,
+                parsed_cmd,
             }),
         };
         self.send_event(event).await;
@@ -805,9 +843,6 @@ impl Session {
         }
     }
 
-    // Legacy executor-based exec methods removed; shell/apply_patch go through the
-    // new ToolOrchestrator which emits events during tool handling.
-
     /// Helper that emits a BackgroundEvent with the given message. This keeps
     /// the call‑sites terse so adding more diagnostics does not clutter the
     /// core agent logic.
@@ -863,6 +898,39 @@ impl Session {
             }
             None => Vec::with_capacity(0),
         }
+    }
+
+    pub async fn list_resources(
+        &self,
+        server: &str,
+        params: Option<ListResourcesRequestParams>,
+    ) -> anyhow::Result<ListResourcesResult> {
+        self.services
+            .mcp_connection_manager
+            .list_resources(server, params)
+            .await
+    }
+
+    pub async fn list_resource_templates(
+        &self,
+        server: &str,
+        params: Option<ListResourceTemplatesRequestParams>,
+    ) -> anyhow::Result<ListResourceTemplatesResult> {
+        self.services
+            .mcp_connection_manager
+            .list_resource_templates(server, params)
+            .await
+    }
+
+    pub async fn read_resource(
+        &self,
+        server: &str,
+        params: ReadResourceRequestParams,
+    ) -> anyhow::Result<ReadResourceResult> {
+        self.services
+            .mcp_connection_manager
+            .read_resource(server, params)
+            .await
     }
 
     pub async fn call_tool(
@@ -1192,16 +1260,23 @@ async fn submission_loop(
 
                 // This is a cheap lookup from the connection manager's cache.
                 let tools = sess.services.mcp_connection_manager.list_all_tools();
-                let auth_statuses = compute_auth_statuses(
-                    config.mcp_servers.iter(),
-                    config.mcp_oauth_credentials_store_mode,
-                )
-                .await;
+                let (auth_statuses, resources, resource_templates) = tokio::join!(
+                    compute_auth_statuses(
+                        config.mcp_servers.iter(),
+                        config.mcp_oauth_credentials_store_mode,
+                    ),
+                    sess.services.mcp_connection_manager.list_all_resources(),
+                    sess.services
+                        .mcp_connection_manager
+                        .list_all_resource_templates()
+                );
                 let event = Event {
                     id: sub_id,
                     msg: EventMsg::McpListToolsResponse(
                         crate::protocol::McpListToolsResponseEvent {
                             tools,
+                            resources,
+                            resource_templates,
                             auth_statuses,
                         },
                     ),
@@ -1990,7 +2065,8 @@ async fn try_run_turn(
                             response: Some(response),
                         });
                     }
-                    Err(FunctionCallError::RespondToModel(message)) => {
+                    Err(FunctionCallError::RespondToModel(message))
+                    | Err(FunctionCallError::Denied(message)) => {
                         let response = ResponseInputItem::FunctionCallOutput {
                             call_id: String::new(),
                             output: FunctionCallOutputPayload {
@@ -2518,6 +2594,7 @@ mod tests {
             config.model.as_str(),
             config.model_family.slug.as_str(),
             None,
+            Some("test@test.com".to_string()),
             Some(AuthMode::ChatGPT),
             false,
             "test".to_string(),
