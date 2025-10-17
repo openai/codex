@@ -149,7 +149,7 @@ async fn select_shell_sandbox(
                 ReviewDecision::Approved => Ok(SandboxDecision::user_override(false)),
                 ReviewDecision::ApprovedForSession => Ok(SandboxDecision::user_override(true)),
                 ReviewDecision::Denied | ReviewDecision::Abort => {
-                    Err(ExecError::rejection("exec command rejected by user"))
+                    Err(ExecError::denied("exec command rejected by user"))
                 }
             }
         }

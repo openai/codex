@@ -2492,7 +2492,7 @@
 {"ts":"2025-08-09T15:51:59.856Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:51:59.858Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
 {"ts":"2025-08-09T15:51:59.939Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] FunctionCall: {\"command\":[\"bash\",\"-lc\",\"just fix\"],\"with_escalated_permissions\":true,\"justifica"}
-{"ts":"2025-08-09T15:51:59.939Z","dir":"to_tui","kind":"codex_event","payload":{"id":"1","msg":{"type":"exec_approval_request","call_id":"call_KOxVodT3X5ci7LJmudvcovhW","command":["bash","-lc","just fix"],"cwd":"/Users/easong/code/codex/codex-rs","reason":"Run clippy with network and system permissions to apply lint fixes across workspace."}}}
+{"ts":"2025-08-09T15:51:59.939Z","dir":"to_tui","kind":"codex_event","payload":{"id":"1","msg":{"type":"exec_approval_request","call_id":"call_KOxVodT3X5ci7LJmudvcovhW","command":["bash","-lc","just fix"],"cwd":"/Users/easong/code/codex/codex-rs","reason":"Run clippy with network and system permissions to apply lint fixes across workspace.","parsed_cmd":[]}}}
 {"ts":"2025-08-09T15:51:59.939Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:51:59.939Z","dir":"to_tui","kind":"insert_history","lines":5}
 {"ts":"2025-08-09T15:51:59.939Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
@@ -4172,7 +4172,7 @@
 {"ts":"2025-08-09T15:53:09.375Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:53:09.376Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
 {"ts":"2025-08-09T15:53:09.448Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] FunctionCall: {\"command\":[\"bash\",\"-lc\",\"just fix\"],\"with_escalated_permissions\":true,\"justifica"}
-{"ts":"2025-08-09T15:53:09.448Z","dir":"to_tui","kind":"codex_event","payload":{"id":"1","msg":{"type":"exec_approval_request","call_id":"call_POl3hxI2xeszBLv9IOM7L2ir","command":["bash","-lc","just fix"],"cwd":"/Users/easong/code/codex/codex-rs","reason":"Clippy needs broader permissions; allow to run and apply lint fixes."}}}
+{"ts":"2025-08-09T15:53:09.448Z","dir":"to_tui","kind":"codex_event","payload":{"id":"1","msg":{"type":"exec_approval_request","call_id":"call_POl3hxI2xeszBLv9IOM7L2ir","command":["bash","-lc","just fix"],"cwd":"/Users/easong/code/codex/codex-rs","reason":"Clippy needs broader permissions; allow to run and apply lint fixes.","parsed_cmd":[]}}}
 {"ts":"2025-08-09T15:53:09.448Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:53:09.449Z","dir":"to_tui","kind":"insert_history","lines":5}
 {"ts":"2025-08-09T15:53:09.449Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
@@ -7776,7 +7776,7 @@
 {"ts":"2025-08-09T15:58:28.583Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:58:28.590Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
 {"ts":"2025-08-09T15:58:28.594Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] FunctionCall: {\"command\":[\"bash\",\"-lc\",\"cargo test -p codex-core shell::tests::test_current_she"}
-{"ts":"2025-08-09T15:58:28.594Z","dir":"to_tui","kind":"codex_event","payload":{"id":"1","msg":{"type":"exec_approval_request","call_id":"call_iMa8Qnw0dYLba4rVysxebmkV","command":["bash","-lc","cargo test -p codex-core shell::tests::test_current_shell_detects_zsh -- --nocapture"],"cwd":"/Users/easong/code/codex/codex-rs","reason":"Run the macOS shell detection test without sandbox limits so dscl can read user shell."}}}
+{"ts":"2025-08-09T15:58:28.594Z","dir":"to_tui","kind":"codex_event","payload":{"id":"1","msg":{"type":"exec_approval_request","call_id":"call_iMa8Qnw0dYLba4rVysxebmkV","command":["bash","-lc","cargo test -p codex-core shell::tests::test_current_shell_detects_zsh -- --nocapture"],"cwd":"/Users/easong/code/codex/codex-rs","reason":"Run the macOS shell detection test without sandbox limits so dscl can read user shell.","parsed_cmd":[]}}}
 {"ts":"2025-08-09T15:58:28.594Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:58:28.594Z","dir":"to_tui","kind":"insert_history","lines":5}
 {"ts":"2025-08-09T15:58:28.594Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
@@ -8730,7 +8730,7 @@
 {"ts":"2025-08-09T15:59:01.983Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:59:01.985Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
 {"ts":"2025-08-09T15:59:02.005Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] FunctionCall: {\"command\":[\"bash\",\"-lc\",\"cargo test --all-features\"],\"with_escalated_permissions"}
-{"ts":"2025-08-09T15:59:02.005Z","dir":"to_tui","kind":"codex_event","payload":{"id":"1","msg":{"type":"exec_approval_request","call_id":"call_JDFGIuFhYCIiQO1Aq2L9lBO1","command":["bash","-lc","cargo test --all-features"],"cwd":"/Users/easong/code/codex/codex-rs","reason":"Run full test suite without sandbox constraints to validate the merge."}}}
+{"ts":"2025-08-09T15:59:02.005Z","dir":"to_tui","kind":"codex_event","payload":{"id":"1","msg":{"type":"exec_approval_request","call_id":"call_JDFGIuFhYCIiQO1Aq2L9lBO1","command":["bash","-lc","cargo test --all-features"],"cwd":"/Users/easong/code/codex/codex-rs","reason":"Run full test suite without sandbox constraints to validate the merge.","parsed_cmd":[]}}}
 {"ts":"2025-08-09T15:59:02.006Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:59:02.006Z","dir":"to_tui","kind":"insert_history","lines":5}
 {"ts":"2025-08-09T15:59:02.006Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}

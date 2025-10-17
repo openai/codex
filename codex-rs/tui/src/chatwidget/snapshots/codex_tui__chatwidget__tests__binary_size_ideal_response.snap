@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 1152
 expression: "lines[start_idx..].join(\"\\n\")"
 ---
 • I need to check the codex-rs repository to explain why the project's binaries
@@ -33,7 +32,7 @@ expression: "lines[start_idx..].join(\"\\n\")"
   │ … +1 lines
   └ --- ansi-escape/Cargo.toml
     [package]
-    … +7 lines
+    … +243 lines
     ] }
     tracing = { version
 

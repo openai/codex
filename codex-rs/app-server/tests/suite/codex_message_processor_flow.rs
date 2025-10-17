@@ -27,6 +27,7 @@ use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InputMessageKind;
@@ -311,6 +312,9 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
             ],
             cwd: working_directory.clone(),
             reason: None,
+            parsed_cmd: vec![ParsedCommand::Unknown {
+                cmd: "python3 -c 'print(42)'".to_string()
+            }],
         },
         params
     );

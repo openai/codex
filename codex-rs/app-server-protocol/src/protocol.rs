@@ -9,6 +9,7 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
@@ -697,6 +698,7 @@ pub struct ExecCommandApprovalParams {
     pub cwd: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    pub parsed_cmd: Vec<ParsedCommand>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -904,6 +906,9 @@ mod tests {
             command: vec!["echo".to_string(), "hello".to_string()],
             cwd: PathBuf::from("/tmp"),
             reason: Some("because tests".to_string()),
+            parsed_cmd: vec![ParsedCommand::Unknown {
+                cmd: "echo hello".to_string(),
+            }],
         };
         let request = ServerRequest::ExecCommandApproval {
             request_id: RequestId::Integer(7),
@@ -920,6 +925,12 @@ mod tests {
                     "command": ["echo", "hello"],
                     "cwd": "/tmp",
                     "reason": "because tests",
+                    "parsedCmd": [
+                        {
+                            "type": "unknown",
+                            "cmd": "echo hello"
+                        }
+                    ]
                 }
             }),
             serde_json::to_value(&request)?,

@@ -79,6 +79,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         config.model.as_str(),
         config.model_family.slug.as_str(),
         None,
+        Some("test@test.com".to_string()),
         Some(AuthMode::ChatGPT),
         false,
         "test".to_string(),

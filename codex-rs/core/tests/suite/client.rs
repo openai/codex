@@ -657,6 +657,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         config.model.as_str(),
         config.model_family.slug.as_str(),
         None,
+        Some("test@test.com".to_string()),
         Some(AuthMode::ChatGPT),
         false,
         "test".to_string(),

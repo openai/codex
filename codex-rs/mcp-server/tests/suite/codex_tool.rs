@@ -3,6 +3,7 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_core::parse_command;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -176,6 +177,7 @@ fn create_expected_elicitation_request(
         shlex::try_join(command.iter().map(std::convert::AsRef::as_ref))?,
         workdir.to_string_lossy()
     );
+    let codex_parsed_cmd = parse_command::parse_command(&command);
     Ok(JSONRPCRequest {
         jsonrpc: JSONRPC_VERSION.into(),
         id: elicitation_request_id,
@@ -193,6 +195,7 @@ fn create_expected_elicitation_request(
             codex_command: command,
             codex_cwd: workdir.to_path_buf(),
             codex_call_id: "call1234".to_string(),
+            codex_parsed_cmd,
         })?),
     })
 }

@@ -78,6 +78,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         config.model.as_str(),
         config.model_family.slug.as_str(),
         None,
+        Some("test@test.com".to_string()),
         Some(AuthMode::ChatGPT),
         false,
         "test".to_string(),

@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use crate::CODEX_APPLY_PATCH_ARG1;
 use crate::apply_patch::ApplyPatchExec;
 use crate::exec::ExecParams;
+use crate::executor::ExecutorConfig;
 use crate::function_tool::FunctionCallError;
 
 pub(crate) enum ExecutionMode {
@@ -22,6 +23,7 @@ pub(crate) trait ExecutionBackend: Send + Sync {
         params: ExecParams,
         // Required for downcasting the apply_patch.
         mode: &ExecutionMode,
+        config: &ExecutorConfig,
     ) -> Result<ExecParams, FunctionCallError>;
 
     fn stream_stdout(&self, _mode: &ExecutionMode) -> bool {
@@ -47,6 +49,7 @@ impl ExecutionBackend for ShellBackend {
         &self,
         params: ExecParams,
         mode: &ExecutionMode,
+        _config: &ExecutorConfig,
     ) -> Result<ExecParams, FunctionCallError> {
         match mode {
             ExecutionMode::Shell => Ok(params),
@@ -65,17 +68,22 @@ impl ExecutionBackend for ApplyPatchBackend {
         &self,
         params: ExecParams,
         mode: &ExecutionMode,
+        config: &ExecutorConfig,
     ) -> Result<ExecParams, FunctionCallError> {
         match mode {
             ExecutionMode::ApplyPatch(exec) => {
-                let path_to_codex = env::current_exe()
-                    .ok()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .ok_or_else(|| {
-                        FunctionCallError::RespondToModel(
-                            "failed to determine path to codex executable".to_string(),
-                        )
-                    })?;
+                let path_to_codex = if let Some(exe_path) = &config.codex_exe {
+                    exe_path.to_string_lossy().to_string()
+                } else {
+                    env::current_exe()
+                        .ok()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .ok_or_else(|| {
+                            FunctionCallError::RespondToModel(
+                                "failed to determine path to codex executable".to_string(),
+                            )
+                        })?
+                };
 
                 let patch = exec.action.patch.clone();
                 Ok(ExecParams {

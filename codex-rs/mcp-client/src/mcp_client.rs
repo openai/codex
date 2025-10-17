@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -86,19 +87,26 @@ impl McpClient {
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
+        env_vars: &[String],
+        cwd: Option<PathBuf>,
     ) -> std::io::Result<Self> {
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .env_clear()
-            .envs(create_env_for_mcp_server(env))
+            .envs(create_env_for_mcp_server(env, env_vars))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             // As noted in the `kill_on_drop` documentation, the Tokio runtime makes
             // a "best effort" to reap-after-exit to avoid zombie processes, but it
             // is not a guarantee.
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+
+        let mut child = command.spawn()?;
 
         let stdin = child
             .stdin
@@ -447,12 +455,16 @@ const DEFAULT_ENV_VARS: &[&str] = &[
 /// `config.toml`.
 fn create_env_for_mcp_server(
     extra_env: Option<HashMap<String, String>>,
+    env_vars: &[String],
 ) -> HashMap<String, String> {
     DEFAULT_ENV_VARS
         .iter()
-        .filter_map(|var| match std::env::var(var) {
-            Ok(value) => Some((var.to_string(), value)),
-            Err(_) => None,
+        .copied()
+        .chain(env_vars.iter().map(String::as_str))
+        .filter_map(|var| {
+            std::env::var(var)
+                .ok()
+                .map(|value| (var.to_string(), value))
         })
         .chain(extra_env.unwrap_or_default())
         .collect::<HashMap<_, _>>()
@@ -462,14 +474,36 @@ fn create_env_for_mcp_server(
 mod tests {
     use super::*;
 
+    fn set_env_var(key: &str, value: &str) {
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
+
+    fn remove_env_var(key: &str) {
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
     #[test]
     fn test_create_env_for_mcp_server() {
         let env_var = "USER";
         let env_var_existing_value = std::env::var(env_var).unwrap_or_default();
         let env_var_new_value = format!("{env_var_existing_value}-extra");
         let extra_env = HashMap::from([(env_var.to_owned(), env_var_new_value.clone())]);
-        let mcp_server_env = create_env_for_mcp_server(Some(extra_env));
+        let mcp_server_env = create_env_for_mcp_server(Some(extra_env), &[]);
         assert!(mcp_server_env.contains_key("PATH"));
         assert_eq!(Some(&env_var_new_value), mcp_server_env.get(env_var));
+    }
+
+    #[test]
+    fn test_create_env_for_mcp_server_includes_extra_whitelisted_vars() {
+        let custom_var = "CUSTOM_TEST_VAR";
+        let value = "value".to_string();
+        set_env_var(custom_var, &value);
+        let mcp_server_env = create_env_for_mcp_server(None, &[custom_var.to_string()]);
+        assert_eq!(Some(&value), mcp_server_env.get(custom_var));
+        remove_env_var(custom_var);
     }
 }

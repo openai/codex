@@ -5,6 +5,8 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
+use crate::error::ConnectionFailedError;
+use crate::error::ResponseStreamFailed;
 use crate::error::Result;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
@@ -309,7 +311,12 @@ pub(crate) async fn stream_chat_completions(
         match res {
             Ok(resp) if resp.status().is_success() => {
                 let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
-                let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
+                let stream = resp.bytes_stream().map_err(|e| {
+                    CodexErr::ResponseStreamFailed(ResponseStreamFailed {
+                        source: e,
+                        request_id: None,
+                    })
+                });
                 tokio::spawn(process_chat_sse(
                     stream,
                     tx_event,
@@ -349,7 +356,9 @@ pub(crate) async fn stream_chat_completions(
             }
             Err(e) => {
                 if attempt > max_retries {
-                    return Err(e.into());
+                    return Err(CodexErr::ConnectionFailed(ConnectionFailedError {
+                        source: e,
+                    }));
                 }
                 let delay = backoff(attempt);
                 tokio::time::sleep(delay).await;

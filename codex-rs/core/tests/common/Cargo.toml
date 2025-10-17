@@ -10,8 +10,10 @@ path = "lib.rs"
 anyhow = { workspace = true }
 assert_cmd = { workspace = true }
 codex-core = { workspace = true }
+notify = { workspace = true }
 regex-lite = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
+walkdir = { workspace = true }
 wiremock = { workspace = true }

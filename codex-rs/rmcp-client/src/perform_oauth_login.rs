@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::string::String;
 use std::sync::Arc;
 use std::time::Duration;
@@ -5,6 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use reqwest::ClientBuilder;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
 use tiny_http::Server;
@@ -16,6 +18,8 @@ use crate::OAuthCredentialsStoreMode;
 use crate::StoredOAuthTokens;
 use crate::WrappedOAuthTokenResponse;
 use crate::save_oauth_tokens;
+use crate::utils::apply_default_headers;
+use crate::utils::build_default_headers;
 
 struct CallbackServerGuard {
     server: Arc<Server>,
@@ -31,6 +35,8 @@ pub async fn perform_oauth_login(
     server_name: &str,
     server_url: &str,
     store_mode: OAuthCredentialsStoreMode,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
 ) -> Result<()> {
     let server = Arc::new(Server::http("127.0.0.1:0").map_err(|err| anyhow!(err))?);
     let guard = CallbackServerGuard {
@@ -51,7 +57,10 @@ pub async fn perform_oauth_login(
     let (tx, rx) = oneshot::channel();
     spawn_callback_server(server, tx);
 
-    let mut oauth_state = OAuthState::new(server_url, None).await?;
+    let default_headers = build_default_headers(http_headers, env_http_headers)?;
+    let http_client = apply_default_headers(ClientBuilder::new(), &default_headers).build()?;
+
+    let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
     oauth_state
         .start_authorization(&[], &redirect_uri, Some("Codex"))
         .await?;

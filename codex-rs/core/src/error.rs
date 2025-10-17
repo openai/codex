@@ -91,6 +91,12 @@ pub enum CodexErr {
     #[error("{0}")]
     UsageLimitReached(UsageLimitReachedError),
 
+    #[error("{0}")]
+    ResponseStreamFailed(ResponseStreamFailed),
+
+    #[error("{0}")]
+    ConnectionFailed(ConnectionFailedError),
+
     #[error(
         "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
     )]
@@ -127,9 +133,6 @@ pub enum CodexErr {
     Io(#[from] io::Error),
 
     #[error(transparent)]
-    Reqwest(#[from] reqwest::Error),
-
-    #[error(transparent)]
     Json(#[from] serde_json::Error),
 
     #[cfg(target_os = "linux")]
@@ -145,6 +148,37 @@ pub enum CodexErr {
 
     #[error("{0}")]
     EnvVar(EnvVarError),
+}
+
+#[derive(Debug)]
+pub struct ConnectionFailedError {
+    pub source: reqwest::Error,
+}
+
+impl std::fmt::Display for ConnectionFailedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Connection failed: {}", self.source)
+    }
+}
+
+#[derive(Debug)]
+pub struct ResponseStreamFailed {
+    pub source: reqwest::Error,
+    pub request_id: Option<String>,
+}
+
+impl std::fmt::Display for ResponseStreamFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Error while reading the server response: {}{}",
+            self.source,
+            self.request_id
+                .as_ref()
+                .map(|id| format!(", request id: {id}"))
+                .unwrap_or_default()
+        )
+    }
 }
 
 #[derive(Debug)]

@@ -27,11 +27,13 @@ mod footer;
 mod list_selection_view;
 mod prompt_args;
 pub(crate) use list_selection_view::SelectionViewParams;
+mod feedback_view;
 mod paste_burst;
 pub mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
+pub(crate) use feedback_view::FeedbackView;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
@@ -236,7 +238,7 @@ impl BottomPane {
             CancellationEvent::NotHandled
         } else {
             self.view_stack.pop();
-            self.set_composer_text(String::new());
+            self.clear_composer_for_ctrl_c();
             self.show_ctrl_c_quit_hint();
             CancellationEvent::Handled
         }
@@ -267,6 +269,11 @@ impl BottomPane {
     /// Replace the composer text with `text`.
     pub(crate) fn set_composer_text(&mut self, text: String) {
         self.composer.set_text_content(text);
+        self.request_redraw();
+    }
+
+    pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
+        self.composer.clear_for_ctrl_c();
         self.request_redraw();
     }
 

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +22,14 @@ use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
 use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
+use mcp_types::ListResourceTemplatesRequestParams;
+use mcp_types::ListResourceTemplatesResult;
+use mcp_types::ListResourcesRequestParams;
+use mcp_types::ListResourcesResult;
+use mcp_types::ReadResourceRequestParams;
+use mcp_types::ReadResourceResult;
+use mcp_types::Resource;
+use mcp_types::ResourceTemplate;
 use mcp_types::Tool;
 
 use serde_json::json;
@@ -102,36 +111,51 @@ enum McpClientAdapter {
 }
 
 impl McpClientAdapter {
+    #[allow(clippy::too_many_arguments)]
     async fn new_stdio_client(
         use_rmcp_client: bool,
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
+        env_vars: Vec<String>,
+        cwd: Option<PathBuf>,
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
     ) -> Result<Self> {
         if use_rmcp_client {
-            let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
+            let client =
+                Arc::new(RmcpClient::new_stdio_client(program, args, env, &env_vars, cwd).await?);
             client.initialize(params, Some(startup_timeout)).await?;
             Ok(McpClientAdapter::Rmcp(client))
         } else {
-            let client = Arc::new(McpClient::new_stdio_client(program, args, env).await?);
+            let client =
+                Arc::new(McpClient::new_stdio_client(program, args, env, &env_vars, cwd).await?);
             client.initialize(params, Some(startup_timeout)).await?;
             Ok(McpClientAdapter::Legacy(client))
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn new_streamable_http_client(
         server_name: String,
         url: String,
         bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
         let client = Arc::new(
-            RmcpClient::new_streamable_http_client(&server_name, &url, bearer_token, store_mode)
-                .await?,
+            RmcpClient::new_streamable_http_client(
+                &server_name,
+                &url,
+                bearer_token,
+                http_headers,
+                env_http_headers,
+                store_mode,
+            )
+            .await?,
         );
         client.initialize(params, Some(startup_timeout)).await?;
         Ok(McpClientAdapter::Rmcp(client))
@@ -145,6 +169,47 @@ impl McpClientAdapter {
         match self {
             McpClientAdapter::Legacy(client) => client.list_tools(params, timeout).await,
             McpClientAdapter::Rmcp(client) => client.list_tools(params, timeout).await,
+        }
+    }
+
+    async fn list_resources(
+        &self,
+        params: Option<mcp_types::ListResourcesRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::ListResourcesResult> {
+        match self {
+            McpClientAdapter::Legacy(_) => Ok(ListResourcesResult {
+                next_cursor: None,
+                resources: Vec::new(),
+            }),
+            McpClientAdapter::Rmcp(client) => client.list_resources(params, timeout).await,
+        }
+    }
+
+    async fn read_resource(
+        &self,
+        params: mcp_types::ReadResourceRequestParams,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::ReadResourceResult> {
+        match self {
+            McpClientAdapter::Legacy(_) => Err(anyhow!(
+                "resources/read is not supported by legacy MCP clients"
+            )),
+            McpClientAdapter::Rmcp(client) => client.read_resource(params, timeout).await,
+        }
+    }
+
+    async fn list_resource_templates(
+        &self,
+        params: Option<mcp_types::ListResourceTemplatesRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<mcp_types::ListResourceTemplatesResult> {
+        match self {
+            McpClientAdapter::Legacy(_) => Ok(ListResourceTemplatesResult {
+                next_cursor: None,
+                resource_templates: Vec::new(),
+            }),
+            McpClientAdapter::Rmcp(client) => client.list_resource_templates(params, timeout).await,
         }
     }
 
@@ -246,7 +311,13 @@ impl McpConnectionManager {
                 };
 
                 let client = match transport {
-                    McpServerTransportConfig::Stdio { command, args, env } => {
+                    McpServerTransportConfig::Stdio {
+                        command,
+                        args,
+                        env,
+                        env_vars,
+                        cwd,
+                    } => {
                         let command_os: OsString = command.into();
                         let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
                         McpClientAdapter::new_stdio_client(
@@ -254,16 +325,25 @@ impl McpConnectionManager {
                             command_os,
                             args_os,
                             env,
+                            env_vars,
+                            cwd,
                             params,
                             startup_timeout,
                         )
                         .await
                     }
-                    McpServerTransportConfig::StreamableHttp { url, .. } => {
+                    McpServerTransportConfig::StreamableHttp {
+                        url,
+                        http_headers,
+                        env_http_headers,
+                        ..
+                    } => {
                         McpClientAdapter::new_streamable_http_client(
                             server_name.clone(),
                             url,
                             resolved_bearer_token.unwrap_or_default(),
+                            http_headers,
+                            env_http_headers,
                             params,
                             startup_timeout,
                             store_mode,
@@ -318,13 +398,140 @@ impl McpConnectionManager {
         Ok((Self { clients, tools }, errors))
     }
 
-    /// Returns a single map that contains **all** tools. Each key is the
+    /// Returns a single map that contains all tools. Each key is the
     /// fully-qualified name for the tool.
     pub fn list_all_tools(&self) -> HashMap<String, Tool> {
         self.tools
             .iter()
             .map(|(name, tool)| (name.clone(), tool.tool.clone()))
             .collect()
+    }
+
+    /// Returns a single map that contains all resources. Each key is the
+    /// server name and the value is a vector of resources.
+    pub async fn list_all_resources(&self) -> HashMap<String, Vec<Resource>> {
+        let mut join_set = JoinSet::new();
+
+        for (server_name, managed_client) in &self.clients {
+            let server_name_cloned = server_name.clone();
+            let client_clone = managed_client.client.clone();
+            let timeout = managed_client.tool_timeout;
+
+            join_set.spawn(async move {
+                let mut collected: Vec<Resource> = Vec::new();
+                let mut cursor: Option<String> = None;
+
+                loop {
+                    let params = cursor.as_ref().map(|next| ListResourcesRequestParams {
+                        cursor: Some(next.clone()),
+                    });
+                    let response = match client_clone.list_resources(params, timeout).await {
+                        Ok(result) => result,
+                        Err(err) => return (server_name_cloned, Err(err)),
+                    };
+
+                    collected.extend(response.resources);
+
+                    match response.next_cursor {
+                        Some(next) => {
+                            if cursor.as_ref() == Some(&next) {
+                                return (
+                                    server_name_cloned,
+                                    Err(anyhow!("resources/list returned duplicate cursor")),
+                                );
+                            }
+                            cursor = Some(next);
+                        }
+                        None => return (server_name_cloned, Ok(collected)),
+                    }
+                }
+            });
+        }
+
+        let mut aggregated: HashMap<String, Vec<Resource>> = HashMap::new();
+
+        while let Some(join_res) = join_set.join_next().await {
+            match join_res {
+                Ok((server_name, Ok(resources))) => {
+                    aggregated.insert(server_name, resources);
+                }
+                Ok((server_name, Err(err))) => {
+                    warn!("Failed to list resources for MCP server '{server_name}': {err:#}");
+                }
+                Err(err) => {
+                    warn!("Task panic when listing resources for MCP server: {err:#}");
+                }
+            }
+        }
+
+        aggregated
+    }
+
+    /// Returns a single map that contains all resource templates. Each key is the
+    /// server name and the value is a vector of resource templates.
+    pub async fn list_all_resource_templates(&self) -> HashMap<String, Vec<ResourceTemplate>> {
+        let mut join_set = JoinSet::new();
+
+        for (server_name, managed_client) in &self.clients {
+            let server_name_cloned = server_name.clone();
+            let client_clone = managed_client.client.clone();
+            let timeout = managed_client.tool_timeout;
+
+            join_set.spawn(async move {
+                let mut collected: Vec<ResourceTemplate> = Vec::new();
+                let mut cursor: Option<String> = None;
+
+                loop {
+                    let params = cursor
+                        .as_ref()
+                        .map(|next| ListResourceTemplatesRequestParams {
+                            cursor: Some(next.clone()),
+                        });
+                    let response = match client_clone.list_resource_templates(params, timeout).await
+                    {
+                        Ok(result) => result,
+                        Err(err) => return (server_name_cloned, Err(err)),
+                    };
+
+                    collected.extend(response.resource_templates);
+
+                    match response.next_cursor {
+                        Some(next) => {
+                            if cursor.as_ref() == Some(&next) {
+                                return (
+                                    server_name_cloned,
+                                    Err(anyhow!(
+                                        "resources/templates/list returned duplicate cursor"
+                                    )),
+                                );
+                            }
+                            cursor = Some(next);
+                        }
+                        None => return (server_name_cloned, Ok(collected)),
+                    }
+                }
+            });
+        }
+
+        let mut aggregated: HashMap<String, Vec<ResourceTemplate>> = HashMap::new();
+
+        while let Some(join_res) = join_set.join_next().await {
+            match join_res {
+                Ok((server_name, Ok(templates))) => {
+                    aggregated.insert(server_name, templates);
+                }
+                Ok((server_name, Err(err))) => {
+                    warn!(
+                        "Failed to list resource templates for MCP server '{server_name}': {err:#}"
+                    );
+                }
+                Err(err) => {
+                    warn!("Task panic when listing resource templates for MCP server: {err:#}");
+                }
+            }
+        }
+
+        aggregated
     }
 
     /// Invoke the tool indicated by the (server, tool) pair.
@@ -338,13 +545,71 @@ impl McpConnectionManager {
             .clients
             .get(server)
             .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
-        let client = managed.client.clone();
+        let client = &managed.client;
         let timeout = managed.tool_timeout;
 
         client
             .call_tool(tool.to_string(), arguments, timeout)
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))
+    }
+
+    /// List resources from the specified server.
+    pub async fn list_resources(
+        &self,
+        server: &str,
+        params: Option<ListResourcesRequestParams>,
+    ) -> Result<ListResourcesResult> {
+        let managed = self
+            .clients
+            .get(server)
+            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let client = managed.client.clone();
+        let timeout = managed.tool_timeout;
+
+        client
+            .list_resources(params, timeout)
+            .await
+            .with_context(|| format!("resources/list failed for `{server}`"))
+    }
+
+    /// List resource templates from the specified server.
+    pub async fn list_resource_templates(
+        &self,
+        server: &str,
+        params: Option<ListResourceTemplatesRequestParams>,
+    ) -> Result<ListResourceTemplatesResult> {
+        let managed = self
+            .clients
+            .get(server)
+            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let client = managed.client.clone();
+        let timeout = managed.tool_timeout;
+
+        client
+            .list_resource_templates(params, timeout)
+            .await
+            .with_context(|| format!("resources/templates/list failed for `{server}`"))
+    }
+
+    /// Read a resource from the specified server.
+    pub async fn read_resource(
+        &self,
+        server: &str,
+        params: ReadResourceRequestParams,
+    ) -> Result<ReadResourceResult> {
+        let managed = self
+            .clients
+            .get(server)
+            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
+        let client = managed.client.clone();
+        let timeout = managed.tool_timeout;
+        let uri = params.uri.clone();
+
+        client
+            .read_resource(params, timeout)
+            .await
+            .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
     pub fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
@@ -382,7 +647,7 @@ fn resolve_bearer_token(
 }
 
 /// Query every server for its available tools and return a single map that
-/// contains **all** tools. Each key is the fully-qualified name for the tool.
+/// contains all tools. Each key is the fully-qualified name for the tool.
 async fn list_all_tools(clients: &HashMap<String, ManagedClient>) -> Result<Vec<ToolInfo>> {
     let mut join_set = JoinSet::new();
 

@@ -5,6 +5,7 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::config::OPENAI_DEFAULT_MODEL;
+use codex_core::features::Feature;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
@@ -99,10 +100,10 @@ async fn codex_mini_latest_tools() {
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
+    config.features.disable(Feature::ApplyPatchFreeform);
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    config.include_apply_patch_tool = false;
     config.model = "codex-mini-latest".to_string();
     config.model_family = find_family_for_model("codex-mini-latest").unwrap();
 
@@ -185,7 +186,7 @@ async fn prompt_tools_are_consistent_across_requests() {
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
-    config.include_plan_tool = true;
+    config.features.enable(Feature::PlanTool);
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
@@ -222,10 +223,28 @@ async fn prompt_tools_are_consistent_across_requests() {
     // our internal implementation is responsible for keeping tools in sync
     // with the OpenAI schema, so we just verify the tool presence here
     let tools_by_model: HashMap<&'static str, Vec<&'static str>> = HashMap::from([
-        ("gpt-5", vec!["shell", "update_plan", "view_image"]),
+        (
+            "gpt-5",
+            vec![
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "view_image",
+            ],
+        ),
         (
             "gpt-5-codex",
-            vec!["shell", "update_plan", "apply_patch", "view_image"],
+            vec![
+                "shell",
+                "list_mcp_resources",
+                "list_mcp_resource_templates",
+                "read_mcp_resource",
+                "update_plan",
+                "apply_patch",
+                "view_image",
+            ],
         ),
     ]);
     let expected_tools_names = tools_by_model

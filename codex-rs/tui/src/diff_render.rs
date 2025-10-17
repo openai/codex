@@ -72,7 +72,7 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             )));
         }
 
-        Box::new(ColumnRenderable::new(rows))
+        Box::new(ColumnRenderable::with(rows))
     }
 }
 
