@@ -870,7 +870,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     let context_window = 100;
     let limit = (context_window * 90 / 100) as i64;
-    let over_limit_tokens = (context_window * 95 / 100 + 1) as u64;
+    let over_limit_tokens = context_window * 95 / 100 + 1;
 
     let first_turn = sse(vec![
         ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
