@@ -1682,10 +1682,12 @@ mod tests {
                 ParsedCommand::Read {
                     name: "shimmer.rs".into(),
                     cmd: "cat shimmer.rs".into(),
+                    path: "shimmer.rs".into(),
                 },
                 ParsedCommand::Read {
                     name: "status_indicator_widget.rs".into(),
                     cmd: "cat status_indicator_widget.rs".into(),
+                    path: "status_indicator_widget.rs".into(),
                 },
             ],
             output: None,
@@ -1742,6 +1744,7 @@ mod tests {
                 vec![ParsedCommand::Read {
                     name: "shimmer.rs".into(),
                     cmd: "cat shimmer.rs".into(),
+                    path: "shimmer.rs".into(),
                 }],
             )
             .unwrap();
@@ -1763,6 +1766,7 @@ mod tests {
                 vec![ParsedCommand::Read {
                     name: "status_indicator_widget.rs".into(),
                     cmd: "cat status_indicator_widget.rs".into(),
+                    path: "status_indicator_widget.rs".into(),
                 }],
             )
             .unwrap();
@@ -1791,14 +1795,17 @@ mod tests {
                 ParsedCommand::Read {
                     name: "auth.rs".into(),
                     cmd: "cat auth.rs".into(),
+                    path: "auth.rs".into(),
                 },
                 ParsedCommand::Read {
                     name: "auth.rs".into(),
                     cmd: "cat auth.rs".into(),
+                    path: "auth.rs".into(),
                 },
                 ParsedCommand::Read {
                     name: "shimmer.rs".into(),
                     cmd: "cat shimmer.rs".into(),
+                    path: "shimmer.rs".into(),
                 },
             ],
             output: None,
