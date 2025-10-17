@@ -95,12 +95,15 @@ impl Session {
                         ctx,
                         sub_clone.clone(),
                         input,
-                        task_cancellation_token,
+                        task_cancellation_token.child_token(),
                     )
                     .await;
-                // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                let sess = session_ctx.clone_session();
-                sess.on_task_finished(sub_clone, last_agent_message).await;
+
+                if !task_cancellation_token.is_cancelled() {
+                    // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                    let sess = session_ctx.clone_session();
+                    sess.on_task_finished(sub_clone, last_agent_message).await;
+                }
                 done_clone.notify_waiters();
             })
         };

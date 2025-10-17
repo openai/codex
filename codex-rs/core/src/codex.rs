@@ -2559,6 +2559,8 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use std::time::Duration;
+    use tokio::time::sleep;
 
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -2947,12 +2949,15 @@ mod tests {
     }
 
     #[derive(Clone, Copy)]
-    struct NeverEndingTask(TaskKind);
+    struct NeverEndingTask {
+        kind: TaskKind,
+        listen_to_cancellation_token: bool,
+    }
 
     #[async_trait::async_trait]
     impl SessionTask for NeverEndingTask {
         fn kind(&self) -> TaskKind {
-            self.0
+            self.kind
         }
 
         async fn run(
@@ -2963,18 +2968,24 @@ mod tests {
             _input: Vec<InputItem>,
             cancellation_token: CancellationToken,
         ) -> Option<String> {
-            cancellation_token.cancelled().await;
-            return None;
+            if self.listen_to_cancellation_token {
+                cancellation_token.cancelled().await;
+                return None;
+            }
+            loop {
+                sleep(Duration::from_secs(60)).await;
+            }
         }
 
         async fn abort(&self, session: Arc<SessionTaskContext>, sub_id: &str) {
-            if let TaskKind::Review = self.0 {
+            if let TaskKind::Review = self.kind {
                 exit_review_mode(session.clone_session(), sub_id.to_string(), None).await;
             }
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test_log::test]
     async fn abort_regular_task_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-regular".to_string();
@@ -2985,7 +2996,41 @@ mod tests {
             Arc::clone(&tc),
             sub_id.clone(),
             input,
-            NeverEndingTask(TaskKind::Regular),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+        let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for event")
+            .expect("event");
+        match evt.msg {
+            EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn abort_gracefuly_emits_turn_aborted_only() {
+        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let sub_id = "sub-regular".to_string();
+        let input = vec![InputItem::Text {
+            text: "hello".to_string(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            sub_id.clone(),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
         )
         .await;
 
@@ -2999,7 +3044,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-review".to_string();
@@ -3010,18 +3055,27 @@ mod tests {
             Arc::clone(&tc),
             sub_id.clone(),
             input,
-            NeverEndingTask(TaskKind::Review),
+            NeverEndingTask {
+                kind: TaskKind::Review,
+                listen_to_cancellation_token: false,
+            },
         )
         .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        let first = rx.recv().await.expect("first event");
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for first event")
+            .expect("first event");
         match first.msg {
             EventMsg::ExitedReviewMode(ev) => assert!(ev.review_output.is_none()),
             other => panic!("unexpected first event: {other:?}"),
         }
-        let second = rx.recv().await.expect("second event");
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for second event")
+            .expect("second event");
         match second.msg {
             EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
             other => panic!("unexpected second event: {other:?}"),
