@@ -373,7 +373,7 @@ cwd = "/Users/<user>/code/my-server"
 ```toml
 # Streamable HTTP requires the experimental rmcp client
 experimental_use_rmcp_client = true
-[mcp_servers.figma]
+[mcp_servers.linear]
 url = "https://mcp.linear.app/mcp"
 # Optional environment variable containing a bearer token to use for auth
 bearer_token_env_var = "<token>"
