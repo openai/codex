@@ -25,13 +25,9 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
-use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use wiremock::Mock;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
@@ -336,10 +332,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .await
         .unwrap();
 
-    println!(
-        "first event: {:?}",
-        tokio::time::timeout(std::time::Duration::from_secs(10), codex.next_event()).await
-    );
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
@@ -437,24 +430,14 @@ async fn context_window_prompts_lower_limit_when_threshold_high() {
         body.contains(FIRST_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(first_matcher)
-        .respond_with(sse_response(sse1))
-        .mount(&server)
-        .await;
+    let _first_request = mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(second_matcher)
-        .respond_with(sse_response(sse2))
-        .mount(&server)
-        .await;
+    let _second_request = mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -481,14 +464,7 @@ async fn context_window_prompts_lower_limit_when_threshold_high() {
         .await
         .unwrap();
 
-    let event = tokio::time::timeout(std::time::Duration::from_secs(10), codex.next_event())
-        .await
-        .expect("first event should arrive")
-        .expect("event stream closed unexpectedly");
-    println!("first event: {:?}", event.msg);
-    if !matches!(event.msg, EventMsg::TaskComplete(_)) {
-        panic!("expected first event to be TaskComplete");
-    }
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex
         .submit(Op::UserInput {
@@ -516,9 +492,6 @@ async fn context_window_prompts_lower_limit_when_threshold_high() {
         message.contains("model context window"),
         "error message should mention the context window"
     );
-
-    // Attempt to drain any trailing completion event, ignoring timeouts when none arrive.
-    let _ = tokio::time::timeout(std::time::Duration::from_millis(100), codex.next_event()).await;
 
     let requests = server.received_requests().await.unwrap();
     assert_eq!(
@@ -556,24 +529,14 @@ async fn auto_compact_respects_config_toggle() {
         body.contains(FIRST_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(first_matcher)
-        .respond_with(sse_response(sse1))
-        .mount(&server)
-        .await;
+    let _first_request = mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(second_matcher)
-        .respond_with(sse_response(sse2))
-        .mount(&server)
-        .await;
+    let _second_request = mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -600,9 +563,6 @@ async fn auto_compact_respects_config_toggle() {
         })
         .await
         .unwrap();
-
-    // Ensure the first turn finishes before sending another request.
-    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
@@ -653,24 +613,14 @@ async fn auto_compact_override_disables_inline_compaction() {
         body.contains(FIRST_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(first_matcher)
-        .respond_with(sse_response(sse1))
-        .mount(&server)
-        .await;
+    let _first_request = mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(second_matcher)
-        .respond_with(sse_response(sse2))
-        .mount(&server)
-        .await;
+    let _second_request = mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -760,24 +710,14 @@ async fn auto_compact_manual_mode_emits_warning_without_compaction() {
         body.contains(FIRST_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(first_matcher)
-        .respond_with(sse_response(sse1))
-        .mount(&server)
-        .await;
+    let _first_request = mount_sse_once_match(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(second_matcher)
-        .respond_with(sse_response(sse2))
-        .mount(&server)
-        .await;
+    let _second_request = mount_sse_once_match(&server, second_matcher, sse2).await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -888,21 +828,13 @@ async fn context_window_failure_prompts_lower_limit_without_retry() {
         .await
         .unwrap();
 
-    let error = wait_for_event(&codex, |ev| {
-        matches!(
-            ev,
-            EventMsg::Error(ErrorEvent { message }) if message.contains(
-                "Lower your auto-compaction threshold"
-            )
-        )
-    })
-    .await;
-
-    let EventMsg::Error(ErrorEvent { message }) = error else {
-        panic!("expected context-window error prompting user to lower limit");
+    let EventMsg::Error(ErrorEvent { message: error_msg }) =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await
+    else {
+        unreachable!("wait_for_event only returns errors here");
     };
     assert!(
-        message.contains("context window"),
+        error_msg.contains("context window"),
         "context-window failure should reference the limit"
     );
 

@@ -678,11 +678,11 @@ impl TokenUsage {
         self.non_cached_input() + self.output_tokens
     }
 
-    /// Returns the tokens currently occupying the model context window. Providers
-    /// report this via the input token count, which already accounts for any
-    /// cached segments and excludes generated output.
+    /// Returns the tokens currently occupying the model context window. This includes
+    /// all prompt tokens (even if cached) plus the assistant's output tokens because
+    /// both must be present for the next turn.
     pub fn tokens_in_context_window(&self) -> u64 {
-        self.input_tokens
+        self.input_tokens.saturating_add(self.output_tokens)
     }
 
     /// Estimate the remaining user-controllable percentage of the model's context window.
