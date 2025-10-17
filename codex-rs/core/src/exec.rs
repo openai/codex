@@ -369,7 +369,7 @@ async fn consume_truncated_output(
         Some(agg_tx.clone()),
     ));
 
-    let mut ctrl_c = tokio::signal::ctrl_c();
+    let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
     let (exit_status, timed_out) = match timeout {
