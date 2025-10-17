@@ -36,22 +36,6 @@ impl ShellRuntime {
         Self
     }
 
-    fn build_command_spec(req: &ShellRequest) -> Result<CommandSpec, ToolError> {
-        let (program, args) = req
-            .command
-            .split_first()
-            .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
-        Ok(CommandSpec {
-            program: program.clone(),
-            args: args.to_vec(),
-            cwd: req.cwd.clone(),
-            env: req.env.clone(),
-            timeout_ms: req.timeout_ms,
-            with_escalated_permissions: req.with_escalated_permissions,
-            justification: req.justification.clone(),
-        })
-    }
-
     fn stdout_stream(ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
             sub_id: ctx.sub_id.clone(),
@@ -125,7 +109,14 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let spec = Self::build_command_spec(req)?;
+        let spec = crate::runtime::command_spec::build_command_spec(
+            &req.command,
+            &req.cwd,
+            &req.env,
+            req.timeout_ms,
+            req.with_escalated_permissions,
+            req.justification.clone(),
+        )?;
         let env = attempt
             .env_for(&spec)
             .map_err(|err| ToolError::Codex(err.into()))?;

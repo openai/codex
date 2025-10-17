@@ -319,18 +319,20 @@ impl UnifiedExecSessionManager {
             fn build_command_spec(
                 req: &OpenShellReq,
             ) -> Result<crate::sandboxing::CommandSpec, ToolError> {
-                let (program, args) = req.command.split_first().ok_or_else(|| {
-                    ToolError::Rejected("missing command line for PTY".to_string())
-                })?;
-                Ok(crate::sandboxing::CommandSpec {
-                    program: program.clone(),
-                    args: args.to_vec(),
-                    cwd: req.cwd.clone(),
-                    env: HashMap::new(),
-                    timeout_ms: None,
-                    with_escalated_permissions: None,
-                    justification: None,
-                })
+                let env = HashMap::new();
+                match crate::runtime::command_spec::build_command_spec(
+                    &req.command,
+                    &req.cwd,
+                    &env,
+                    None,
+                    None,
+                    None,
+                ) {
+                    Ok(spec) => Ok(spec),
+                    Err(_) => Err(ToolError::Rejected(
+                        "missing command line for PTY".to_string(),
+                    )),
+                }
             }
         }
         impl Sandboxable for OpenShellRuntime<'_> {

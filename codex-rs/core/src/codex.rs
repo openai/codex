@@ -50,9 +50,6 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-use crate::exec_command::ExecCommandParams;
-use crate::exec_command::ExecSessionManager;
-use crate::exec_command::WriteStdinParams;
 // Removed: legacy executor wiring replaced by ToolOrchestrator flows.
 // legacy normalize_exec_result no longer used after orchestrator migration
 use crate::mcp::auth::compute_auth_statuses;
@@ -456,7 +453,6 @@ impl Session {
         };
         let services = SessionServices {
             mcp_connection_manager,
-            session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: notify,
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -885,33 +881,6 @@ impl Session {
         self.services
             .mcp_connection_manager
             .parse_tool_name(tool_name)
-    }
-
-    pub(crate) async fn handle_exec_command_tool(
-        &self,
-        params: ExecCommandParams,
-    ) -> Result<String, FunctionCallError> {
-        let result = self
-            .services
-            .session_manager
-            .handle_exec_command_request(params)
-            .await;
-        match result {
-            Ok(output) => Ok(output.to_text_output()),
-            Err(err) => Err(FunctionCallError::RespondToModel(err)),
-        }
-    }
-
-    pub(crate) async fn handle_write_stdin_tool(
-        &self,
-        params: WriteStdinParams,
-    ) -> Result<String, FunctionCallError> {
-        self.services
-            .session_manager
-            .handle_write_stdin_request(params)
-            .await
-            .map(|output| output.to_text_output())
-            .map_err(FunctionCallError::RespondToModel)
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
@@ -2595,7 +2564,6 @@ mod tests {
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
-            session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
             rollout: Mutex::new(None),
@@ -2659,7 +2627,6 @@ mod tests {
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
-            session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
             rollout: Mutex::new(None),
