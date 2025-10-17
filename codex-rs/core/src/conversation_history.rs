@@ -37,7 +37,7 @@ impl ConversationHistory {
     }
 }
 
-/// Anything that is not a system message or "reasoning" message is considered
+/// Anything that is not a system message or "Other" is considered
 /// an API message.
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
