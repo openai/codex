@@ -413,6 +413,25 @@ impl ModelClient {
                     let body = res.json::<ErrorResponse>().await.ok();
                     if let Some(ErrorResponse { error }) = body {
                         if error.r#type.as_deref() == Some("usage_limit_reached") {
+                            let context = "usage_limit_reached";
+                            if Self::refresh_on_plan_mismatch(
+                                auth_manager,
+                                &auth,
+                                error.plan_type.clone(),
+                                context,
+                            )
+                            .await
+                            {
+                                return Err(StreamAttemptError::RetryableTransportError(
+                                    CodexErr::Stream(
+                                        format!(
+                                            "plan mismatch detected during {context}; retrying"
+                                        ),
+                                        None,
+                                    ),
+                                ));
+                            }
+
                             // Prefer the plan_type provided in the error message if present
                             // because it's more up to date than the one encoded in the auth
                             // token.
@@ -427,6 +446,24 @@ impl ModelClient {
                             });
                             return Err(StreamAttemptError::Fatal(codex_err));
                         } else if error.r#type.as_deref() == Some("usage_not_included") {
+                            let context = "usage_not_included";
+                            if Self::refresh_on_plan_mismatch(
+                                auth_manager,
+                                &auth,
+                                error.plan_type.clone(),
+                                context,
+                            )
+                            .await
+                            {
+                                return Err(StreamAttemptError::RetryableTransportError(
+                                    CodexErr::Stream(
+                                        format!(
+                                            "plan mismatch detected during {context}; retrying"
+                                        ),
+                                        None,
+                                    ),
+                                ));
+                            }
                             return Err(StreamAttemptError::Fatal(CodexErr::UsageNotIncluded));
                         }
                     }
@@ -442,6 +479,48 @@ impl ModelClient {
                 CodexErr::ConnectionFailed(ConnectionFailedError { source: e }),
             )),
         }
+    }
+
+    async fn refresh_on_plan_mismatch(
+        auth_manager: &Option<Arc<AuthManager>>,
+        auth: &Option<CodexAuth>,
+        server_plan_type: Option<PlanType>,
+        log_context: &str,
+    ) -> bool {
+        let Some(server_plan) = server_plan_type else {
+            return false;
+        };
+
+        let jwt_plan = auth.as_ref().and_then(CodexAuth::get_plan_type);
+
+        if jwt_plan == Some(server_plan.clone()) {
+            return false;
+        }
+
+        if let Some(manager) = auth_manager.as_ref() {
+            match manager.refresh_token().await {
+                Ok(_) => {
+                    warn!(
+                        context = log_context,
+                        ?server_plan,
+                        previous_plan = ?jwt_plan,
+                        "plan mismatch detected; refreshed token and will retry"
+                    );
+                    return true;
+                }
+                Err(err) => {
+                    warn!(
+                        context = log_context,
+                        ?server_plan,
+                        previous_plan = ?jwt_plan,
+                        error = ?err,
+                        "failed to refresh token after plan mismatch"
+                    );
+                }
+            }
+        }
+
+        false
     }
 
     pub fn get_provider(&self) -> ModelProviderInfo {
@@ -1438,5 +1517,33 @@ mod tests {
 
         let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
         assert_eq!(plan_json, "\"vip\"");
+    }
+
+    #[tokio::test]
+    async fn refresh_on_plan_mismatch_retries_when_plan_differs() {
+        use crate::token_data::KnownPlan;
+        use crate::token_data::PlanType;
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        if let Some(auth_json) = auth.auth_dot_json.lock().unwrap().as_mut()
+            && let Some(tokens) = auth_json.tokens.as_mut()
+        {
+            tokens.id_token.chatgpt_plan_type = Some(PlanType::Known(KnownPlan::Plus));
+            tokens.id_token.raw_jwt = "dummy".to_string();
+        }
+
+        let manager = Arc::new(AuthManager::new(PathBuf::new()));
+
+        let should_retry = ModelClient::refresh_on_plan_mismatch(
+            &Some(manager),
+            &Some(auth),
+            Some(PlanType::Known(KnownPlan::Team)),
+            "usage_limit_reached",
+        )
+        .await;
+
+        assert!(should_retry);
     }
 }
