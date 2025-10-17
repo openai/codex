@@ -48,6 +48,12 @@ fn display_status(row: &TaskRow) -> String {
     }
 }
 
+fn variants_label(row: &TaskRow) -> String {
+    row.attempt_total
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
 pub fn print_task_table(env: Option<&str>, include_reviews: bool, rows: &[TaskRow]) {
     if rows.is_empty() {
         match env {
@@ -68,30 +74,41 @@ pub fn print_task_table(env: Option<&str>, include_reviews: bool, rows: &[TaskRo
         .map(|row| display_status(row).len())
         .max()
         .unwrap_or("STATUS".len());
+    let variants_width = rows
+        .iter()
+        .map(|row| variants_label(row).len())
+        .max()
+        .unwrap_or("VARIANTS".len())
+        .max("VARIANTS".len());
 
     println!(
-        "{:<id_width$}  {:<status_width$}  {:<24}  TITLE",
+        "{:<id_width$}  {:<status_width$}  {:>variants_width$}  {:<24}  TITLE",
         "ID",
         "STATUS",
+        "VARIANTS",
         "UPDATED",
         id_width = id_width,
         status_width = status_width,
+        variants_width = variants_width,
     );
     println!(
         "{:-<width$}",
         "",
-        width = id_width + status_width + 2 + 2 + 24 + 2 + "TITLE".len()
+        width = id_width + status_width + variants_width + 24 + 8 + "TITLE".len()
     );
 
     for row in rows {
+        let variants = variants_label(row);
         println!(
-            "{:<id_width$}  {:<status_width$}  {:<24}  {}",
+            "{:<id_width$}  {:<status_width$}  {:>variants_width$}  {:<24}  {}",
             row.id.0,
             display_status(row),
+            variants,
             format_datetime(&row.updated_at),
             row.title,
             id_width = id_width,
             status_width = status_width,
+            variants_width = variants_width,
         );
     }
 
