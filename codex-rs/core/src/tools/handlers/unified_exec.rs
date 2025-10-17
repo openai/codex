@@ -76,6 +76,7 @@ impl ToolHandler for UnifiedExecHandler {
             session_id: parsed_session_id,
             input_chunks: &input,
             timeout_ms,
+            disable_timeout: turn.disable_command_timeouts,
         };
 
         let value = session

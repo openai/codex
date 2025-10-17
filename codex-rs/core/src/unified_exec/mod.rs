@@ -33,6 +33,7 @@ pub(crate) struct UnifiedExecRequest<'a> {
     pub session_id: Option<i32>,
     pub input_chunks: &'a [String],
     pub timeout_ms: Option<u64>,
+    pub disable_timeout: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,7 +125,10 @@ impl ManagedUnifiedExecSession {
                         continue;
                     }
                     // When the sender closes, exit the task.
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        notify_clone.notify_waiters();
+                        break;
+                    }
                 }
             }
         });
@@ -164,15 +168,19 @@ impl UnifiedExecSessionManager {
         &self,
         request: UnifiedExecRequest<'_>,
     ) -> Result<UnifiedExecResult, UnifiedExecError> {
-        let (timeout_ms, timeout_warning) = match request.timeout_ms {
-            Some(requested) if requested > MAX_TIMEOUT_MS => (
-                MAX_TIMEOUT_MS,
-                Some(format!(
-                    "Warning: requested timeout {requested}ms exceeds maximum of {MAX_TIMEOUT_MS}ms; clamping to {MAX_TIMEOUT_MS}ms.\n"
-                )),
-            ),
-            Some(requested) => (requested, None),
-            None => (DEFAULT_TIMEOUT_MS, None),
+        let (timeout_ms, timeout_warning) = if request.disable_timeout {
+            (None, None)
+        } else {
+            match request.timeout_ms {
+                Some(requested) if requested > MAX_TIMEOUT_MS => (
+                    Some(MAX_TIMEOUT_MS),
+                    Some(format!(
+                        "Warning: requested timeout {requested}ms exceeds maximum of {MAX_TIMEOUT_MS}ms; clamping to {MAX_TIMEOUT_MS}ms.\n"
+                    )),
+                ),
+                Some(requested) => (Some(requested), None),
+                None => (Some(DEFAULT_TIMEOUT_MS), None),
+            }
         };
 
         let mut new_session: Option<ManagedUnifiedExecSession> = None;
@@ -227,7 +235,7 @@ impl UnifiedExecSessionManager {
 
         let mut collected: Vec<u8> = Vec::with_capacity(4096);
         let start = Instant::now();
-        let deadline = start + Duration::from_millis(timeout_ms);
+        let deadline = timeout_ms.and_then(|ms| start.checked_add(Duration::from_millis(ms)));
 
         loop {
             let drained_chunks;
@@ -241,16 +249,39 @@ impl UnifiedExecSessionManager {
             }
 
             if drained_chunks.is_empty() {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining == Duration::ZERO {
-                    break;
+                if request.disable_timeout {
+                    let exited = if let Some(session) = new_session.as_ref() {
+                        session.has_exited()
+                    } else if let Some(existing_id) = request.session_id {
+                        let sessions = self.sessions.lock().await;
+                        sessions
+                            .get(&existing_id)
+                            .map(ManagedUnifiedExecSession::has_exited)
+                            .unwrap_or(true)
+                    } else {
+                        false
+                    };
+
+                    if exited {
+                        break;
+                    }
                 }
 
-                let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
-                tokio::pin!(notified);
-                tokio::select! {
-                    _ = &mut notified => {}
-                    _ = tokio::time::sleep(remaining) => break,
+                if let Some(deadline) = deadline {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    let remaining = deadline.saturating_duration_since(now);
+                    let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
+                    tokio::pin!(notified);
+                    tokio::select! {
+                        _ = &mut notified => {}
+                        _ = tokio::time::sleep(remaining) => break,
+                    }
+                } else {
+                    let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
+                    notified.await;
                 }
                 continue;
             }
@@ -259,8 +290,10 @@ impl UnifiedExecSessionManager {
                 collected.extend_from_slice(&chunk);
             }
 
-            if Instant::now() >= deadline {
-                break;
+            if let Some(deadline) = deadline {
+                if Instant::now() >= deadline {
+                    break;
+                }
             }
         }
 
@@ -447,6 +480,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["bash".to_string(), "-i".to_string()],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
         let session_id = open_shell.session_id.expect("expected session_id");
@@ -459,6 +493,7 @@ mod tests {
                     "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
                 ],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
 
@@ -467,6 +502,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
         assert!(out_2.output.contains("codex"));
@@ -486,6 +522,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["/bin/bash".to_string(), "-i".to_string()],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
         let session_a = shell_a.session_id.expect("expected session id");
@@ -495,6 +532,7 @@ mod tests {
                 session_id: Some(session_a),
                 input_chunks: &["export CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string()],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
 
@@ -506,6 +544,7 @@ mod tests {
                     "$CODEX_INTERACTIVE_SHELL_VAR\n".to_string(),
                 ],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
         assert!(!out_2.output.contains("codex"));
@@ -515,6 +554,7 @@ mod tests {
                 session_id: Some(session_a),
                 input_chunks: &["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
         assert!(out_3.output.contains("codex"));
@@ -534,6 +574,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["bash".to_string(), "-i".to_string()],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
         let session_id = open_shell.session_id.expect("expected session id");
@@ -546,6 +587,7 @@ mod tests {
                     "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
                 ],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
 
@@ -554,6 +596,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &["sleep 5 && echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
                 timeout_ms: Some(10),
+                disable_timeout: false,
             })
             .await?;
         assert!(!out_2.output.contains("codex"));
@@ -566,6 +609,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &empty,
                 timeout_ms: Some(100),
+                disable_timeout: false,
             })
             .await?;
 
@@ -585,6 +629,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["echo".to_string(), "codex".to_string()],
                 timeout_ms: Some(120_000),
+                disable_timeout: false,
             })
             .await?;
 
@@ -606,6 +651,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["/bin/echo".to_string(), "codex".to_string()],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
 
@@ -629,6 +675,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["/bin/bash".to_string(), "-i".to_string()],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
         let session_id = open_shell.session_id.expect("expected session id");
@@ -638,6 +685,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &["exit\n".to_string()],
                 timeout_ms: Some(2_500),
+                disable_timeout: false,
             })
             .await?;
 
@@ -648,6 +696,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &[],
                 timeout_ms: Some(100),
+                disable_timeout: false,
             })
             .await
             .expect_err("expected unknown session error");

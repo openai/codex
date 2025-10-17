@@ -53,11 +53,18 @@ pub struct ExecParams {
     pub env: HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub disable_timeout: bool,
 }
 
 impl ExecParams {
-    pub fn timeout_duration(&self) -> Duration {
-        Duration::from_millis(self.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS))
+    pub fn timeout_duration(&self) -> Option<Duration> {
+        if self.disable_timeout {
+            None
+        } else {
+            Some(Duration::from_millis(
+                self.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
+            ))
+        }
     }
 }
 
@@ -329,7 +336,7 @@ async fn exec(
 /// use as the output of a `shell` tool call. Also enforces specified timeout.
 async fn consume_truncated_output(
     mut child: Child,
-    timeout: Duration,
+    timeout: Option<Duration>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
     // Both stdout and stderr were configured with `Stdio::piped()`
@@ -362,24 +369,41 @@ async fn consume_truncated_output(
         Some(agg_tx.clone()),
     ));
 
-    let (exit_status, timed_out) = tokio::select! {
-        result = tokio::time::timeout(timeout, child.wait()) => {
-            match result {
-                Ok(status_result) => {
-                    let exit_status = status_result?;
-                    (exit_status, false)
+    let mut ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
+    let (exit_status, timed_out) = match timeout {
+        Some(timeout) => {
+            tokio::select! {
+                result = tokio::time::timeout(timeout, child.wait()) => {
+                    match result {
+                        Ok(status_result) => {
+                            let exit_status = status_result?;
+                            (exit_status, false)
+                        }
+                        Err(_) => {
+                            child.start_kill()?;
+                            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+                        }
+                    }
                 }
-                Err(_) => {
-                    // timeout
+                _ = &mut ctrl_c => {
                     child.start_kill()?;
-                    // Debatable whether `child.wait().await` should be called here.
-                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
                 }
             }
         }
-        _ = tokio::signal::ctrl_c() => {
-            child.start_kill()?;
-            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+        None => {
+            tokio::select! {
+                result = child.wait() => {
+                    let exit_status = result?;
+                    (exit_status, false)
+                }
+                _ = &mut ctrl_c => {
+                    child.start_kill()?;
+                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+                }
+            }
         }
     };
 

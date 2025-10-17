@@ -603,6 +603,7 @@ impl CodexMessageProcessor {
             env,
             with_escalated_permissions: None,
             justification: None,
+            disable_timeout: self.config.disable_command_timeouts,
         };
 
         let effective_policy = params
@@ -1353,6 +1354,7 @@ async fn derive_config_from_params(
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
+        disable_command_timeouts: None,
     };
 
     let cli_overrides = cli_overrides

@@ -273,6 +273,7 @@ pub(crate) struct TurnContext {
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) disable_command_timeouts: bool,
 }
 
 impl TurnContext {
@@ -497,6 +498,7 @@ impl Session {
             cwd,
             is_review_mode: false,
             final_output_json_schema: None,
+            disable_command_timeouts: config.disable_command_timeouts,
         };
         let services = SessionServices {
             mcp_connection_manager,
@@ -1272,6 +1274,7 @@ async fn submission_loop(
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
                     final_output_json_schema: None,
+                    disable_command_timeouts: prev.disable_command_timeouts,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1365,6 +1368,7 @@ async fn submission_loop(
                         cwd,
                         is_review_mode: false,
                         final_output_json_schema,
+                        disable_command_timeouts: turn_context.disable_command_timeouts,
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1651,6 +1655,7 @@ async fn spawn_review_thread(
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
         final_output_json_schema: None,
+        disable_command_timeouts: parent_turn_context.disable_command_timeouts,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2848,6 +2853,7 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            disable_command_timeouts: config.disable_command_timeouts,
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2916,6 +2922,7 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            disable_command_timeouts: config.disable_command_timeouts,
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -3268,6 +3275,7 @@ mod tests {
             env: HashMap::new(),
             with_escalated_permissions: Some(true),
             justification: Some("test".to_string()),
+            disable_timeout: turn_context.disable_command_timeouts,
         };
 
         let params2 = ExecParams {

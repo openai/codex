@@ -57,6 +57,7 @@ async fn test_exec_stdout_stream_events_echo() {
         env: HashMap::new(),
         with_escalated_permissions: None,
         justification: None,
+        disable_timeout: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();
@@ -109,6 +110,7 @@ async fn test_exec_stderr_stream_events_echo() {
         env: HashMap::new(),
         with_escalated_permissions: None,
         justification: None,
+        disable_timeout: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();
@@ -164,6 +166,7 @@ async fn test_aggregated_output_interleaves_in_order() {
         env: HashMap::new(),
         with_escalated_permissions: None,
         justification: None,
+        disable_timeout: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();
@@ -202,6 +205,7 @@ async fn test_exec_timeout_returns_partial_output() {
         env: HashMap::new(),
         with_escalated_permissions: None,
         justification: None,
+        disable_timeout: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();

@@ -61,6 +61,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_profile,
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
+        dangerously_disable_timeouts,
         cwd,
         skip_git_repo_check,
         color,
@@ -72,6 +73,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_plan_tool,
         config_overrides,
     } = cli;
+
+    let dangerously_bypass = dangerously_bypass_approvals_and_sandbox || dangerously_disable_timeouts;
 
     // Determine the prompt source (parent or subcommand) and read from stdin if needed.
     let prompt_arg = match &command {
@@ -141,7 +144,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
-    } else if dangerously_bypass_approvals_and_sandbox {
+    } else if dangerously_bypass {
         Some(SandboxMode::DangerFullAccess)
     } else {
         sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
@@ -181,6 +184,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
+        disable_command_timeouts: dangerously_disable_timeouts.then_some(true),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {

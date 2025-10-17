@@ -554,6 +554,9 @@ fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
     if resume_cli.dangerously_bypass_approvals_and_sandbox {
         interactive.dangerously_bypass_approvals_and_sandbox = true;
     }
+    if resume_cli.dangerously_disable_timeouts {
+        interactive.dangerously_disable_timeouts = true;
+    }
     if let Some(cwd) = resume_cli.cwd {
         interactive.cwd = Some(cwd);
     }

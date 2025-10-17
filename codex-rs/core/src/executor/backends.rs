@@ -95,6 +95,7 @@ impl ExecutionBackend for ApplyPatchBackend {
                     env: HashMap::new(),
                     with_escalated_permissions: params.with_escalated_permissions,
                     justification: params.justification,
+                    disable_timeout: params.disable_timeout,
                 })
             }
             ExecutionMode::Shell => Err(FunctionCallError::RespondToModel(

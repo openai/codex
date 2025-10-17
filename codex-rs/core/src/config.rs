@@ -107,6 +107,7 @@ pub struct Config {
     pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
+    pub disable_command_timeouts: bool,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -836,6 +837,9 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
+    /// Disable command execution timeouts.
+    pub disable_command_timeouts: Option<bool>,
+
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -1094,6 +1098,7 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub disable_command_timeouts: Option<bool>,
 }
 
 impl Config {
@@ -1122,6 +1127,7 @@ impl Config {
             include_view_image_tool: include_view_image_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            disable_command_timeouts,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -1217,6 +1223,11 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let disable_command_timeouts = disable_command_timeouts
+            .or(config_profile.disable_command_timeouts)
+            .or(cfg.disable_command_timeouts)
+            .unwrap_or(false);
+
         let include_plan_tool_flag = features.enabled(Feature::PlanTool);
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let include_view_image_tool_flag = features.enabled(Feature::ViewImageTool);
@@ -1289,6 +1300,7 @@ impl Config {
             sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             shell_environment_policy,
+            disable_command_timeouts,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -2716,6 +2728,7 @@ model_verbosity = "high"
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
+                disable_command_timeouts: false,
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -2783,6 +2796,7 @@ model_verbosity = "high"
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            disable_command_timeouts: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2865,6 +2879,7 @@ model_verbosity = "high"
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            disable_command_timeouts: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2933,6 +2948,7 @@ model_verbosity = "high"
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            disable_command_timeouts: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
