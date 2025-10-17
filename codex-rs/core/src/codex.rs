@@ -1678,7 +1678,7 @@ pub(crate) async fn run_task(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let mut auto_retry_in_progress = false;
+    let mut auto_compact_in_progress = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -1865,27 +1865,32 @@ pub(crate) async fn run_task(
                 }
 
                 if auto_compact_threshold_reached {
-                    let limit_str = auto_compact_threshold
-                        .map(|limit| limit.to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
+                    let limit_display = match (model_context_window, auto_compact_threshold) {
+                        (Some(limit), Some(threshold)) if limit != threshold => {
+                            format!("limit {limit}, threshold {threshold}")
+                        }
+                        (Some(limit), _) => format!("limit {limit}"),
+                        (_, Some(threshold)) => format!("limit {threshold}"),
+                        _ => "limit unknown".to_string(),
+                    };
                     let current_tokens = total_usage_tokens
                         .map(|tokens| tokens.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
                     match turn_context.client.get_auto_compact_mode() {
                         AutoCompactMode::Auto => {
-                            if auto_retry_in_progress {
+                            if auto_compact_in_progress {
                                 let event = Event {
                                     id: sub_id.clone(),
                                     msg: EventMsg::Error(ErrorEvent {
                                         message: format!(
-                                            "Conversation is still above the auto-compaction threshold after automatic summarization (threshold {limit_str}, current {current_tokens}). Please start a new session or trim your input."
+                                            "Conversation is still above the auto-compaction threshold after automatic summarization ({limit_display}, current {current_tokens}). Please start a new session or trim your input."
                                         ),
                                     }),
                                 };
                                 sess.send_event(event).await;
                                 break;
                             }
-                            auto_retry_in_progress = true;
+                            auto_compact_in_progress = true;
                             compact::run_inline_auto_compact_task(
                                 sess.clone(),
                                 turn_context.clone(),
@@ -1898,7 +1903,7 @@ pub(crate) async fn run_task(
                                 id: sub_id.clone(),
                                 msg: EventMsg::Error(ErrorEvent {
                                     message: format!(
-                                        "Conversation reached the auto-compaction threshold (threshold {limit_str}, current {current_tokens}). Auto-compaction is set to manual; run /compact when you are ready or start a new session."
+                                        "Conversation reached the auto-compaction threshold ({limit_display}, current {current_tokens}). Auto-compaction is set to manual; run /compact when you are ready or start a new session."
                                     ),
                                 }),
                             };
@@ -1925,7 +1930,7 @@ pub(crate) async fn run_task(
                     break;
                 }
 
-                auto_retry_in_progress = false;
+                auto_compact_in_progress = false;
 
                 if responses.is_empty() {
                     last_agent_message = get_last_assistant_message_from_turn(

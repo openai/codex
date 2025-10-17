@@ -2293,7 +2293,7 @@ model_verbosity = "high"
             .expect("model info for gpt-3.5-turbo");
 
         assert_eq!(gpt3_profile_config.model, "gpt-3.5-turbo");
-        assert_eq!(gpt3_profile_config.model_family, gpt3_family.clone());
+        assert_eq!(gpt3_profile_config.model_family, gpt3_family);
         assert_eq!(gpt3_profile_config.model_context_window, Some(16_385));
         assert_eq!(gpt3_profile_config.model_max_output_tokens, Some(4_096));
         assert_eq!(
@@ -2307,7 +2307,7 @@ model_verbosity = "high"
         );
         assert_eq!(
             gpt3_profile_config.model_provider,
-            fixture.openai_chat_completions_provider.clone()
+            fixture.openai_chat_completions_provider
         );
         assert_eq!(
             gpt3_profile_config.approval_policy,
