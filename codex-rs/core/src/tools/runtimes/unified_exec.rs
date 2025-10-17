@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
-use crate::tools::runtimes::command_spec;
+use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ApprovalDecision;
@@ -20,14 +20,8 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::unified_exec::UnifiedExecError;
+use crate::unified_exec::UnifiedExecSession;
 use crate::unified_exec::UnifiedExecSessionManager;
-use crate::unified_exec::session::UnifiedExecSession;
-
-#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct UnifiedExecApprovalKey {
-    pub command: Vec<String>,
-    pub cwd: PathBuf,
-}
 
 #[derive(Clone, Debug)]
 pub struct UnifiedExecRequest {
@@ -35,14 +29,20 @@ pub struct UnifiedExecRequest {
     pub cwd: PathBuf,
 }
 
-impl UnifiedExecRequest {
-    pub fn new(command: Vec<String>, cwd: PathBuf) -> Self {
-        Self { command, cwd }
-    }
+#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct UnifiedExecApprovalKey {
+    pub command: Vec<String>,
+    pub cwd: PathBuf,
 }
 
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecSessionManager,
+}
+
+impl UnifiedExecRequest {
+    pub fn new(command: Vec<String>, cwd: PathBuf) -> Self {
+        Self { command, cwd }
+    }
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -100,9 +100,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
         _ctx: &ToolCtx<'_>,
     ) -> Result<UnifiedExecSession, ToolError> {
         let empty_env = HashMap::new();
-        let spec =
-            command_spec::build_command_spec(&req.command, &req.cwd, &empty_env, None, None, None)
-                .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+        let spec = build_command_spec(&req.command, &req.cwd, &empty_env, None, None, None)
+            .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
             .env_for(&spec)
             .map_err(|err| ToolError::Codex(err.into()))?;

@@ -6,6 +6,7 @@ builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::execute_env;
+use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ApprovalDecision;
@@ -30,6 +31,13 @@ pub struct ShellRequest {
 #[derive(Default)]
 pub struct ShellRuntime;
 
+#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) struct ApprovalKey {
+    command: Vec<String>,
+    cwd: PathBuf,
+    escalated: bool,
+}
+
 impl ShellRuntime {
     pub fn new() -> Self {
         Self
@@ -51,13 +59,6 @@ impl Sandboxable for ShellRuntime {
     fn escalate_on_failure(&self) -> bool {
         true
     }
-}
-
-#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct ApprovalKey {
-    command: Vec<String>,
-    cwd: PathBuf,
-    escalated: bool,
 }
 
 impl Approvable<ShellRequest> for ShellRuntime {
@@ -103,7 +104,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let spec = crate::tools::runtimes::command_spec::build_command_spec(
+        let spec = build_command_spec(
             &req.command,
             &req.cwd,
             &req.env,

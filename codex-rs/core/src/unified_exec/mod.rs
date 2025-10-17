@@ -34,6 +34,7 @@ mod session;
 mod session_manager;
 
 pub(crate) use errors::UnifiedExecError;
+pub(crate) use session::UnifiedExecSession;
 
 const DEFAULT_TIMEOUT_MS: u64 = 1_000;
 const MAX_TIMEOUT_MS: u64 = 60_000;
@@ -124,7 +125,7 @@ mod tests {
         buffer.push_chunk(vec![b'b']);
         buffer.push_chunk(vec![b'c']);
 
-        assert_eq!(buffer.total_bytes(), UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+        assert_eq!(buffer.total_bytes, UNIFIED_EXEC_OUTPUT_MAX_BYTES);
         let snapshot = buffer.snapshot();
         assert_eq!(snapshot.len(), 3);
         assert_eq!(

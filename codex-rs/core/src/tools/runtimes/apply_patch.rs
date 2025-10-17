@@ -31,6 +31,12 @@ pub struct ApplyPatchRequest {
 #[derive(Default)]
 pub struct ApplyPatchRuntime;
 
+#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) struct ApprovalKey {
+    patch: String,
+    cwd: PathBuf,
+}
+
 impl ApplyPatchRuntime {
     pub fn new() -> Self {
         Self
@@ -69,12 +75,6 @@ impl Sandboxable for ApplyPatchRuntime {
     fn escalate_on_failure(&self) -> bool {
         true
     }
-}
-
-#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct ApprovalKey {
-    patch: String,
-    cwd: PathBuf,
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {

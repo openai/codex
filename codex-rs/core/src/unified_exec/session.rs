@@ -24,7 +24,7 @@ use super::UnifiedExecError;
 #[derive(Debug, Default)]
 pub(crate) struct OutputBufferState {
     chunks: VecDeque<Vec<u8>>,
-    total_bytes: usize,
+    pub(crate) total_bytes: usize,
 }
 
 impl OutputBufferState {
@@ -61,10 +61,6 @@ impl OutputBufferState {
 
     pub(super) fn snapshot(&self) -> Vec<Vec<u8>> {
         self.chunks.iter().cloned().collect()
-    }
-
-    pub(super) fn total_bytes(&self) -> usize {
-        self.total_bytes
     }
 }
 
