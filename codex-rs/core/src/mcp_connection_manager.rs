@@ -545,7 +545,7 @@ impl McpConnectionManager {
             .clients
             .get(server)
             .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?;
-        let client = managed.client.clone();
+        let client = &managed.client;
         let timeout = managed.tool_timeout;
 
         client

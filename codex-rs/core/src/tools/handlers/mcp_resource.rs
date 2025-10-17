@@ -86,11 +86,12 @@ impl ResourceTemplateWithServer {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ListResourcesPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     server: Option<String>,
     resources: Vec<ResourceWithServer>,
-    #[serde(rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
 }
 
@@ -128,12 +129,12 @@ impl ListResourcesPayload {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ListResourceTemplatesPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     server: Option<String>,
-    #[serde(rename = "resourceTemplates")]
     resource_templates: Vec<ResourceTemplateWithServer>,
-    #[serde(rename = "nextCursor", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
 }
 
@@ -760,8 +761,13 @@ mod tests {
             ResourceTemplateWithServer::new("srv".to_string(), template("memo://{id}", "memo"));
         let value = serde_json::to_value(&entry).expect("serialize template");
 
-        assert_eq!(value["server"], json!("srv"));
-        assert_eq!(value["uriTemplate"], json!("memo://{id}"));
-        assert_eq!(value["name"], json!("memo"));
+        assert_eq!(
+            value,
+            json!({
+                "server": "srv",
+                "uriTemplate": "memo://{id}",
+                "name": "memo"
+            })
+        );
     }
 }
