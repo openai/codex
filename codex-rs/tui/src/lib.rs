@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
 mod app;
@@ -219,12 +220,20 @@ pub async fn run_main(
         })
     };
 
-    // Build layered subscriber:
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
+
+    let feedback = codex_feedback::CodexFeedback::new();
+    let targets = Targets::new().with_default(tracing::Level::TRACE);
+
+    let feedback_layer = tracing_subscriber::fmt::layer()
+        .with_writer(feedback.make_writer())
+        .with_ansi(false)
+        .with_target(false)
+        .with_filter(targets);
 
     if cli.oss {
         codex_ollama::ensure_oss_ready(&config)
@@ -250,15 +259,26 @@ pub async fn run_main(
 
         let _ = tracing_subscriber::registry()
             .with(file_layer)
+            .with(feedback_layer)
             .with(otel_layer)
             .try_init();
     } else {
-        let _ = tracing_subscriber::registry().with(file_layer).try_init();
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(feedback_layer)
+            .try_init();
     };
 
-    run_ratatui_app(cli, config, overrides, cli_kv_overrides, active_profile)
-        .await
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(
+        cli,
+        config,
+        overrides,
+        cli_kv_overrides,
+        active_profile,
+        feedback,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
@@ -267,6 +287,7 @@ async fn run_ratatui_app(
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     active_profile: Option<String>,
+    feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
 
@@ -462,6 +483,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         resume_selection,
+        feedback,
     )
     .await;
 

@@ -359,6 +359,11 @@ env = { "API_KEY" = "value" }
 # or
 [mcp_servers.server_name.env]
 API_KEY = "value"
+# Optional: Additional list of environment variables that will be whitelisted in the MCP server's environment.
+env_vars = ["API_KEY2"]
+
+# Optional: cwd that the command will be run from
+cwd = "/Users/<user>/code/my-server"
 ```
 
 #### Streamable HTTP
@@ -372,6 +377,10 @@ experimental_use_rmcp_client = true
 url = "https://mcp.linear.app/mcp"
 # Optional environment variable containing a bearer token to use for auth
 bearer_token_env_var = "<token>"
+# Optional map of headers with hard-coded values.
+http_headers = { "HEADER_NAME" = "HEADER_VALUE" }
+# Optional map of headers whose values will be replaced with the environment variable.
+env_http_headers = { "HEADER_NAME" = "ENV_VAR" }
 ```
 
 For oauth login, you must enable `experimental_use_rmcp_client = true` and then run `codex mcp login server_name`

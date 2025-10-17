@@ -224,6 +224,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) feedback: codex_feedback::CodexFeedback,
 }
 
 pub(crate) struct ChatWidget {
@@ -272,6 +273,8 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
+    // Feedback sink for /feedback
+    feedback: codex_feedback::CodexFeedback,
 }
 
 struct UserMessage {
@@ -917,6 +920,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            feedback,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -963,6 +967,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            feedback,
         }
     }
 
@@ -980,6 +985,7 @@ impl ChatWidget {
             initial_images,
             enhanced_keys_supported,
             auth_manager,
+            feedback,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -1028,6 +1034,7 @@ impl ChatWidget {
             ghost_snapshots_disabled: true,
             needs_final_message_separator: false,
             last_rendered_width: std::cell::Cell::new(None),
+            feedback,
         }
     }
 
@@ -1131,6 +1138,25 @@ impl ChatWidget {
             return;
         }
         match cmd {
+            SlashCommand::Feedback => {
+                let snapshot = self.feedback.snapshot(self.conversation_id);
+                match snapshot.save_to_temp_file() {
+                    Ok(path) => {
+                        crate::bottom_pane::FeedbackView::show(
+                            &mut self.bottom_pane,
+                            path,
+                            snapshot,
+                        );
+                        self.request_redraw();
+                    }
+                    Err(e) => {
+                        self.add_to_history(history_cell::new_error_event(format!(
+                            "Failed to save feedback logs: {e}"
+                        )));
+                        self.request_redraw();
+                    }
+                }
+            }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
@@ -2045,6 +2071,8 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_mcp_tools_output(
             &self.config,
             ev.tools,
+            ev.resources,
+            ev.resource_templates,
             &ev.auth_statuses,
         ));
     }

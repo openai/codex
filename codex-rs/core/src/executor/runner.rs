@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -74,13 +75,18 @@ impl Executor {
     /// Runs a prepared execution request end-to-end: prepares parameters, decides on
     /// sandbox placement (prompting the user when necessary), launches the command,
     /// and lets the backend post-process the final output.
-    pub(crate) async fn run(
+    pub(crate) async fn run<F, Fut>(
         &self,
         mut request: ExecutionRequest,
         session: &Session,
         approval_policy: AskForApproval,
         context: &ExecCommandContext,
-    ) -> Result<ExecToolCallOutput, ExecError> {
+        on_exec_begin: F,
+    ) -> Result<ExecToolCallOutput, ExecError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = ()>,
+    {
         if matches!(request.mode, ExecutionMode::Shell) {
             request.params =
                 maybe_translate_shell_command(request.params, session, request.use_shell_profile);
@@ -119,7 +125,7 @@ impl Executor {
         if sandbox_decision.record_session_approval {
             self.approval_cache.insert(request.approval_command.clone());
         }
-
+        on_exec_begin().await;
         // Step 4: Launch the command within the chosen sandbox.
         let first_attempt = self
             .spawn(
@@ -210,7 +216,7 @@ impl Executor {
                 Ok(retry_output)
             }
             ReviewDecision::Denied | ReviewDecision::Abort => {
-                Err(ExecError::rejection("exec command rejected by user"))
+                Err(ExecError::denied("exec command rejected by user"))
             }
         }
     }
@@ -301,7 +307,8 @@ pub(crate) fn normalize_exec_result(
         }
         Err(err) => {
             let message = match err {
-                ExecError::Function(FunctionCallError::RespondToModel(msg)) => msg.clone(),
+                ExecError::Function(FunctionCallError::RespondToModel(msg))
+                | ExecError::Function(FunctionCallError::Denied(msg)) => msg.clone(),
                 ExecError::Codex(e) => get_error_message_ui(e),
                 err => err.to_string(),
             };

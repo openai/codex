@@ -235,6 +235,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
         auth_manager,
+        feedback: codex_feedback::CodexFeedback::new(),
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -291,6 +292,7 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
+        feedback: codex_feedback::CodexFeedback::new(),
     };
     (widget, rx, op_rx)
 }
@@ -1629,7 +1631,7 @@ fn status_widget_and_approval_modal_snapshot() {
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
-        cwd: std::path::PathBuf::from("/tmp"),
+        cwd: PathBuf::from("/tmp"),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
@@ -2308,6 +2310,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
                 ParsedCommand::Read {
                     name: "diff_render.rs".into(),
                     cmd: "cat diff_render.rs".into(),
+                    path: "diff_render.rs".into(),
                 },
             ],
         }),
