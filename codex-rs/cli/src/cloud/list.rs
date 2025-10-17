@@ -76,6 +76,7 @@ impl From<TaskSummary> for TaskRow {
             lines_added: summary.summary.lines_added,
             lines_removed: summary.summary.lines_removed,
             is_review: summary.is_review,
+            attempt_total: summary.attempt_total,
         }
     }
 }
