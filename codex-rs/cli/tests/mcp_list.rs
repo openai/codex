@@ -30,8 +30,8 @@ fn list_shows_empty_state() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn list_and_get_render_expected_output() -> Result<()> {
+#[tokio::test]
+async fn list_and_get_render_expected_output() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     let mut add = codex_command(codex_home.path())?;
@@ -49,9 +49,7 @@ fn list_and_get_render_expected_output() -> Result<()> {
     .assert()
     .success();
 
-    let runtime = tokio::runtime::Runtime::new()?;
-    let mut servers = runtime.block_on(load_global_mcp_servers(codex_home.path()))?;
-    drop(runtime);
+    let mut servers = load_global_mcp_servers(codex_home.path()).await?;
     let docs_entry = servers
         .get_mut("docs")
         .expect("docs server should exist after add");

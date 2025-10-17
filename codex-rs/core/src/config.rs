@@ -2323,6 +2323,8 @@ url = "https://example.com/mcp"
                         command: "logs-server".to_string(),
                         args: vec!["--follow".to_string()],
                         env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
                     },
                     enabled: true,
                     startup_timeout_sec: None,
