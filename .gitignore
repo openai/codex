@@ -82,3 +82,6 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
+scripts/__pycache__
+tests/__pycache__
+**/__pycache__
