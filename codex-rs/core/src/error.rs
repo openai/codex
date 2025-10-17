@@ -68,6 +68,9 @@ pub enum CodexErr {
     )]
     ContextWindowExceeded,
 
+    #[error("You exceeded your current quota, please check your plan and billing details.")]
+    QuotaExceeded,
+
     #[error("no conversation with id: {0}")]
     ConversationNotFound(ConversationId),
 
