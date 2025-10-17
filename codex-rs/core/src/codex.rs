@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -49,6 +50,9 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::codebase_change_notice::CODEBASE_CHANGE_NOTICE_MAX_PATHS;
+use crate::codebase_change_notice::CodebaseChangeNotice;
+use crate::codebase_snapshot::CodebaseSnapshot;
 use crate::config::Config;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
@@ -753,6 +757,73 @@ impl Session {
             .map(RolloutItem::ResponseItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
+    }
+
+    async fn stored_snapshot_for_root(&self, root: &Path) -> Option<CodebaseSnapshot> {
+        let state = self.state.lock().await;
+        state
+            .codebase_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.root() == root)
+            .cloned()
+    }
+
+    async fn set_codebase_snapshot(&self, snapshot: CodebaseSnapshot) {
+        let mut state = self.state.lock().await;
+        state.codebase_snapshot = Some(snapshot);
+    }
+
+    pub(crate) async fn emit_codebase_delta_if_changed(
+        &self,
+        turn_context: &TurnContext,
+        sub_id: &str,
+    ) -> anyhow::Result<()> {
+        let cwd = turn_context.cwd.clone();
+        let previous = self.stored_snapshot_for_root(&cwd).await;
+        let latest = CodebaseSnapshot::capture(cwd.clone()).await?;
+
+        if let Some(previous_snapshot) = previous {
+            let diff = previous_snapshot.diff(&latest);
+            if diff.is_empty() {
+                self.set_codebase_snapshot(latest).await;
+                return Ok(());
+            }
+
+            let notice = CodebaseChangeNotice::new(diff, CODEBASE_CHANGE_NOTICE_MAX_PATHS);
+            if notice.is_empty() {
+                self.set_codebase_snapshot(latest).await;
+                return Ok(());
+            }
+
+            let response_item: ResponseItem = notice.into();
+            self.record_conversation_items(std::slice::from_ref(&response_item))
+                .await;
+
+            for msg in
+                map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning())
+            {
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg,
+                };
+                self.send_event(event).await;
+            }
+
+            self.set_codebase_snapshot(latest).await;
+            return Ok(());
+        }
+
+        self.set_codebase_snapshot(latest).await;
+        Ok(())
+    }
+
+    pub(crate) async fn refresh_codebase_snapshot(
+        &self,
+        turn_context: &TurnContext,
+    ) -> anyhow::Result<()> {
+        let snapshot = CodebaseSnapshot::capture(turn_context.cwd.clone()).await?;
+        self.set_codebase_snapshot(snapshot).await;
+        Ok(())
     }
 
     pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
@@ -1738,6 +1809,14 @@ pub(crate) async fn run_task(
             .await;
     }
 
+    if !is_review_mode
+        && let Err(err) = sess
+            .emit_codebase_delta_if_changed(turn_context.as_ref(), &sub_id)
+            .await
+    {
+        warn!(error = ?err, "failed to compute codebase changes");
+    }
+
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -1969,6 +2048,11 @@ pub(crate) async fn run_task(
                 break;
             }
         }
+    }
+
+    if !is_review_mode && let Err(err) = sess.refresh_codebase_snapshot(turn_context.as_ref()).await
+    {
+        warn!(error = ?err, "failed to refresh codebase snapshot");
     }
 
     // If this was a review thread and we have a final assistant message,

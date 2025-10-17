@@ -11,6 +11,8 @@ pub mod bash;
 mod chat_completions;
 mod client;
 mod client_common;
+mod codebase_change_notice;
+mod codebase_snapshot;
 pub mod codex;
 mod codex_conversation;
 pub mod token_data;

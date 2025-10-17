@@ -2,6 +2,7 @@
 
 use codex_protocol::models::ResponseItem;
 
+use crate::codebase_snapshot::CodebaseSnapshot;
 use crate::conversation_history::ConversationHistory;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
@@ -13,6 +14,7 @@ pub(crate) struct SessionState {
     pub(crate) history: ConversationHistory,
     pub(crate) token_info: Option<TokenUsageInfo>,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    pub(crate) codebase_snapshot: Option<CodebaseSnapshot>,
 }
 
 impl SessionState {
