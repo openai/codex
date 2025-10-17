@@ -1,6 +1,8 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::config_types::McpServerConfig;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -32,6 +34,11 @@ pub struct ConfigProfile {
     /// Optional feature toggles scoped to this profile.
     #[serde(default)]
     pub features: Option<crate::features::FeaturesToml>,
+    /// Optional MCP servers defined within this profile.
+    ///
+    /// When provided, these entries are merged into the top-level
+    /// `mcp_servers` map during config loading.
+    pub mcp_servers: Option<HashMap<String, McpServerConfig>>,
 }
 
 impl From<ConfigProfile> for codex_app_server_protocol::Profile {
