@@ -68,6 +68,7 @@ export class Thread {
       baseUrl: this._options.baseUrl,
       apiKey: this._options.apiKey,
       threadId: this._id,
+      images: turnOptions.images,
       model: options?.model,
       sandboxMode: options?.sandboxMode,
       workingDirectory: options?.workingDirectory,

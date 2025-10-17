@@ -279,6 +279,49 @@ describe("Codex", () => {
       await close();
     }
   });
+  it("forwards images to exec", async () => {
+    const { url, close } = await startResponsesTestProxy({
+      statusCode: 200,
+      responseBodies: [
+        sse(
+          responseStarted("response_1"),
+          assistantMessage("Images applied", "item_1"),
+          responseCompleted("response_1"),
+        ),
+      ],
+    });
+
+    const { args: spawnArgs, restore } = codexExecSpy();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-images-"));
+    const images: [string, string] = [
+      path.join(tempDir, "first.png"),
+      path.join(tempDir, "second.jpg"),
+    ];
+    images.forEach((image, index) => {
+      fs.writeFileSync(image, `image-${index}`);
+    });
+
+    try {
+      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
+
+      const thread = client.startThread();
+      await thread.run("describe the images", { images });
+
+      const commandArgs = spawnArgs[0];
+      expect(commandArgs).toBeDefined();
+      const forwardedImages: string[] = [];
+      for (let i = 0; i < commandArgs!.length; i += 1) {
+        if (commandArgs![i] === "--image") {
+          forwardedImages.push(commandArgs![i + 1] ?? "");
+        }
+      }
+      expect(forwardedImages).toEqual(images);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      restore();
+      await close();
+    }
+  });
   it("runs in provided working directory", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,

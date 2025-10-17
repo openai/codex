@@ -83,6 +83,16 @@ const turn = await thread.run("Summarize repository status", {
 console.log(turn.finalResponse);
 ```
 
+### Attaching images
+
+Provide image file paths with the `images` option to include visual context in a turn.
+
+```typescript
+const turn = await thread.run("Describe these screenshots", {
+  images: ["./ui.png", "./diagram.jpg"],
+});
+```
+
 ### Resuming an existing thread
 
 Threads are persisted in `~/.codex/sessions`. If you lose the in-memory `Thread` object, reconstruct it with `resumeThread()` and keep going.
@@ -95,7 +105,7 @@ await thread.run("Implement the fix");
 
 ### Working directory controls
 
-Codex runs in the current working directory by default. To avoid unrecoverable errors, Codex requires the working directory to be a Git repository. You can skip the Git repository check by passing the `skipGitRepoCheck` option when creating a thread. 
+Codex runs in the current working directory by default. To avoid unrecoverable errors, Codex requires the working directory to be a Git repository. You can skip the Git repository check by passing the `skipGitRepoCheck` option when creating a thread.
 
 ```typescript
 const thread = codex.startThread({
