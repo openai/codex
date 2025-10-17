@@ -4,6 +4,7 @@ members = [
     "ansi-escape",
     "app-server",
     "app-server-protocol",
+    "app-server-ws",
     "apply-patch",
     "arg0",
     "codex-backend-openapi-models",

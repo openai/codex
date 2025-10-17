@@ -959,6 +959,7 @@ pub enum SessionSource {
     Cli,
     #[default]
     VSCode,
+    WSRemote,
     Exec,
     Mcp,
     #[serde(other)]

@@ -674,6 +674,21 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = conversation_id;
+                // Emit a top-level ServerNotification so late subscribers can still
+                // observe initial configuration without racing the event stream.
+                self.outgoing
+                    .send_server_notification(ServerNotification::SessionConfigured(
+                        SessionConfiguredNotification {
+                            session_id: session_configured.session_id,
+                            model: session_configured.model.clone(),
+                            reasoning_effort: session_configured.reasoning_effort,
+                            history_log_id: session_configured.history_log_id,
+                            history_entry_count: session_configured.history_entry_count,
+                            initial_messages: session_configured.initial_messages.clone(),
+                            rollout_path: session_configured.rollout_path.clone(),
+                        },
+                    ))
+                    .await;
                 let response = NewConversationResponse {
                     conversation_id,
                     model: session_configured.model,
