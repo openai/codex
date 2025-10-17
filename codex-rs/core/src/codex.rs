@@ -38,6 +38,7 @@ use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -70,6 +71,7 @@ use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
+use crate::or_cancel::OrCancelExt;
 use crate::parse_command::parse_command;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
@@ -1170,19 +1172,6 @@ impl Session {
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
     }
 
-    fn interrupt_task_sync(&self) {
-        if let Ok(mut active) = self.active_turn.try_lock()
-            && let Some(at) = active.as_mut()
-        {
-            at.try_clear_pending_sync();
-            let tasks = at.drain_tasks();
-            *active = None;
-            for (_sub_id, task) in tasks {
-                task.handle.abort();
-            }
-        }
-    }
-
     pub(crate) fn notifier(&self) -> &UserNotifier {
         &self.services.notifier
     }
@@ -1193,12 +1182,6 @@ impl Session {
 
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        self.interrupt_task_sync();
     }
 }
 
@@ -1711,6 +1694,7 @@ pub(crate) async fn run_task(
     sub_id: String,
     input: Vec<InputItem>,
     task_kind: TaskKind,
+    cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() {
         return None;
@@ -1795,6 +1779,7 @@ pub(crate) async fn run_task(
             sub_id.clone(),
             turn_input,
             task_kind,
+            cancellation_token.child_token(),
         )
         .await
         {
@@ -1956,6 +1941,10 @@ pub(crate) async fn run_task(
                 }
                 continue;
             }
+            Err(CodexErr::TurnAborted) => {
+                // Aborted turn is repored via a different event.
+                break;
+            }
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let event = Event {
@@ -2022,6 +2011,7 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
     task_kind: TaskKind,
+    cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
     let router = Arc::new(ToolRouter::from_config(
@@ -2052,10 +2042,12 @@ async fn run_turn(
             &sub_id,
             &prompt,
             task_kind,
+            cancellation_token.child_token(),
         )
         .await
         {
             Ok(output) => return Ok(output),
+            Err(CodexErr::TurnAborted) => return Err(CodexErr::TurnAborted),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
@@ -2118,6 +2110,7 @@ struct TurnRunResult {
     total_token_usage: Option<TokenUsage>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn try_run_turn(
     router: Arc<ToolRouter>,
     sess: Arc<Session>,
@@ -2126,6 +2119,7 @@ async fn try_run_turn(
     sub_id: &str,
     prompt: &Prompt,
     task_kind: TaskKind,
+    cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
     // call_ids that are part of this response.
     let completed_call_ids = prompt
@@ -2195,7 +2189,9 @@ async fn try_run_turn(
         .client
         .clone()
         .stream_with_task_kind(prompt.as_ref(), task_kind)
-        .await?;
+        .or_cancel(&cancellation_token)
+        .await
+        .map_err(|_| CodexErr::TurnAborted)??;
 
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
@@ -2211,7 +2207,12 @@ async fn try_run_turn(
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
-        let event = stream.next().await;
+        let event = stream
+            .next()
+            .or_cancel(&cancellation_token)
+            .await
+            .map_err(|_| CodexErr::TurnAborted)?;
+
         let event = match event {
             Some(res) => res?,
             None => {
@@ -2316,7 +2317,11 @@ async fn try_run_turn(
                 sess.update_token_usage_info(sub_id, turn_context.as_ref(), token_usage.as_ref())
                     .await;
 
-                let processed_items: Vec<ProcessedResponseItem> = output.try_collect().await?;
+                let processed_items = output
+                    .try_collect()
+                    .or_cancel(&cancellation_token)
+                    .await
+                    .map_err(|_| CodexErr::TurnAborted)??;
 
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;
@@ -2563,8 +2568,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
-    use tokio::time::Duration;
-    use tokio::time::sleep;
 
     #[test]
     fn reconstruct_history_matches_live_compactions() {
@@ -2958,10 +2961,10 @@ mod tests {
             _ctx: Arc<TurnContext>,
             _sub_id: String,
             _input: Vec<InputItem>,
+            cancellation_token: CancellationToken,
         ) -> Option<String> {
-            loop {
-                sleep(Duration::from_secs(60)).await;
-            }
+            cancellation_token.cancelled().await;
+            return None;
         }
 
         async fn abort(&self, session: Arc<SessionTaskContext>, sub_id: &str) {
