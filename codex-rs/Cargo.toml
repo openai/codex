@@ -6,6 +6,7 @@ members = [
     "app-server-protocol",
     "apply-patch",
     "arg0",
+    "feedback",
     "codex-backend-openapi-models",
     "cloud-tasks",
     "cloud-tasks-client",
@@ -56,6 +57,7 @@ codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
+codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git-tooling = { path = "git-tooling" }
 codex-linux-sandbox = { path = "linux-sandbox" }
@@ -83,8 +85,8 @@ ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = "3"
 askama = "0.12"
-assert_matches = "1.5.0"
 assert_cmd = "2"
+assert_matches = "1.5.0"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
@@ -147,6 +149,7 @@ reqwest = "0.12"
 rmcp = { version = "0.8.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
+sentry = "0.34.0"
 serde = "1"
 serde_json = "1"
 serde_with = "3.14"

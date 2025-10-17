@@ -28,6 +28,12 @@ use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
+use mcp_types::ListResourceTemplatesRequestParams;
+use mcp_types::ListResourceTemplatesResult;
+use mcp_types::ListResourcesRequestParams;
+use mcp_types::ListResourcesResult;
+use mcp_types::ReadResourceRequestParams;
+use mcp_types::ReadResourceResult;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -910,6 +916,7 @@ impl Session {
             duration,
             exit_code,
             timed_out: _,
+            ..
         } = output;
         // Send full stdout/stderr to clients; do not truncate.
         let stdout = stdout.text.clone();
@@ -974,14 +981,27 @@ impl Session {
         let sub_id = context.sub_id.clone();
         let call_id = context.call_id.clone();
 
-        self.on_exec_command_begin(turn_diff_tracker.clone(), context.clone())
-            .await;
-
+        let begin_turn_diff = turn_diff_tracker.clone();
+        let begin_context = context.clone();
+        let session = self;
         let result = self
             .services
             .executor
-            .run(request, self, approval_policy, &context)
+            .run(request, self, approval_policy, &context, move || {
+                let turn_diff = begin_turn_diff.clone();
+                let ctx = begin_context.clone();
+                async move {
+                    session.on_exec_command_begin(turn_diff, ctx).await;
+                }
+            })
             .await;
+
+        if matches!(
+            &result,
+            Err(ExecError::Function(FunctionCallError::Denied(_)))
+        ) {
+            return result;
+        }
 
         let normalized = normalize_exec_result(&result);
         let borrowed = normalized.event_output();
@@ -1055,6 +1075,39 @@ impl Session {
             }
             None => Vec::with_capacity(0),
         }
+    }
+
+    pub async fn list_resources(
+        &self,
+        server: &str,
+        params: Option<ListResourcesRequestParams>,
+    ) -> anyhow::Result<ListResourcesResult> {
+        self.services
+            .mcp_connection_manager
+            .list_resources(server, params)
+            .await
+    }
+
+    pub async fn list_resource_templates(
+        &self,
+        server: &str,
+        params: Option<ListResourceTemplatesRequestParams>,
+    ) -> anyhow::Result<ListResourceTemplatesResult> {
+        self.services
+            .mcp_connection_manager
+            .list_resource_templates(server, params)
+            .await
+    }
+
+    pub async fn read_resource(
+        &self,
+        server: &str,
+        params: ReadResourceRequestParams,
+    ) -> anyhow::Result<ReadResourceResult> {
+        self.services
+            .mcp_connection_manager
+            .read_resource(server, params)
+            .await
     }
 
     pub async fn call_tool(
@@ -1419,16 +1472,23 @@ async fn submission_loop(
 
                 // This is a cheap lookup from the connection manager's cache.
                 let tools = sess.services.mcp_connection_manager.list_all_tools();
-                let auth_statuses = compute_auth_statuses(
-                    config.mcp_servers.iter(),
-                    config.mcp_oauth_credentials_store_mode,
-                )
-                .await;
+                let (auth_statuses, resources, resource_templates) = tokio::join!(
+                    compute_auth_statuses(
+                        config.mcp_servers.iter(),
+                        config.mcp_oauth_credentials_store_mode,
+                    ),
+                    sess.services.mcp_connection_manager.list_all_resources(),
+                    sess.services
+                        .mcp_connection_manager
+                        .list_all_resource_templates()
+                );
                 let event = Event {
                     id: sub_id,
                     msg: EventMsg::McpListToolsResponse(
                         crate::protocol::McpListToolsResponseEvent {
                             tools,
+                            resources,
+                            resource_templates,
                             auth_statuses,
                         },
                     ),
@@ -2216,7 +2276,8 @@ async fn try_run_turn(
                             response: Some(response),
                         });
                     }
-                    Err(FunctionCallError::RespondToModel(message)) => {
+                    Err(FunctionCallError::RespondToModel(message))
+                    | Err(FunctionCallError::Denied(message)) => {
                         let response = ResponseInputItem::FunctionCallOutput {
                             call_id: String::new(),
                             output: FunctionCallOutputPayload {

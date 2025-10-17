@@ -13,12 +13,8 @@ use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
-use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -27,6 +23,7 @@ use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
 mod app;
@@ -192,52 +189,9 @@ pub async fn run_main(
         }
     };
 
-    let mut config = {
-        // Load configuration and support CLI overrides.
+    let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
 
-        #[allow(clippy::print_stderr)]
-        match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides).await {
-            Ok(config) => config,
-            Err(err) => {
-                eprintln!("Error loading configuration: {err}");
-                std::process::exit(1);
-            }
-        }
-    };
-
-    // we load config.toml here to determine project state.
-    #[allow(clippy::print_stderr)]
-    let config_toml = {
-        let codex_home = match find_codex_home() {
-            Ok(codex_home) => codex_home,
-            Err(err) => {
-                eprintln!("Error finding codex home: {err}");
-                std::process::exit(1);
-            }
-        };
-
-        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides).await {
-            Ok(config_toml) => config_toml,
-            Err(err) => {
-                eprintln!("Error loading config.toml: {err}");
-                std::process::exit(1);
-            }
-        }
-    };
-
-    let cli_profile_override = cli.config_profile.clone();
-    let active_profile = cli_profile_override
-        .clone()
-        .or_else(|| config_toml.profile.clone());
-
-    let should_show_trust_screen = determine_repo_trust_state(
-        &mut config,
-        &config_toml,
-        approval_policy,
-        sandbox_mode,
-        cli_profile_override,
-    )?;
-
+    let active_profile = config.active_profile.clone();
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
@@ -266,12 +220,20 @@ pub async fn run_main(
         })
     };
 
-    // Build layered subscriber:
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
+
+    let feedback = codex_feedback::CodexFeedback::new();
+    let targets = Targets::new().with_default(tracing::Level::TRACE);
+
+    let feedback_layer = tracing_subscriber::fmt::layer()
+        .with_writer(feedback.make_writer())
+        .with_ansi(false)
+        .with_target(false)
+        .with_filter(targets);
 
     if cli.oss {
         codex_ollama::ensure_oss_ready(&config)
@@ -297,24 +259,36 @@ pub async fn run_main(
 
         let _ = tracing_subscriber::registry()
             .with(file_layer)
+            .with(feedback_layer)
             .with(otel_layer)
             .try_init();
     } else {
-        let _ = tracing_subscriber::registry().with(file_layer).try_init();
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(feedback_layer)
+            .try_init();
     };
 
-    run_ratatui_app(cli, config, active_profile, should_show_trust_screen)
-        .await
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(
+        cli,
+        config,
+        overrides,
+        cli_kv_overrides,
+        active_profile,
+        feedback,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
     cli: Cli,
-    config: Config,
+    initial_config: Config,
+    overrides: ConfigOverrides,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
     active_profile: Option<String>,
-    should_show_trust_screen: bool,
+    feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
-    let mut config = config;
     color_eyre::install()?;
 
     // Forward panic reports through tracing so they appear in the UI status
@@ -337,7 +311,7 @@ async fn run_ratatui_app(
 
         let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
         if !skip_update_prompt {
-            match update_prompt::run_update_prompt_if_needed(&mut tui, &config).await? {
+            match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
                 UpdatePromptOutcome::Continue => {}
                 UpdatePromptOutcome::RunUpdate(action) => {
                     crate::tui::restore()?;
@@ -354,7 +328,7 @@ async fn run_ratatui_app(
     // Show update banner in terminal history (instead of stderr) so it is visible
     // within the TUI scrollback. Building spans keeps styling consistent.
     #[cfg(not(debug_assertions))]
-    if let Some(latest_version) = updates::get_upgrade_version(&config) {
+    if let Some(latest_version) = updates::get_upgrade_version(&initial_config) {
         use crate::history_cell::padded_emoji;
         use crate::history_cell::with_border_with_inner_width;
         use ratatui::style::Stylize as _;
@@ -402,27 +376,29 @@ async fn run_ratatui_app(
     }
 
     // Initialize high-fidelity session event logging if enabled.
-    session_log::maybe_init(&config);
+    session_log::maybe_init(&initial_config);
 
-    let auth_manager = AuthManager::shared(config.codex_home.clone(), false);
-    let login_status = get_login_status(&config);
+    let auth_manager = AuthManager::shared(initial_config.codex_home.clone(), false);
+    let login_status = get_login_status(&initial_config);
+    let should_show_trust_screen = should_show_trust_screen(&initial_config);
     let should_show_windows_wsl_screen =
-        cfg!(target_os = "windows") && !config.windows_wsl_setup_acknowledged;
+        cfg!(target_os = "windows") && !initial_config.windows_wsl_setup_acknowledged;
     let should_show_onboarding = should_show_onboarding(
         login_status,
-        &config,
+        &initial_config,
         should_show_trust_screen,
         should_show_windows_wsl_screen,
     );
-    if should_show_onboarding {
+
+    let config = if should_show_onboarding {
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
+                show_login_screen: should_show_login_screen(login_status, &initial_config),
                 show_windows_wsl_screen: should_show_windows_wsl_screen,
-                show_login_screen: should_show_login_screen(login_status, &config),
                 show_trust_screen: should_show_trust_screen,
                 login_status,
                 auth_manager: auth_manager.clone(),
-                config: config.clone(),
+                config: initial_config.clone(),
             },
             &mut tui,
         )
@@ -440,14 +416,20 @@ async fn run_ratatui_app(
                 update_action: None,
             });
         }
-        if should_show_windows_wsl_screen {
-            config.windows_wsl_setup_acknowledged = true;
+        // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
+        if should_show_windows_wsl_screen
+            || onboarding_result
+                .directory_trust_decision
+                .map(|d| d == TrustDirectorySelection::Trust)
+                .unwrap_or(false)
+        {
+            load_config_or_exit(cli_kv_overrides, overrides).await
+        } else {
+            initial_config
         }
-        if let Some(TrustDirectorySelection::Trust) = onboarding_result.directory_trust_decision {
-            config.approval_policy = AskForApproval::OnRequest;
-            config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
-        }
-    }
+    } else {
+        initial_config
+    };
 
     // Determine resume behavior: explicit id, then resume last, then picker.
     let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
@@ -501,6 +483,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         resume_selection,
+        feedback,
     )
     .await;
 
@@ -588,39 +571,31 @@ fn get_login_status(config: &Config) -> LoginStatus {
     }
 }
 
-/// Determine if user has configured a sandbox / approval policy,
-/// or if the current cwd project is trusted, and updates the config
-/// accordingly.
-fn determine_repo_trust_state(
-    config: &mut Config,
-    config_toml: &ConfigToml,
-    approval_policy_overide: Option<AskForApproval>,
-    sandbox_mode_override: Option<SandboxMode>,
-    config_profile_override: Option<String>,
-) -> std::io::Result<bool> {
-    let config_profile = config_toml.get_config_profile(config_profile_override)?;
+async fn load_config_or_exit(
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    overrides: ConfigOverrides,
+) -> Config {
+    #[allow(clippy::print_stderr)]
+    match Config::load_with_cli_overrides(cli_kv_overrides, overrides).await {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Error loading configuration: {err}");
+            std::process::exit(1);
+        }
+    }
+}
 
-    if approval_policy_overide.is_some() || sandbox_mode_override.is_some() {
+/// Determine if user has configured a sandbox / approval policy,
+/// or if the current cwd project is already trusted. If not, we need to
+/// show the trust screen.
+fn should_show_trust_screen(config: &Config) -> bool {
+    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
         // if the user has overridden either approval policy or sandbox mode,
         // skip the trust flow
-        Ok(false)
-    } else if config_profile.approval_policy.is_some() {
-        // if the user has specified settings in a config profile, skip the trust flow
-        // todo: profile sandbox mode?
-        Ok(false)
-    } else if config_toml.approval_policy.is_some() || config_toml.sandbox_mode.is_some() {
-        // if the user has specified either approval policy or sandbox mode in config.toml
-        // skip the trust flow
-        Ok(false)
-    } else if config_toml.is_cwd_trusted(&config.cwd) {
-        // if the current cwd project is trusted and no config has been set
-        // skip the trust flow and set the approval policy and sandbox mode
-        config.approval_policy = AskForApproval::OnRequest;
-        config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
-        Ok(false)
+        false
     } else {
-        // if none of the above conditions are met, show the trust screen
-        Ok(true)
+        // otherwise, skip iff the active project is trusted
+        !config.active_project.is_trusted()
     }
 }
 
