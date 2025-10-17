@@ -107,7 +107,7 @@ impl Session {
 
         let running_task = RunningTask {
             done,
-            _handle: Arc::new(AbortOnDropHandle::new(handle)),
+            handle: Arc::new(AbortOnDropHandle::new(handle)),
             kind: task_kind,
             task,
             cancellation_token,
@@ -181,7 +181,7 @@ impl Session {
             }
         }
 
-        task._handle.abort();
+        task.handle.abort();
 
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task.abort(session_ctx, &sub_id).await;

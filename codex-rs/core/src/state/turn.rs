@@ -52,7 +52,7 @@ pub(crate) struct RunningTask {
     pub(crate) kind: TaskKind,
     pub(crate) task: Arc<dyn SessionTask>,
     pub(crate) cancellation_token: CancellationToken,
-    pub(crate) _handle: Arc<AbortOnDropHandle<()>>,
+    pub(crate) handle: Arc<AbortOnDropHandle<()>>,
 }
 
 impl ActiveTurn {
