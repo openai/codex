@@ -1,0 +1,16 @@
+[package]
+edition = "2021"
+name = "codex-utils-pty"
+version = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+portable-pty = { workspace = true }
+tokio = { workspace = true, features = [
+    "macros",
+    "rt-multi-thread",
+    "sync",
+] }

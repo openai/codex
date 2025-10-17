@@ -55,23 +55,23 @@ pub fn assess_patch_safety(
     if is_write_patch_constrained_to_writable_paths(action, sandbox_policy, cwd)
         || policy == AskForApproval::OnFailure
     {
-        // Only auto‑approve when we can actually enforce a sandbox. Otherwise
-        // fall back to asking the user because the patch may touch arbitrary
-        // paths outside the project.
-        match get_platform_sandbox() {
-            Some(sandbox_type) => SafetyCheck::AutoApprove {
-                sandbox_type,
+        if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+            // DangerFullAccess is intended to bypass sandboxing entirely.
+            SafetyCheck::AutoApprove {
+                sandbox_type: SandboxType::None,
                 user_explicitly_approved: false,
-            },
-            None if sandbox_policy == &SandboxPolicy::DangerFullAccess => {
-                // If the user has explicitly requested DangerFullAccess, then
-                // we can auto-approve even without a sandbox.
-                SafetyCheck::AutoApprove {
-                    sandbox_type: SandboxType::None,
-                    user_explicitly_approved: false,
-                }
             }
-            None => SafetyCheck::AskUser,
+        } else {
+            // Only auto‑approve when we can actually enforce a sandbox. Otherwise
+            // fall back to asking the user because the patch may touch arbitrary
+            // paths outside the project.
+            match get_platform_sandbox() {
+                Some(sandbox_type) => SafetyCheck::AutoApprove {
+                    sandbox_type,
+                    user_explicitly_approved: false,
+                },
+                None => SafetyCheck::AskUser,
+            }
         }
     } else if policy == AskForApproval::Never {
         SafetyCheck::Reject {
@@ -89,6 +89,7 @@ pub fn assess_patch_safety(
 /// - the user has explicitly approved the command
 /// - the command is on the "known safe" list
 /// - `DangerFullAccess` was specified and `UnlessTrusted` was not
+#[allow(dead_code)]
 pub fn assess_command_safety(
     command: &[String],
     approval_policy: AskForApproval,
@@ -135,6 +136,7 @@ pub fn assess_command_safety(
     assess_safety_for_untrusted_command(approval_policy, sandbox_policy, with_escalated_permissions)
 }
 
+#[allow(dead_code)]
 pub(crate) fn assess_safety_for_untrusted_command(
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,

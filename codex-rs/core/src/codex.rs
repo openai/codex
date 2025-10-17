@@ -8,6 +8,7 @@ use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::function_tool::FunctionCallError;
+use crate::parse_command::parse_command;
 use crate::review_format::format_review_findings_block;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
@@ -55,22 +56,14 @@ use crate::conversation_history::ConversationHistory;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::exec::ExecToolCallOutput;
 #[cfg(test)]
 use crate::exec::StreamOutput;
-use crate::exec_command::ExecCommandParams;
-use crate::exec_command::ExecSessionManager;
-use crate::exec_command::WriteStdinParams;
-use crate::executor::Executor;
-use crate::executor::ExecutorConfig;
-use crate::executor::normalize_exec_result;
+// Removed: legacy executor wiring replaced by ToolOrchestrator flows.
+// legacy normalize_exec_result no longer used after orchestrator migration
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
-use crate::openai_tools::ToolsConfig;
-use crate::openai_tools::ToolsConfigParams;
-use crate::parse_command::parse_command;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
@@ -83,13 +76,9 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
-use crate::protocol::ExecCommandBeginEvent;
-use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::InputItem;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
-use crate::protocol::PatchApplyBeginEvent;
-use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
@@ -112,8 +101,9 @@ use crate::tasks::RegularTask;
 use crate::tasks::ReviewTask;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::format_exec_output_str;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::spec::ToolsConfig;
+use crate::tools::spec::ToolsConfigParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
@@ -271,6 +261,7 @@ pub(crate) struct TurnContext {
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
 }
 
 impl TurnContext {
@@ -495,20 +486,15 @@ impl Session {
             cwd,
             is_review_mode: false,
             final_output_json_schema: None,
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         };
         let services = SessionServices {
             mcp_connection_manager,
-            session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: notify,
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-            executor: Executor::new(ExecutorConfig::new(
-                turn_context.sandbox_policy.clone(),
-                turn_context.cwd.clone(),
-                config.codex_linux_sandbox_exe.clone(),
-            )),
         };
 
         let sess = Arc::new(Session {
@@ -858,168 +844,6 @@ impl Session {
         }
     }
 
-    async fn on_exec_command_begin(
-        &self,
-        turn_diff_tracker: SharedTurnDiffTracker,
-        exec_command_context: ExecCommandContext,
-    ) {
-        let ExecCommandContext {
-            sub_id,
-            call_id,
-            command_for_display,
-            cwd,
-            apply_patch,
-            ..
-        } = exec_command_context;
-        let msg = match apply_patch {
-            Some(ApplyPatchCommandContext {
-                user_explicitly_approved_this_action,
-                changes,
-            }) => {
-                {
-                    let mut tracker = turn_diff_tracker.lock().await;
-                    tracker.on_patch_begin(&changes);
-                }
-
-                EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
-                    call_id,
-                    auto_approved: !user_explicitly_approved_this_action,
-                    changes,
-                })
-            }
-            None => EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                call_id,
-                command: command_for_display.clone(),
-                cwd,
-                parsed_cmd: parse_command(&command_for_display),
-            }),
-        };
-        let event = Event {
-            id: sub_id.to_string(),
-            msg,
-        };
-        self.send_event(event).await;
-    }
-
-    async fn on_exec_command_end(
-        &self,
-        turn_diff_tracker: SharedTurnDiffTracker,
-        sub_id: &str,
-        call_id: &str,
-        output: &ExecToolCallOutput,
-        is_apply_patch: bool,
-    ) {
-        let ExecToolCallOutput {
-            stdout,
-            stderr,
-            aggregated_output,
-            duration,
-            exit_code,
-            timed_out: _,
-            ..
-        } = output;
-        // Send full stdout/stderr to clients; do not truncate.
-        let stdout = stdout.text.clone();
-        let stderr = stderr.text.clone();
-        let formatted_output = format_exec_output_str(output);
-        let aggregated_output: String = aggregated_output.text.clone();
-
-        let msg = if is_apply_patch {
-            EventMsg::PatchApplyEnd(PatchApplyEndEvent {
-                call_id: call_id.to_string(),
-                stdout,
-                stderr,
-                success: *exit_code == 0,
-            })
-        } else {
-            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                call_id: call_id.to_string(),
-                stdout,
-                stderr,
-                aggregated_output,
-                exit_code: *exit_code,
-                duration: *duration,
-                formatted_output,
-            })
-        };
-
-        let event = Event {
-            id: sub_id.to_string(),
-            msg,
-        };
-        self.send_event(event).await;
-
-        // If this is an apply_patch, after we emit the end patch, emit a second event
-        // with the full turn diff if there is one.
-        if is_apply_patch {
-            let unified_diff = {
-                let mut tracker = turn_diff_tracker.lock().await;
-                tracker.get_unified_diff()
-            };
-            if let Ok(Some(unified_diff)) = unified_diff {
-                let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
-                let event = Event {
-                    id: sub_id.into(),
-                    msg,
-                };
-                self.send_event(event).await;
-            }
-        }
-    }
-    /// Runs the exec tool call and emits events for the begin and end of the
-    /// command even on error.
-    ///
-    /// Returns the output of the exec tool call.
-    pub(crate) async fn run_exec_with_events(
-        &self,
-        turn_diff_tracker: SharedTurnDiffTracker,
-        prepared: PreparedExec,
-        approval_policy: AskForApproval,
-    ) -> Result<ExecToolCallOutput, ExecError> {
-        let PreparedExec { context, request } = prepared;
-        let is_apply_patch = context.apply_patch.is_some();
-        let sub_id = context.sub_id.clone();
-        let call_id = context.call_id.clone();
-
-        let begin_turn_diff = turn_diff_tracker.clone();
-        let begin_context = context.clone();
-        let session = self;
-        let result = self
-            .services
-            .executor
-            .run(request, self, approval_policy, &context, move || {
-                let turn_diff = begin_turn_diff.clone();
-                let ctx = begin_context.clone();
-                async move {
-                    session.on_exec_command_begin(turn_diff, ctx).await;
-                }
-            })
-            .await;
-
-        if matches!(
-            &result,
-            Err(ExecError::Function(FunctionCallError::Denied(_)))
-        ) {
-            return result;
-        }
-
-        let normalized = normalize_exec_result(&result);
-        let borrowed = normalized.event_output();
-
-        self.on_exec_command_end(
-            turn_diff_tracker,
-            &sub_id,
-            &call_id,
-            borrowed,
-            is_apply_patch,
-        )
-        .await;
-
-        drop(normalized);
-
-        result
-    }
-
     /// Helper that emits a BackgroundEvent with the given message. This keeps
     /// the call‑sites terse so adding more diagnostics does not clutter the
     /// core agent logic.
@@ -1126,43 +950,6 @@ impl Session {
         self.services
             .mcp_connection_manager
             .parse_tool_name(tool_name)
-    }
-
-    pub(crate) async fn handle_exec_command_tool(
-        &self,
-        params: ExecCommandParams,
-    ) -> Result<String, FunctionCallError> {
-        let result = self
-            .services
-            .session_manager
-            .handle_exec_command_request(params)
-            .await;
-        match result {
-            Ok(output) => Ok(output.to_text_output()),
-            Err(err) => Err(FunctionCallError::RespondToModel(err)),
-        }
-    }
-
-    pub(crate) async fn handle_write_stdin_tool(
-        &self,
-        params: WriteStdinParams,
-    ) -> Result<String, FunctionCallError> {
-        self.services
-            .session_manager
-            .handle_write_stdin_request(params)
-            .await
-            .map(|output| output.to_text_output())
-            .map_err(FunctionCallError::RespondToModel)
-    }
-
-    pub(crate) async fn run_unified_exec_request(
-        &self,
-        request: crate::unified_exec::UnifiedExecRequest<'_>,
-    ) -> Result<crate::unified_exec::UnifiedExecResult, crate::unified_exec::UnifiedExecError> {
-        self.services
-            .unified_exec_manager
-            .handle_request(request)
-            .await
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
@@ -1289,6 +1076,7 @@ async fn submission_loop(
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
                     final_output_json_schema: None,
+                    codex_linux_sandbox_exe: prev.codex_linux_sandbox_exe.clone(),
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1382,6 +1170,7 @@ async fn submission_loop(
                         cwd,
                         is_review_mode: false,
                         final_output_json_schema,
+                        codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1668,6 +1457,7 @@ async fn spawn_review_thread(
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
         final_output_json_schema: None,
+        codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2525,10 +2315,6 @@ pub(crate) async fn exit_review_mode(
         .await;
 }
 
-use crate::executor::errors::ExecError;
-use crate::executor::linkers::PreparedExec;
-use crate::tools::context::ApplyPatchCommandContext;
-use crate::tools::context::ExecCommandContext;
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 
@@ -2537,6 +2323,8 @@ mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use crate::exec::ExecToolCallOutput;
+    use crate::tools::format_exec_output_str;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::InitialHistory;
@@ -2849,20 +2637,15 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
-            session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
             rollout: Mutex::new(None),
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-            executor: Executor::new(ExecutorConfig::new(
-                turn_context.sandbox_policy.clone(),
-                turn_context.cwd.clone(),
-                None,
-            )),
         };
         let session = Session {
             conversation_id,
@@ -2917,20 +2700,15 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
-            session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
             rollout: Mutex::new(None),
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-            executor: Executor::new(ExecutorConfig::new(
-                config.sandbox_policy.clone(),
-                config.cwd.clone(),
-                None,
-            )),
         };
         let session = Arc::new(Session {
             conversation_id,

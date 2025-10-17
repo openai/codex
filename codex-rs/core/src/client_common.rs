@@ -281,7 +281,7 @@ pub(crate) struct ResponsesApiRequest<'a> {
 }
 
 pub(crate) mod tools {
-    use crate::openai_tools::JsonSchema;
+    use crate::tools::spec::JsonSchema;
     use serde::Deserialize;
     use serde::Serialize;
 

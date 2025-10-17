@@ -35,7 +35,13 @@ impl ToolHandler for UnifiedExecHandler {
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
-            session, payload, ..
+            session,
+            turn,
+            sub_id,
+            call_id,
+            tool_name: _tool_name,
+            payload,
+            ..
         } = invocation;
 
         let args = match payload {
@@ -73,13 +79,23 @@ impl ToolHandler for UnifiedExecHandler {
         };
 
         let request = UnifiedExecRequest {
-            session_id: parsed_session_id,
             input_chunks: &input,
             timeout_ms,
         };
 
         let value = session
-            .run_unified_exec_request(request)
+            .services
+            .unified_exec_manager
+            .handle_request(
+                request,
+                crate::unified_exec::UnifiedExecContext {
+                    session: &session,
+                    turn: turn.as_ref(),
+                    sub_id: &sub_id,
+                    call_id: &call_id,
+                    session_id: parsed_session_id,
+                },
+            )
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("unified exec failed: {err:?}"))

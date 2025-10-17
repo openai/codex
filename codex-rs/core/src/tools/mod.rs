@@ -1,28 +1,32 @@
 pub mod context;
 pub(crate) mod handlers;
+pub mod orchestrator;
 pub mod parallel;
 pub mod registry;
 pub mod router;
+pub mod runtimes;
+pub mod sandboxing;
 pub mod spec;
 
 use crate::apply_patch;
-use crate::apply_patch::ApplyPatchExec;
 use crate::apply_patch::InternalApplyPatchInvocation;
-use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::StdoutStream;
-use crate::executor::ExecutionMode;
-use crate::executor::errors::ExecError;
-use crate::executor::linkers::PreparedExec;
+// Removed old executor-based imports in favor of the new orchestrator runtimes.
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::ApplyPatchCommandContext;
-use crate::tools::context::ExecCommandContext;
+// no longer need ExecCommandContext/ApplyPatchCommandContext in orchestrated flow
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
+use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+use crate::tools::runtimes::shell::ShellRequest;
+use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::protocol::AskForApproval;
@@ -52,11 +56,11 @@ pub(crate) async fn handle_container_exec_with_params(
     params: ExecParams,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    turn_diff_tracker: SharedTurnDiffTracker,
+    _turn_diff_tracker: SharedTurnDiffTracker,
     sub_id: String,
     call_id: String,
 ) -> Result<String, FunctionCallError> {
-    let otel_event_manager = turn_context.client.get_otel_event_manager();
+    let _otel_event_manager = turn_context.client.get_otel_event_manager();
 
     if params.with_escalated_permissions.unwrap_or(false)
         && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
@@ -100,81 +104,117 @@ pub(crate) async fn handle_container_exec_with_params(
         MaybeApplyPatchVerified::NotApplyPatch => None,
     };
 
-    let command_for_display = if let Some(exec) = apply_patch_exec.as_ref() {
-        vec!["apply_patch".to_string(), exec.action.patch.clone()]
-    } else {
-        params.command.clone()
-    };
+    // Build runtime contexts only when needed (shell/apply_patch below).
 
-    let exec_command_context = ExecCommandContext {
-        sub_id: sub_id.clone(),
-        call_id: call_id.clone(),
-        command_for_display: command_for_display.clone(),
-        cwd: params.cwd.clone(),
-        apply_patch: apply_patch_exec.as_ref().map(
-            |ApplyPatchExec {
-                 action,
-                 user_explicitly_approved_this_action,
-             }| ApplyPatchCommandContext {
-                user_explicitly_approved_this_action: *user_explicitly_approved_this_action,
-                changes: convert_apply_patch_to_protocol(action),
-            },
-        ),
-        tool_name: tool_name.to_string(),
-        otel_event_manager,
-    };
+    if let Some(exec) = apply_patch_exec {
+        // Route apply_patch execution through the new orchestrator/runtime.
+        let req = ApplyPatchRequest {
+            patch: exec.action.patch.clone(),
+            cwd: params.cwd.clone(),
+            timeout_ms: params.timeout_ms,
+            user_explicitly_approved: exec.user_explicitly_approved_this_action,
+            codex_exe: turn_context.codex_linux_sandbox_exe.clone(),
+        };
 
-    let mode = match apply_patch_exec {
-        Some(exec) => ExecutionMode::ApplyPatch(exec),
-        None => ExecutionMode::Shell,
-    };
-
-    sess.services.executor.update_environment(
-        turn_context.sandbox_policy.clone(),
-        turn_context.cwd.clone(),
-    );
-
-    let prepared_exec = PreparedExec::new(
-        exec_command_context,
-        params,
-        command_for_display,
-        mode,
-        Some(StdoutStream {
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = ApplyPatchRuntime::new();
+        let tool_ctx = ToolCtx {
+            session: sess.as_ref(),
             sub_id: sub_id.clone(),
             call_id: call_id.clone(),
-            tx_event: sess.get_tx_event(),
-        }),
-        turn_context.shell_environment_policy.use_profile,
-    );
+            tool_name: tool_name.to_string(),
+        };
 
-    let output_result = sess
-        .run_exec_with_events(
-            turn_diff_tracker.clone(),
-            prepared_exec,
-            turn_context.approval_policy,
-        )
-        .await;
+        let out = orchestrator
+            .run(
+                &mut runtime,
+                &req,
+                &tool_ctx,
+                &turn_context,
+                turn_context.approval_policy,
+            )
+            .await;
 
-    // always make sure to truncate the output if its length isn't controlled.
-    match output_result {
-        Ok(output) => {
-            let ExecToolCallOutput { exit_code, .. } = &output;
-            let content = format_exec_output_apply_patch(&output);
-            if *exit_code == 0 {
-                Ok(content)
-            } else {
-                Err(FunctionCallError::RespondToModel(content))
+        match out {
+            Ok(output) => {
+                let ExecToolCallOutput { exit_code, .. } = &output;
+                let content = format_exec_output_apply_patch(&output);
+                if *exit_code == 0 {
+                    Ok(content)
+                } else {
+                    Err(FunctionCallError::RespondToModel(content))
+                }
+            }
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
+                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
+            ),
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => Err(
+                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
+            ),
+            Err(ToolError::Codex(err)) => {
+                let message = format!("execution error: {err:?}");
+                Err(FunctionCallError::RespondToModel(format_exec_output(
+                    &message,
+                )))
+            }
+            Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
+                Err(FunctionCallError::RespondToModel(format_exec_output(&msg)))
             }
         }
-        Err(ExecError::Function(err)) => Err(truncate_function_error(err)),
-        Err(ExecError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
-            FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
-        ),
-        Err(ExecError::Codex(err)) => {
-            let message = format!("execution error: {err:?}");
-            Err(FunctionCallError::RespondToModel(format_exec_output(
-                &message,
-            )))
+    } else {
+        // Route shell execution through the new orchestrator/runtime.
+        let req = ShellRequest {
+            command: params.command.clone(),
+            cwd: params.cwd.clone(),
+            timeout_ms: params.timeout_ms,
+            env: params.env.clone(),
+            with_escalated_permissions: params.with_escalated_permissions,
+            justification: params.justification.clone(),
+        };
+
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = ShellRuntime::new();
+        let tool_ctx = ToolCtx {
+            session: sess.as_ref(),
+            sub_id: sub_id.clone(),
+            call_id: call_id.clone(),
+            tool_name: tool_name.to_string(),
+        };
+
+        let out = orchestrator
+            .run(
+                &mut runtime,
+                &req,
+                &tool_ctx,
+                &turn_context,
+                turn_context.approval_policy,
+            )
+            .await;
+
+        match out {
+            Ok(exec_output) => {
+                let content = format_exec_output_apply_patch(&exec_output);
+                if exec_output.exit_code == 0 {
+                    Ok(content)
+                } else {
+                    Err(FunctionCallError::RespondToModel(content))
+                }
+            }
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
+                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
+            ),
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => Err(
+                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
+            ),
+            Err(ToolError::Codex(err)) => {
+                let message = format!("execution error: {err:?}");
+                Err(FunctionCallError::RespondToModel(format_exec_output(
+                    &message,
+                )))
+            }
+            Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
+                Err(FunctionCallError::RespondToModel(format_exec_output(&msg)))
+            }
         }
     }
 }
@@ -233,6 +273,7 @@ pub fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     format_exec_output(content)
 }
 
+#[allow(dead_code)]
 fn truncate_function_error(err: FunctionCallError) -> FunctionCallError {
     match err {
         FunctionCallError::RespondToModel(msg) => {
