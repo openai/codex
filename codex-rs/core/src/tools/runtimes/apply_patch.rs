@@ -10,7 +10,6 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalDecision;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
@@ -19,6 +18,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use codex_protocol::protocol::ReviewDecision;
 
 #[derive(Clone, Debug)]
 pub struct ApplyPatchRequest {
@@ -91,7 +91,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         &'a mut self,
         req: &'a ApplyPatchRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ReviewDecision> + Send + 'a>> {
         if let Some(reason) = ctx.retry_reason.clone() {
             return Box::pin(async move {
                 ctx.session
@@ -108,9 +108,9 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         }
 
         let decision = if req.user_explicitly_approved {
-            ApprovalDecision::ApprovedForSession
+            ReviewDecision::ApprovedForSession
         } else {
-            ApprovalDecision::Approved
+            ReviewDecision::Approved
         };
         Box::pin(async move { decision })
     }

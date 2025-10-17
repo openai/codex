@@ -9,7 +9,6 @@ use crate::sandboxing::execute_env;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalDecision;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
@@ -17,6 +16,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use std::path::PathBuf;
+use codex_protocol::protocol::ReviewDecision;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
@@ -76,7 +76,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         &'a mut self,
         req: &'a ShellRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ReviewDecision> + Send + 'a>> {
         let reason = ctx
             .retry_reason
             .clone()
@@ -92,7 +92,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     reason,
                 )
                 .await;
-            ApprovalDecision::from(decision)
+            ReviewDecision::from(decision)
         })
     }
 }

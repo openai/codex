@@ -110,6 +110,7 @@ impl UnifiedExecSessionManager {
             session: context.session,
             sub_id: context.sub_id.to_string(),
             call_id: context.call_id.to_string(),
+            tool_name: "unified_exec".to_string(),
         };
         orchestrator
             .run(

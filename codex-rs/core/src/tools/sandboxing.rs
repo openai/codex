@@ -17,33 +17,14 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::Path;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ApprovalDecision {
-    Approved,
-    ApprovedForSession,
-    Denied,
-    Abort,
-}
-
-impl From<ReviewDecision> for ApprovalDecision {
-    fn from(value: ReviewDecision) -> Self {
-        match value {
-            ReviewDecision::Approved => ApprovalDecision::Approved,
-            ReviewDecision::ApprovedForSession => ApprovalDecision::ApprovedForSession,
-            ReviewDecision::Denied => ApprovalDecision::Denied,
-            ReviewDecision::Abort => ApprovalDecision::Abort,
-        }
-    }
-}
-
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ApprovalStore {
     // Store serialized keys for generic caching across requests.
-    map: HashMap<String, ApprovalDecision>,
+    map: HashMap<String, ReviewDecision>,
 }
 
 impl ApprovalStore {
-    pub fn get<K>(&self, key: &K) -> Option<ApprovalDecision>
+    pub fn get<K>(&self, key: &K) -> Option<ReviewDecision>
     where
         K: Serialize,
     {
@@ -51,7 +32,7 @@ impl ApprovalStore {
         self.map.get(&s).cloned()
     }
 
-    pub fn put<K>(&mut self, key: K, value: ApprovalDecision)
+    pub fn put<K>(&mut self, key: K, value: ReviewDecision)
     where
         K: Serialize,
     {
@@ -82,7 +63,7 @@ pub(crate) trait Approvable<Req> {
         &'a mut self,
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'a>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ReviewDecision> + Send + 'a>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +86,7 @@ pub(crate) struct ToolCtx<'a> {
     pub session: &'a Session,
     pub sub_id: String,
     pub call_id: String,
+    pub tool_name: String,
 }
 
 #[derive(Debug)]

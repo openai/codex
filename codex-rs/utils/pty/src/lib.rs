@@ -126,11 +126,12 @@ pub async fn spawn_pty_process(
 
     let mut command_builder = CommandBuilder::new(program);
     command_builder.cwd(cwd);
+    command_builder.env_clear();
     for arg in args {
-        command_builder.arg(arg.clone());
+        command_builder.arg(arg);
     }
     for (key, value) in env {
-        command_builder.env(key.clone(), value.clone());
+        command_builder.env(key, value);
     }
 
     let mut child = pair.slave.spawn_command(command_builder)?;

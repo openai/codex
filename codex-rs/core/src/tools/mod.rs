@@ -52,7 +52,7 @@ pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
 
 // TODO(jif) break this down
 pub(crate) async fn handle_container_exec_with_params(
-    _tool_name: &str,
+    tool_name: &str,
     params: ExecParams,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -121,6 +121,7 @@ pub(crate) async fn handle_container_exec_with_params(
             session: sess.as_ref(),
             sub_id: sub_id.clone(),
             call_id: call_id.clone(),
+            tool_name: tool_name.to_string(),
         };
 
         let out = orchestrator
@@ -176,6 +177,7 @@ pub(crate) async fn handle_container_exec_with_params(
             session: sess.as_ref(),
             sub_id: sub_id.clone(),
             call_id: call_id.clone(),
+            tool_name: tool_name.to_string(),
         };
 
         let out = orchestrator

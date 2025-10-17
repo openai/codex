@@ -11,13 +11,13 @@ use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalDecision;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ReviewDecision;
 
 pub(crate) struct ToolOrchestrator {
     approvals: ApprovalStore,
@@ -43,16 +43,26 @@ impl ToolOrchestrator {
     where
         T: ToolRuntime<Rq, Out>,
     {
+        let otel = turn_ctx.client.get_otel_event_manager();
+        let otel_tn = &tool_ctx.tool_name;
+        let otel_ci = &tool_ctx.call_id;
+        let otel_user = codex_otel::otel_event_manager::ToolDecisionSource::User;
+        let otel_cfg = codex_otel::otel_event_manager::ToolDecisionSource::Config;
+
         // 1) Approval
-        // Policy semantics:
-        // - Never: bypass approval entirely
-        // - OnFailure: bypass initial approval; ask only if we need to escalate
-        // - OnRequest/UnlessTrusted: require approval up-front
-        let key = tool.approval_key(req);
-        let needs_initial_approval = matches!(
-            approval_policy,
-            AskForApproval::OnRequest | AskForApproval::UnlessTrusted
-        );
+        // Policy semantics for initial attempt:
+        // - Never: bypass approval entirely (auto-approved by config)
+        // - OnFailure: bypass initial approval; ask only on sandbox denial before escalation
+        // - OnRequest: require approval unless sandbox policy auto-approves (DangerFullAccess)
+        // - UnlessTrusted: require approval up-front
+        let needs_initial_approval = match approval_policy {
+            AskForApproval::Never | AskForApproval::OnFailure => false,
+            AskForApproval::OnRequest => !matches!(
+                turn_ctx.sandbox_policy,
+                crate::protocol::SandboxPolicy::DangerFullAccess
+            ),
+            AskForApproval::UnlessTrusted => true,
+        };
 
         if needs_initial_approval {
             let key = tool.approval_key(req);
@@ -68,13 +78,18 @@ impl ToolOrchestrator {
                     tool.start_approval_async(req, ctx).await
                 }
             };
+
+            otel.tool_decision(otel_tn, otel_ci, decision, otel_user.clone());
+
             match decision {
-                ApprovalDecision::Denied | ApprovalDecision::Abort => {
+                ReviewDecision::Denied | ReviewDecision::Abort => {
                     return Err(ToolError::Rejected("rejected by user".to_string()));
                 }
-                ApprovalDecision::ApprovedForSession => self.approvals.put(key.clone(), decision),
-                ApprovalDecision::Approved => {}
+                ReviewDecision::ApprovedForSession => self.approvals.put(key.clone(), decision),
+                ReviewDecision::Approved => {}
             }
+        } else {
+            otel.tool_decision(otel_tn, otel_ci, ReviewDecision::Approved, otel_cfg);
         }
 
         // 2) First attempt under the selected sandbox.
@@ -110,15 +125,20 @@ impl ToolOrchestrator {
                         call_id: &tool_ctx.call_id,
                         retry_reason: Some(retry_reason.clone()),
                     };
-                    match tool.start_approval_async(req, approval_ctx).await {
-                        ApprovalDecision::Denied | ApprovalDecision::Abort => {
+
+                    let decision = tool.start_approval_async(req, approval_ctx).await;
+                    otel.tool_decision(otel_tn, otel_ci, decision, otel_user);
+
+                    match decision {
+                        ReviewDecision::Denied | ReviewDecision::Abort => {
                             return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
-                        ApprovalDecision::ApprovedForSession => {
+                        ReviewDecision::ApprovedForSession => {
+                            let key = tool.approval_key(req);
                             self.approvals
-                                .put(key.clone(), ApprovalDecision::ApprovedForSession);
+                                .put(key.clone(), ReviewDecision::ApprovedForSession);
                         }
-                        ApprovalDecision::Approved => {}
+                        ReviewDecision::Approved => {}
                     }
                 }
 

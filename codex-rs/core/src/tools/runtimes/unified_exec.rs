@@ -6,13 +6,12 @@ the session manager to spawn PTYs once an ExecEnv is prepared.
 */
 use std::collections::HashMap;
 use std::path::PathBuf;
-
+use codex_protocol::protocol::ReviewDecision;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalDecision;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
@@ -75,7 +74,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         &'b mut self,
         req: &'b UnifiedExecRequest,
         ctx: ApprovalCtx<'b>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'b>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ReviewDecision> + Send + 'b>> {
         let reason = ctx.retry_reason.clone();
         Box::pin(async move {
             ctx.session
