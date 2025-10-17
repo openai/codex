@@ -2,6 +2,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::truncate_middle;
+use codex_async_utils::CancelErr;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;
@@ -50,6 +51,9 @@ pub enum SandboxErr {
 
 #[derive(Error, Debug)]
 pub enum CodexErr {
+    #[error("turn aborted")]
+    TurnAborted,
+
     /// Returned by ResponsesClient when the SSE stream disconnects or errors out **after** the HTTP
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
     ///
@@ -148,6 +152,12 @@ pub enum CodexErr {
 
     #[error("{0}")]
     EnvVar(EnvVarError),
+}
+
+impl From<CancelErr> for CodexErr {
+    fn from(_: CancelErr) -> Self {
+        CodexErr::TurnAborted
+    }
 }
 
 #[derive(Debug)]
