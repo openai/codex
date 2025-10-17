@@ -89,16 +89,26 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
 
     fn reset_cache(&mut self) {}
 
-    fn approval_preview(&self, _req: &ApplyPatchRequest) -> Vec<String> {
-        // Avoid dumping large patch content; show a short summary line.
-        vec!["apply_patch <patch>".to_string()]
-    }
-
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a ApplyPatchRequest,
-        _ctx: ApprovalCtx<'a>,
+        ctx: ApprovalCtx<'a>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'a>> {
+        if let Some(reason) = ctx.retry_reason.clone() {
+            return Box::pin(async move {
+                ctx.session
+                    .request_command_approval(
+                        ctx.sub_id.to_string(),
+                        ctx.call_id.to_string(),
+                        vec!["apply_patch".to_string()],
+                        req.cwd.clone(),
+                        Some(reason),
+                    )
+                    .await
+                    .into()
+            });
+        }
+
         // `apply_patch` verification/approval was already handled upstream in tools::mod
         // via `apply_patch::apply_patch`, which requests explicit approval when needed.
         // Avoid re-prompting here; map explicit approval to ApprovedForSession, else Approved.

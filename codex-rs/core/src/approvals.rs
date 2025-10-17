@@ -61,12 +61,12 @@ impl ApprovalStore {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ApprovalCtx<'a> {
-    pub policy: AskForApproval,
     pub session: &'a Session,
     pub sub_id: &'a str,
     pub call_id: &'a str,
+    pub retry_reason: Option<String>,
 }
 
 pub(crate) trait Approvable<Req> {
@@ -76,16 +76,8 @@ pub(crate) trait Approvable<Req> {
 
     fn reset_cache(&mut self);
 
-    fn approval_preview(&self, _req: &Req) -> Vec<String> {
-        Vec::new()
-    }
-
     fn should_bypass_approval(&self, policy: AskForApproval) -> bool {
         matches!(policy, AskForApproval::Never)
-    }
-
-    fn map_review_decision(decision: ReviewDecision) -> ApprovalDecision {
-        ApprovalDecision::from(decision)
     }
 
     // Optional helpers are intentionally omitted to keep the trait minimal.
@@ -95,4 +87,6 @@ pub(crate) trait Approvable<Req> {
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'a>>;
+
+    // Retrying flows reuse start_approval_async; see ApprovalCtx::retry_reason.
 }

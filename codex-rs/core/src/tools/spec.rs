@@ -735,17 +735,23 @@ pub(crate) fn build_specs(
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
 
-    // Prefer unified_exec for streamable flows; otherwise fall back to default/local shell specs.
-    match &config.shell_type {
-        ConfigShellToolType::Default => {
-            builder.push_spec(create_shell_tool());
-        }
-        ConfigShellToolType::Local => {
-            builder.push_spec(ToolSpec::LocalShell {});
-        }
-        ConfigShellToolType::Streamable => {
-            builder.push_spec(create_unified_exec_tool());
-            builder.register_handler("unified_exec", unified_exec_handler);
+    let use_unified_exec = config.experimental_unified_exec_tool
+        || matches!(config.shell_type, ConfigShellToolType::Streamable);
+
+    if use_unified_exec {
+        builder.push_spec(create_unified_exec_tool());
+        builder.register_handler("unified_exec", unified_exec_handler);
+    } else {
+        match &config.shell_type {
+            ConfigShellToolType::Default => {
+                builder.push_spec(create_shell_tool());
+            }
+            ConfigShellToolType::Local => {
+                builder.push_spec(ToolSpec::LocalShell {});
+            }
+            ConfigShellToolType::Streamable => {
+                // Already handled by use_unified_exec.
+            }
         }
     }
 

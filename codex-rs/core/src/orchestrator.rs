@@ -12,6 +12,8 @@ use crate::approvals::ApprovalStore;
 use crate::codex::Session;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
+use crate::error::get_error_message_ui;
+use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxTransformError;
@@ -110,10 +112,10 @@ impl ToolOrchestrator {
                     ApprovalDecision::Approved
                 } else {
                     let ctx = ApprovalCtx {
-                        policy: approval_policy,
                         session: tool_ctx.session,
                         sub_id: &tool_ctx.sub_id,
                         call_id: &tool_ctx.call_id,
+                        retry_reason: None,
                     };
                     tool.start_approval_async(req, ctx).await
                 }
@@ -127,43 +129,89 @@ impl ToolOrchestrator {
             ApprovalDecision::Approved => {}
         }
 
-        // 2) Select initial sandbox
-        let initial = self
+        // 2) First attempt under the selected sandbox.
+        let initial_sandbox = self
             .sandbox
             .select_initial(&turn_ctx.sandbox_policy, tool.sandbox_preference());
-
-        let codex_linux_sandbox_exe = turn_ctx.codex_linux_sandbox_exe.clone();
-
-        let attempt = SandboxAttempt {
-            sandbox: initial,
+        let initial_attempt = SandboxAttempt {
+            sandbox: initial_sandbox,
             policy: &turn_ctx.sandbox_policy,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
-            codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
+            codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
         };
 
-        // 3) Attempt #1
-        match tool.run(req, &attempt, tool_ctx).await {
-            Ok(out) => return Ok(out),
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { .. }))) => {}
-            Err(err) => return Err(err),
-        }
+        match tool.run(req, &initial_attempt, tool_ctx).await {
+            Ok(out) => {
+                // We have a successful initial result
+                Ok(out)
+            },
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+                if !tool.escalate_on_failure() {
+                    return Err(ToolError::SandboxDenied(
+                        "sandbox denied and no retry".to_string(),
+                    ));
+                }
 
-        // 4) Retry without sandbox
-        if tool.escalate_on_failure() {
-            tool.reset_cache();
-            let attempt2 = SandboxAttempt {
-                sandbox: crate::exec::SandboxType::None,
-                policy: &turn_ctx.sandbox_policy,
-                manager: &self.sandbox,
-                sandbox_cwd: &turn_ctx.cwd,
-                codex_linux_sandbox_exe: None,
-            };
-            return tool.run(req, &attempt2, tool_ctx).await;
-        }
+                // Ask for approval before retrying without sandbox.
+                let retry_reason = sandbox_denial_reason(initial_attempt.sandbox, output.as_ref());
+                if !tool.should_bypass_approval(approval_policy) {
+                    let approval_ctx = ApprovalCtx {
+                        session: tool_ctx.session,
+                        sub_id: &tool_ctx.sub_id,
+                        call_id: &tool_ctx.call_id,
+                        retry_reason: Some(retry_reason.clone()),
+                    };
+                    match tool.start_approval_async(req, approval_ctx).await {
+                        ApprovalDecision::Denied | ApprovalDecision::Abort => {
+                            return Err(ToolError::Rejected("rejected by user".to_string()));
+                        }
+                        ApprovalDecision::ApprovedForSession => {
+                            self.approvals
+                                .put(key.clone(), ApprovalDecision::ApprovedForSession);
+                        }
+                        ApprovalDecision::Approved => {}
+                    }
+                }
 
-        Err(ToolError::SandboxDenied(
-            "sandbox denied and no retry".to_string(),
-        ))
+                let escalated_attempt = SandboxAttempt {
+                    sandbox: crate::exec::SandboxType::None,
+                    policy: &turn_ctx.sandbox_policy,
+                    manager: &self.sandbox,
+                    sandbox_cwd: &turn_ctx.cwd,
+                    codex_linux_sandbox_exe: None,
+                };
+
+                // Second attempt.
+                (*tool).run(req, &escalated_attempt, tool_ctx).await
+            }
+            other => other
+        }
+    }
+}
+
+fn sandbox_denial_reason(sandbox: crate::exec::SandboxType, output: &ExecToolCallOutput) -> String {
+    let err = CodexErr::Sandbox(SandboxErr::Denied {
+        output: Box::new(clone_exec_output(output)),
+    });
+    let message = get_error_message_ui(&err);
+    format!("{sandbox:?} sandbox denied the command. {message}\nRetry without sandbox?")
+}
+
+fn clone_exec_output(output: &ExecToolCallOutput) -> ExecToolCallOutput {
+    ExecToolCallOutput {
+        exit_code: output.exit_code,
+        stdout: clone_stream(&output.stdout),
+        stderr: clone_stream(&output.stderr),
+        aggregated_output: clone_stream(&output.aggregated_output),
+        duration: output.duration,
+        timed_out: output.timed_out,
+    }
+}
+
+fn clone_stream(stream: &crate::exec::StreamOutput<String>) -> crate::exec::StreamOutput<String> {
+    crate::exec::StreamOutput {
+        text: stream.text.clone(),
+        truncated_after_lines: stream.truncated_after_lines,
     }
 }

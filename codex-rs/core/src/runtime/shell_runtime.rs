@@ -14,7 +14,6 @@ use crate::orchestrator::SandboxablePreference;
 use crate::orchestrator::ToolCtx;
 use crate::orchestrator::ToolError;
 use crate::orchestrator::ToolRuntime;
-use crate::sandboxing::CommandSpec;
 use crate::sandboxing::execute_env;
 use std::path::PathBuf;
 
@@ -74,18 +73,15 @@ impl Approvable<ShellRequest> for ShellRuntime {
 
     fn reset_cache(&mut self) {}
 
-    fn approval_preview(&self, req: &ShellRequest) -> Vec<String> {
-        if req.command.is_empty() {
-            return vec![];
-        }
-        vec![req.command.join(" ")]
-    }
-
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a ShellRequest,
         ctx: ApprovalCtx<'a>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'a>> {
+        let reason = ctx
+            .retry_reason
+            .clone()
+            .or_else(|| req.justification.clone());
         Box::pin(async move {
             let decision = ctx
                 .session
@@ -94,7 +90,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     ctx.call_id.to_string(),
                     req.command.clone(),
                     req.cwd.clone(),
-                    req.justification.clone(),
+                    reason,
                 )
                 .await;
             ApprovalDecision::from(decision)

@@ -352,15 +352,13 @@ impl UnifiedExecSessionManager {
                 }
             }
             fn reset_cache(&mut self) {}
-            fn approval_preview(&self, req: &OpenShellReq) -> Vec<String> {
-                vec![req.command.join(" ")]
-            }
             fn start_approval_async<'b>(
                 &'b mut self,
                 req: &'b OpenShellReq,
                 ctx: ApprovalCtx<'b>,
             ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'b>>
             {
+                let reason = ctx.retry_reason.clone();
                 Box::pin(async move {
                     ctx.session
                         .request_command_approval(
@@ -368,7 +366,7 @@ impl UnifiedExecSessionManager {
                             ctx.call_id.to_string(),
                             req.command.clone(),
                             req.cwd.clone(),
-                            None,
+                            reason,
                         )
                         .await
                         .into()
