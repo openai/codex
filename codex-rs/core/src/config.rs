@@ -1451,6 +1451,15 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
         return PathBuf::from(val).canonicalize();
     }
 
+    // Check for XDG_CONFIG_HOME to follow XDG Base Directory specification
+    if let Ok(val) = std::env::var("XDG_CONFIG_HOME")
+        && !val.is_empty()
+    {
+        let mut p = PathBuf::from(val);
+        p.push(".codex");
+        return Ok(p);
+    }
+
     let mut p = home_dir().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
