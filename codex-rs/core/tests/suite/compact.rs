@@ -917,15 +917,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         .await
         .unwrap();
 
-    loop {
-        let event = codex.next_event().await.unwrap();
-        if event.id.starts_with("auto-compact-") {
-            continue;
-        }
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    wait_for_event(&codex, |msg| matches!(msg, EventMsg::TaskComplete(_))).await;
 
     let requests = request_log.requests();
     assert_eq!(
