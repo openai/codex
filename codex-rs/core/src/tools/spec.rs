@@ -535,7 +535,7 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_mcp_resources".to_string(),
-        description: "Lists resources provided by MCP servers.".to_string(),
+        description: "Lists resources provided by MCP servers. Resources allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resources over web search when possible.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -568,7 +568,7 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_mcp_resource_templates".to_string(),
-        description: "Lists resource templates provided by MCP servers.".to_string(),
+        description: "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that takes parameters and provides context to language models, such as files, database schemas, or application-specific information. Prefer resource templates over web search when possible.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
