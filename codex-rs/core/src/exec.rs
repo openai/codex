@@ -297,6 +297,15 @@ pub struct StreamOutput<T> {
     pub text: T,
     pub truncated_after_lines: Option<u32>,
 }
+
+impl<T: Clone> Clone for StreamOutput<T> {
+    fn clone(&self) -> Self {
+        Self {
+            text: self.text.clone(),
+            truncated_after_lines: self.truncated_after_lines,
+        }
+    }
+}
 #[derive(Debug)]
 struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,
@@ -329,7 +338,7 @@ fn append_all(dst: &mut Vec<u8>, src: &[u8]) {
     dst.extend_from_slice(src);
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ExecToolCallOutput {
     pub exit_code: i32,
     pub stdout: StreamOutput<String>,

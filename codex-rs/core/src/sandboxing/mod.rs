@@ -15,6 +15,7 @@ use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use crate::seatbelt::create_seatbelt_command_args;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use crate::tools::sandboxing::SandboxablePreference;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -64,11 +65,11 @@ impl SandboxManager {
     pub(crate) fn select_initial(
         &self,
         policy: &SandboxPolicy,
-        pref: super::orchestrator::SandboxablePreference,
+        pref: SandboxablePreference,
     ) -> SandboxType {
         match pref {
-            super::orchestrator::SandboxablePreference::Forbid => SandboxType::None,
-            super::orchestrator::SandboxablePreference::Require => {
+            SandboxablePreference::Forbid => SandboxType::None,
+            SandboxablePreference::Require => {
                 #[cfg(target_os = "macos")]
                 {
                     return SandboxType::MacosSeatbelt;
@@ -80,7 +81,7 @@ impl SandboxManager {
                 #[allow(unreachable_code)]
                 SandboxType::None
             }
-            super::orchestrator::SandboxablePreference::Auto => match policy {
+            SandboxablePreference::Auto => match policy {
                 SandboxPolicy::DangerFullAccess => SandboxType::None,
                 #[cfg(target_os = "macos")]
                 _ => SandboxType::MacosSeatbelt,

@@ -1,3 +1,4 @@
+use crate::exec::ExecToolCallOutput;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -11,7 +12,10 @@ pub(crate) enum UnifiedExecError {
     #[error("missing command line for unified exec request")]
     MissingCommandLine,
     #[error("Command denied by sandbox: {message}")]
-    SandboxDenied { message: String },
+    SandboxDenied {
+        message: String,
+        output: ExecToolCallOutput,
+    },
 }
 
 impl UnifiedExecError {
@@ -19,7 +23,7 @@ impl UnifiedExecError {
         Self::CreateSession { message }
     }
 
-    pub(crate) fn sandbox_denied(message: String) -> Self {
-        Self::SandboxDenied { message }
+    pub(crate) fn sandbox_denied(message: String, output: ExecToolCallOutput) -> Self {
+        Self::SandboxDenied { message, output }
     }
 }

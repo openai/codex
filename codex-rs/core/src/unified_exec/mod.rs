@@ -34,6 +34,8 @@ use tokio::time::Instant;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::error::CodexErr;
+use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
@@ -246,7 +248,7 @@ impl UnifiedExecSession {
             } else {
                 snippet
             };
-            return Err(UnifiedExecError::sandbox_denied(message));
+            return Err(UnifiedExecError::sandbox_denied(message, exec_output));
         }
 
         Ok(())
@@ -291,9 +293,10 @@ impl UnifiedExecSessionManager {
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let spawned = codex_utils_pty::spawn_pty_process(program, args, &env.env)
-            .await
-            .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
+        let spawned =
+            codex_utils_pty::spawn_pty_process(program, args, env.cwd.as_path(), &env.env)
+                .await
+                .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
         UnifiedExecSession::from_spawned(spawned, env.sandbox).await
     }
 
@@ -387,7 +390,14 @@ impl UnifiedExecSessionManager {
                 self.manager
                     .open_session_with_exec_env(&env)
                     .await
-                    .map_err(|e| ToolError::Rejected(e.to_string()))
+                    .map_err(|err| match err {
+                        UnifiedExecError::SandboxDenied { output, .. } => {
+                            ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                                output: Box::new(output),
+                            }))
+                        }
+                        other => ToolError::Rejected(other.to_string()),
+                    })
             }
         }
 
@@ -897,10 +907,3 @@ mod tests {
         Ok(())
     }
 }
-use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::Sandboxable;
-use crate::tools::sandboxing::SandboxablePreference;
-use crate::tools::sandboxing::ToolCtx;
-use crate::tools::sandboxing::ToolError;
-use crate::tools::sandboxing::ToolRuntime;
