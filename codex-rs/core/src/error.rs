@@ -1,4 +1,5 @@
 use crate::exec::ExecToolCallOutput;
+use crate::or_cancel::CancelErr;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::truncate_middle;
@@ -151,6 +152,12 @@ pub enum CodexErr {
 
     #[error("{0}")]
     EnvVar(EnvVarError),
+}
+
+impl From<CancelErr> for CodexErr {
+    fn from(_: CancelErr) -> Self {
+        CodexErr::TurnAborted
+    }
 }
 
 #[derive(Debug)]

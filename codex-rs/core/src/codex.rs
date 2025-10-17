@@ -2190,8 +2190,7 @@ async fn try_run_turn(
         .clone()
         .stream_with_task_kind(prompt.as_ref(), task_kind)
         .or_cancel(&cancellation_token)
-        .await
-        .map_err(|_| CodexErr::TurnAborted)??;
+        .await??;
 
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
@@ -2207,11 +2206,7 @@ async fn try_run_turn(
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
-        let event = stream
-            .next()
-            .or_cancel(&cancellation_token)
-            .await
-            .map_err(|_| CodexErr::TurnAborted)?;
+        let event = stream.next().or_cancel(&cancellation_token).await?;
 
         let event = match event {
             Some(res) => res?,
@@ -2320,8 +2315,7 @@ async fn try_run_turn(
                 let processed_items = output
                     .try_collect()
                     .or_cancel(&cancellation_token)
-                    .await
-                    .map_err(|_| CodexErr::TurnAborted)??;
+                    .await??;
 
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;
