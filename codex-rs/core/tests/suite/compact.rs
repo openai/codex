@@ -960,7 +960,6 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let auto_compact_body = requests[2].body_json().to_string();
     assert!(
         auto_compact_body.contains("You have exceeded the maximum number of tokens"),
-        "auto compact request should include the summarization prompt after exceeding 95% (limit {})",
-        limit
+        "auto compact request should include the summarization prompt after exceeding 95% (limit {limit})"
     );
 }
