@@ -21,6 +21,7 @@ use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
+use crate::user_input::UserInput;
 use mcp_types::CallToolResult;
 use mcp_types::Resource as McpResource;
 use mcp_types::ResourceTemplate as McpResourceTemplate;
@@ -31,7 +32,6 @@ use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
-use crate::user_input::UserInput;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -513,14 +513,14 @@ pub enum EventMsg {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ItemStartedEvent {
-    pub thread_id: String,
+    pub thread_id: ConversationId,
     pub turn_id: String,
     pub item: TurnItem,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ItemCompletedEvent {
-    pub thread_id: String,
+    pub thread_id: ConversationId,
     pub turn_id: String,
     pub item: TurnItem,
 }

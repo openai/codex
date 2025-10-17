@@ -85,7 +85,6 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
-use codex_protocol::user_input::UserInput;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
@@ -128,6 +127,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::user_input::UserInput;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -271,6 +271,7 @@ pub(crate) struct TurnContext {
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) item_collector: ItemCollector,
 }
 
 impl TurnContext {
@@ -1311,6 +1312,11 @@ async fn submission_loop(
                     .client
                     .get_otel_event_manager()
                     .user_prompt(&items);
+
+                turn_context
+                    .item_collector
+                    .started(TurnItem::UserMessage(UserMessageItem::new()));
+
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
                     // no current task, spawn a new one
