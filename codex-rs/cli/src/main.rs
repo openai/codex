@@ -25,8 +25,10 @@ use std::path::PathBuf;
 use supports_color::Stream;
 
 mod mcp_cmd;
+mod setup_token;
 
 use crate::mcp_cmd::McpCli;
+use crate::setup_token::run_setup_token;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 
@@ -69,6 +71,10 @@ enum Subcommand {
 
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
+
+    /// Ensure credentials exist and print the contents of auth.json.
+    #[clap(name = "setup-token")]
+    SetupToken(SetupTokenCommand),
 
     /// [experimental] Run Codex as an MCP server and manage MCP servers.
     Mcp(McpCli),
@@ -190,6 +196,12 @@ enum LoginSubcommand {
 
 #[derive(Debug, Parser)]
 struct LogoutCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+}
+
+#[derive(Debug, Parser)]
+struct SetupTokenCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
 }
@@ -416,6 +428,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             run_logout(logout_cli.config_overrides).await;
+        }
+        Some(Subcommand::SetupToken(mut setup_token_cli)) => {
+            prepend_config_flags(
+                &mut setup_token_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            run_setup_token(setup_token_cli.config_overrides).await;
         }
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);
