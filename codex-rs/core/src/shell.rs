@@ -30,6 +30,35 @@ pub enum Shell {
 }
 
 impl Shell {
+    pub fn format_user_shell_script(&self, script: &str) -> Option<Vec<String>> {
+        match self {
+            Shell::Zsh(zsh) => Some(format_shell_script_with_rc(
+                &zsh.shell_path,
+                &zsh.zshrc_path,
+                script,
+            )),
+            Shell::Bash(bash) => Some(format_shell_script_with_rc(
+                &bash.shell_path,
+                &bash.bashrc_path,
+                script,
+            )),
+            Shell::PowerShell(ps) => Some(vec![
+                ps.exe.clone(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                script.to_string(),
+            ]),
+            Shell::Unknown => {
+                // In CI we sometimes cannot determine the user's default shell (e.g. musl builds
+                // running under minimal passwd entries). Returning `None` here would make callers
+                // treat the entire script as a single argv[0], which prevents simple commands like
+                // `python3 -c "..."` from spawning. Instead, fall back to a POSIX-style split so we
+                // still run straightforward commands even without shell discovery.
+                shlex::split(script)
+            }
+        }
+    }
+
     pub fn format_default_shell_invocation(&self, command: Vec<String>) -> Option<Vec<String>> {
         match self {
             Shell::Zsh(zsh) => format_shell_invocation_with_rc(
@@ -113,13 +142,7 @@ fn format_shell_invocation_with_rc(
     let joined = strip_bash_lc(command)
         .or_else(|| shlex::try_join(command.iter().map(String::as_str)).ok())?;
 
-    let rc_command = if std::path::Path::new(rc_path).exists() {
-        format!("source {rc_path} && ({joined})")
-    } else {
-        joined
-    };
-
-    Some(vec![shell_path.to_string(), "-lc".to_string(), rc_command])
+    Some(format_shell_script_with_rc(shell_path, rc_path, &joined))
 }
 
 fn strip_bash_lc(command: &[String]) -> Option<String> {
@@ -133,6 +156,16 @@ fn strip_bash_lc(command: &[String]) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn format_shell_script_with_rc(shell_path: &str, rc_path: &str, script: &str) -> Vec<String> {
+    let rc_command = if std::path::Path::new(rc_path).exists() {
+        format!("source {rc_path} && ({script})")
+    } else {
+        script.to_string()
+    };
+
+    vec![shell_path.to_string(), "-lc".to_string(), rc_command]
 }
 
 #[cfg(unix)]
@@ -365,6 +398,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn format_user_shell_script_unknown_splits_command() {
+        let script = "python3 -c \"print('hi')\"";
+        let invocation = Shell::Unknown.format_user_shell_script(script);
+        assert_eq!(
+            invocation,
+            Some(vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print('hi')".to_string(),
+            ])
+        );
     }
 }
 
