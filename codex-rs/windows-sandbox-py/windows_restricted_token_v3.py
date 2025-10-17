@@ -5,6 +5,7 @@ import argparse
 import ctypes as c
 import ctypes.wintypes as wt
 import json
+import time
 import os
 import sys
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from network_sandbox import NoNetConfig, apply_no_network_to_env
 
 LOG_FILE_PATH = os.path.join(os.path.dirname(__file__), "sandbox_commands.log")
 LOG_COMMAND_PREVIEW_LIMIT = 200
+_PERSIST_ACES = False
 
 
 def _append_command_log(message: str) -> None:
@@ -52,7 +54,7 @@ class WritableRoot:
     root: str
 
 class SandboxPolicy:
-    # Modes: "read-only", "workspace-write", "danger-full-access"
+    # Modes: "read-only", "workspace-write"
     def __init__(self, mode: str, workspace_roots: Optional[List[str]] = None):
         self.mode = mode
         self.workspace_roots = workspace_roots or []
@@ -65,13 +67,9 @@ class SandboxPolicy:
     def new_workspace_write_policy(workspace_roots: Optional[List[str]] = None):
         return SandboxPolicy("workspace-write", workspace_roots or [])
 
-    @staticmethod
-    def danger_full_access():
-        return SandboxPolicy("danger-full-access")
-
     def has_full_network_access(self) -> bool:
-        # Match Rust behavior: only "danger" gets network by default.
-        return self.mode == "danger-full-access"
+        # No sandbox mode enables full network by default here.
+        return False
 
     # In Rust this resolves policy-relative roots; we replicate the effective list.
     def get_writable_roots_with_cwd(self, policy_cwd: str) -> List[WritableRoot]:
@@ -361,6 +359,28 @@ advapi32.CreateProcessAsUserW.restype  = wt.BOOL
 
 advapi32.CreateWellKnownSid.argtypes = [wt.DWORD, wt.LPVOID, wt.LPVOID, c.POINTER(wt.DWORD)]
 advapi32.CreateWellKnownSid.restype  = wt.BOOL
+class SID_IDENTIFIER_AUTHORITY(c.Structure):
+    fields = [("Value", wt.BYTE * 6)]
+try:
+    setattr(wt, "SID_IDENTIFIER_AUTHORITY", SID_IDENTIFIER_AUTHORITY)
+except Exception:
+    pass
+
+# Allocate / free SIDs and parse from string
+advapi32.AllocateAndInitializeSid.argtypes = [
+
+    c.POINTER(SID_IDENTIFIER_AUTHORITY),
+    wt.BYTE,
+    wt.DWORD, wt.DWORD, wt.DWORD, wt.DWORD, wt.DWORD, wt.DWORD, wt.DWORD, wt.DWORD,
+    c.POINTER(wt.LPVOID),
+]
+advapi32.AllocateAndInitializeSid.restype  = wt.BOOL
+
+advapi32.ConvertStringSidToSidW.argtypes = [wt.LPCWSTR, c.POINTER(wt.LPVOID)]
+advapi32.ConvertStringSidToSidW.restype  = wt.BOOL
+
+advapi32.FreeSid.argtypes = [wt.LPVOID]
+advapi32.FreeSid.restype  = wt.LPVOID
 
 aclapi.GetNamedSecurityInfoW.argtypes = [
     wt.LPCWSTR, wt.DWORD, wt.DWORD,
@@ -450,6 +470,121 @@ def _sid_str(psid: wt.LPVOID) -> str:
     except Exception:
         pass
     return "<sid>"
+
+# ---- Capability SID helpers --------------------------------------------------
+
+def _cap_sid_file(policy_cwd: str) -> str:
+    try:
+        base = policy_cwd or os.getcwd()
+    except Exception:
+        base = os.getcwd()
+    return os.path.join(base, ".codex", "cap_sid")
+
+def _ensure_dir(path: str) -> None:
+    d = os.path.dirname(path)
+    if d and not os.path.exists(d):
+        os.makedirs(d, exist_ok=True)
+
+def _make_random_cap_sid_string() -> str:
+    import uuid
+    # Use NT authority S-1-5-21-<a>-<b>-<c>-<d>
+    g = uuid.uuid4().int
+    parts = [
+        (g >> 96) & 0xFFFFFFFF,
+        (g >> 64) & 0xFFFFFFFF,
+        (g >> 32) & 0xFFFFFFFF,
+        g & 0xFFFFFFFF,
+    ]
+    return f"S-1-5-21-{parts[0]}-{parts[1]}-{parts[2]}-{parts[3]}"
+
+def _cap_sid_from_string(s: str) -> wt.LPVOID:
+    psid = wt.LPVOID()
+    if advapi32.ConvertStringSidToSidW(wt.LPCWSTR(s), c.byref(psid)):
+        return psid
+    # Fallback: try to parse minimal S-1-5-21-a-b-c-d
+    try:
+        if not s.startswith("S-1-5-21-"):
+            raise ValueError("unsupported SID format")
+        *_, a, b, c_, d = s.split("-")
+        a, b, c_, d = int(a), int(b), int(c_), int(d)
+        class SID_IDENTIFIER_AUTHORITY(c.Structure):
+            _fields_ = [("Value", wt.BYTE * 6)]
+        nt_auth = SID_IDENTIFIER_AUTHORITY((0,0,0,0,0,5))
+        out = wt.LPVOID()
+        ok = advapi32.AllocateAndInitializeSid(
+            c.byref(nt_auth),
+            wt.BYTE(5),
+            wt.DWORD(21), wt.DWORD(a), wt.DWORD(b), wt.DWORD(c_), wt.DWORD(d),
+            wt.DWORD(0), wt.DWORD(0), wt.DWORD(0),
+            c.byref(out)
+        )
+        if ok:
+            return out
+    except Exception:
+        pass
+    raise RuntimeError("failed to materialize capability SID from string")
+
+def _load_or_create_cap_sids(policy_cwd: str) -> Tuple[str, str]:
+    """
+    Load or create distinct capability SID strings for workspace and read-only
+    modes, cached in the same .codex/cap_sid file.
+
+    File formats supported (backwards compatible):
+    - Legacy: a single SID string -> interpreted as workspace SID; a new
+      read-only SID is generated and the file is upgraded to JSON.
+    - JSON: {"workspace":"S-...","readonly":"S-..."}
+    """
+    path = _cap_sid_file(policy_cwd)
+    ws_sid_str: Optional[str] = None
+    ro_sid_str: Optional[str] = None
+
+    if os.path.exists(path):
+        try:
+            txt = open(path, "r", encoding="utf-8").read().strip()
+            if txt.startswith("{") and txt.endswith("}"):
+                import json as _json
+                obj = _json.loads(txt)
+                ws_sid_str = obj.get("workspace")
+                ro_sid_str = obj.get("readonly")
+            else:
+                # Legacy single SID -> workspace
+                ws_sid_str = txt
+        except Exception:
+            pass
+
+    if not ws_sid_str:
+        ws_sid_str = _make_random_cap_sid_string()
+    if not ro_sid_str:
+        ro_sid_str = _make_random_cap_sid_string()
+
+    # Persist in JSON form for future reads
+    try:
+        import json as _json
+        _ensure_dir(path)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(_json.dumps({"workspace": ws_sid_str, "readonly": ro_sid_str}))
+    except Exception:
+        pass
+
+    return ws_sid_str, ro_sid_str
+
+def _load_or_create_cap_sid(policy_cwd: str) -> Tuple[wt.LPVOID, Optional[str]]:
+    """Return (PSID, sid_string_or_None_if_unknown) for workspace-write."""
+    ws_sid_str, _ = _load_or_create_cap_sids(policy_cwd)
+    try:
+        psid = _cap_sid_from_string(ws_sid_str)
+        return psid, ws_sid_str
+    except Exception:
+        return _cap_sid_from_string(_make_random_cap_sid_string()), None
+
+def _load_or_create_readonly_cap_sid(policy_cwd: str) -> Tuple[wt.LPVOID, Optional[str]]:
+    """Return (PSID, sid_string_or_None_if_unknown) for read-only mode."""
+    _, ro_sid_str = _load_or_create_cap_sids(policy_cwd)
+    try:
+        psid = _cap_sid_from_string(ro_sid_str)
+        return psid, ro_sid_str
+    except Exception:
+        return _cap_sid_from_string(_make_random_cap_sid_string()), None
 
 def _dump_restricted_sids(h_token: wt.HANDLE):
     """Debug: list the Restricted SID set on the token."""
@@ -629,7 +764,7 @@ def _create_write_restricted_token_strict() -> Tuple[wt.HANDLE, wt.LPVOID]:
 
 def _create_write_restricted_token_compat() -> Tuple[wt.HANDLE, wt.LPVOID]:
     r"""
-    Compat mode (workspace-write/danger): SidsToRestrict = [ Logon SID, Everyone ].
+    Compat mode: SidsToRestrict = [ Logon SID, Everyone ].
     Keeps Git/PowerShell/Python happy with NUL; still re-enables SeChangeNotifyPrivilege.
     """
     base = _get_current_token_for_restriction()
@@ -672,6 +807,80 @@ def _create_write_restricted_token_compat() -> Tuple[wt.HANDLE, wt.LPVOID]:
             pass
 
         return new_token, psid_logon
+    finally:
+        _close_handle_safe(base)
+
+def _create_workspace_write_token_with_cap(psid_capability: wt.LPVOID) -> Tuple[wt.HANDLE, wt.LPVOID]:
+    r"""
+    Workspace-write: SidsToRestrict = [ Capability SID, Everyone ].
+    The Capability SID is unique to this workspace and is used for directory ACLs.
+    """
+    base = _get_current_token_for_restriction()
+    try:
+        # Everyone (WORLD) SID for restricted set
+        everyone_size = wt.DWORD(0)
+        advapi32.CreateWellKnownSid(WinWorldSid, None, None, c.byref(everyone_size))
+        everyone_buf = (c.c_ubyte * everyone_size.value)()
+        _check_bool(
+            advapi32.CreateWellKnownSid(WinWorldSid, None, everyone_buf, c.byref(everyone_size)),
+            "CreateWellKnownSid(WinWorldSid)",
+        )
+        psid_everyone = c.cast(everyone_buf, wt.LPVOID)
+
+        restrict_entries = (SID_AND_ATTRIBUTES * 2)()
+        restrict_entries[0].Sid = psid_capability
+        restrict_entries[0].Attributes = 0
+        restrict_entries[1].Sid = psid_everyone
+        restrict_entries[1].Attributes = 0
+
+        new_token = wt.HANDLE()
+        flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
+        _check_bool(advapi32.CreateRestrictedToken(
+            base, flags,
+            0, None,
+            0, None,
+            2, restrict_entries,
+            c.byref(new_token)
+        ), "CreateRestrictedToken")
+
+        _enable_single_privilege(new_token, SE_CHANGE_NOTIFY_NAME)
+
+        # Return the capability SID as the one to use for ACLs
+        return new_token, psid_capability
+    finally:
+        _close_handle_safe(base)
+
+def _create_readonly_token_with_cap(psid_capability: wt.LPVOID) -> Tuple[wt.HANDLE, wt.LPVOID]:
+    r"""
+    Read-only: SidsToRestrict = [ Capability SID ]. No Everyone.
+    Using a dedicated capability SID ensures writes fail unless explicitly
+    allowed for that capability (which we never do in read-only mode).
+    """
+    base = _get_current_token_for_restriction()
+    try:
+        restrict_entries = (SID_AND_ATTRIBUTES * 1)()
+        restrict_entries[0].Sid = psid_capability
+        restrict_entries[0].Attributes = 0
+
+        new_token = wt.HANDLE()
+        flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
+        _check_bool(
+            advapi32.CreateRestrictedToken(
+                base,
+                flags,
+                0,
+                None,
+                0,
+                None,
+                1,
+                restrict_entries,
+                c.byref(new_token),
+            ),
+            "CreateRestrictedToken",
+        )
+
+        _enable_single_privilege(new_token, SE_CHANGE_NOTIFY_NAME)
+        return new_token, psid_capability
     finally:
         _close_handle_safe(base)
 
@@ -767,6 +976,7 @@ def _add_allow_ace(path: str, psid: wt.LPVOID) -> bool:
     finally:
         if pSD:
             kernel32.LocalFree(pSD)
+
 
 def _revoke_ace(path: str, psid: wt.LPVOID):
     # Best effort removal (REVOKE_ACCESS)
@@ -877,11 +1087,11 @@ class _AclGuard:
         self.path = path
         self.psid = psid
         self.active = True
-
     def close(self):
         if self.active:
             try:
-                _revoke_ace(self.path, self.psid)
+                if not _PERSIST_ACES:
+                    _revoke_ace(self.path, self.psid)
             except Exception:
                 pass
             self.active = False
@@ -889,6 +1099,29 @@ class _AclGuard:
     def __del__(self):
         self.close()
 
+
+def _compute_allow_paths(policy: SandboxPolicy, policy_cwd: str, command_cwd: str,
+                         env_map: Dict[str, str]) -> List[str]:
+    allow: List[str] = []
+    seen = set()
+    def add_once(p: str):
+        p2 = os.path.abspath(p)
+        if p2 not in seen and os.path.exists(p2):
+            seen.add(p2)
+            allow.append(p2)
+    if policy.mode == "read-only":
+        pass
+    elif policy.mode == "workspace-write":
+        for w in policy.get_writable_roots_with_cwd(policy_cwd):
+            add_once(w.root)
+        if not any(command_cwd.startswith(x + os.sep) or command_cwd == x for x in allow):
+            add_once(command_cwd)
+    if policy.mode != "read-only":
+        for key in ("TEMP", "TMP"):
+            val = env_map.get(key) or os.environ.get(key)
+            if val:
+                add_once(val)
+    return allow
 def _configure_paths(policy: SandboxPolicy, policy_cwd: str, command_cwd: str,
                      psid: wt.LPVOID, env_map: Dict[str, str]) -> List[_AclGuard]:
     allow: List[str] = []
@@ -902,8 +1135,6 @@ def _configure_paths(policy: SandboxPolicy, policy_cwd: str, command_cwd: str,
 
     if policy.mode == "read-only":
         pass
-    elif policy.mode == "danger-full-access":
-        add_once(command_cwd)
     elif policy.mode == "workspace-write":
         for w in policy.get_writable_roots_with_cwd(policy_cwd):
             add_once(w.root)
@@ -923,14 +1154,69 @@ def _configure_paths(policy: SandboxPolicy, policy_cwd: str, command_cwd: str,
         try:
             added = _add_allow_ace(p, psid)
             if added:
-                guards.append(_AclGuard(p, psid))
+                if policy.mode != "workspace-write":
+                    guards.append(_AclGuard(p, psid))
+                else:
+                    # One-time recursive seeding for existing items in newly-seeded directories
+                    if os.path.isdir(p) and not _is_temp_path(p, env_map):
+                        try:
+                            _ensure_write_acl_recursive(p, psid)
+                        except Exception:
+                            pass
         except Exception as e:
-            # best effort — continue
             print(f"[sandbox] failed to allow write on {p}: {e}", file=sys.stderr)
 
     # Best-effort NUL permission for strict mode; harmless elsewhere
     _allow_null_device(psid)
     return guards
+RECURSE_MAX_ENTRIES = 5000
+RECURSE_MAX_SECONDS = 3.0
+
+def _is_temp_path(path: str, env_map: Dict[str, str]) -> bool:
+    try:
+        path_norm = os.path.abspath(path)
+        tmps: List[str] = []
+        for key in ("TEMP", "TMP"):
+            val = env_map.get(key) or os.environ.get(key)
+            if val:
+                tmps.append(os.path.abspath(val))
+        return any(path_norm == t or path_norm.startswith(t + os.sep) for t in tmps)
+    except Exception:
+        return False
+
+def _ensure_write_acl_recursive(path: str, psid: wt.LPVOID,
+                                max_entries: int = RECURSE_MAX_ENTRIES,
+                                max_seconds: float = RECURSE_MAX_SECONDS) -> None:
+    """Best-effort: add allow ACE for psid to existing files/dirs under path, capped."""
+    start = time.monotonic()
+    count = 0
+
+    def try_add(pth: str) -> bool:
+        nonlocal count
+        if count >= max_entries or (time.monotonic() - start) >= max_seconds:
+            return False
+        try:
+            _add_allow_ace(pth, psid)
+        except Exception:
+            pass
+        count += 1
+        return True
+
+    try:
+        if os.path.isdir(path):
+            if not try_add(path):
+                return
+            for root, dirs, files in os.walk(path):
+                for d in dirs:
+                    if not try_add(os.path.join(root, d)):
+                        return
+                for f in files:
+                    if not try_add(os.path.join(root, f)):
+                        return
+        else:
+            try_add(path)
+    except Exception:
+        pass
 
 # ---- Job object --------------------------------------------------------------
 
@@ -1078,8 +1364,6 @@ def parse_policy_arg(value: str) -> SandboxPolicy:
     if value == "workspace-write":
         # Let JSON override to pass explicit roots; plain preset means "derive from cwd".
         return SandboxPolicy.new_workspace_write_policy()
-    if value == "danger-full-access":
-        return SandboxPolicy.danger_full_access()
     # JSON path: { "mode": "...", "workspace_roots": ["..."] }
     try:
         obj = json.loads(value)
@@ -1102,7 +1386,7 @@ def main():
     )
     parser.add_argument("--sandbox-policy-cwd", default=None, help="Base dir for policy-relative paths")
     parser.add_argument("sandbox_policy", type=parse_policy_arg,
-                        help="Preset ('workspace-write' | 'read-only' | 'danger-full-access') or JSON")
+                        help="Preset ('workspace-write' | 'read-only') or JSON")
     parser.add_argument("command", nargs=argparse.REMAINDER,
                         help="Command and args (everything after policy)")
 
@@ -1126,16 +1410,21 @@ def main():
     #if not policy.has_full_network_access():
     #    apply_best_effort_network_block(env_map)
     ensure_non_interactive_pager(env_map)
-    #if os.environ.get("SANDBOX_NO_NET") == "1":
     apply_no_network_to_env(env_map, NoNetConfig())
 
-    # Create restricted token (WRITE_RESTRICTED + LUA), choose strict/compat
+    # Read-only policy uses a dedicated capability SID; no TEMP/TMP env tweaks.
+
+    # Create restricted token (WRITE_RESTRICTED + LUA), choose strict/compat/capability
     try:
         if policy.mode == "read-only":
-            h_token, psid = _create_write_restricted_token_strict()
+            psid_cap_ro, _sid_str_ro = _load_or_create_readonly_cap_sid(policy_cwd)
+            h_token, psid = _create_readonly_token_with_cap(psid_cap_ro)
+        elif policy.mode == "workspace-write":
+            psid_cap, _sid_str_cached = _load_or_create_cap_sid(policy_cwd)
+            h_token, psid = _create_workspace_write_token_with_cap(psid_cap)
         else:
-            # workspace-write and danger-full-access
-            h_token, psid = _create_write_restricted_token_compat()
+            # Fallback to read-only for unknown mode
+            h_token, psid = _create_write_restricted_token_strict()
     except Exception as e:
         print(f"failed to create restricted token: {e}", file=sys.stderr)
         sys.exit(1)
@@ -1150,9 +1439,21 @@ def main():
     except Exception:
         pass
 
-    # Configure writable directories by appending allow ACEs for the Logon SID
+    # Configure writable directories (workspace-write uses capability SID)
+    # Toggle persistence for workspace-write
+    global _PERSIST_ACES
+    _PERSIST_ACES = (policy.mode == "workspace-write")
     acl_guards: List[_AclGuard] = []
     try:
+        if policy.mode == "workspace-write":
+            try:
+                base_tok = _get_current_token_for_restriction()
+                logon_sid_bytes2 = _get_logon_sid_bytes(base_tok)
+            finally:
+                _close_handle_safe(base_tok)
+            sid_buf2 = c.create_string_buffer(logon_sid_bytes2)
+            psid_logon2 = c.cast(sid_buf2, wt.LPVOID)
+            _allow_null_device(psid_logon2)
         acl_guards = _configure_paths(policy, policy_cwd, current_dir, psid, env_map)
         # Spawn process with inherited stdio; attach to a kill-on-close job
         command_preview = _format_command_for_log(command)
@@ -1197,9 +1498,10 @@ def main():
                 kernel32.CloseHandle(h_job)
         sys.exit(code)
     finally:
-        # Best-effort cleanup: revoke ACEs we added
-        for g in acl_guards:
-            g.close()
+        # Best-effort cleanup: revoke ACEs we added, except in workspace-write where they persist
+        if policy.mode != "workspace-write":
+            for g in acl_guards:
+                g.close()
         _close_handle_safe(h_token)
 
 if __name__ == "__main__":
