@@ -74,7 +74,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_overrides,
     } = cli;
 
-    let dangerously_bypass = dangerously_bypass_approvals_and_sandbox || dangerously_disable_timeouts;
+    let dangerously_bypass =
+        dangerously_bypass_approvals_and_sandbox || dangerously_disable_timeouts;
 
     // Determine the prompt source (parent or subcommand) and read from stdin if needed.
     let prompt_arg = match &command {
