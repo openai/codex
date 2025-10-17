@@ -10,7 +10,6 @@ use crate::error::SandboxErr;
 use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::SandboxManager;
-use codex_protocol::protocol::AskForApproval;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ApprovalDecision;
 use crate::tools::sandboxing::ApprovalStore;
@@ -20,6 +19,7 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use codex_protocol::protocol::AskForApproval;
 
 pub(crate) struct ToolOrchestrator {
     approvals: ApprovalStore,
@@ -87,7 +87,7 @@ impl ToolOrchestrator {
             Ok(out) => {
                 // We have a successful initial result
                 Ok(out)
-            },
+            }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
                 if !tool.escalate_on_failure() {
                     return Err(ToolError::SandboxDenied(
@@ -127,7 +127,7 @@ impl ToolOrchestrator {
                 // Second attempt.
                 (*tool).run(req, &escalated_attempt, tool_ctx).await
             }
-            other => other
+            other => other,
         }
     }
 }

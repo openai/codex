@@ -143,16 +143,12 @@ pub(crate) async fn handle_container_exec_with_params(
                     Err(FunctionCallError::RespondToModel(content))
                 }
             }
-            Err(ToolError::Codex(CodexErr::Sandbox(
-                SandboxErr::Timeout { output },
-            ))) => Err(FunctionCallError::RespondToModel(
-                format_exec_output_apply_patch(&output),
-            )),
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                output,
-            }))) => Err(FunctionCallError::RespondToModel(
-                format_exec_output_apply_patch(&output),
-            )),
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
+                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
+            ),
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => Err(
+                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
+            ),
             Err(ToolError::Codex(err)) => {
                 let message = format!("execution error: {err:?}");
                 Err(FunctionCallError::RespondToModel(format_exec_output(
@@ -201,16 +197,12 @@ pub(crate) async fn handle_container_exec_with_params(
                     Err(FunctionCallError::RespondToModel(content))
                 }
             }
-            Err(ToolError::Codex(CodexErr::Sandbox(
-                SandboxErr::Timeout { output },
-            ))) => Err(FunctionCallError::RespondToModel(
-                format_exec_output_apply_patch(&output),
-            )),
-            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                output,
-            }))) => Err(FunctionCallError::RespondToModel(
-                format_exec_output_apply_patch(&output),
-            )),
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output }))) => Err(
+                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
+            ),
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => Err(
+                FunctionCallError::RespondToModel(format_exec_output_apply_patch(&output)),
+            ),
             Err(ToolError::Codex(err)) => {
                 let message = format!("execution error: {err:?}");
                 Err(FunctionCallError::RespondToModel(format_exec_output(

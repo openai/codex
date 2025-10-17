@@ -6,17 +6,15 @@ builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
 use crate::exec::ExecToolCallOutput;
 use crate::sandboxing::execute_env;
-use crate::tools::sandboxing::{
-    Approvable,
-    ApprovalCtx,
-    ApprovalDecision,
-    SandboxAttempt,
-    Sandboxable,
-    SandboxablePreference,
-    ToolCtx,
-    ToolError,
-    ToolRuntime,
-};
+use crate::tools::sandboxing::Approvable;
+use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalDecision;
+use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::Sandboxable;
+use crate::tools::sandboxing::SandboxablePreference;
+use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
+use crate::tools::sandboxing::ToolRuntime;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]

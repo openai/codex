@@ -3,7 +3,9 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
+use anyhow::Result;
 use portable_pty::CommandBuilder;
 use portable_pty::PtySize;
 use portable_pty::native_pty_system;
@@ -11,24 +13,102 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tokio::time::Duration;
-
-use crate::exec_command::ExecCommandSession;
 
 #[derive(Debug)]
-pub(crate) struct SpawnedPty {
+pub struct ExecCommandSession {
+    writer_tx: mpsc::Sender<Vec<u8>>,
+    output_tx: broadcast::Sender<Vec<u8>>,
+    killer: StdMutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
+    reader_handle: StdMutex<Option<JoinHandle<()>>>,
+    writer_handle: StdMutex<Option<JoinHandle<()>>>,
+    wait_handle: StdMutex<Option<JoinHandle<()>>>,
+    exit_status: Arc<AtomicBool>,
+    exit_code: Arc<StdMutex<Option<i32>>>,
+}
+
+impl ExecCommandSession {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        writer_tx: mpsc::Sender<Vec<u8>>,
+        output_tx: broadcast::Sender<Vec<u8>>,
+        killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+        reader_handle: JoinHandle<()>,
+        writer_handle: JoinHandle<()>,
+        wait_handle: JoinHandle<()>,
+        exit_status: Arc<AtomicBool>,
+        exit_code: Arc<StdMutex<Option<i32>>>,
+    ) -> (Self, broadcast::Receiver<Vec<u8>>) {
+        let initial_output_rx = output_tx.subscribe();
+        (
+            Self {
+                writer_tx,
+                output_tx,
+                killer: StdMutex::new(Some(killer)),
+                reader_handle: StdMutex::new(Some(reader_handle)),
+                writer_handle: StdMutex::new(Some(writer_handle)),
+                wait_handle: StdMutex::new(Some(wait_handle)),
+                exit_status,
+                exit_code,
+            },
+            initial_output_rx,
+        )
+    }
+
+    pub fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
+        self.writer_tx.clone()
+    }
+
+    pub fn output_receiver(&self) -> broadcast::Receiver<Vec<u8>> {
+        self.output_tx.subscribe()
+    }
+
+    pub fn has_exited(&self) -> bool {
+        self.exit_status.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn exit_code(&self) -> Option<i32> {
+        self.exit_code.lock().ok().and_then(|guard| *guard)
+    }
+}
+
+impl Drop for ExecCommandSession {
+    fn drop(&mut self) {
+        if let Ok(mut killer_opt) = self.killer.lock()
+            && let Some(mut killer) = killer_opt.take()
+        {
+            let _ = killer.kill();
+        }
+
+        if let Ok(mut h) = self.reader_handle.lock()
+            && let Some(handle) = h.take()
+        {
+            handle.abort();
+        }
+        if let Ok(mut h) = self.writer_handle.lock()
+            && let Some(handle) = h.take()
+        {
+            handle.abort();
+        }
+        if let Ok(mut h) = self.wait_handle.lock()
+            && let Some(handle) = h.take()
+        {
+            handle.abort();
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SpawnedPty {
     pub session: ExecCommandSession,
     pub output_rx: broadcast::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
 }
 
-/// Spawn a PTY-based process and return the interactive session along with
-/// receivers for streaming output and exit status.
-pub(crate) async fn spawn_pty_process(
+pub async fn spawn_pty_process(
     program: &str,
     args: &[String],
     env: &HashMap<String, String>,
-) -> anyhow::Result<SpawnedPty> {
+) -> Result<SpawnedPty> {
     if program.is_empty() {
         anyhow::bail!("missing program for PTY spawn");
     }
@@ -58,7 +138,7 @@ pub(crate) async fn spawn_pty_process(
     let mut reader = pair.master.try_clone_reader()?;
     let output_tx_clone = output_tx.clone();
     let reader_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
-        let mut buf = [0u8; 8192];
+        let mut buf = [0u8; 8_192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
@@ -96,9 +176,9 @@ pub(crate) async fn spawn_pty_process(
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
     let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = exit_status.clone();
+    let wait_exit_status = Arc::clone(&exit_status);
     let exit_code = Arc::new(StdMutex::new(None));
-    let wait_exit_code = exit_code.clone();
+    let wait_exit_code = Arc::clone(&exit_code);
     let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
             Ok(status) => status.exit_code() as i32,

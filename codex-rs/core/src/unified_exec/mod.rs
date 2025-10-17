@@ -38,22 +38,20 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
-use codex_utils_pty::ExecCommandSession;
-use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::sandboxing::{
-    Approvable,
-    ApprovalCtx,
-    ApprovalDecision,
-    SandboxAttempt,
-    Sandboxable,
-    SandboxablePreference,
-    ToolCtx,
-    ToolError,
-    ToolRuntime,
-};
-use codex_utils_pty::SpawnedPty;
 use crate::sandboxing::ExecEnv;
+use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::sandboxing::Approvable;
+use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalDecision;
+use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::Sandboxable;
+use crate::tools::sandboxing::SandboxablePreference;
+use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
+use crate::tools::sandboxing::ToolRuntime;
 use crate::truncate::truncate_middle;
+use codex_utils_pty::ExecCommandSession;
+use codex_utils_pty::SpawnedPty;
 
 mod errors;
 
@@ -322,7 +320,7 @@ impl UnifiedExecSessionManager {
                 req: &OpenShellReq,
             ) -> Result<crate::sandboxing::CommandSpec, ToolError> {
                 let env = HashMap::new();
-                match crate::runtime::command_spec::build_command_spec(
+                match crate::tools::runtimes::command_spec::build_command_spec(
                     &req.command,
                     &req.cwd,
                     &env,

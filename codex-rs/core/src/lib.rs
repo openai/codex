@@ -26,7 +26,6 @@ pub mod custom_prompts;
 mod environment_context;
 pub mod error;
 pub mod exec;
-mod exec_command;
 pub mod exec_env;
 pub mod features;
 mod flags;
