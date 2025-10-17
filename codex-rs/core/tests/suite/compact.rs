@@ -43,6 +43,7 @@ const CONTEXT_LIMIT_MESSAGE: &str =
     "Your input exceeds the context window of this model. Please adjust your input and try again.";
 const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
 const DUMMY_CALL_ID: &str = "call-multi-auto";
+const FUNCTION_CALL_LIMIT_MSG: &str = "function call limit push";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
@@ -858,5 +859,110 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     assert!(
         request_bodies[4].contains("You have exceeded the maximum number of tokens"),
         "second auto compact request should include the summarization prompt"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let context_window = 100;
+    let limit = (context_window * 95 / 100) as i64;
+    let over_limit_tokens = (limit + 1) as u64;
+
+    let first_turn = sse(vec![
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r1", 50),
+    ]);
+    let function_call_follow_up = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed_with_tokens("r2", over_limit_tokens),
+    ]);
+    let auto_compact_turn = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", 10),
+    ]);
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![first_turn, function_call_follow_up, auto_compact_turn],
+    )
+    .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_context_window = Some(context_window);
+    config.model_auto_compact_token_limit = Some(limit);
+
+    let codex = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"))
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: FUNCTION_CALL_LIMIT_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    loop {
+        let event = codex.next_event().await.unwrap();
+        if event.id.starts_with("auto-compact-") {
+            continue;
+        }
+        if matches!(event.msg, EventMsg::TaskComplete(_)) {
+            break;
+        }
+    }
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected user request, function call follow-up, and auto compact requests"
+    );
+
+    let first_request = requests[0].input();
+    assert!(
+        first_request.iter().any(|item| {
+            item.get("type").and_then(|value| value.as_str()) == Some("message")
+                && item
+                    .get("content")
+                    .and_then(|content| content.as_array())
+                    .and_then(|entries| entries.first())
+                    .and_then(|entry| entry.get("text"))
+                    .and_then(|value| value.as_str())
+                    == Some(FUNCTION_CALL_LIMIT_MSG)
+        }),
+        "first request should include the user message that triggers the function call"
+    );
+
+    let function_call_output = requests[1].function_call_output(DUMMY_CALL_ID);
+    let output_text = function_call_output
+        .get("output")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    assert!(
+        output_text.contains(DUMMY_FUNCTION_NAME),
+        "function call output should be sent before auto compact"
+    );
+
+    let auto_compact_body = requests[2].body_json().to_string();
+    assert!(
+        auto_compact_body.contains("You have exceeded the maximum number of tokens"),
+        "auto compact request should include the summarization prompt after exceeding 95% (limit {})",
+        limit
     );
 }
