@@ -28,6 +28,8 @@ pub(crate) struct ToolsConfig {
     pub plan_tool: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
+    #[allow(dead_code)]
+    pub deep_web_search: bool,
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -35,14 +37,26 @@ pub(crate) struct ToolsConfig {
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_family: &'a ModelFamily,
-    pub(crate) features: &'a Features,
+    pub(crate) include_plan_tool: bool,
+    pub(crate) include_apply_patch_tool: bool,
+    pub(crate) include_web_search_request: bool,
+    pub(crate) include_deep_web_search: bool,
+    pub(crate) use_streamable_shell_tool: bool,
+    pub(crate) include_view_image_tool: bool,
+    pub(crate) experimental_unified_exec_tool: bool,
 }
 
 impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let ToolsConfigParams {
             model_family,
-            features,
+            include_plan_tool,
+            include_apply_patch_tool,
+            include_web_search_request,
+            include_deep_web_search,
+            use_streamable_shell_tool,
+            include_view_image_tool,
+            experimental_unified_exec_tool,
         } = params;
         let use_streamable_shell_tool = features.enabled(Feature::StreamableShell);
         let experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
@@ -75,9 +89,10 @@ impl ToolsConfig {
             shell_type,
             plan_tool: include_plan_tool,
             apply_patch_tool_type,
-            web_search_request: include_web_search_request,
-            include_view_image_tool,
-            experimental_unified_exec_tool,
+            web_search_request: *include_web_search_request,
+            deep_web_search: *include_deep_web_search,
+            include_view_image_tool: *include_view_image_tool,
+            experimental_unified_exec_tool: *experimental_unified_exec_tool,
             experimental_supported_tools: model_family.experimental_supported_tools.clone(),
         }
     }
@@ -828,6 +843,16 @@ pub(crate) fn build_specs(
         builder.push_spec(ToolSpec::WebSearch {});
     }
 
+    // Deep web search is now handled by MCP server
+    // if config.deep_web_search {
+    //     let deep_web_search_handler = Arc::new(crate::tools::handlers::DeepWebSearchHandler);
+    //     builder.push_spec_with_parallel_support(
+    //         ToolSpec::Function(crate::tools::handlers::create_deep_web_search_tool()),
+    //         false, // Deep research is async and may take time
+    //     );
+    //     builder.register_handler("deep_web_search", deep_web_search_handler);
+    // }
+
     if config.include_view_image_tool {
         builder.push_spec_with_parallel_support(create_view_image_tool(), true);
         builder.register_handler("view_image", view_image_handler);
@@ -911,7 +936,13 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: true,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -930,7 +961,13 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: true,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(&config, Some(HashMap::new())).build();
 
@@ -950,7 +987,13 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -968,7 +1011,13 @@ mod tests {
         features.disable(Feature::ViewImageTool);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            experimental_unified_exec_tool: false,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -998,7 +1047,13 @@ mod tests {
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(
             &config,
@@ -1100,7 +1155,13 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -1175,7 +1236,13 @@ mod tests {
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let (tools, _) = build_specs(
@@ -1242,7 +1309,13 @@ mod tests {
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let (tools, _) = build_specs(
@@ -1305,7 +1378,13 @@ mod tests {
         features.enable(Feature::ApplyPatchFreeform);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: false,
+            include_apply_patch_tool: true,
+            include_web_search_request: true,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let (tools, _) = build_specs(
@@ -1370,7 +1449,13 @@ mod tests {
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let (tools, _) = build_specs(
@@ -1447,7 +1532,13 @@ mod tests {
         features.enable(Feature::WebSearchRequest);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
-            features: &features,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            include_deep_web_search: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let (tools, _) = build_specs(
             &config,

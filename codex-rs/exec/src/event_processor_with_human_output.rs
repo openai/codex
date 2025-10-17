@@ -517,6 +517,27 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::AgentMessageDelta(_) => {}
             EventMsg::AgentReasoningDelta(_) => {}
             EventMsg::AgentReasoningRawContentDelta(_) => {}
+            EventMsg::SubAgentTaskCompleted(_) => {
+                // サブエージェントタスク完了
+                ts_msg!(self, "{}", "Sub-agent task completed".style(self.green));
+            }
+            EventMsg::SubAgentTaskFailed(_) => {
+                // サブエージェントタスク失敗
+                ts_msg!(self, "{}", "Sub-agent task failed".style(self.red));
+            }
+            EventMsg::SubAgentProgressUpdate(_) => {
+                // サブエージェント進捗更新（デバッグ用）
+            }
+            EventMsg::SubAgentMessage(_) => {
+                // サブエージェントメッセージ
+            }
+            EventMsg::SubAgentError(_) => {
+                // サブエージェントエラー
+                ts_msg!(self, "{}", "Sub-agent error".style(self.red));
+            }
+            EventMsg::SubAgentInfo(_) => {
+                // サブエージェント情報
+            }
         }
         CodexStatus::Running
     }

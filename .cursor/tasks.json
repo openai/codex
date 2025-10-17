@@ -1,0 +1,225 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Codex: Deep Research",
+      "type": "shell",
+      "command": "${workspaceFolder}/codex-rs/target/release/codex-tui",
+      "args": [
+        "research",
+        "${input:researchTopic}",
+        "--depth",
+        "${input:researchDepth}",
+        "--output",
+        "${workspaceFolder}/artifacts/research-${input:researchTopic}.md"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Codex: Code Review",
+      "type": "shell",
+      "command": "${workspaceFolder}/codex-rs/target/release/codex-tui",
+      "args": [
+        "delegate",
+        "code-reviewer",
+        "--scope",
+        "${input:reviewScope}",
+        "--output",
+        "${workspaceFolder}/artifacts/review-${fileBasenameNoExtension}.md"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Codex: Test Generation",
+      "type": "shell",
+      "command": "${workspaceFolder}/codex-rs/target/release/codex-tui",
+      "args": [
+        "delegate",
+        "test-gen",
+        "--scope",
+        "${file}",
+        "--output",
+        "${workspaceFolder}/artifacts/tests-${fileBasenameNoExtension}.md"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Codex: Security Audit",
+      "type": "shell",
+      "command": "${workspaceFolder}/codex-rs/target/release/codex-tui",
+      "args": [
+        "delegate",
+        "sec-audit",
+        "--scope",
+        "${workspaceFolder}",
+        "--output",
+        "${workspaceFolder}/artifacts/security-audit.md"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "MCP: Start Server",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/codex-rs/mcp-server/dist/index.js"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^(.*)$",
+          "file": 1,
+          "location": 2,
+          "message": 3
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Starting.*$",
+          "endsPattern": "^.*Ready.*$"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "MCP: Web Search Server",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/codex-rs/deep-research/mcp-server/web-search.js"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^(.*)$",
+          "file": 1,
+          "location": 2,
+          "message": 3
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Starting.*$",
+          "endsPattern": "^.*Ready.*$"
+        }
+      }
+    },
+    {
+      "label": "Test: All MCP Servers",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/codex-rs/mcp-server/test/test-server.js"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Test: Deep Research",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "test",
+        "-p",
+        "codex-deep-research",
+        "--lib",
+        "--release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/codex-rs"
+      },
+      "problemMatcher": "$rustc",
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Build: Release All",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "build",
+        "--release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/codex-rs"
+      },
+      "problemMatcher": "$rustc",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Install: Global",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/install-global.ps1"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "researchTopic",
+      "type": "promptString",
+      "description": "Research topic",
+      "default": "Enter your research topic"
+    },
+    {
+      "id": "researchDepth",
+      "type": "pickString",
+      "description": "Research depth",
+      "options": ["1", "2", "3", "4", "5"],
+      "default": "3"
+    },
+    {
+      "id": "reviewScope",
+      "type": "promptString",
+      "description": "Code review scope (file or directory)",
+      "default": "${file}"
+    }
+  ]
+}
+

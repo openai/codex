@@ -1,5 +1,19 @@
 # Rust/codex-rs
 
+## Codex サブエージェント & Deep Research 拡張（概要）
+
+- 詳細な要件定義は `docs/codex-subagents-deep-research.md` を参照してください。サブエージェント機構と Deep Research の計画型探索を Codex に中核追加するための背景・目標・アーキテクチャがまとまっています。
+- **サブエージェント機構**：`.codex/agents/*.yaml|md` で権限やトークン上限を宣言し、`codex delegate`/`codex research` などから並列実行・PR 分割を行う設計です。
+- **Deep Research 拡張**：サブクエリ計画→多段探索→引用必須レポート→軽量版フェイルオーバの流れを Codex の公式 Web 検索として統合します。
+- **既存動線との両立**：CLI / IDE / Web / GitHub / Slack を壊さずプラガブルに拡張し、`openai/codex` と `zapabob/codex` の双方で維持できる構造を目指します。
+- 実装フェーズ例（M1: サブエージェント MVP → M2: Deep Research v1 → M3: 統合 & ガバナンス → M4: GA）も同ドキュメントに記載されています。
+- **主なユースケース**：巨大リポジトリ刷新の自動分担、未知技術の調査レポート作成、セキュリティ診断とパッチ発行などで、サブエージェントと Deep Research を組み合わせて長時間タスクを回します。
+- **非機能要件のポイント**：サンドボックスと権限ガードによるセキュリティ、トークン Budgeter/軽量 DR によるコスト管理、進行状況と出典の可視化、監査ログの永続化が必須です。
+- エージェントに破壊的なシェルスクリプトを実行させないでください。
+- **導入時の流れ**：まずフォーク環境 (`zapabob/codex`) でサブエージェント Runtime と Budgeter を段階導入し、その後 Research Engine と MCP ツール連携を有効化、最終的に GitHub/Slack/IDE へ拡張します。
+- **関連ドキュメント**：KPI・性能要件・リスク対策は同ドキュメントの 9〜13 章を参照し、実装ロードマップやサンプル YAML は付録で確認できます。変更を加える際は `docs/codex-subagents-deep-research.md` とこの概要の両方を同期させてください。
+- **タスク着手前チェック**：対象サーフェス（CLI/IDE/Web/GitHub/Slack）と必要ツール（MCP サーバ、検索 API、CI）を事前に確認し、Budgeter と権限ポリシーが設計方針に従っているかレビューするのが推奨です。
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`

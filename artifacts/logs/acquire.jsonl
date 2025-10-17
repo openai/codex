@@ -1,0 +1,5 @@
+{"timestamp":"2025-10-10T18:42:00Z","action":"fetch","url":"https://blog.logrocket.com/top-rust-web-frameworks/","notes":"Comprehensive 2025 comparison covering Actix Web, Axum, Warp plus community metrics and feature summaries."}
+{"timestamp":"2025-10-10T18:42:05Z","action":"fetch","url":"https://docs.rs/axum/latest/axum/index.html","notes":"Rustdoc describing axum's ergonomics, modular focus, and high-level features like extractors and Tower integration."}
+{"timestamp":"2025-10-10T18:42:10Z","action":"fetch","url":"https://actix.rs/","notes":"Official site outlining Actix Web's type safety, feature richness, and performance emphasis."}
+{"timestamp":"2025-10-10T18:42:15Z","action":"fetch","url":"https://rocket.rs/overview/","notes":"Rocket overview explaining validation pipeline, type-safe request handling, and responder model."}
+{"timestamp":"2025-10-10T18:42:20Z","action":"fetch","url":"https://docs.rs/warp/latest/warp/index.html","notes":"Warp documentation summarizing composable filter system and lightweight focus."}

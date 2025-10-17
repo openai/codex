@@ -1,0 +1,120 @@
+{
+  "name": "codex-windsurf",
+  "displayName": "Codex Multi-Agent for Windsurf",
+  "description": "Sub-Agents & Deep Research for Windsurf IDE",
+  "version": "0.47.0",
+  "publisher": "zapabob",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.80.0",
+    "windsurf": "^1.0.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "codex",
+    "ai",
+    "agent",
+    "deep-research",
+    "windsurf"
+  ],
+  "activationEvents": [
+    "onCommand:codex.research",
+    "onCommand:codex.review",
+    "onCommand:codex.testGen",
+    "onCommand:codex.secAudit"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codex.research",
+        "title": "Codex: Deep Research",
+        "icon": "$(library)"
+      },
+      {
+        "command": "codex.review",
+        "title": "Codex: Code Review",
+        "icon": "$(search)"
+      },
+      {
+        "command": "codex.testGen",
+        "title": "Codex: Generate Tests",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "codex.secAudit",
+        "title": "Codex: Security Audit",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "codex.startMCP",
+        "title": "Codex: Start MCP Server"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "codex.research",
+        "key": "ctrl+shift+s",
+        "mac": "cmd+shift+s",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "codex.review",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "codex.testGen",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t"
+      },
+      {
+        "command": "codex.secAudit",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
+      }
+    ],
+    "configuration": {
+      "title": "Codex",
+      "properties": {
+        "codex.mcpServerPath": {
+          "type": "string",
+          "default": "${workspaceFolder}/codex-rs/mcp-server/dist/index.js",
+          "description": "Path to Codex MCP server"
+        },
+        "codex.researchDepth": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Default depth for Deep Research"
+        },
+        "codex.autoReview": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable auto code review on save"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.40.0",
+    "typescript": "^5.0.0"
+  }
+}
+

@@ -1,0 +1,43 @@
+name: "sec-audit"
+goal: "Security audit with CVE scanning, dependency analysis, and vulnerability patching"
+tools:
+  mcp:
+    - grep
+    - read_file
+    - codebase_search
+    - web_search
+  fs:
+    read: true
+    write:
+      - "./artifacts"
+      - "./security-reports"
+  net:
+    allow:
+      - "https://nvd.nist.gov/*"
+      - "https://cve.mitre.org/*"
+      - "https://rustsec.org/*"
+      - "https://snyk.io/*"
+      - "https://github.com/advisories/*"
+  shell:
+    exec:
+      - cargo
+      - npm
+      - pip
+      - cargo-audit
+      - npm audit
+policies:
+  context:
+    max_tokens: 50000
+    retention: "session"
+  secrets:
+    redact: true
+success_criteria:
+  - "Scan all dependencies for known CVEs"
+  - "Identify potential security vulnerabilities in code"
+  - "Provide patch recommendations with version numbers"
+  - "Generate prioritized vulnerability report (Critical/High/Medium/Low)"
+  - "Include remediation steps for each finding"
+artifacts:
+  - "artifacts/security-audit-report.md"
+  - "security-reports/vulnerability-summary.json"
+  - "security-reports/patch-recommendations.md"

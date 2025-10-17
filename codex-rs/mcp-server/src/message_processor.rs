@@ -302,6 +302,11 @@ impl MessageProcessor {
             tools: vec![
                 create_tool_for_codex_tool_call_param(),
                 create_tool_for_codex_tool_call_reply_param(),
+                crate::supervisor_tool::create_supervisor_tool(),
+                crate::deep_research_tool::create_deep_research_tool(),
+                crate::subagent_tool::create_subagent_tool(),
+                crate::custom_command_tool::create_custom_command_tool(),
+                crate::hook_tool::create_hook_tool(),
             ],
             next_cursor: None,
         };
@@ -324,6 +329,11 @@ impl MessageProcessor {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
             }
+            "codex-supervisor" => self.handle_tool_call_supervisor(id, arguments).await,
+            "codex-deep-research" => self.handle_tool_call_deep_research(id, arguments).await,
+            "codex-subagent" => self.handle_tool_call_subagent(id, arguments).await,
+            "codex-custom-command" => self.handle_tool_call_custom_command(id, arguments).await,
+            "codex-hook" => self.handle_tool_call_hook(id, arguments).await,
             _ => {
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
@@ -647,5 +657,118 @@ impl MessageProcessor {
         params: <mcp_types::LoggingMessageNotification as mcp_types::ModelContextProtocolNotification>::Params,
     ) {
         tracing::info!("notifications/message -> params: {:?}", params);
+    }
+
+    async fn handle_tool_call_supervisor(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let result =
+            crate::supervisor_tool_handler::handle_supervisor_tool_call(id.clone(), arguments)
+                .await;
+        self.send_response::<mcp_types::CallToolRequest>(id, result)
+            .await;
+    }
+
+    async fn handle_tool_call_deep_research(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let result = crate::deep_research_tool_handler::handle_deep_research_tool_call(
+            id.clone(),
+            arguments,
+        )
+        .await;
+        self.send_response::<mcp_types::CallToolRequest>(id, result)
+            .await;
+    }
+
+    async fn handle_tool_call_subagent(&self, id: RequestId, arguments: Option<serde_json::Value>) {
+        let result = match arguments {
+            Some(args) => crate::subagent_tool_handler::handle_subagent_tool_call(args).await,
+            None => Err(anyhow::anyhow!("No arguments provided")),
+        };
+
+        match result {
+            Ok(call_result) => {
+                self.send_response::<mcp_types::CallToolRequest>(id, call_result)
+                    .await;
+            }
+            Err(e) => {
+                let error_result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Error: {}", e),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, error_result)
+                    .await;
+            }
+        }
+    }
+
+    async fn handle_tool_call_custom_command(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let result = match arguments {
+            Some(args) => {
+                crate::custom_command_tool_handler::handle_custom_command_tool_call(args).await
+            }
+            None => Err(anyhow::anyhow!("No arguments provided")),
+        };
+
+        match result {
+            Ok(call_result) => {
+                self.send_response::<mcp_types::CallToolRequest>(id, call_result)
+                    .await;
+            }
+            Err(e) => {
+                let error_result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Error: {}", e),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, error_result)
+                    .await;
+            }
+        }
+    }
+
+    async fn handle_tool_call_hook(&self, id: RequestId, arguments: Option<serde_json::Value>) {
+        let result = match arguments {
+            Some(args) => crate::hook_tool_handler::handle_hook_tool_call(args).await,
+            None => Err(anyhow::anyhow!("No arguments provided")),
+        };
+
+        match result {
+            Ok(call_result) => {
+                self.send_response::<mcp_types::CallToolRequest>(id, call_result)
+                    .await;
+            }
+            Err(e) => {
+                let error_result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("Error: {}", e),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, error_result)
+                    .await;
+            }
+        }
     }
 }

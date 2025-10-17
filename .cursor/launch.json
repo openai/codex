@@ -1,0 +1,57 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug: Deep Research",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/codex-rs/target/release/codex-tui",
+      "args": [
+        "research",
+        "Test Topic",
+        "--depth",
+        "3"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Debug: MCP Server",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/codex-rs/mcp-server/dist/index.js",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "CODEX_HOME": "${workspaceFolder}/.codex",
+        "CODEX_AGENTS_DIR": "${workspaceFolder}/.codex/agents",
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "name": "Debug: Web Search MCP",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/codex-rs/deep-research/mcp-server/web-search.js",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "BRAVE_API_KEY": "${env:BRAVE_API_KEY}",
+        "GOOGLE_API_KEY": "${env:GOOGLE_API_KEY}",
+        "GOOGLE_CSE_ID": "${env:GOOGLE_CSE_ID}",
+        "BING_API_KEY": "${env:BING_API_KEY}",
+        "NODE_ENV": "development"
+      }
+    },
+    {
+      "name": "Test: MCP Server",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/codex-rs/mcp-server/test/test-server.js",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}
+

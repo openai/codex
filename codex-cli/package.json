@@ -1,6 +1,6 @@
 {
   "name": "@openai/codex",
-  "version": "0.0.0-dev",
+  "version": "0.47.0-alpha.1",
   "license": "Apache-2.0",
   "bin": {
     "codex": "bin/codex.js"
@@ -15,7 +15,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git",
+    "url": "git+https://github.com/zapabob/codex.git",
     "directory": "codex-cli"
   }
 }

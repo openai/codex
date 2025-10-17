@@ -1,0 +1,250 @@
+{
+  "mcpServers": {
+    "codex-subagents": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/codex-rs/mcp-server/dist/index.js"
+      ],
+      "env": {
+        "CODEX_HOME": "${workspaceFolder}/.codex",
+        "CODEX_AGENTS_DIR": "${workspaceFolder}/.codex/agents",
+        "CODEX_POLICIES_DIR": "${workspaceFolder}/.codex/policies",
+        "CODEX_ARTIFACTS_DIR": "${workspaceFolder}/artifacts"
+      },
+      "description": "Codex Sub-Agent delegation and orchestration",
+      "capabilities": {
+        "tools": [
+          "code_review",
+          "deep_research",
+          "test_generation",
+          "security_audit",
+          "delegate_agent"
+        ]
+      }
+    },
+    "web-search": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/codex-rs/deep-research/mcp-server/web-search.js"
+      ],
+      "env": {
+        "BRAVE_API_KEY": "${env:BRAVE_API_KEY}",
+        "GOOGLE_API_KEY": "${env:GOOGLE_API_KEY}",
+        "GOOGLE_CSE_ID": "${env:GOOGLE_CSE_ID}",
+        "BING_API_KEY": "${env:BING_API_KEY}"
+      },
+      "description": "Web search provider for Deep Research",
+      "capabilities": {
+        "tools": [
+          "brave_search",
+          "duckduckgo_search",
+          "google_search",
+          "bing_search"
+        ]
+      }
+    },
+    "code-analyzer": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/codex-rs/mcp-server/tools/code-analyzer.js"
+      ],
+      "description": "Code analysis and AST parsing",
+      "capabilities": {
+        "tools": [
+          "analyze_ast",
+          "calculate_complexity",
+          "find_dependencies",
+          "detect_vulnerabilities"
+        ]
+      }
+    },
+    "git-integration": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/codex-rs/mcp-server/tools/git-integration.js"
+      ],
+      "env": {
+        "GIT_DIR": "${workspaceFolder}/.git"
+      },
+      "description": "Git operations integration",
+      "capabilities": {
+        "tools": [
+          "git_status",
+          "git_diff",
+          "git_commit",
+          "git_create_pr"
+        ]
+      }
+    },
+    "typescript-analyzer": {
+      "command": "npx",
+      "args": [
+        "typescript-language-server",
+        "--stdio"
+      ],
+      "env": {
+        "TSCONFIG_PATH": "${workspaceFolder}/tsconfig.json"
+      },
+      "description": "TypeScript/JavaScript analysis",
+      "capabilities": {
+        "tools": [
+          "ts_diagnostics",
+          "ts_suggestions",
+          "ts_refactor"
+        ]
+      }
+    },
+    "python-analyzer": {
+      "command": "python",
+      "args": [
+        "-m",
+        "pylsp"
+      ],
+      "description": "Python code analysis",
+      "capabilities": {
+        "tools": [
+          "pylint_check",
+          "mypy_check",
+          "black_format"
+        ]
+      }
+    },
+    "rust-analyzer": {
+      "command": "rust-analyzer",
+      "args": [],
+      "description": "Rust code analysis",
+      "capabilities": {
+        "tools": [
+          "clippy_check",
+          "rustfmt_check",
+          "cargo_check"
+        ]
+      }
+    },
+    "unity-analyzer": {
+      "command": "dotnet",
+      "args": [
+        "tool",
+        "run",
+        "unity-analyzer"
+      ],
+      "description": "Unity C# code analysis",
+      "capabilities": {
+        "tools": [
+          "unity_diagnostics",
+          "gc_analysis",
+          "scriptable_object_check"
+        ]
+      }
+    }
+  },
+  "toolBindings": {
+    "@code-reviewer": {
+      "server": "codex-subagents",
+      "tool": "code_review",
+      "autoInvoke": true,
+      "languages": ["typescript", "javascript", "python", "rust", "csharp"]
+    },
+    "@researcher": {
+      "server": "codex-subagents",
+      "tool": "deep_research",
+      "autoInvoke": false
+    },
+    "@test-gen": {
+      "server": "codex-subagents",
+      "tool": "test_generation",
+      "autoInvoke": false
+    },
+    "@sec-audit": {
+      "server": "codex-subagents",
+      "tool": "security_audit",
+      "autoInvoke": false
+    },
+    "@ts-reviewer": {
+      "server": "typescript-analyzer",
+      "tool": "ts_diagnostics",
+      "autoInvoke": true,
+      "languages": ["typescript", "javascript"]
+    },
+    "@python-reviewer": {
+      "server": "python-analyzer",
+      "tool": "pylint_check",
+      "autoInvoke": true,
+      "languages": ["python"]
+    },
+    "@unity-reviewer": {
+      "server": "unity-analyzer",
+      "tool": "unity_diagnostics",
+      "autoInvoke": true,
+      "languages": ["csharp"]
+    }
+  },
+  "composerIntegration": {
+    "enabled": true,
+    "quickActions": [
+      {
+        "label": "Review with Code Reviewer",
+        "command": "@code-reviewer",
+        "description": "Multi-language code review",
+        "icon": "search",
+        "keybinding": "Ctrl+Shift+R"
+      },
+      {
+        "label": "Deep Research",
+        "command": "@researcher",
+        "description": "Research with web search and citation",
+        "icon": "library",
+        "keybinding": "Ctrl+Shift+S"
+      },
+      {
+        "label": "Generate Tests",
+        "command": "@test-gen",
+        "description": "Auto-generate test suites",
+        "icon": "beaker",
+        "keybinding": "Ctrl+Shift+T"
+      },
+      {
+        "label": "Security Audit",
+        "command": "@sec-audit",
+        "description": "Scan for vulnerabilities",
+        "icon": "shield",
+        "keybinding": "Ctrl+Shift+A"
+      }
+    ]
+  },
+  "chatIntegration": {
+    "enabled": true,
+    "suggestTools": true,
+    "contextAware": true
+  },
+  "apiKeys": {
+    "brave": "${env:BRAVE_API_KEY}",
+    "google": "${env:GOOGLE_API_KEY}",
+    "googleCseId": "${env:GOOGLE_CSE_ID}",
+    "bing": "${env:BING_API_KEY}",
+    "openai": "${env:OPENAI_API_KEY}"
+  },
+  "preferences": {
+    "autoReview": {
+      "enabled": true,
+      "onSave": true,
+      "onCommit": true,
+      "languages": ["typescript", "javascript", "python", "rust", "csharp"]
+    },
+    "deepResearch": {
+      "defaultDepth": 3,
+      "maxSources": 10,
+      "citationStyle": "markdown"
+    },
+    "testGeneration": {
+      "framework": "auto-detect",
+      "coverage": 80,
+      "includeEdgeCases": true
+    },
+    "securityAudit": {
+      "severity": "medium",
+      "autoFix": false,
+      "reportFormat": "markdown"
+    }
+  }
+}

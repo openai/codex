@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use crate::utils_string::take_bytes_at_char_boundary;
 use async_trait::async_trait;
-use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;

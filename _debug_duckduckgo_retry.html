@@ -1,0 +1,634 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<!--[if IE 6]><html class="ie6" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 7]><html class="lt-ie8 lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if IE 8]><html class="lt-ie9" xmlns="http://www.w3.org/1999/xhtml"><![endif]-->
+<!--[if gt IE 8]><!--><html xmlns="http://www.w3.org/1999/xhtml"><!--<![endif]-->
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=1" />
+  <meta name="referrer" content="origin" />
+  <meta name="HandheldFriendly" content="true" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>Python FastAPI at DuckDuckGo</title>
+  <link title="DuckDuckGo (HTML)" type="application/opensearchdescription+xml" rel="search" href="//duckduckgo.com/opensearch_html_v2.xml" />
+  <link href="//duckduckgo.com/favicon.ico" rel="shortcut icon" />
+  <link rel="icon" href="//duckduckgo.com/favicon.ico" type="image/x-icon" />
+  <link id="icon60" rel="apple-touch-icon" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_60x60.png?v=2"/>
+  <link id="icon76" rel="apple-touch-icon" sizes="76x76" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_76x76.png?v=2"/>
+  <link id="icon120" rel="apple-touch-icon" sizes="120x120" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_120x120.png?v=2"/>
+  <link id="icon152" rel="apple-touch-icon" sizes="152x152" href="//duckduckgo.com/assets/icons/meta/DDG-iOS-icon_152x152.png?v=2"/>
+  <link rel="image_src" href="//duckduckgo.com/assets/icons/meta/DDG-icon_256x256.png">
+  <link rel="stylesheet" media="handheld, all" href="//duckduckgo.com/dist/h.5cdd129b369a4236564b.css" type="text/css"/>
+</head>
+
+<body class="body--html">
+  <a name="top" id="top"></a>
+
+  <form action="/html/" method="post">
+    <input type="text" name="state_hidden" id="state_hidden" />
+  </form>
+
+  <div>
+    <div class="site-wrapper-border"></div>
+
+    <div id="header" class="header cw header--html">
+      <a title="DuckDuckGo" href="/html/" class="header__logo-wrap"></a>
+
+      <form name="x" class="header__form" action="/html/" method="post">
+        <div class="search search--header">
+          <input name="q" autocomplete="off" class="search__input" id="search_form_input_homepage" type="text" value="Python FastAPI" />
+          <input name="b" id="search_button_homepage" class="search__button search__button--html" value="" title="Search" alt="Search" type="submit" />
+        </div>
+
+        
+        
+        
+        
+
+        <div class="frm__select">
+          <select name="kl">
+            
+              <option value="" >All Regions</option>
+            
+              <option value="ar-es" >Argentina</option>
+            
+              <option value="au-en" >Australia</option>
+            
+              <option value="at-de" >Austria</option>
+            
+              <option value="be-fr" >Belgium (fr)</option>
+            
+              <option value="be-nl" >Belgium (nl)</option>
+            
+              <option value="br-pt" >Brazil</option>
+            
+              <option value="bg-bg" >Bulgaria</option>
+            
+              <option value="ca-en" >Canada (en)</option>
+            
+              <option value="ca-fr" >Canada (fr)</option>
+            
+              <option value="ct-ca" >Catalonia</option>
+            
+              <option value="cl-es" >Chile</option>
+            
+              <option value="cn-zh" >China</option>
+            
+              <option value="co-es" >Colombia</option>
+            
+              <option value="hr-hr" >Croatia</option>
+            
+              <option value="cz-cs" >Czech Republic</option>
+            
+              <option value="dk-da" >Denmark</option>
+            
+              <option value="ee-et" >Estonia</option>
+            
+              <option value="fi-fi" >Finland</option>
+            
+              <option value="fr-fr" >France</option>
+            
+              <option value="de-de" >Germany</option>
+            
+              <option value="gr-el" >Greece</option>
+            
+              <option value="hk-tzh" >Hong Kong</option>
+            
+              <option value="hu-hu" >Hungary</option>
+            
+              <option value="is-is" >Iceland</option>
+            
+              <option value="in-en" >India (en)</option>
+            
+              <option value="id-en" >Indonesia (en)</option>
+            
+              <option value="ie-en" >Ireland</option>
+            
+              <option value="il-en" >Israel (en)</option>
+            
+              <option value="it-it" >Italy</option>
+            
+              <option value="jp-jp" >Japan</option>
+            
+              <option value="kr-kr" >Korea</option>
+            
+              <option value="lv-lv" >Latvia</option>
+            
+              <option value="lt-lt" >Lithuania</option>
+            
+              <option value="my-en" >Malaysia (en)</option>
+            
+              <option value="mx-es" >Mexico</option>
+            
+              <option value="nl-nl" >Netherlands</option>
+            
+              <option value="nz-en" >New Zealand</option>
+            
+              <option value="no-no" >Norway</option>
+            
+              <option value="pk-en" >Pakistan (en)</option>
+            
+              <option value="pe-es" >Peru</option>
+            
+              <option value="ph-en" >Philippines (en)</option>
+            
+              <option value="pl-pl" >Poland</option>
+            
+              <option value="pt-pt" >Portugal</option>
+            
+              <option value="ro-ro" >Romania</option>
+            
+              <option value="ru-ru" >Russia</option>
+            
+              <option value="xa-ar" >Saudi Arabia</option>
+            
+              <option value="sg-en" >Singapore</option>
+            
+              <option value="sk-sk" >Slovakia</option>
+            
+              <option value="sl-sl" >Slovenia</option>
+            
+              <option value="za-en" >South Africa</option>
+            
+              <option value="es-ca" >Spain (ca)</option>
+            
+              <option value="es-es" >Spain (es)</option>
+            
+              <option value="se-sv" >Sweden</option>
+            
+              <option value="ch-de" >Switzerland (de)</option>
+            
+              <option value="ch-fr" >Switzerland (fr)</option>
+            
+              <option value="tw-tzh" >Taiwan</option>
+            
+              <option value="th-en" >Thailand (en)</option>
+            
+              <option value="tr-tr" >Turkey</option>
+            
+              <option value="us-en" >US (English)</option>
+            
+              <option value="us-es" >US (Spanish)</option>
+            
+              <option value="ua-uk" >Ukraine</option>
+            
+              <option value="uk-en" >United Kingdom</option>
+            
+              <option value="vn-en" >Vietnam (en)</option>
+            
+          </select>
+        </div>
+
+        <div class="frm__select frm__select--last">
+          <select class="" name="df">
+            
+              <option value="" selected>Any Time</option>
+            
+              <option value="d" >Past Day</option>
+            
+              <option value="w" >Past Week</option>
+            
+              <option value="m" >Past Month</option>
+            
+              <option value="y" >Past Year</option>
+            
+          </select>
+        </div>
+      </form>
+    </div>
+
+    
+
+    
+      <!-- Web results are present -->
+      <div>
+        <div class="serp__results">
+          <div id="links" class="results">
+            
+
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi.tiangolo.com%2F&amp;rut=b9aedb7b70135aa6cb2e4d120fd5fa9f5b036ff0d11d1de854e8455dc9174f5b">FastAPI</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi.tiangolo.com%2F&amp;rut=b9aedb7b70135aa6cb2e4d120fd5fa9f5b036ff0d11d1de854e8455dc9174f5b">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/fastapi.tiangolo.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi.tiangolo.com%2F&amp;rut=b9aedb7b70135aa6cb2e4d120fd5fa9f5b036ff0d11d1de854e8455dc9174f5b">
+                            fastapi.tiangolo.com
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi.tiangolo.com%2F&amp;rut=b9aedb7b70135aa6cb2e4d120fd5fa9f5b036ff0d11d1de854e8455dc9174f5b"><b>FastAPI</b> is a modern, fast (high-performance), web framework for building APIs with <b>Python</b> based on standard <b>Python</b> type hints. The key features are: Fast: Very high performance, on par with NodeJS and Go (thanks to Starlette and Pydantic). One of the fastest <b>Python</b> frameworks available. Fast to code: Increase the speed to develop features by about 200% to 300%. * Fewer bugs: Reduce about 40% ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.geeksforgeeks.org%2Fpython%2Ffastapi%2Dtutorial%2F&amp;rut=7312378586c90a8b0f5aab0dae68feec9f700d20717d2b7e7131d4867adbf505">FastAPI Tutorial - GeeksforGeeks</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.geeksforgeeks.org%2Fpython%2Ffastapi%2Dtutorial%2F&amp;rut=7312378586c90a8b0f5aab0dae68feec9f700d20717d2b7e7131d4867adbf505">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/www.geeksforgeeks.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.geeksforgeeks.org%2Fpython%2Ffastapi%2Dtutorial%2F&amp;rut=7312378586c90a8b0f5aab0dae68feec9f700d20717d2b7e7131d4867adbf505">
+                            www.geeksforgeeks.org/python/fastapi-tutorial/
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-09-10T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.geeksforgeeks.org%2Fpython%2Ffastapi%2Dtutorial%2F&amp;rut=7312378586c90a8b0f5aab0dae68feec9f700d20717d2b7e7131d4867adbf505"><b>FastAPI</b> is a modern, high-performance, <b>Python</b> web framework designed for building APIs quickly and efficiently. Built on Starlette (for web parts) and Pydantic (for data validatio</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi%2Dtutorial.readthedocs.io%2Fen%2Flatest%2F&amp;rut=d8ee8cf8ccc6a0de56226a8f9b28dc0b2dee8f05935fc54a939de5bba4ee3790">Home - FastAPI Tutorial</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi%2Dtutorial.readthedocs.io%2Fen%2Flatest%2F&amp;rut=d8ee8cf8ccc6a0de56226a8f9b28dc0b2dee8f05935fc54a939de5bba4ee3790">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/fastapi-tutorial.readthedocs.io.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi%2Dtutorial.readthedocs.io%2Fen%2Flatest%2F&amp;rut=d8ee8cf8ccc6a0de56226a8f9b28dc0b2dee8f05935fc54a939de5bba4ee3790">
+                            fastapi-tutorial.readthedocs.io/en/latest/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi%2Dtutorial.readthedocs.io%2Fen%2Flatest%2F&amp;rut=d8ee8cf8ccc6a0de56226a8f9b28dc0b2dee8f05935fc54a939de5bba4ee3790"><b>FastAPI</b> is a modern, fast, and easy web framework for building APIs with <b>Python</b> 3.6+. This tutorial covers how to create, test, document, and containerize a <b>FastAPI</b> app with Postgres and Pytest.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Frealpython.com%2Ffastapi%2Dpython%2Dweb%2Dapis%2F&amp;rut=ba5528c70516e9e7b494eb9ea924f89652aa6191a762277c97b84345ad5b1a0f">Using FastAPI to Build Python Web APIs</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Frealpython.com%2Ffastapi%2Dpython%2Dweb%2Dapis%2F&amp;rut=ba5528c70516e9e7b494eb9ea924f89652aa6191a762277c97b84345ad5b1a0f">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/realpython.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Frealpython.com%2Ffastapi%2Dpython%2Dweb%2Dapis%2F&amp;rut=ba5528c70516e9e7b494eb9ea924f89652aa6191a762277c97b84345ad5b1a0f">
+                            realpython.com/fastapi-python-web-apis/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Frealpython.com%2Ffastapi%2Dpython%2Dweb%2Dapis%2F&amp;rut=ba5528c70516e9e7b494eb9ea924f89652aa6191a762277c97b84345ad5b1a0f">Learn how to use <b>FastAPI</b>, a modern, high-performance web framework for building APIs with <b>Python</b> based on standard type hints. This tutorial covers the basics of <b>FastAPI</b>, such as path parameters, JSON data, validation, documentation, and more.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdev.to%2Fatifwattoo%2Ffastapi%2Dthe%2Dultimate%2Dguide%2Dto%2Dbuilding%2Dhigh%2Dperformance%2Dapis%2Dwith%2Dpython%2D9hg&amp;rut=3f81b62adf9703ad16f8f30a9aa6942386b2fccecece1fc2c9aafdff5d8c6d0e">FastAPI: The Ultimate Guide to Building High-Performance APIs with Python</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdev.to%2Fatifwattoo%2Ffastapi%2Dthe%2Dultimate%2Dguide%2Dto%2Dbuilding%2Dhigh%2Dperformance%2Dapis%2Dwith%2Dpython%2D9hg&amp;rut=3f81b62adf9703ad16f8f30a9aa6942386b2fccecece1fc2c9aafdff5d8c6d0e">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/dev.to.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdev.to%2Fatifwattoo%2Ffastapi%2Dthe%2Dultimate%2Dguide%2Dto%2Dbuilding%2Dhigh%2Dperformance%2Dapis%2Dwith%2Dpython%2D9hg&amp;rut=3f81b62adf9703ad16f8f30a9aa6942386b2fccecece1fc2c9aafdff5d8c6d0e">
+                            dev.to/atifwattoo/fastapi-the-ultimate-guide-to-building-high-performance-apis-with-python-9hg
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-02-05T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdev.to%2Fatifwattoo%2Ffastapi%2Dthe%2Dultimate%2Dguide%2Dto%2Dbuilding%2Dhigh%2Dperformance%2Dapis%2Dwith%2Dpython%2D9hg&amp;rut=3f81b62adf9703ad16f8f30a9aa6942386b2fccecece1fc2c9aafdff5d8c6d0e">Learn how to use <b>FastAPI</b>, a modern and fast <b>Python</b> web framework for creating APIs. Discover its features, benefits, and real-world use cases with examples and tutorials.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi.tiangolo.com%2Ftutorial%2F&amp;rut=b10bb6b9fa7590e2555e3147d7c1130bac08c967052448989dcb388dc594edab">Tutorial - User Guide - FastAPI</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi.tiangolo.com%2Ftutorial%2F&amp;rut=b10bb6b9fa7590e2555e3147d7c1130bac08c967052448989dcb388dc594edab">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/fastapi.tiangolo.com.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi.tiangolo.com%2Ftutorial%2F&amp;rut=b10bb6b9fa7590e2555e3147d7c1130bac08c967052448989dcb388dc594edab">
+                            fastapi.tiangolo.com/tutorial/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffastapi.tiangolo.com%2Ftutorial%2F&amp;rut=b10bb6b9fa7590e2555e3147d7c1130bac08c967052448989dcb388dc594edab"><b>FastAPI</b> Learn Tutorial - User Guide Tutorial - User Guide This tutorial shows you how to use <b>FastAPI</b> with most of its features, step by step. Each section gradually builds on the previous ones, but it&#x27;s structured to separate topics, so that you can go directly to any specific one to solve your specific API needs. It is also built to work as a future reference so you can come back and see ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpythonium.net%2Fblog%2Ffastapi&amp;rut=0233e5cb8920afbbb1f3c6806e20f126b5ab200cca314bd123d90e3d01e94ea4">FastAPI: Build a REST API in 15 Minutes - pythonium.net</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpythonium.net%2Fblog%2Ffastapi&amp;rut=0233e5cb8920afbbb1f3c6806e20f126b5ab200cca314bd123d90e3d01e94ea4">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/pythonium.net.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpythonium.net%2Fblog%2Ffastapi&amp;rut=0233e5cb8920afbbb1f3c6806e20f126b5ab200cca314bd123d90e3d01e94ea4">
+                            pythonium.net/blog/fastapi
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpythonium.net%2Fblog%2Ffastapi&amp;rut=0233e5cb8920afbbb1f3c6806e20f126b5ab200cca314bd123d90e3d01e94ea4">Learn how to use <b>FastAPI</b>, a modern and high-performance framework for building APIs in <b>Python</b>, with examples of GET, POST, PUT, and PATCH methods. See how to validate data, filter results, and handle pagination with <b>FastAPI</b>.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpypi.org%2Fproject%2Ffastapi%2F&amp;rut=849bd34c79018015d36dce4fb143c5554eef83a3257a396677b0e3a3a307333a">fastapi · PyPI</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpypi.org%2Fproject%2Ffastapi%2F&amp;rut=849bd34c79018015d36dce4fb143c5554eef83a3257a396677b0e3a3a307333a">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/pypi.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpypi.org%2Fproject%2Ffastapi%2F&amp;rut=849bd34c79018015d36dce4fb143c5554eef83a3257a396677b0e3a3a307333a">
+                            pypi.org/project/fastapi/
+                          </a>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpypi.org%2Fproject%2Ffastapi%2F&amp;rut=849bd34c79018015d36dce4fb143c5554eef83a3257a396677b0e3a3a307333a"><b>FastAPI</b> is a modern, fast (high-performance), web framework for building APIs with <b>Python</b> based on standard <b>Python</b> type hints. The key features are: Fast: Very high performance, on par with NodeJS and Go (thanks to Starlette and Pydantic). One of the fastest <b>Python</b> frameworks available. Fast to code: Increase the speed to develop features by about 200% to 300%. * Fewer bugs: Reduce about 40% ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.geeksforgeeks.org%2Fpython%2Ffastapi%2Dintroduction%2F&amp;rut=3d4ce9b678732276d3727db43d9afce3db60034f68e365f1fbaea33f9716b9d3">FastAPI - Introduction - GeeksforGeeks</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.geeksforgeeks.org%2Fpython%2Ffastapi%2Dintroduction%2F&amp;rut=3d4ce9b678732276d3727db43d9afce3db60034f68e365f1fbaea33f9716b9d3">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/www.geeksforgeeks.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.geeksforgeeks.org%2Fpython%2Ffastapi%2Dintroduction%2F&amp;rut=3d4ce9b678732276d3727db43d9afce3db60034f68e365f1fbaea33f9716b9d3">
+                            www.geeksforgeeks.org/python/fastapi-introduction/
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-09-23T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.geeksforgeeks.org%2Fpython%2Ffastapi%2Dintroduction%2F&amp;rut=3d4ce9b678732276d3727db43d9afce3db60034f68e365f1fbaea33f9716b9d3">Features of <b>FastAPI</b> Automatic Documentation: <b>FastAPI</b> auto-generates interactive API docs using OpenAPI standard making it easy to test and understand your APIs. <b>Python</b> Type Hints: uses type hints to validate inputs and generate docs automatically making code more readable and less error-prone.</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+              
+                <div class="result results_links results_links_deep web-result ">
+                  <div class="links_main links_deep result__body"> <!-- This is the visible part -->
+                    
+                      <h2 class="result__title">
+                        <a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fcoderivers.org%2Fblog%2Fpython%2Dfastapi%2F&amp;rut=fa1e237696ec8dccb459c1d628b7c703d8ed35aaa9b1579b593c73d2fff9690d">Python FastAPI: A Comprehensive Guide - CodeRivers</a>
+                      </h2>
+
+                    
+
+                    
+                      <div class="result__extras">
+                        <div class="result__extras__url">
+                          <span class="result__icon">
+                            <a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fcoderivers.org%2Fblog%2Fpython%2Dfastapi%2F&amp;rut=fa1e237696ec8dccb459c1d628b7c703d8ed35aaa9b1579b593c73d2fff9690d">
+                              <img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/coderivers.org.ico" name="i15" />
+                            </a>
+                          </span>
+                          <a class="result__url" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fcoderivers.org%2Fblog%2Fpython%2Dfastapi%2F&amp;rut=fa1e237696ec8dccb459c1d628b7c703d8ed35aaa9b1579b593c73d2fff9690d">
+                            coderivers.org/blog/python-fastapi/
+                          </a>
+                          
+                            <span>&nbsp; &nbsp; 2025-01-23T00:00:00.0000000</span>
+                          
+                        </div>
+                      </div>
+                    
+
+                    
+                      
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fcoderivers.org%2Fblog%2Fpython%2Dfastapi%2F&amp;rut=fa1e237696ec8dccb459c1d628b7c703d8ed35aaa9b1579b593c73d2fff9690d"><b>FastAPI</b> is a modern, fast (high - performance) web framework for building APIs with <b>Python</b> based on <b>Python&#x27;s</b> type hints. It is designed to be easy to use, highly efficient, and developer - friendly. With the increasing demand for building reliable and <b>fast</b> <b>APIs,</b> <b>FastAPI</b> has emerged as a popular choice among <b>Python</b> developers. This blog will take you through the fundamental concepts, usage ...</a>
+                      
+                    
+
+                    <div class="clear"></div>
+                  </div>
+                </div>
+              
+            
+
+            
+              
+              
+                <div class="nav-link">
+                  <form action="/html/" method="post">
+                    <input type="submit" class='btn btn--alt' value="Next" />
+                    <input type="hidden" name="q" value="Python FastAPI" />
+                    <input type="hidden" name="s" value="10" />
+                    <input type="hidden" name="nextParams" value="" />
+                    <input type="hidden" name="v" value="l" />
+                    <input type="hidden" name="o" value="json" />
+                    <input type="hidden" name="dc" value="11" />
+                    <input type="hidden" name="api" value="d.js" />
+                    <input type="hidden" name="vqd" value="4-85191767783405145231775706340043241738" />
+
+                    
+                    
+                    
+                      <input name="kl" value="wt-wt" type="hidden" />
+                    
+                    
+                    
+                    
+                  </form>
+                </div>
+              
+            
+
+            <div class="feedback-btn">
+              <a rel="nofollow" href="//duckduckgo.com/feedback.html" target="_new">Feedback</a>
+            </div>
+            <div class="clear"></div>
+          </div>
+        </div>
+      </div> <!-- links wrapper //-->
+    
+  </div>
+
+  <div id="bottom_spacing2"></div>
+
+  
+    <img src="//duckduckgo.com/t/sl_h"/>
+  
+</body>
+</html>

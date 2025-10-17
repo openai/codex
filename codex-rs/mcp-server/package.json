@@ -1,0 +1,27 @@
+{
+  "name": "codex-mcp-server",
+  "version": "0.47.0",
+  "description": "Codex MCP Server - Sub-Agent Delegation & Deep Research",
+  "main": "dist/index.js",
+  "bin": {
+    "codex-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "start": "node dist/index.js",
+    "test": "node test/test-server.js"
+  },
+  "keywords": [
+    "codex",
+    "mcp",
+    "subagents",
+    "deep-research",
+    "ai"
+  ],
+  "author": "zapabob",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {}
+}
+

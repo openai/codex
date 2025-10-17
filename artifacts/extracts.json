@@ -1,0 +1,102 @@
+{
+  "actix_web": {
+    "highlights": [
+      {
+        "text": "Production-grade, high-performance framework built on the actor model with extensive features, though it has a steeper learning curve than Axum or Rocket.",
+        "confidence": 0.7,
+        "sources": [
+          "https://blog.logrocket.com/top-rust-web-frameworks/#actix-web"
+        ]
+      },
+      {
+        "text": "Emphasizes type-safe request/response handling, rich built-in capabilities (HTTP/2, logging), and advertises itself as extremely fast.",
+        "confidence": 0.7,
+        "sources": [
+          "https://actix.rs/"
+        ]
+      },
+      {
+        "text": "Community maturity signaled by 23k+ GitHub stars as of May 2025, indicating strong adoption for performance-sensitive services.",
+        "confidence": 0.6,
+        "sources": [
+          "https://blog.logrocket.com/top-rust-web-frameworks/#actix-web"
+        ]
+      }
+    ]
+  },
+  "axum": {
+    "highlights": [
+      {
+        "text": "Async-first, ergonomic framework atop Tokio that balances ease of use with performance and supports SSR integrations, WebSockets, and layered middleware.",
+        "confidence": 0.7,
+        "sources": [
+          "https://blog.logrocket.com/top-rust-web-frameworks/#axum"
+        ]
+      },
+      {
+        "text": "Focuses on ergonomics and modularity with macro-free routing, declarative extractors, predictable error handling, and reuse of the Tower ecosystem.",
+        "confidence": 0.7,
+        "sources": [
+          "https://docs.rs/axum/latest/axum/index.html"
+        ]
+      },
+      {
+        "text": "Perceived as friendly to newcomers due to minimized exposure to complex generics while still supporting modern HTTP features like HTTP/2.",
+        "confidence": 0.6,
+        "sources": [
+          "https://blog.logrocket.com/top-rust-web-frameworks/#axum"
+        ]
+      }
+    ]
+  },
+  "rocket": {
+    "highlights": [
+      {
+        "text": "Request pipeline performs strict type-based validation before invoking handlers, reinforcing Rocket's emphasis on type safety and developer ergonomics.",
+        "confidence": 0.7,
+        "sources": [
+          "https://rocket.rs/overview/"
+        ]
+      },
+      {
+        "text": "Handlers return types implementing the Responder trait, with batteries-included responders (JSON, templates, streams) that simplify response composition.",
+        "confidence": 0.6,
+        "sources": [
+          "https://rocket.rs/overview/"
+        ]
+      },
+      {
+        "text": "Community perception in 2025 notes Rocket moved off nightly Rust and async support makes production adoption easier.",
+        "confidence": 0.5,
+        "sources": [
+          "https://blog.logrocket.com/top-rust-web-frameworks/#dev-sentiment"
+        ]
+      }
+    ]
+  },
+  "warp": {
+    "highlights": [
+      {
+        "text": "Designed to be fast, lightweight, and composable; quick to build performant APIs with concise filter-based routing.",
+        "confidence": 0.7,
+        "sources": [
+          "https://blog.logrocket.com/top-rust-web-frameworks/#warp"
+        ]
+      },
+      {
+        "text": "Core abstraction is the Filter, enabling composition and reusable request pipelines for high-throughput services.",
+        "confidence": 0.7,
+        "sources": [
+          "https://docs.rs/warp/latest/warp/index.html"
+        ]
+      },
+      {
+        "text": "Community footprint around 9.5k GitHub stars (2025) with a growing developer base.",
+        "confidence": 0.5,
+        "sources": [
+          "https://blog.logrocket.com/top-rust-web-frameworks/#warp"
+        ]
+      }
+    ]
+  }
+}

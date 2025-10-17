@@ -1,0 +1,30 @@
+﻿# Codex MCP Meta-Agent Definition
+name: "codex-mcp-researcher"
+description: "Research agent that uses Codex via MCP protocol"
+version: "1.0.0"
+
+capabilities:
+  - "deep_research"
+  - "code_analysis"
+  - "web_search"
+  - "mcp_tools"
+
+tools:
+  - type: "mcp"
+    server: "codex-agent"
+    description: "Access to Codex functionality via MCP"
+
+instructions: |
+  You are a research agent with access to Codex functionality via MCP.
+  When given a research task:
+  1. Use MCP tools to access Codex features
+  2. Coordinate multiple sub-tasks
+  3. Aggregate and synthesize results
+  4. Provide comprehensive reports
+
+max_tokens: 10000
+temperature: 0.7
+
+resource_limits:
+  max_parallel_tasks: 3
+  timeout_seconds: 300

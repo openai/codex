@@ -1,0 +1,25 @@
+[
+  {
+    "claim": "Selective builds and merge queues are necessary to keep monorepo CI scalable and green.",
+    "status": "corroborated",
+    "evidence": [
+      "https://www.buildkite.com/blog/monorepo-ci-best-practices"
+    ],
+    "notes": "Buildkite documents selective builds and merge queues as standard practice for high-volume monorepos to avoid redundant CI runs and stale baselines." 
+  },
+  {
+    "claim": "Remote caching can be enabled with minimal configuration on modern monorepo toolchains.",
+    "status": "corroborated",
+    "evidence": [
+      "https://github.com/vercel/turbo/blob/main/docs/site/content/docs/guides/ci-vendors/index.mdx",
+      "https://github.com/bazelbuild/bazel-website/blob/master/roadmaps/2019/remote-execution.md"
+    ],
+    "notes": "Turborepo requires only token/team secrets before running cached tasks, and Bazel roadmap emphasizes remote cache as a simple performance win." 
+  },
+  {
+    "claim": "Remote caching always improves performance without trade-offs",
+    "status": "refuted",
+    "evidence": [],
+    "notes": "Sources highlight fallback and network reliability concerns, implying remote caches can slow builds under poor network conditions." 
+  }
+]

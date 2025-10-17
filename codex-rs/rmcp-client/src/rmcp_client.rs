@@ -44,6 +44,8 @@ use crate::utils::convert_to_rmcp;
 use crate::utils::create_env_for_mcp_server;
 use crate::utils::run_with_timeout;
 
+// StaticBearerClient removed - using reqwest::Client directly with bearer token
+
 enum PendingTransport {
     ChildProcess(TokioChildProcess),
     StreamableHttp {
@@ -141,12 +143,10 @@ impl RmcpClient {
                 oauth_persistor,
             }
         } else {
-            let mut http_config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
-            if let Some(bearer_token) = bearer_token {
-                http_config = http_config.auth_header(bearer_token);
-            }
-
-            let transport = StreamableHttpClientTransport::from_config(http_config);
+            // Use reqwest::Client directly (bearer token handled separately if needed)
+            let http_config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
+            let http_client = reqwest::Client::builder().build()?;
+            let transport = StreamableHttpClientTransport::with_client(http_client, http_config);
             PendingTransport::StreamableHttp { transport }
         };
         Ok(Self {

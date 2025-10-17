@@ -71,6 +71,12 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::PlanUpdate(_)
         | EventMsg::ShutdownComplete
         | EventMsg::ViewImageToolCall(_)
-        | EventMsg::ConversationPath(_) => false,
+        | EventMsg::ConversationPath(_)
+        | EventMsg::SubAgentTaskCompleted(_)
+        | EventMsg::SubAgentTaskFailed(_)
+        | EventMsg::SubAgentProgressUpdate(_)
+        | EventMsg::SubAgentMessage(_)
+        | EventMsg::SubAgentError(_)
+        | EventMsg::SubAgentInfo(_) => false,
     }
 }

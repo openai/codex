@@ -1,0 +1,20 @@
+{
+  "session_id": "20251011_104012",
+  "completed_steps": [
+    "clean",
+    "deep-research",
+    "core-modules:codex-core",
+    "core-modules:codex-deep-research",
+    "core-modules:codex-tui",
+    "core-modules"
+  ],
+  "current_step": "core-modules",
+  "build_times": {
+    "deep-research": 4.011055,
+    "codex-core": 117.026447,
+    "codex-deep-research": 0.632742,
+    "codex-tui": 164.596946
+  },
+  "errors": [],
+  "timestamp": "2025-10-11T10:44:58.741009"
+}

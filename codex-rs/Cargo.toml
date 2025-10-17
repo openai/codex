@@ -6,12 +6,14 @@ members = [
     "app-server-protocol",
     "apply-patch",
     "arg0",
+    "audit",
     "codex-backend-openapi-models",
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
     "common",
     "core",
+    "deep-research",
     "exec",
     "execpolicy",
     "file-search",
@@ -19,7 +21,7 @@ members = [
     "linux-sandbox",
     "login",
     "mcp-client",
-    "mcp-server",
+    "mcp-server",                   # ENABLED: supervisor依存削除済み
     "mcp-types",
     "ollama",
     "process-hardening",
@@ -27,22 +29,22 @@ members = [
     "protocol-ts",
     "rmcp-client",
     "responses-api-proxy",
+    # "supervisor",  # DISABLED: 古い実装、codex_core::Codexとの互換性なし
     "otel",
     "tui",
     "git-apply",
     "utils/json-to-toml",
     "utils/readiness",
-    "utils/string",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.47.0-alpha.1"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
-# crates created with `cargo new -w ...` automatically inherit the 2024
+# crates created with `cargo new -w ...` automatically inherit the 2021
 # edition.
-edition = "2024"
+edition = "2021"
 
 [workspace.dependencies]
 # Internal
@@ -55,6 +57,7 @@ codex-arg0 = { path = "arg0" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
+codex-deep-research = { path = "deep-research" }
 codex-exec = { path = "exec" }
 codex-file-search = { path = "file-search" }
 codex-git-tooling = { path = "git-tooling" }
@@ -69,10 +72,10 @@ codex-protocol = { path = "protocol" }
 codex-protocol-ts = { path = "protocol-ts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+# codex-supervisor = { path = "supervisor" }  # DELETED: 古い実装、完全削除
 codex-tui = { path = "tui" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-readiness = { path = "utils/readiness" }
-codex-utils-string = { path = "utils/string" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
@@ -83,12 +86,12 @@ ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = "3"
 askama = "0.12"
-assert_matches = "1.5.0"
 assert_cmd = "2"
+assert_matches = "1.5"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
-axum = { version = "0.8", default-features = false }
+axum = "0.7"
 base64 = "0.22.1"
 bytes = "1.10.1"
 chrono = "0.4.42"
@@ -106,7 +109,7 @@ env-flags = "0.1.1"
 env_logger = "0.11.5"
 escargot = "0.5"
 eventsource-stream = "0.2.3"
-futures = { version = "0.3", default-features = false }
+futures = "0.3"
 icu_decimal = "2.0.0"
 icu_locale_core = "2.0.0"
 ignore = "0.4.23"
@@ -114,7 +117,7 @@ image = { version = "^0.25.8", default-features = false }
 indexmap = "2.6.0"
 insta = "1.43.2"
 itertools = "0.14.0"
-keyring = "3.6"
+keyring = "3.0"
 landlock = "0.4.1"
 lazy_static = "1"
 libc = "0.2.175"
@@ -124,6 +127,7 @@ mime_guess = "2.0.5"
 multimap = "0.10.0"
 notify = "8.2.0"
 nucleo-matcher = "0.3.1"
+once_cell = "1.20"
 openssl-sys = "*"
 opentelemetry = "0.30.0"
 opentelemetry-appender-tracing = "0.30.0"
@@ -142,15 +146,17 @@ pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
 rand = "0.9"
 ratatui = "0.29.0"
+regex = "1.11"
 regex-lite = "0.1.7"
 reqwest = "0.12"
-rmcp = { version = "0.8.0", default-features = false }
+rmcp = "0.8.1"
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 serde = "1"
 serde_json = "1"
 serde_with = "3.14"
-serial_test = "3.2.0"
+serde_yaml = "0.9"
+serial_test = "3"
 sha1 = "0.10.6"
 sha2 = "0.10"
 shlex = "1.3.0"
@@ -176,9 +182,11 @@ tracing = "0.1.41"
 tracing-appender = "0.2.3"
 tracing-subscriber = "0.3.20"
 tracing-test = "0.2.5"
-tree-sitter = "0.25.10"
-tree-sitter-bash = "0.25"
-tree-sitter-highlight = "0.25.10"
+tree-sitter = "0.25.9"
+tree-sitter-bash = "0.25.0"
+tree-sitter-highlight = "0.25.0"
+tree-sitter-json = "0.25.0"
+tree-sitter-python = "0.25.0"
 ts-rs = "11"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
@@ -246,9 +254,5 @@ strip = "symbols"
 codegen-units = 1
 
 [patch.crates-io]
-# Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }
-
-# Uncomment to debug local changes.
-# rmcp = { path = "../../rust-sdk/crates/rmcp" }

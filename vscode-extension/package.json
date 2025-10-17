@@ -1,0 +1,111 @@
+{
+  "name": "codex-subagents",
+  "displayName": "Codex Sub-Agents & Deep Research",
+  "description": "Multi-agent delegation and deep research for VS Code",
+  "version": "0.1.0",
+  "publisher": "zapabob",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Testing",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onCommand:codex.delegateAgent",
+    "onCommand:codex.deepResearch",
+    "onCommand:codex.listAgents",
+    "onCommand:codex.reviewCode"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codex.delegateAgent",
+        "title": "Codex: Delegate to Sub-Agent"
+      },
+      {
+        "command": "codex.deepResearch",
+        "title": "Codex: Deep Research"
+      },
+      {
+        "command": "codex.listAgents",
+        "title": "Codex: List Available Agents"
+      },
+      {
+        "command": "codex.reviewCode",
+        "title": "Codex: Review Code"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codex-agents",
+          "title": "Codex Agents",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codex-agents": [
+        {
+          "id": "codex.agentsList",
+          "name": "Sub-Agents"
+        },
+        {
+          "id": "codex.agentStatus",
+          "name": "Agent Status"
+        },
+        {
+          "id": "codex.researchResults",
+          "name": "Research Results"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Codex Sub-Agents",
+      "properties": {
+        "codex.agentsPath": {
+          "type": "string",
+          "default": ".codex/agents",
+          "description": "Path to agent definitions directory"
+        },
+        "codex.defaultBudget": {
+          "type": "number",
+          "default": 40000,
+          "description": "Default token budget for agents"
+        },
+        "codex.slackWebhook": {
+          "type": "string",
+          "default": "",
+          "description": "Slack webhook URL for notifications"
+        },
+        "codex.githubToken": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub personal access token"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.x",
+    "@typescript-eslint/parser": "^6.x",
+    "eslint": "^8.x",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "yaml": "^2.3.4"
+  }
+}
+

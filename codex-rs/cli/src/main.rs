@@ -1,18 +1,18 @@
 use clap::CommandFactory;
 use clap::Parser;
-use clap_complete::Shell;
 use clap_complete::generate;
+use clap_complete::Shell;
 use codex_arg0::arg0_dispatch_or_else;
-use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
-use codex_cli::LandlockCommand;
-use codex_cli::SeatbeltCommand;
+use codex_chatgpt::apply_command::ApplyCommand;
 use codex_cli::login::read_api_key_from_stdin;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
+use codex_cli::LandlockCommand;
+use codex_cli::SeatbeltCommand;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
@@ -100,6 +100,20 @@ enum Subcommand {
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
 
+    /// [EXPERIMENTAL] Delegate task to a sub-agent.
+    Delegate(DelegateCommand),
+
+    /// [EXPERIMENTAL] Delegate tasks to multiple agents in parallel
+    #[clap(name = "delegate-parallel")]
+    DelegateParallel(DelegateParallelCommand),
+
+    /// [EXPERIMENTAL] Create and run a custom agent from a prompt
+    #[clap(name = "agent-create")]
+    AgentCreate(AgentCreateCommand),
+
+    /// [EXPERIMENTAL] Conduct deep research on a topic.
+    Research(ResearchCommand),
+
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
     ResponsesApiProxy(ResponsesApiProxyArgs),
@@ -128,6 +142,127 @@ struct ResumeCommand {
 
     #[clap(flatten)]
     config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct DelegateCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    /// Agent name to delegate to
+    #[arg(value_name = "AGENT")]
+    agent: String,
+
+    /// Goal or task description
+    #[arg(short, long, value_name = "GOAL")]
+    goal: Option<String>,
+
+    /// Scope path (files or directories)
+    #[arg(long, value_name = "PATH")]
+    scope: Option<PathBuf>,
+
+    /// Token budget for the agent
+    #[arg(long, value_name = "TOKENS")]
+    budget: Option<usize>,
+
+    /// Deadline in minutes
+    #[arg(long, value_name = "MINUTES")]
+    deadline: Option<u64>,
+
+    /// Output file for the result
+    #[arg(short, long, value_name = "FILE")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct DelegateParallelCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    /// Comma-separated agent names
+    #[arg(value_name = "AGENTS", value_delimiter = ',')]
+    agents: Vec<String>,
+
+    /// Comma-separated goals (must match number of agents)
+    #[arg(long, value_delimiter = ',')]
+    goals: Vec<String>,
+
+    /// Comma-separated scope paths (optional, must match number of agents if provided)
+    #[arg(long, value_delimiter = ',')]
+    scopes: Vec<PathBuf>,
+
+    /// Comma-separated budgets (optional, must match number of agents if provided)
+    #[arg(long, value_delimiter = ',')]
+    budgets: Vec<usize>,
+
+    /// Deadline in minutes (applies to all agents)
+    #[arg(long, value_name = "MINUTES")]
+    deadline: Option<u64>,
+
+    /// Output file for combined results
+    #[arg(short, long, value_name = "FILE")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct AgentCreateCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    /// Prompt describing the agent's purpose and tasks
+    #[arg(value_name = "PROMPT")]
+    prompt: String,
+
+    /// Token budget for the custom agent
+    #[arg(long, value_name = "TOKENS")]
+    budget: Option<usize>,
+
+    /// Save the generated agent definition to .codex/agents/
+    #[arg(long, default_value = "false")]
+    save: bool,
+
+    /// Output file for the result
+    #[arg(short, long, value_name = "FILE")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct ResearchCommand {
+    /// Topic to research
+    #[arg(value_name = "TOPIC")]
+    topic: String,
+
+    /// Research depth (1-5)
+    #[arg(short, long, value_name = "DEPTH", default_value = "3")]
+    depth: u8,
+
+    /// Search breadth (number of sources)
+    #[arg(short, long, value_name = "BREADTH", default_value = "8")]
+    breadth: u8,
+
+    /// Token budget
+    #[arg(long, value_name = "TOKENS", default_value = "60000")]
+    budget: usize,
+
+    /// Require citations
+    #[arg(long, default_value = "true")]
+    citations: bool,
+
+    /// MCP tools to use (comma-separated)
+    #[arg(long, value_name = "TOOLS")]
+    mcp: Option<String>,
+
+    /// Enable lightweight fallback
+    #[arg(long, default_value = "false")]
+    lightweight_fallback: bool,
+
+    /// Use Gemini CLI with Google Search (requires gemini CLI and GOOGLE_API_KEY)
+    #[arg(long, default_value = "false")]
+    gemini: bool,
+
+    /// Output file for the report
+    #[arg(short, long, value_name = "FILE")]
+    out: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -426,6 +561,78 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             codex_cloud_tasks::run_main(cloud_cli, codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::Delegate(mut delegate_cmd)) => {
+            prepend_config_flags(
+                &mut delegate_cmd.config_overrides,
+                root_config_overrides.clone(),
+            );
+            codex_cli::delegate_cmd::run_delegate_command(
+                delegate_cmd.config_overrides,
+                delegate_cmd.agent,
+                delegate_cmd.goal,
+                delegate_cmd.scope,
+                delegate_cmd.budget,
+                delegate_cmd.deadline,
+                delegate_cmd.out,
+            )
+            .await?;
+        }
+        Some(Subcommand::DelegateParallel(mut parallel_cmd)) => {
+            prepend_config_flags(
+                &mut parallel_cmd.config_overrides,
+                root_config_overrides.clone(),
+            );
+
+            // clap handles value_delimiter, so we get Vec<T> directly
+            let agents = parallel_cmd.agents;
+            let goals = parallel_cmd.goals;
+
+            // Convert Vec<PathBuf> to Vec<Option<PathBuf>>
+            let scopes: Vec<Option<PathBuf>> = parallel_cmd.scopes.into_iter().map(Some).collect();
+
+            // Convert Vec<usize> to Vec<Option<usize>>
+            let budgets: Vec<Option<usize>> = parallel_cmd.budgets.into_iter().map(Some).collect();
+
+            codex_cli::parallel_delegate_cmd::run_parallel_delegate_command(
+                agents,
+                goals,
+                scopes,
+                budgets,
+                parallel_cmd.deadline,
+                parallel_cmd.out,
+                parallel_cmd.config_overrides,
+            )
+            .await?;
+        }
+        Some(Subcommand::AgentCreate(mut agent_create_cmd)) => {
+            prepend_config_flags(
+                &mut agent_create_cmd.config_overrides,
+                root_config_overrides.clone(),
+            );
+
+            codex_cli::agent_create_cmd::run_agent_create_command(
+                agent_create_cmd.prompt,
+                agent_create_cmd.budget,
+                agent_create_cmd.save,
+                agent_create_cmd.out,
+                agent_create_cmd.config_overrides,
+            )
+            .await?;
+        }
+        Some(Subcommand::Research(research_cmd)) => {
+            codex_cli::research_cmd::run_research_command(
+                research_cmd.topic,
+                research_cmd.depth,
+                research_cmd.breadth,
+                research_cmd.budget,
+                research_cmd.citations,
+                research_cmd.mcp,
+                research_cmd.lightweight_fallback,
+                research_cmd.out,
+                research_cmd.gemini,
+            )
+            .await?;
         }
         Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
             SandboxCommand::Macos(mut seatbelt_cli) => {

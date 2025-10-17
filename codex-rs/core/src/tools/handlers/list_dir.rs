@@ -4,8 +4,8 @@ use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::utils_string::take_bytes_at_char_boundary;
 use async_trait::async_trait;
-use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
 

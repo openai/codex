@@ -1,0 +1,303 @@
+# Codex Multi-Agent System - Cursor IDE Rules
+
+## 🎯 プロジェクト概要
+このプロジェクトはCodex Multi-Agent Systemで、サブエージェント機構とDeep Research機能を実装しています。
+
+## 🤖 利用可能なサブエージェント
+
+### 1. Code Reviewer（コードレビュー）
+**起動コマンド**: `codex delegate code-reviewer --scope <path>`
+
+**対応言語**:
+- TypeScript/JavaScript (React, Next.js, Express, NestJS)
+- Python (Django, FastAPI, Flask)
+- Rust (Clippy, 所有権パターン)
+- C# Unity (GC最適化, ScriptableObject)
+
+**自動チェック**:
+- 型安全性
+- セキュリティ脆弱性（SQLインジェクション、XSS）
+- パフォーマンス最適化
+- ベストプラクティス準拠
+
+### 2. Researcher（調査エージェント）
+**起動コマンド**: `codex research "<query>" --depth <1-5>`
+
+**機能**:
+- Web検索（Brave, DuckDuckGo, Google, Bing）
+- 矛盾検出・クロスバリデーション
+- 引用付きレポート生成
+- 軽量フォールバック（トークン削減）
+
+### 3. Test Generator（テスト生成）
+**起動コマンド**: `codex delegate test-gen --scope <path>`
+
+**対応**:
+- Unit Test生成
+- Integration Test生成
+- E2E Test生成
+- カバレッジ分析
+
+### 4. Security Auditor（セキュリティ監査）
+**起動コマンド**: `codex delegate sec-audit --scope <path>`
+
+**スキャン対象**:
+- CVE横断検索
+- 依存関係監査
+- 静的解析
+- 脆弱性パッチ提案
+
+## 🔧 Cursor IDE統合
+
+### Composer使用時
+Composerで以下のように指示可能：
+```
+@code-reviewer このファイルをレビューして
+@researcher Reactの最新ベストプラクティスを調査
+@test-gen このモジュールのテストを生成
+@sec-audit セキュリティ脆弱性をチェック
+```
+
+### Chat使用時
+通常のチャットでも呼び出し可能：
+```
+# TypeScript専用レビュー
+@ts-reviewer src/components/
+
+# Python専用レビュー
+@python-reviewer backend/
+
+# Unity専用レビュー
+@unity-reviewer Assets/Scripts/
+```
+
+## 📋 コーディング規約
+
+### TypeScript/JavaScript
+- `any`型禁止 → 具体的な型を使用
+- `async/await`推奨（`Promise.then`回避）
+- Optional chaining (`?.`) / Nullish coalescing (`??`) 活用
+- `const`優先（`let`は必要時のみ）
+- React Hooks規則厳守
+
+### Python
+- PEP 8準拠
+- 型ヒント必須（PEP 484）
+- リスト内包表記推奨
+- `pathlib`使用（`os.path`回避）
+- Black フォーマット適用
+
+### Rust
+- Clippy lint全チェック
+- `unsafe`コード要レビュー
+- 所有権パターン厳守
+- イテレータ優先
+- `clone()`回避
+
+### C# Unity
+- Update内GC Allocation禁止
+- オブジェクトプーリング使用
+- ScriptableObject活用
+- `[SerializeField]`推奨（public変数回避）
+- Coroutine vs async適切選択
+
+## 🛡️ セキュリティポリシー
+
+### 必須チェック項目
+1. **SQLインジェクション**: パラメータ化クエリ必須
+2. **XSS対策**: 入力サニタイズ・エスケープ
+3. **CSRF対策**: トークン検証
+4. **シークレット**: ハードコード禁止（環境変数使用）
+5. **依存関係**: 脆弱性スキャン定期実行
+
+### 禁止事項
+- ❌ 生SQLクエリ実行
+- ❌ `eval()` / `exec()` 使用
+- ❌ API キーのコミット
+- ❌ `dangerouslySetInnerHTML` 無制限使用
+- ❌ `unsafe` コード（Rust、正当理由なし）
+
+## 📦 MCP ツール統合
+
+### 利用可能なMCPサーバー
+1. **Web Search MCP**: `mcp://web-search`
+   - Brave Search
+   - DuckDuckGo
+   - Google Custom Search
+   - Bing Search
+
+2. **Code Analysis MCP**: `mcp://code-analyzer`
+   - AST解析
+   - 依存関係グラフ
+   - 複雑度計算
+
+3. **Git Integration MCP**: `mcp://git`
+   - ブランチ管理
+   - コミット履歴
+   - PR作成
+
+## 🚀 Quick Actions
+
+### 1. ファイルレビュー
+```
+Cmd/Ctrl + Shift + R → 現在のファイルをレビュー
+```
+
+### 2. Deep Research
+```
+Cmd/Ctrl + Shift + S → 選択テキストで調査開始
+```
+
+### 3. テスト生成
+```
+Cmd/Ctrl + Shift + T → 現在のファイルのテスト生成
+```
+
+### 4. セキュリティスキャン
+```
+Cmd/Ctrl + Shift + A → セキュリティ監査実行
+```
+
+## 📊 パフォーマンス最適化
+
+### TypeScript/React
+- `useMemo` / `useCallback` 適切使用
+- `React.lazy` でコード分割
+- Bundle size監視（< 200KB推奨）
+- 画像最適化（WebP, lazy loading）
+
+### Python
+- リスト内包表記（ループより高速）
+- `__slots__` でメモリ削減
+- `functools.lru_cache` でキャッシュ
+- 非同期IO（asyncio）活用
+
+### Unity
+- **Update内禁止**: `new`, `GetComponent`, `Find`
+- Object Pooling実装
+- Addressables使用（Resources.Load回避）
+- LOD / Occlusion Culling有効化
+
+## 🧪 テスト要件
+
+### カバレッジ目標
+- **Unit Test**: 80%以上
+- **Integration Test**: 主要フロー100%
+- **E2E Test**: クリティカルパス100%
+
+### テストフレームワーク
+- **TypeScript**: Jest, Vitest, React Testing Library
+- **Python**: pytest, unittest
+- **Rust**: `cargo test`
+- **Unity**: Unity Test Framework, NUnit
+
+## 📝 コミット規約
+
+### Conventional Commits準拠
+```
+feat: 新機能追加
+fix: バグ修正
+docs: ドキュメント更新
+style: コードフォーマット
+refactor: リファクタリング
+test: テスト追加
+chore: ビルド・設定変更
+```
+
+### 例
+```bash
+git commit -m "feat: TypeScript code reviewer with React hooks validation"
+git commit -m "fix: SQL injection vulnerability in user query"
+git commit -m "docs: update API documentation for Deep Research"
+```
+
+## 🔄 CI/CD統合
+
+### GitHub Actions
+- サブエージェント自動レビュー
+- Deep Research レポート生成
+- セキュリティスキャン
+- パフォーマンステスト
+
+### トリガー
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize]
+  push:
+    branches: [main, develop]
+```
+
+## 📚 リソース
+
+### ドキュメント
+- `.codex/README.md` - サブエージェント詳細
+- `INSTALL_SUBAGENTS.md` - インストール手順
+- `_docs/` - 実装ログ
+
+### サンプルコマンド
+```bash
+# 多言語レビュー
+codex delegate code-reviewer --scope ./src
+
+# TypeScript専用
+codex delegate ts-reviewer --scope ./src
+
+# Deep Research（深度3）
+codex research "React Server Components best practices" --depth 3
+
+# セキュリティ監査
+codex delegate sec-audit --scope ./
+```
+
+## 🎯 AI Composer使用時の推奨プロンプト
+
+### コードレビュー
+```
+このファイルを以下の観点でレビューしてください：
+1. 型安全性（TypeScript）
+2. セキュリティ脆弱性
+3. パフォーマンス最適化
+4. ベストプラクティス準拠
+
+@code-reviewer を使用してください
+```
+
+### 調査タスク
+```
+以下のトピックを調査し、引用付きレポートを作成してください：
+"<トピック>"
+
+- 信頼できるソースから情報収集
+- 矛盾がないか検証
+- 実装例を含める
+
+@researcher を使用してください
+```
+
+### テスト生成
+```
+このモジュールの包括的なテストスイートを生成してください：
+- Unit Test
+- Integration Test
+- Edge cases
+
+カバレッジ80%以上を目指してください
+
+@test-gen を使用してください
+```
+
+## 🌟 ベストプラクティス
+
+1. **サブエージェント活用**: 専門タスクは専用エージェントに委譲
+2. **Deep Research**: 未知の技術調査時に必ず使用
+3. **セキュリティFirst**: コード変更時は必ず脆弱性チェック
+4. **テスト駆動**: 実装前にテスト生成で仕様明確化
+5. **継続的改善**: レビュー結果を次回実装に反映
+
+---
+
+**プロジェクト**: zapabob/codex  
+**バージョン**: 0.47.0-alpha.1  
+**最終更新**: 2025-10-10
+

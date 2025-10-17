@@ -98,6 +98,7 @@ async fn get_config_toml_parses_all_fields() {
             model_verbosity: Some(Verbosity::Medium),
             tools: Some(Tools {
                 web_search: Some(false),
+                deep_web_search: Some(false),
                 view_image: Some(true),
             }),
             profile: Some("test".to_string()),

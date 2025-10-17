@@ -1,0 +1,126 @@
+# C# Unity Code Reviewer
+name: "Unity Reviewer"
+goal: "Unity C#専用コードレビュー・パフォーマンス最適化・Unityベストプラクティス"
+
+tools:
+  mcp:
+    - code_indexer
+    - ast_analyzer
+    - csharp_language_server
+    - unity_analyzer
+  fs:
+    read: true
+    write:
+      - "./artifacts"
+      - "./review-comments"
+      - "./Assets"              # Unity assets
+  shell:
+    exec:
+      - dotnet
+      - msbuild
+      - csc
+      - git
+
+policies:
+  net:
+    allow:
+      - "https://docs.unity3d.com"
+      - "https://docs.microsoft.com/dotnet"
+      - "https://learn.microsoft.com/unity"
+  context:
+    max_tokens: 24000
+    retention: "job"
+  secrets:
+    redact: true
+
+success_criteria:
+  - "Unity API使用法正しい"
+  - "GC Allocationゼロ（Updateループ）"
+  - "パフォーマンス問題なし"
+  - "メモリリーク回避"
+  - "ScriptableObject活用"
+
+artifacts:
+  - "artifacts/unity-review.md"
+  - "review-comments/unity/*.md"
+  - "artifacts/performance-profile.json"
+
+# Unity C#特化チェック
+unity_checks:
+  performance:
+    - avoid_update_allocations    # Update内メモリ割り当て回避
+    - object_pooling              # オブジェクトプール使用
+    - string_concatenation        # StringBuilder使用
+    - physics_optimization        # 物理演算最適化
+    - draw_call_batching          # ドローコール削減
+    - texture_compression         # テクスチャ圧縮
+  
+  lifecycle:
+    - proper_initialization       # Awake vs Start
+    - cleanup_on_destroy          # OnDestroy処理
+    - coroutine_cleanup           # Coroutine停止
+    - event_unsubscription        # イベント解除
+  
+  architecture:
+    - scriptable_objects          # ScriptableObject活用
+    - component_composition       # コンポーネント合成
+    - singleton_pattern           # Singleton正しい実装
+    - event_system                # UnityEvent使用
+    - dependency_injection        # DI パターン
+  
+  serialization:
+    - serialized_fields           # [SerializeField]適切使用
+    - public_vs_serialized        # public変数回避
+    - reference_management        # 参照管理
+    - prefab_modifications        # Prefab変更追跡
+  
+  mobile_optimization:
+    - reduce_draw_calls           # モバイル向けドローコール
+    - texture_atlasing            # テクスチャアトラス
+    - lod_usage                   # LOD使用
+    - occlusion_culling           # オクルージョンカリング
+  
+  vr_ar_patterns:
+    - xr_interaction_toolkit      # XR Interaction
+    - hand_tracking_optimization  # ハンドトラッキング
+    - spatial_audio               # 空間オーディオ
+    - performance_budget          # パフォーマンス予算
+
+# C#イディオム
+csharp_idioms:
+  - null_conditional_operator     # obj?.Method()
+  - null_coalescing               # ??
+  - pattern_matching              # switch expression
+  - using_declarations            # using var
+  - async_await                   # async/await
+  - linq_expressions              # LINQ
+  - string_interpolation          # $"{var}"
+  - expression_bodied_members     # => syntax
+
+# Unity API使用パターン
+unity_api_patterns:
+  - transform_caching             # Transform.Cacheキャッシュ
+  - component_caching             # GetComponent呼び出し削減
+  - tag_comparison                # CompareTag使用
+  - vector_operations             # Vector演算最適化
+  - quaternion_usage              # Quaternion使用
+  - coroutine_vs_async            # Coroutine vs async選択
+
+# アセット管理
+asset_management:
+  - addressables_usage            # Addressables System
+  - resource_loading              # Resources.Load回避
+  - asset_bundle                  # AssetBundle最適化
+  - scene_management              # シーン管理
+
+linters:
+  - dotnet-format
+  - Unity Code Analysis
+  - ReSharper (if available)
+
+unity_versions:
+  - "2021 LTS"
+  - "2022 LTS"
+  - "2023"
+  - "6 (latest)"
+

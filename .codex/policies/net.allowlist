@@ -1,0 +1,34 @@
+# Network Allowlist for Sub-Agents
+# 各サブエージェントがアクセス可能なドメインを定義
+
+# セキュリティ関連
+https://nvd.nist.gov
+https://cve.mitre.org
+https://github.com
+https://security.snyk.io
+https://www.cvedetails.com
+
+# 公式ドキュメント
+https://docs.rs
+https://doc.rust-lang.org
+https://developer.mozilla.org
+https://nodejs.org
+
+# 検索・リサーチ
+https://www.google.com
+https://duckduckgo.com
+https://search.brave.com
+
+# コード・パッケージリポジトリ
+https://crates.io
+https://npmjs.com
+https://pypi.org
+https://pkg.go.dev
+
+# アーカイブ・PDF
+https://arxiv.org
+https://scholar.google.com
+
+# ワイルドカード（慎重に使用）
+# https://*  # すべてのHTTPS（必要な場合のみ）
+

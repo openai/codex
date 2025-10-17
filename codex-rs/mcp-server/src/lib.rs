@@ -22,11 +22,22 @@ use tracing_subscriber::EnvFilter;
 
 mod codex_tool_config;
 mod codex_tool_runner;
+pub mod codex_tools;
+mod custom_command_tool;
+mod custom_command_tool_handler;
+mod deep_research_tool;
+mod deep_research_tool_handler;
 mod error_code;
 mod exec_approval;
+mod hook_tool;
+mod hook_tool_handler;
 pub(crate) mod message_processor;
 mod outgoing_message;
 mod patch_approval;
+mod subagent_tool;
+mod subagent_tool_handler;
+mod supervisor_tool;
+mod supervisor_tool_handler;
 
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
@@ -34,10 +45,13 @@ use crate::outgoing_message::OutgoingMessageSender;
 
 pub use crate::codex_tool_config::CodexToolCallParam;
 pub use crate::codex_tool_config::CodexToolCallReplyParam;
+pub use crate::codex_tools::CodexMcpTool;
+pub use crate::deep_research_tool::DeepResearchToolParam;
 pub use crate::exec_approval::ExecApprovalElicitRequestParams;
 pub use crate::exec_approval::ExecApprovalResponse;
 pub use crate::patch_approval::PatchApprovalElicitRequestParams;
 pub use crate::patch_approval::PatchApprovalResponse;
+pub use crate::supervisor_tool::SupervisorToolParam;
 
 /// Size of the bounded channels used to communicate between tasks. The value
 /// is a balance between throughput and memory usage – 128 messages should be

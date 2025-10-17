@@ -1482,6 +1482,16 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
+            // サブエージェント関連イベント（TUIでは現時点で未処理）
+            EventMsg::SubAgentTaskCompleted(_)
+            | EventMsg::SubAgentTaskFailed(_)
+            | EventMsg::SubAgentProgressUpdate(_)
+            | EventMsg::SubAgentMessage(_)
+            | EventMsg::SubAgentError(_)
+            | EventMsg::SubAgentInfo(_) => {
+                // TODO: サブエージェントイベントのTUI表示実装
+                tracing::debug!("SubAgent event received (not yet displayed in TUI)");
+            }
         }
     }
 

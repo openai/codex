@@ -515,6 +515,8 @@ pub struct Tools {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_search: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub deep_web_search: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub view_image: Option<bool>,
 }
 

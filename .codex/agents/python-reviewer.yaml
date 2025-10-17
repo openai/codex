@@ -1,0 +1,105 @@
+# Python Code Reviewer
+name: "Python Reviewer"
+goal: "Python専用コードレビュー・型ヒント・Django/FastAPIベストプラクティス"
+
+tools:
+  mcp:
+    - code_indexer
+    - ast_analyzer
+    - python_language_server
+  fs:
+    read: true
+    write:
+      - "./artifacts"
+      - "./review-comments"
+  shell:
+    exec:
+      - python
+      - python3
+      - pip
+      - pylint
+      - black
+      - mypy
+      - flake8
+      - bandit
+      - pytest
+      - isort
+      - git
+
+policies:
+  net:
+    allow:
+      - "https://docs.python.org"
+      - "https://peps.python.org"
+      - "https://django-doc.readthedocs.io"
+      - "https://fastapi.tiangolo.com"
+  context:
+    max_tokens: 20000
+    retention: "job"
+  secrets:
+    redact: true
+
+success_criteria:
+  - "PEP 8準拠"
+  - "型ヒント完備"
+  - "pylintスコア9.0以上"
+  - "セキュリティ警告なし"
+  - "テストカバレッジ80%以上"
+
+artifacts:
+  - "artifacts/python-review.md"
+  - "review-comments/python/*.md"
+
+# Python特化チェック
+python_checks:
+  style:
+    - pep8_compliance          # PEP 8準拠
+    - black_formatting         # Black フォーマット
+    - isort_imports            # import順序
+    - docstring_coverage       # docstring必須
+  
+  type_safety:
+    - type_hints               # PEP 484型ヒント
+    - mypy_strict              # mypy strict mode
+    - return_type_annotations  # 戻り値型必須
+    - no_implicit_optional     # Optional明示
+  
+  code_quality:
+    - list_comprehensions      # リスト内包表記
+    - context_managers         # with statement
+    - pathlib_over_os          # pathlib推奨
+    - f_strings                # f-string推奨
+    - avoid_mutable_defaults   # mutableデフォルト引数回避
+  
+  security:
+    - sql_injection_check      # SQLインジェクション
+    - command_injection        # コマンドインジェクション
+    - hardcoded_secrets        # ハードコードシークレット
+    - unsafe_pickle            # pickle使用チェック
+  
+  django_patterns:
+    - orm_best_practices       # ORM最適化
+    - migration_safety         # マイグレーション安全性
+    - template_security        # テンプレートXSS
+    - csrf_protection          # CSRF対策
+  
+  fastapi_patterns:
+    - dependency_injection     # 依存性注入
+    - async_endpoints          # async/await
+    - pydantic_models          # Pydanticバリデーション
+    - openapi_docs             # OpenAPIドキュメント
+
+linters:
+  - pylint
+  - black
+  - mypy
+  - flake8
+  - bandit
+  - isort
+
+frameworks_support:
+  - Django
+  - FastAPI
+  - Flask
+  - pytest
+

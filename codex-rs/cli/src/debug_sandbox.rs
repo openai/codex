@@ -9,9 +9,9 @@ use codex_core::seatbelt::spawn_command_under_seatbelt;
 use codex_core::spawn::StdioPolicy;
 use codex_protocol::config_types::SandboxMode;
 
+use crate::exit_status::handle_exit_status;
 use crate::LandlockCommand;
 use crate::SeatbeltCommand;
-use crate::exit_status::handle_exit_status;
 
 pub async fn run_command_under_seatbelt(
     command: SeatbeltCommand,

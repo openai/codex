@@ -5,7 +5,10 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod agents;
 mod apply_patch;
+pub mod async_subagent_integration;
+pub mod audit_log;
 pub mod auth;
 pub mod bash;
 mod chat_completions;
@@ -14,6 +17,7 @@ mod client_common;
 pub mod codex;
 mod codex_conversation;
 pub mod token_data;
+mod utils_string;
 pub use codex_conversation::CodexConversation;
 mod command_safety;
 pub mod config;
@@ -22,6 +26,7 @@ pub mod config_loader;
 pub mod config_profile;
 pub mod config_types;
 mod conversation_history;
+pub mod custom_commands;
 pub mod custom_prompts;
 mod environment_context;
 pub mod error;
@@ -32,6 +37,8 @@ pub mod executor;
 pub mod features;
 mod flags;
 pub mod git_info;
+pub mod hooks;
+pub mod integrations;
 pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;

@@ -21,12 +21,12 @@ bytes = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
+codex-deep-research = { workspace = true }
 codex-file-search = { workspace = true }
 codex-mcp-client = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
-codex-utils-string = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
 env-flags = { workspace = true }
@@ -35,13 +35,16 @@ futures = { workspace = true }
 indexmap = { workspace = true }
 libc = { workspace = true }
 mcp-types = { workspace = true }
+once_cell = { workspace = true }
 os_info = { workspace = true }
 portable-pty = { workspace = true }
 rand = { workspace = true }
+regex = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 sha1 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }

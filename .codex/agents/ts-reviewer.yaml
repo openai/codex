@@ -1,0 +1,90 @@
+# TypeScript/JavaScript Code Reviewer
+name: "TypeScript Reviewer"
+goal: "TypeScript/JavaScript専用コードレビュー・型安全性・React/Next.jsベストプラクティス"
+
+tools:
+  mcp:
+    - code_indexer
+    - ast_analyzer
+    - typescript_language_server
+  fs:
+    read: true
+    write:
+      - "./artifacts"
+      - "./review-comments"
+  shell:
+    exec:
+      - npm
+      - npx
+      - eslint
+      - prettier
+      - tsc
+      - jest
+      - vitest
+      - git
+
+policies:
+  net:
+    allow:
+      - "https://typescript-eslint.io"
+      - "https://react.dev"
+      - "https://nextjs.org"
+      - "https://nodejs.org"
+  context:
+    max_tokens: 20000
+    retention: "job"
+  secrets:
+    redact: true
+
+success_criteria:
+  - "型安全性100%"
+  - "ESLintエラー0件"
+  - "Prettierフォーマット準拠"
+  - "Reactフック使用法正しい"
+  - "パフォーマンス懸念なし"
+
+artifacts:
+  - "artifacts/ts-review.md"
+  - "review-comments/typescript/*.md"
+
+# TypeScript特化チェック
+typescript_checks:
+  type_safety:
+    - no_any_type              # any型を避ける
+    - explicit_return_types    # 戻り値型明示
+    - strict_null_checks       # null/undefined厳密チェック
+    - no_implicit_any          # 暗黙のany禁止
+  
+  code_quality:
+    - prefer_async_await       # Promise.then → async/await
+    - use_optional_chaining    # obj?.prop
+    - use_nullish_coalescing   # ?? operator
+    - const_over_let           # 不変性優先
+    - destructuring            # 分割代入活用
+  
+  react_patterns:
+    - hooks_rules              # Hooks のルール
+    - memo_optimization        # useMemo, useCallback
+    - key_props                # list の key
+    - effect_dependencies      # useEffect 依存配列
+    - component_composition    # コンポーネント分割
+  
+  performance:
+    - avoid_inline_functions   # render内関数定義
+    - bundle_size_awareness    # バンドルサイズ
+    - lazy_loading             # 遅延ロード
+    - code_splitting           # コード分割
+
+linters:
+  - eslint
+  - prettier
+  - typescript-eslint
+
+frameworks_support:
+  - React
+  - Next.js
+  - Vue
+  - Angular
+  - Express
+  - NestJS
+

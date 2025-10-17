@@ -218,6 +218,8 @@ pub struct Config {
 
     pub tools_web_search_request: bool,
 
+    pub tools_deep_web_search: bool,
+
     pub use_experimental_streamable_shell_tool: bool,
 
     /// If set to `true`, used only the experimental unified exec tool.
@@ -938,16 +940,24 @@ pub struct ToolsToml {
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,
 
+    /// Enable deep web search with multi-level research capabilities
+    #[serde(default)]
+    pub deep_web_search: Option<bool>,
+
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
 }
 
+// Note: Tools struct is imported from codex_app_server_protocol
+// We extend it via the From impl below
+
 impl From<ToolsToml> for Tools {
-    fn from(tools_toml: ToolsToml) -> Self {
+    fn from(value: ToolsToml) -> Self {
         Self {
-            web_search: tools_toml.web_search,
-            view_image: tools_toml.view_image,
+            web_search: value.web_search,
+            deep_web_search: value.deep_web_search,
+            view_image: value.view_image,
         }
     }
 }
@@ -1295,11 +1305,19 @@ impl Config {
             include_plan_tool: include_plan_tool_flag,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
-            use_experimental_streamable_shell_tool,
-            use_experimental_unified_exec_tool,
-            use_experimental_use_rmcp_client,
-            include_view_image_tool: include_view_image_tool_flag,
-            features,
+            tools_deep_web_search: cfg
+                .tools
+                .as_ref()
+                .and_then(|t| t.deep_web_search)
+                .unwrap_or(false),
+            use_experimental_streamable_shell_tool: cfg
+                .experimental_use_exec_command_tool
+                .unwrap_or(false),
+            use_experimental_unified_exec_tool: cfg
+                .experimental_use_unified_exec_tool
+                .unwrap_or(false),
+            use_experimental_use_rmcp_client: cfg.experimental_use_rmcp_client.unwrap_or(false),
+            include_view_image_tool,
             active_profile: active_profile_name,
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
@@ -2379,6 +2397,7 @@ model_verbosity = "high"
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
+                tools_deep_web_search: false,
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
                 use_experimental_use_rmcp_client: false,

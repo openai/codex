@@ -16,12 +16,16 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+chrono = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
+codex-deep-research = { workspace = true }
 codex-protocol = { workspace = true }
+# codex-supervisor = { workspace = true }  # DISABLED: 古い実装、削除済み
 codex-utils-json-to-toml = { workspace = true }
 mcp-types = { workspace = true }
+once_cell = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
