@@ -354,7 +354,6 @@ impl UnifiedExecSessionManager {
                     cwd: req.cwd.clone(),
                 }
             }
-            fn reset_cache(&mut self) {}
             fn start_approval_async<'b>(
                 &'b mut self,
                 req: &'b OpenShellReq,
@@ -664,7 +663,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn unified_exec_persists_across_requests_jif() -> Result<(), UnifiedExecError> {
+    async fn unified_exec_persists_across_requests_jif() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
         let (session, turn) = test_session_and_turn();
@@ -705,7 +704,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn multi_unified_exec_sessions() -> Result<(), UnifiedExecError> {
+    async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
         let (session, turn) = test_session_and_turn();
@@ -756,7 +755,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unified_exec_timeouts() -> Result<(), UnifiedExecError> {
+    async fn unified_exec_timeouts() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
         let (session, turn) = test_session_and_turn();
@@ -806,7 +805,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore] // Ignored while we have a better way to test this.
-    async fn requests_with_large_timeout_are_capped() -> Result<(), UnifiedExecError> {
+    async fn requests_with_large_timeout_are_capped() -> anyhow::Result<()> {
         let (session, turn) = test_session_and_turn();
 
         let result = run_unified_exec_request(
@@ -828,7 +827,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore] // Ignored while we have a better way to test this.
-    async fn completed_commands_do_not_persist_sessions() -> Result<(), UnifiedExecError> {
+    async fn completed_commands_do_not_persist_sessions() -> anyhow::Result<()> {
         let (session, turn) = test_session_and_turn();
         let result = run_unified_exec_request(
             &session,
@@ -856,7 +855,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn reusing_completed_session_returns_unknown_session() -> Result<(), UnifiedExecError> {
+    async fn reusing_completed_session_returns_unknown_session() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
         let (session, turn) = test_session_and_turn();

@@ -14,7 +14,6 @@ use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ApprovalDecision;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;

@@ -87,8 +87,6 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         }
     }
 
-    fn reset_cache(&mut self) {}
-
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a ApplyPatchRequest,

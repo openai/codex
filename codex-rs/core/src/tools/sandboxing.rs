@@ -74,8 +74,6 @@ pub(crate) trait Approvable<Req> {
 
     fn approval_key(&self, req: &Req) -> Self::ApprovalKey;
 
-    fn reset_cache(&mut self);
-
     fn should_bypass_approval(&self, policy: AskForApproval) -> bool {
         matches!(policy, AskForApproval::Never)
     }
@@ -90,7 +88,9 @@ pub(crate) trait Approvable<Req> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SandboxablePreference {
     Auto,
+    #[allow(dead_code)] // Will be used by later tools.
     Require,
+    #[allow(dead_code)] // Will be used by later tools.
     Forbid,
 }
 
