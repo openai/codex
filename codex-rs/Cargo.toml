@@ -2,6 +2,7 @@
 members = [
     "backend-client",
     "ansi-escape",
+    "async-utils",
     "app-server",
     "app-server-protocol",
     "apply-patch",
@@ -56,6 +57,7 @@ codex-arg0 = { path = "arg0" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
+codex-async-utils = { path = "async-utils" }
 codex-exec = { path = "exec" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }

@@ -26,6 +26,7 @@ codex-mcp-client = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-async-utils = { workspace = true }
 codex-utils-string = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }

@@ -1,8 +1,8 @@
 use crate::exec::ExecToolCallOutput;
-use crate::or_cancel::CancelErr;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use crate::truncate::truncate_middle;
+use codex_async_utils::CancelErr;
 use codex_protocol::ConversationId;
 use codex_protocol::protocol::RateLimitSnapshot;
 use reqwest::StatusCode;

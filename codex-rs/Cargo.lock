@@ -900,6 +900,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-async-utils"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "pretty_assertions",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "codex-backend-client"
 version = "0.0.0"
 dependencies = [
@@ -1037,6 +1047,7 @@ dependencies = [
  "chrono",
  "codex-app-server-protocol",
  "codex-apply-patch",
+ "codex-async-utils",
  "codex-file-search",
  "codex-mcp-client",
  "codex-otel",
