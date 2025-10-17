@@ -11,13 +11,13 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
-use codex_protocol::user_input::UserInput;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_protocol::user_input::UserInput;
 
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;

@@ -1,54 +1,68 @@
+use async_channel::Sender;
 use codex_protocol::ConversationId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
-use std::collections::HashMap;
-use std::sync::Arc;
+use tracing::error;
 
-use crate::codex::Session;
-
+#[derive(Debug)]
 pub(crate) struct ItemCollector {
     thread_id: ConversationId,
     turn_id: String,
-    session: Arc<Session>,
-    items: HashMap<String, TurnItem>,
+    tx_event: Sender<Event>,
 }
 
 impl ItemCollector {
-    pub fn new(session: Arc<Session>, thread_id: ConversationId, turn_id: String) -> ItemCollector {
+    pub fn new(
+        tx_event: Sender<Event>,
+        thread_id: ConversationId,
+        turn_id: String,
+    ) -> ItemCollector {
         ItemCollector {
-            items: HashMap::new(),
-            session,
+            tx_event,
             thread_id,
             turn_id,
         }
     }
 
-    pub fn started(&mut self, item: TurnItem) {
-        self.items.insert(item.id(), item.clone());
-
-        self.session.send_event(Event {
-            id: self.turn_id.clone(),
-            msg: EventMsg::ItemStarted(ItemStartedEvent {
-                thread_id: self.thread_id,
-                turn_id: self.turn_id.clone(),
-                item,
-            }),
-        });
+    pub async fn started(&self, item: TurnItem) {
+        let err = self
+            .tx_event
+            .send(Event {
+                id: self.turn_id.clone(),
+                msg: EventMsg::ItemStarted(ItemStartedEvent {
+                    thread_id: self.thread_id,
+                    turn_id: self.turn_id.clone(),
+                    item,
+                }),
+            })
+            .await;
+        if let Err(e) = err {
+            error!("failed to send item started event: {e}");
+        }
     }
 
-    pub fn completed(&mut self, item: TurnItem) {
-        self.items.remove(&item.id());
+    pub async fn completed(&self, item: TurnItem) {
+        let err = self
+            .tx_event
+            .send(Event {
+                id: self.turn_id.clone(),
+                msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                    thread_id: self.thread_id,
+                    turn_id: self.turn_id.clone(),
+                    item,
+                }),
+            })
+            .await;
+        if let Err(e) = err {
+            error!("failed to send item completed event: {e}");
+        }
+    }
 
-        self.session.send_event(Event {
-            id: self.turn_id.clone(),
-            msg: EventMsg::ItemCompleted(ItemCompletedEvent {
-                thread_id: self.thread_id,
-                turn_id: self.turn_id.clone(),
-                item,
-            }),
-        });
+    pub async fn started_completed(&self, item: TurnItem) {
+        self.started(item.clone()).await;
+        self.completed(item).await;
     }
 }

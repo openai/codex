@@ -14,10 +14,10 @@ use codex_core::features::Feature;
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_protocol::user_input::UserInput;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::skip_if_no_network;

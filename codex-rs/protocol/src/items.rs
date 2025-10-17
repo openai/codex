@@ -14,11 +14,11 @@ pub struct UserMessageItem {
     pub content: Vec<UserInput>,
 }
 
-impl Default for UserMessageItem {
-    fn default() -> Self {
+impl UserMessageItem {
+    pub fn new(content: &[UserInput]) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            content: Vec::new(),
+            content: content.to_vec(),
         }
     }
 }

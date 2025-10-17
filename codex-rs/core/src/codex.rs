@@ -9,12 +9,15 @@ use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::function_tool::FunctionCallError;
 use crate::review_format::format_review_findings_block;
+use crate::state::ItemCollector;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::McpAuthStatus;
@@ -496,6 +499,11 @@ impl Session {
             cwd,
             is_review_mode: false,
             final_output_json_schema: None,
+            item_collector: ItemCollector::new(
+                tx_event.clone(),
+                conversation_id,
+                "turn_id".to_string(),
+            ),
         };
         let services = SessionServices {
             mcp_connection_manager,
@@ -1290,6 +1298,11 @@ async fn submission_loop(
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
                     final_output_json_schema: None,
+                    item_collector: ItemCollector::new(
+                        sess.get_tx_event().clone(),
+                        sess.conversation_id,
+                        "submission_id".to_string(),
+                    ),
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1315,7 +1328,8 @@ async fn submission_loop(
 
                 turn_context
                     .item_collector
-                    .started(TurnItem::UserMessage(UserMessageItem::new()));
+                    .started_completed(TurnItem::UserMessage(UserMessageItem::new(&items)))
+                    .await;
 
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
@@ -1388,6 +1402,11 @@ async fn submission_loop(
                         cwd,
                         is_review_mode: false,
                         final_output_json_schema,
+                        item_collector: ItemCollector::new(
+                            sess.get_tx_event().clone(),
+                            sess.conversation_id,
+                            sub.id.clone(),
+                        ),
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1411,6 +1430,11 @@ async fn submission_loop(
 
                     // Install the new persistent context for subsequent tasks/turns.
                     turn_context = Arc::new(fresh_turn_context);
+
+                    turn_context
+                        .item_collector
+                        .started_completed(TurnItem::UserMessage(UserMessageItem::new(&items)))
+                        .await;
 
                     // no current task, spawn a new one with the per-turn context
                     sess.spawn_task(Arc::clone(&turn_context), sub.id, items, RegularTask)
@@ -1674,6 +1698,11 @@ async fn spawn_review_thread(
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
         final_output_json_schema: None,
+        item_collector: ItemCollector::new(
+            sess.get_tx_event(),
+            sess.conversation_id,
+            sub_id.to_string(),
+        ),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2855,6 +2884,11 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            item_collector: ItemCollector::new(
+                tx_event.clone(),
+                conversation_id,
+                "turn_id".to_string(),
+            ),
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2923,6 +2957,11 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            item_collector: ItemCollector::new(
+                tx_event.clone(),
+                conversation_id,
+                "turn_id".to_string(),
+            ),
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),

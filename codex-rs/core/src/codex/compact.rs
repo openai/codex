@@ -12,7 +12,6 @@ use crate::protocol::CompactedItem;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
-use codex_protocol::user_input::UserInput;
 use crate::protocol::InputMessageKind;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
@@ -24,6 +23,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");

@@ -18,11 +18,11 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_protocol::user_input::UserInput;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_protocol::ConversationId;
+use codex_protocol::user_input::UserInput;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::RequestId;
@@ -284,6 +284,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::ShutdownComplete
                     | EventMsg::ViewImageToolCall(_)
                     | EventMsg::EnteredReviewMode(_)
+                    | EventMsg::ItemStarted(_)
+                    | EventMsg::ItemCompleted(_)
                     | EventMsg::ExitedReviewMode(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that

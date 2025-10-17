@@ -5,13 +5,13 @@ use tokio::fs;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
-use codex_protocol::user_input::UserInput;
 use crate::protocol::ViewImageToolCallEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::user_input::UserInput;
 
 pub struct ViewImageHandler;
 

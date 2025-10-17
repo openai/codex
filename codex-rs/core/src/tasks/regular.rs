@@ -4,8 +4,8 @@ use async_trait::async_trait;
 
 use crate::codex::TurnContext;
 use crate::codex::run_task;
-use codex_protocol::user_input::UserInput;
 use crate::state::TaskKind;
+use codex_protocol::user_input::UserInput;
 
 use super::SessionTask;
 use super::SessionTaskContext;
