@@ -359,6 +359,11 @@ env = { "API_KEY" = "value" }
 # or
 [mcp_servers.server_name.env]
 API_KEY = "value"
+# Optional: Additional list of environment variables that will be whitelisted in the MCP server's environment.
+env_vars = ["API_KEY2"]
+
+# Optional: cwd that the command will be run from
+cwd = "/Users/<user>/code/my-server"
 ```
 
 #### Streamable HTTP
@@ -513,7 +518,7 @@ crate—the events listed below—is forwarded to the exporter.
 
 Every event shares a common set of metadata fields: `event.timestamp`,
 `conversation.id`, `app.version`, `auth_mode` (when available),
-`user.account_id` (when available), `terminal.type`, `model`, and `slug`.
+`user.account_id` (when available), `user.email` (when available), `terminal.type`, `model`, and `slug`.
 
 With OTEL enabled Codex emits the following event types (in addition to the
 metadata above):
@@ -644,7 +649,7 @@ def main() -> int:
                 title = f"Codex: {assistant_message}"
             else:
                 title = "Codex: Turn Complete!"
-            input_messages = notification.get("input_messages", [])
+            input_messages = notification.get("input-messages", [])
             message = " ".join(input_messages)
             title += message
         case _:

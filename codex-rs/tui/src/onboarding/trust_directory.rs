@@ -7,8 +7,6 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::style::Styled as _;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -22,11 +20,9 @@ use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt as _;
-use crate::render::renderable::RowRenderable;
+use crate::selection_list::selection_option_row;
 
 use super::onboarding_screen::StepState;
-use unicode_width::UnicodeWidthStr;
-
 pub(crate) struct TrustDirectoryWidget {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
@@ -88,7 +84,7 @@ impl WidgetRef for &TrustDirectoryWidget {
         }
 
         for (idx, (text, selection)) in options.iter().enumerate() {
-            column.push(new_option_row(
+            column.push(selection_option_row(
                 idx,
                 text.to_string(),
                 self.highlighted == *selection,
@@ -118,30 +114,6 @@ impl WidgetRef for &TrustDirectoryWidget {
 
         column.render(area, buf);
     }
-}
-
-fn new_option_row(index: usize, label: String, is_selected: bool) -> Box<dyn Renderable> {
-    let prefix = if is_selected {
-        format!("› {}. ", index + 1)
-    } else {
-        format!("  {}. ", index + 1)
-    };
-
-    let mut style = Style::default();
-    if is_selected {
-        style = style.cyan();
-    }
-
-    let mut row = RowRenderable::new();
-    row.push(prefix.width() as u16, prefix.set_style(style));
-    row.push(
-        u16::MAX,
-        Paragraph::new(label)
-            .style(style)
-            .wrap(Wrap { trim: false }),
-    );
-
-    row.into()
 }
 
 impl KeyboardHandler for TrustDirectoryWidget {

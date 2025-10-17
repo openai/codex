@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -110,36 +111,51 @@ enum McpClientAdapter {
 }
 
 impl McpClientAdapter {
+    #[allow(clippy::too_many_arguments)]
     async fn new_stdio_client(
         use_rmcp_client: bool,
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
+        env_vars: Vec<String>,
+        cwd: Option<PathBuf>,
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
     ) -> Result<Self> {
         if use_rmcp_client {
-            let client = Arc::new(RmcpClient::new_stdio_client(program, args, env).await?);
+            let client =
+                Arc::new(RmcpClient::new_stdio_client(program, args, env, &env_vars, cwd).await?);
             client.initialize(params, Some(startup_timeout)).await?;
             Ok(McpClientAdapter::Rmcp(client))
         } else {
-            let client = Arc::new(McpClient::new_stdio_client(program, args, env).await?);
+            let client =
+                Arc::new(McpClient::new_stdio_client(program, args, env, &env_vars, cwd).await?);
             client.initialize(params, Some(startup_timeout)).await?;
             Ok(McpClientAdapter::Legacy(client))
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn new_streamable_http_client(
         server_name: String,
         url: String,
         bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
         params: mcp_types::InitializeRequestParams,
         startup_timeout: Duration,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
         let client = Arc::new(
-            RmcpClient::new_streamable_http_client(&server_name, &url, bearer_token, store_mode)
-                .await?,
+            RmcpClient::new_streamable_http_client(
+                &server_name,
+                &url,
+                bearer_token,
+                http_headers,
+                env_http_headers,
+                store_mode,
+            )
+            .await?,
         );
         client.initialize(params, Some(startup_timeout)).await?;
         Ok(McpClientAdapter::Rmcp(client))
@@ -295,7 +311,13 @@ impl McpConnectionManager {
                 };
 
                 let client = match transport {
-                    McpServerTransportConfig::Stdio { command, args, env } => {
+                    McpServerTransportConfig::Stdio {
+                        command,
+                        args,
+                        env,
+                        env_vars,
+                        cwd,
+                    } => {
                         let command_os: OsString = command.into();
                         let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
                         McpClientAdapter::new_stdio_client(
@@ -303,16 +325,25 @@ impl McpConnectionManager {
                             command_os,
                             args_os,
                             env,
+                            env_vars,
+                            cwd,
                             params,
                             startup_timeout,
                         )
                         .await
                     }
-                    McpServerTransportConfig::StreamableHttp { url, .. } => {
+                    McpServerTransportConfig::StreamableHttp {
+                        url,
+                        http_headers,
+                        env_http_headers,
+                        ..
+                    } => {
                         McpClientAdapter::new_streamable_http_client(
                             server_name.clone(),
                             url,
                             resolved_bearer_token.unwrap_or_default(),
+                            http_headers,
+                            env_http_headers,
                             params,
                             startup_timeout,
                             store_mode,

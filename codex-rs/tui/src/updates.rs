@@ -45,6 +45,8 @@ struct VersionInfo {
     latest_version: String,
     // ISO-8601 timestamp (RFC3339)
     last_checked_at: DateTime<Utc>,
+    #[serde(default)]
+    dismissed_version: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -75,12 +77,15 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
         .json::<ReleaseInfo>()
         .await?;
 
+    // Preserve any previously dismissed version if present.
+    let prev_info = read_version_info(version_file).ok();
     let info = VersionInfo {
         latest_version: latest_tag_name
             .strip_prefix("rust-v")
             .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))?
             .into(),
         last_checked_at: Utc::now(),
+        dismissed_version: prev_info.and_then(|p| p.dismissed_version),
     };
 
     let json_line = format!("{}\n", serde_json::to_string(&info)?);
@@ -96,6 +101,37 @@ fn is_newer(latest: &str, current: &str) -> Option<bool> {
         (Some(l), Some(c)) => Some(l > c),
         _ => None,
     }
+}
+
+/// Returns the latest version to show in a popup, if it should be shown.
+/// This respects the user's dismissal choice for the current latest version.
+pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
+    let version_file = version_filepath(config);
+    let latest = get_upgrade_version(config)?;
+    // If the user dismissed this exact version previously, do not show the popup.
+    if let Ok(info) = read_version_info(&version_file)
+        && info.dismissed_version.as_deref() == Some(latest.as_str())
+    {
+        return None;
+    }
+    Some(latest)
+}
+
+/// Persist a dismissal for the current latest version so we don't show
+/// the update popup again for this version.
+pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<()> {
+    let version_file = version_filepath(config);
+    let mut info = match read_version_info(&version_file) {
+        Ok(info) => info,
+        Err(_) => return Ok(()),
+    };
+    info.dismissed_version = Some(version.to_string());
+    let json_line = format!("{}\n", serde_json::to_string(&info)?);
+    if let Some(parent) = version_file.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(version_file, json_line).await?;
+    Ok(())
 }
 
 fn parse_version(v: &str) -> Option<(u64, u64, u64)> {

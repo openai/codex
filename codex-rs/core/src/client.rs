@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use crate::AuthManager;
 use crate::auth::CodexAuth;
+use crate::error::ConnectionFailedError;
+use crate::error::ResponseStreamFailed;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use bytes::Bytes;
@@ -351,7 +353,12 @@ impl ModelClient {
                 }
 
                 // spawn task to process SSE
-                let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
+                let stream = resp.bytes_stream().map_err(move |e| {
+                    CodexErr::ResponseStreamFailed(ResponseStreamFailed {
+                        source: e,
+                        request_id: request_id.clone(),
+                    })
+                });
                 tokio::spawn(process_sse(
                     stream,
                     tx_event,
@@ -431,7 +438,9 @@ impl ModelClient {
                     request_id,
                 })
             }
-            Err(e) => Err(StreamAttemptError::RetryableTransportError(e.into())),
+            Err(e) => Err(StreamAttemptError::RetryableTransportError(
+                CodexErr::ConnectionFailed(ConnectionFailedError { source: e }),
+            )),
         }
     }
 
@@ -1030,6 +1039,7 @@ mod tests {
             "test",
             "test",
             None,
+            Some("test@test.com".to_string()),
             Some(AuthMode::ChatGPT),
             false,
             "test".to_string(),

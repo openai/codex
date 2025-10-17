@@ -316,6 +316,11 @@ impl ChatComposer {
         self.sync_file_search_popup();
     }
 
+    pub(crate) fn clear_for_ctrl_c(&mut self) {
+        self.set_text_content(String::new());
+        self.history.reset_navigation();
+    }
+
     /// Get the current composer text.
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
@@ -852,10 +857,12 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
         if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-            if next_mode != self.footer_mode {
-                self.footer_mode = next_mode;
-                return (InputResult::None, true);
+            if self.is_empty() {
+                let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+                if next_mode != self.footer_mode {
+                    self.footer_mode = next_mode;
+                    return (InputResult::None, true);
+                }
             }
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
@@ -1790,6 +1797,35 @@ mod tests {
         snapshot_composer_state("footer_mode_hidden_while_typing", true, |composer| {
             type_chars_humanlike(composer, &['h']);
         });
+    }
+
+    #[test]
+    fn esc_hint_stays_hidden_with_draft_content() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            true,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['d']);
+
+        assert!(!composer.is_empty());
+        assert_eq!(composer.current_text(), "d");
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert!(!composer.esc_backtrack_hint);
     }
 
     #[test]
