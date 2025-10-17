@@ -884,10 +884,16 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
         ev_completed_with_tokens("r3", 10),
     ]);
+    let post_auto_compact_turn = sse(vec![ev_completed_with_tokens("r4", 10)]);
 
     let request_log = mount_sse_sequence(
         &server,
-        vec![first_turn, function_call_follow_up, auto_compact_turn],
+        vec![
+            first_turn,
+            function_call_follow_up,
+            auto_compact_turn,
+            post_auto_compact_turn,
+        ],
     )
     .await;
 
@@ -922,8 +928,8 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     let requests = request_log.requests();
     assert_eq!(
         requests.len(),
-        3,
-        "expected user request, function call follow-up, and auto compact requests"
+        4,
+        "expected user request, function call follow-up, auto compact, and post-compact requests"
     );
 
     let first_request = requests[0].input();
