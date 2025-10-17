@@ -9,8 +9,10 @@ pub enum ParsedCommand {
     Read {
         cmd: String,
         name: String,
-        // Full path to the file operand (absolute when determinable via preceding `cd`,
-        // otherwise as provided in the command, possibly relative).
+        /// (Best effort) Path to the file being read by the command. When
+        /// possible, this is an absolute path, though when relative, it should
+        /// be resolved against the `cwd`` that will be used to run the command
+        /// to derive the absolute path.
         path: PathBuf,
     },
     ListFiles {
