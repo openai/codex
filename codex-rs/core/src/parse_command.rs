@@ -862,8 +862,8 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
     let mut commands: Vec<ParsedCommand> = Vec::new();
     let mut cwd: Option<String> = None;
     for tokens in &parts {
-        if let Some((head, tail)) = tokens.split_first() {
-            if head == "cd" {
+        if let Some((head, tail)) = tokens.split_first()
+            && head == "cd" {
                 if let Some(dir) = tail.first() {
                     cwd = Some(match &cwd {
                         Some(base) => join_paths(base, dir),
@@ -872,7 +872,6 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
                 }
                 continue;
             }
-        }
         let parsed = summarize_main_tokens(tokens);
         let parsed = match parsed {
             ParsedCommand::Read { cmd, name, path } => {
@@ -1179,8 +1178,8 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
         let mut commands: Vec<ParsedCommand> = Vec::new();
         let mut cwd: Option<String> = None;
         for tokens in filtered_commands.into_iter() {
-            if let Some((head, tail)) = tokens.split_first() {
-                if head == "cd" {
+            if let Some((head, tail)) = tokens.split_first()
+                && head == "cd" {
                     if let Some(dir) = tail.first() {
                         cwd = Some(match &cwd {
                             Some(base) => join_paths(base, dir),
@@ -1189,7 +1188,6 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                     }
                     continue;
                 }
-            }
             let parsed = summarize_main_tokens(&tokens);
             let parsed = match parsed {
                 ParsedCommand::Read { cmd, name, path } => {
