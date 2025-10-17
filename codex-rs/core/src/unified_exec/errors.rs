@@ -1,4 +1,3 @@
-use crate::sandboxing::SandboxLaunchError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,16 +23,5 @@ impl UnifiedExecError {
 
     pub(crate) fn sandbox_denied(message: String) -> Self {
         Self::SandboxDenied { message }
-    }
-}
-
-impl From<SandboxLaunchError> for UnifiedExecError {
-    fn from(err: SandboxLaunchError) -> Self {
-        match err {
-            SandboxLaunchError::MissingCommandLine => UnifiedExecError::MissingCommandLine,
-            SandboxLaunchError::MissingLinuxSandboxExecutable => {
-                UnifiedExecError::MissingLinuxSandboxExecutable
-            }
-        }
     }
 }

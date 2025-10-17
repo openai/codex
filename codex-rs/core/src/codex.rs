@@ -2591,6 +2591,7 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2600,12 +2601,6 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-            executor: Executor::new(ExecutorConfig::new(
-                turn_context.sandbox_policy.clone(),
-                turn_context.cwd.clone(),
-                None,
-                None,
-            )),
         };
         let session = Session {
             conversation_id,
@@ -2660,6 +2655,7 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2669,12 +2665,6 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-            executor: Executor::new(ExecutorConfig::new(
-                config.sandbox_policy.clone(),
-                config.cwd.clone(),
-                None,
-                None,
-            )),
         };
         let session = Arc::new(Session {
             conversation_id,

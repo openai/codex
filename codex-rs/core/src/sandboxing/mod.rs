@@ -8,7 +8,7 @@ ready‑to‑spawn environment.
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
-use crate::exec::execute_sandbox_launch;
+use crate::exec::execute_exec_env;
 use crate::landlock::create_linux_sandbox_command_args;
 use crate::protocol::SandboxPolicy;
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
@@ -32,12 +32,13 @@ pub struct CommandSpec {
 
 #[derive(Clone, Debug)]
 pub struct ExecEnv {
-    pub program: String,
-    pub args: Vec<String>,
+    pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub timeout_ms: Option<u64>,
     pub sandbox: SandboxType,
+    pub with_escalated_permissions: Option<bool>,
+    pub justification: Option<String>,
 }
 
 pub enum SandboxPreference {
@@ -46,76 +47,10 @@ pub enum SandboxPreference {
     Forbid,
 }
 
-#[derive(Debug)]
-pub(crate) struct SandboxLaunch {
-    pub sandbox_type: SandboxType,
-    pub program: String,
-    pub args: Vec<String>,
-    pub env: HashMap<String, String>,
-}
-
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SandboxLaunchError {
-    #[error("missing command line for sandbox launch")]
-    MissingCommandLine,
+pub(crate) enum SandboxTransformError {
     #[error("missing codex-linux-sandbox executable path")]
     MissingLinuxSandboxExecutable,
-}
-
-pub(crate) fn build_launch_for_sandbox(
-    sandbox: SandboxType,
-    command: &[String],
-    sandbox_policy: &SandboxPolicy,
-    sandbox_policy_cwd: &Path,
-    codex_linux_sandbox_exe: Option<&PathBuf>,
-) -> Result<SandboxLaunch, SandboxLaunchError> {
-    let mut env = HashMap::new();
-    if !sandbox_policy.has_full_network_access() {
-        env.insert(
-            CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
-            "1".to_string(),
-        );
-    }
-
-    match sandbox {
-        SandboxType::None => {
-            let (program, args) = command
-                .split_first()
-                .ok_or(SandboxLaunchError::MissingCommandLine)?;
-            Ok(SandboxLaunch {
-                sandbox_type: SandboxType::None,
-                program: program.clone(),
-                args: args.to_vec(),
-                env,
-            })
-        }
-        SandboxType::MacosSeatbelt => {
-            env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
-            let args =
-                create_seatbelt_command_args(command.to_vec(), sandbox_policy, sandbox_policy_cwd);
-            Ok(SandboxLaunch {
-                sandbox_type: SandboxType::MacosSeatbelt,
-                program: MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string(),
-                args,
-                env,
-            })
-        }
-        SandboxType::LinuxSeccomp => {
-            let exe =
-                codex_linux_sandbox_exe.ok_or(SandboxLaunchError::MissingLinuxSandboxExecutable)?;
-            let args = create_linux_sandbox_command_args(
-                command.to_vec(),
-                sandbox_policy,
-                sandbox_policy_cwd,
-            );
-            Ok(SandboxLaunch {
-                sandbox_type: SandboxType::LinuxSeccomp,
-                program: exe.to_string_lossy().to_string(),
-                args,
-                env,
-            })
-        }
-    }
 }
 
 #[derive(Default)]
@@ -155,34 +90,61 @@ impl SandboxManager {
         }
     }
 
-    pub fn transform(
+    pub(crate) fn transform(
         &self,
         spec: &CommandSpec,
         policy: &SandboxPolicy,
         sandbox: SandboxType,
+        sandbox_policy_cwd: &Path,
         codex_linux_sandbox_exe: Option<&PathBuf>,
-    ) -> ExecEnv {
-        // Internally reuse existing builder but expose only a ready env.
-        let launch = build_launch_for_sandbox(
-            sandbox,
-            &vec_iter_to_vec([&spec.program].into_iter().chain(spec.args.iter())),
-            policy,
-            &spec.cwd,
-            codex_linux_sandbox_exe,
-        )
-        .expect("sandbox launch should be buildable with provided spec");
-
+    ) -> Result<ExecEnv, SandboxTransformError> {
         let mut env = spec.env.clone();
-        env.extend(launch.env);
+        if !policy.has_full_network_access() {
+            env.insert(
+                CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
+                "1".to_string(),
+            );
+        }
 
-        ExecEnv {
-            program: launch.program,
-            args: launch.args,
+        let mut command = Vec::with_capacity(1 + spec.args.len());
+        command.push(spec.program.clone());
+        command.extend(spec.args.iter().cloned());
+
+        let (command, sandbox_env) = match sandbox {
+            SandboxType::None => (command, HashMap::new()),
+            SandboxType::MacosSeatbelt => {
+                let mut seatbelt_env = HashMap::new();
+                seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
+                let mut args =
+                    create_seatbelt_command_args(command.clone(), policy, sandbox_policy_cwd);
+                let mut full_command = Vec::with_capacity(1 + args.len());
+                full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
+                full_command.append(&mut args);
+                (full_command, seatbelt_env)
+            }
+            SandboxType::LinuxSeccomp => {
+                let exe = codex_linux_sandbox_exe
+                    .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
+                let mut args =
+                    create_linux_sandbox_command_args(command.clone(), policy, sandbox_policy_cwd);
+                let mut full_command = Vec::with_capacity(1 + args.len());
+                full_command.push(exe.to_string_lossy().to_string());
+                full_command.append(&mut args);
+                (full_command, HashMap::new())
+            }
+        };
+
+        env.extend(sandbox_env);
+
+        Ok(ExecEnv {
+            command,
             cwd: spec.cwd.clone(),
             env,
             timeout_ms: spec.timeout_ms,
             sandbox,
-        }
+            with_escalated_permissions: spec.with_escalated_permissions,
+            justification: spec.justification.clone(),
+        })
     }
 
     pub fn denied(&self, sandbox: SandboxType, out: &ExecToolCallOutput) -> bool {
@@ -190,36 +152,10 @@ impl SandboxManager {
     }
 }
 
-fn vec_iter_to_vec<'a, I>(iter: I) -> Vec<String>
-where
-    I: Iterator<Item = &'a String>,
-{
-    iter.cloned().collect()
-}
-
 pub async fn execute_env(
     env: &ExecEnv,
     policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    // Build sandbox launch again (wrapping program/args as needed) and delegate to existing runner.
-    let launch = build_launch_for_sandbox(
-        env.sandbox,
-        &vec_iter_to_vec([&env.program].into_iter().chain(env.args.iter())),
-        policy,
-        &env.cwd,
-        None,
-    )
-    .expect("sandbox launch should be buildable");
-
-    let params = crate::exec::ExecParams {
-        command: vec![env.program.clone()],
-        cwd: env.cwd.clone(),
-        timeout_ms: env.timeout_ms,
-        env: env.env.clone(),
-        with_escalated_permissions: None,
-        justification: None,
-    };
-
-    execute_sandbox_launch(params, launch, env.sandbox, policy, stdout_stream).await
+    execute_exec_env(env.clone(), policy, stdout_stream).await
 }

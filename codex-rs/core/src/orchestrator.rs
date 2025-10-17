@@ -14,7 +14,9 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
+use crate::sandboxing::SandboxTransformError;
 use codex_protocol::protocol::AskForApproval;
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SandboxablePreference {
@@ -44,18 +46,6 @@ pub(crate) enum ToolError {
 }
 
 pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
-    fn command_spec(&self, req: &Req) -> Result<CommandSpec, ToolError>;
-
-    fn stdout_stream(&self, ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
-        Some(crate::exec::StdoutStream {
-            sub_id: ctx.sub_id.clone(),
-            call_id: ctx.call_id.clone(),
-            tx_event: ctx.session.get_tx_event(),
-        })
-    }
-
-    // Reserved for future runtimes needing sandbox binary path; omit for now.
-
     async fn run(
         &mut self,
         req: &Req,
@@ -68,15 +58,20 @@ pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: crate::exec::SandboxType,
     pub policy: &'a crate::protocol::SandboxPolicy,
     manager: &'a SandboxManager,
+    sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
 }
 
 impl<'a> SandboxAttempt<'a> {
-    pub fn env_for(&self, spec: &CommandSpec) -> crate::sandboxing::ExecEnv {
+    pub fn env_for(
+        &self,
+        spec: &CommandSpec,
+    ) -> Result<crate::sandboxing::ExecEnv, SandboxTransformError> {
         self.manager.transform(
             spec,
             self.policy,
             self.sandbox,
+            self.sandbox_cwd,
             self.codex_linux_sandbox_exe,
         )
     }
@@ -143,6 +138,7 @@ impl ToolOrchestrator {
             sandbox: initial,
             policy: &turn_ctx.sandbox_policy,
             manager: &self.sandbox,
+            sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
         };
 
@@ -160,6 +156,7 @@ impl ToolOrchestrator {
                 sandbox: crate::exec::SandboxType::None,
                 policy: &turn_ctx.sandbox_policy,
                 manager: &self.sandbox,
+                sandbox_cwd: &turn_ctx.cwd,
                 codex_linux_sandbox_exe: None,
             };
             return tool.run(req, &attempt2, tool_ctx).await;

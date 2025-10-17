@@ -23,9 +23,9 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
-use crate::sandboxing::SandboxLaunch;
-use crate::sandboxing::SandboxLaunchError;
-use crate::sandboxing::build_launch_for_sandbox;
+use crate::sandboxing::CommandSpec;
+use crate::sandboxing::ExecEnv;
+use crate::sandboxing::SandboxManager;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
@@ -88,28 +88,74 @@ pub async fn process_exec_tool_call(
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
-    let launch = build_launch_for_sandbox(
-        sandbox_type,
-        &params.command,
-        sandbox_policy,
-        sandbox_cwd,
-        codex_linux_sandbox_exe.as_ref(),
-    )
-    .map_err(CodexErr::from)?;
-    execute_sandbox_launch(params, launch, sandbox_type, sandbox_policy, stdout_stream).await
+    let ExecParams {
+        command,
+        cwd,
+        timeout_ms,
+        env,
+        with_escalated_permissions,
+        justification,
+    } = params;
+
+    let (program, args) = command.split_first().ok_or_else(|| {
+        CodexErr::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "command args are empty",
+        ))
+    })?;
+
+    let spec = CommandSpec {
+        program: program.clone(),
+        args: args.to_vec(),
+        cwd,
+        env,
+        timeout_ms,
+        with_escalated_permissions,
+        justification,
+    };
+
+    let manager = SandboxManager::new();
+    let exec_env = manager
+        .transform(
+            &spec,
+            sandbox_policy,
+            sandbox_type,
+            sandbox_cwd,
+            codex_linux_sandbox_exe.as_ref(),
+        )
+        .map_err(CodexErr::from)?;
+
+    execute_exec_env(exec_env, sandbox_policy, stdout_stream).await
 }
 
-pub(crate) async fn execute_sandbox_launch(
-    params: ExecParams,
-    launch: SandboxLaunch,
-    sandbox_type: SandboxType,
+pub(crate) async fn execute_exec_env(
+    env: ExecEnv,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
+    let ExecEnv {
+        command,
+        cwd,
+        env,
+        timeout_ms,
+        sandbox,
+        with_escalated_permissions,
+        justification,
+    } = env;
+
+    let params = ExecParams {
+        command,
+        cwd,
+        timeout_ms,
+        env,
+        with_escalated_permissions,
+        justification,
+    };
+
     let start = Instant::now();
-    let raw_output_result = spawn_with_launch(params, launch, sandbox_policy, stdout_stream).await;
+    let raw_output_result = exec(params, sandbox_policy, stdout_stream).await;
     let duration = start.elapsed();
-    finalize_exec_result(raw_output_result, sandbox_type, duration)
+    finalize_exec_result(raw_output_result, sandbox, duration)
 }
 
 fn finalize_exec_result(
@@ -171,57 +217,14 @@ fn finalize_exec_result(
     }
 }
 
-async fn spawn_with_launch(
-    params: ExecParams,
-    launch: SandboxLaunch,
-    sandbox_policy: &SandboxPolicy,
-    stdout_stream: Option<StdoutStream>,
-) -> std::result::Result<RawExecToolCallOutput, CodexErr> {
-    let ExecParams {
-        command: _,
-        cwd,
-        timeout_ms,
-        mut env,
-        with_escalated_permissions,
-        justification,
-    } = params;
-
-    let SandboxLaunch {
-        program,
-        args,
-        env: launch_env,
-        ..
-    } = launch;
-    env.extend(launch_env);
-
-    let mut command = Vec::with_capacity(1 + args.len());
-    command.push(program);
-    command.extend(args);
-
-    let updated_params = ExecParams {
-        command,
-        cwd,
-        timeout_ms,
-        env,
-        with_escalated_permissions,
-        justification,
-    };
-
-    exec(updated_params, sandbox_policy, stdout_stream).await
-}
-
 pub(crate) mod errors {
     use super::CodexErr;
-    use super::SandboxLaunchError;
+    use crate::sandboxing::SandboxTransformError;
 
-    impl From<SandboxLaunchError> for CodexErr {
-        fn from(err: SandboxLaunchError) -> Self {
+    impl From<SandboxTransformError> for CodexErr {
+        fn from(err: SandboxTransformError) -> Self {
             match err {
-                SandboxLaunchError::MissingCommandLine => CodexErr::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "command args are empty",
-                )),
-                SandboxLaunchError::MissingLinuxSandboxExecutable => {
+                SandboxTransformError::MissingLinuxSandboxExecutable => {
                     CodexErr::LandlockSandboxExecutableNotProvided
                 }
             }

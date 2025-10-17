@@ -287,7 +287,11 @@ impl UnifiedExecSessionManager {
         &self,
         env: &ExecEnv,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
-        let spawned = crate::pty::spawn_pty_process(&env.program, &env.args, &env.env)
+        let (program, args) = env
+            .command
+            .split_first()
+            .ok_or(UnifiedExecError::MissingCommandLine)?;
+        let spawned = crate::pty::spawn_pty_process(program, args, &env.env)
             .await
             .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
         UnifiedExecSession::from_spawned(spawned, env.sandbox).await
@@ -310,6 +314,24 @@ impl UnifiedExecSessionManager {
         struct OpenShellReq {
             command: Vec<String>,
             cwd: std::path::PathBuf,
+        }
+        impl<'a> OpenShellRuntime<'a> {
+            fn build_command_spec(
+                req: &OpenShellReq,
+            ) -> Result<crate::sandboxing::CommandSpec, ToolError> {
+                let (program, args) = req.command.split_first().ok_or_else(|| {
+                    ToolError::Rejected("missing command line for PTY".to_string())
+                })?;
+                Ok(crate::sandboxing::CommandSpec {
+                    program: program.clone(),
+                    args: args.to_vec(),
+                    cwd: req.cwd.clone(),
+                    env: HashMap::new(),
+                    timeout_ms: None,
+                    with_escalated_permissions: None,
+                    justification: None,
+                })
+            }
         }
         impl Sandboxable for OpenShellRuntime<'_> {
             fn sandbox_preference(&self) -> SandboxablePreference {
@@ -352,31 +374,16 @@ impl UnifiedExecSessionManager {
             }
         }
         impl<'a> ToolRuntime<OpenShellReq, UnifiedExecSession> for OpenShellRuntime<'a> {
-            fn command_spec(
-                &self,
-                req: &OpenShellReq,
-            ) -> Result<crate::sandboxing::CommandSpec, ToolError> {
-                let (program, args) = req.command.split_first().ok_or_else(|| {
-                    ToolError::Rejected("missing command line for PTY".to_string())
-                })?;
-                Ok(crate::sandboxing::CommandSpec {
-                    program: program.clone(),
-                    args: args.to_vec(),
-                    cwd: req.cwd.clone(),
-                    env: HashMap::new(),
-                    timeout_ms: None,
-                    with_escalated_permissions: None,
-                    justification: None,
-                })
-            }
             async fn run(
                 &mut self,
                 req: &OpenShellReq,
                 attempt: &SandboxAttempt<'_>,
                 _ctx: &ToolCtx<'_>,
             ) -> Result<UnifiedExecSession, ToolError> {
-                let spec = self.command_spec(req)?;
-                let env = attempt.env_for(&spec);
+                let spec = Self::build_command_spec(req)?;
+                let env = attempt
+                    .env_for(&spec)
+                    .map_err(|err| ToolError::Codex(err.into()))?;
                 self.manager
                     .open_session_with_exec_env(&env)
                     .await

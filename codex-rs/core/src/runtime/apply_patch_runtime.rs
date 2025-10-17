@@ -35,6 +35,31 @@ impl ApplyPatchRuntime {
     pub fn new() -> Self {
         Self
     }
+
+    fn build_command_spec(req: &ApplyPatchRequest) -> Result<CommandSpec, ToolError> {
+        use std::env;
+        let exe = env::current_exe()
+            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?;
+        let program = exe.to_string_lossy().to_string();
+        Ok(CommandSpec {
+            program,
+            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.patch.clone()],
+            cwd: req.cwd.clone(),
+            timeout_ms: req.timeout_ms,
+            // Run apply_patch with a minimal environment for determinism and to avoid leaks.
+            env: HashMap::new(),
+            with_escalated_permissions: None,
+            justification: None,
+        })
+    }
+
+    fn stdout_stream(ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
+        Some(crate::exec::StdoutStream {
+            sub_id: ctx.sub_id.clone(),
+            call_id: ctx.call_id.clone(),
+            tx_event: ctx.session.get_tx_event(),
+        })
+    }
 }
 
 impl Sandboxable for ApplyPatchRuntime {
@@ -87,32 +112,17 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
 }
 
 impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
-    fn command_spec(&self, req: &ApplyPatchRequest) -> Result<CommandSpec, ToolError> {
-        use std::env;
-        let exe = env::current_exe()
-            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?;
-        let program = exe.to_string_lossy().to_string();
-        Ok(CommandSpec {
-            program,
-            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.patch.clone()],
-            cwd: req.cwd.clone(),
-            timeout_ms: req.timeout_ms,
-            // Run apply_patch with a minimal environment for determinism and to avoid leaks.
-            env: HashMap::new(),
-            with_escalated_permissions: None,
-            justification: None,
-        })
-    }
-
     async fn run(
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let spec = self.command_spec(req)?;
-        let env = attempt.env_for(&spec);
-        let out = execute_env(&env, attempt.policy, self.stdout_stream(ctx))
+        let spec = Self::build_command_spec(req)?;
+        let env = attempt
+            .env_for(&spec)
+            .map_err(|err| ToolError::Codex(err.into()))?;
+        let out = execute_env(&env, attempt.policy, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)
