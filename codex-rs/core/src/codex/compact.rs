@@ -274,7 +274,8 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                sess.record_into_history(std::slice::from_ref(&item)).await;
+                sess.record_into_history(std::slice::from_ref(&item), TaskKind::Compact)
+                    .await;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
                 sess.update_rate_limits(sub_id, snapshot).await;

@@ -1,11 +1,13 @@
 //! Session-wide mutable state.
 
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 
 use crate::conversation_history::ConversationHistory;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
+use crate::state::TaskKind;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 #[derive(Default)]
@@ -25,12 +27,11 @@ impl SessionState {
     }
 
     // History helpers
-    pub(crate) fn record_items<I>(&mut self, items: I)
+    pub(crate) fn record_items<I>(&mut self, items: I, task_kind: TaskKind)
     where
-        I: IntoIterator,
-        I::Item: std::ops::Deref<Target = ResponseItem>,
+        I: IntoIterator<Item = ResponseItem>,
     {
-        self.history.record_items(items)
+        self.history.record_items(items, task_kind)
     }
 
     pub(crate) fn history_snapshot(&self) -> Vec<ResponseItem> {
@@ -39,6 +40,31 @@ impl SessionState {
 
     pub(crate) fn replace_history(&mut self, items: Vec<ResponseItem>) {
         self.history.replace(items);
+    }
+
+    pub(crate) fn clear_review_thread(&mut self) {
+        self.history.clear_review_thread();
+    }
+
+    pub(crate) fn initialize_review_history(
+        &mut self,
+        response_input: &ResponseInputItem,
+        initial_context: Vec<ResponseItem>,
+    ) {
+        self.history
+            .initialize_review_history(response_input, initial_context);
+    }
+
+    pub(crate) fn prepare_prompt_input(
+        &mut self,
+        task_kind: TaskKind,
+        pending_input: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        if !pending_input.is_empty() {
+            self.history.add_pending_input(pending_input, task_kind);
+        }
+        self.history.handle_missing_tool_call_output(task_kind);
+        self.history.prompt(task_kind)
     }
 
     // Token/rate limit helpers
