@@ -28,7 +28,7 @@ impl ModelInfo {
     }
 
     const fn default_auto_compact_limit(context_window: u64) -> i64 {
-        (context_window as i64 * 95) / 100
+        (context_window as i64 * 9) / 10
     }
 }
 
@@ -66,11 +66,11 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
         // https://platform.openai.com/docs/models/gpt-3.5-turbo
         "gpt-3.5-turbo" => Some(ModelInfo::new(16_385, 4_096)),
 
-        _ if slug.starts_with("gpt-5-codex") => Some(ModelInfo::new(258000, 128_000)),
+        _ if slug.starts_with("gpt-5-codex") => Some(ModelInfo::new(272_000, 128_000)),
 
-        _ if slug.starts_with("gpt-5") => Some(ModelInfo::new(258000, 128_000)),
+        _ if slug.starts_with("gpt-5") => Some(ModelInfo::new(272_000, 128_000)),
 
-        _ if slug.starts_with("codex-") => Some(ModelInfo::new(258000, 128_000)),
+        _ if slug.starts_with("codex-") => Some(ModelInfo::new(272_000, 128_000)),
 
         _ => None,
     }
