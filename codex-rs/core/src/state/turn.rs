@@ -9,6 +9,7 @@ use tokio::task::AbortHandle;
 use codex_protocol::models::ResponseInputItem;
 use tokio::sync::oneshot;
 
+use crate::codex::ProcessedResponseItem;
 use crate::protocol::ReviewDecision;
 use crate::tasks::SessionTask;
 
@@ -71,6 +72,7 @@ impl ActiveTurn {
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
+    pending_processed_items: Vec<ProcessedResponseItem>,
 }
 
 impl TurnState {
@@ -92,6 +94,7 @@ impl TurnState {
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
         self.pending_input.clear();
+        self.pending_processed_items.clear();
     }
 
     pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
@@ -105,6 +108,31 @@ impl TurnState {
             let mut ret = Vec::new();
             std::mem::swap(&mut ret, &mut self.pending_input);
             ret
+        }
+    }
+
+    pub(crate) fn push_processed_item(&mut self, item: ProcessedResponseItem) -> usize {
+        self.pending_processed_items.push(item);
+        self.pending_processed_items.len() - 1
+    }
+
+    pub(crate) fn take_processed_items(&mut self) -> Vec<ProcessedResponseItem> {
+        if self.pending_processed_items.is_empty() {
+            Vec::with_capacity(0)
+        } else {
+            let mut ret = Vec::new();
+            std::mem::swap(&mut ret, &mut self.pending_processed_items);
+            ret
+        }
+    }
+
+    pub(crate) fn set_processed_item_response(
+        &mut self,
+        index: usize,
+        response: Option<ResponseInputItem>,
+    ) {
+        if let Some(processed) = self.pending_processed_items.get_mut(index) {
+            processed.response = response;
         }
     }
 }

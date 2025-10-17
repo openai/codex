@@ -7,6 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::trace;
 
+use crate::codex::ProcessedResponseItem;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::protocol::Event;
@@ -94,7 +95,18 @@ impl Session {
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
-        for (sub_id, task) in self.take_all_running_tasks().await {
+        let (pending_processed_items, tasks) = self.take_all_running_tasks().await;
+        if !pending_processed_items.is_empty() {
+            // Assume all pending items belong to the same turn; use the first task's kind to
+            // determine whether this was a review task.
+            let is_review_mode = tasks
+                .first()
+                .map(|(_, task)| task.kind == TaskKind::Review)
+                .unwrap_or(false);
+            self.process_pending_items_after_abort(pending_processed_items, is_review_mode)
+                .await;
+        }
+        for (sub_id, task) in tasks {
             self.handle_task_abort(sub_id, task, reason.clone()).await;
         }
     }
@@ -125,15 +137,21 @@ impl Session {
         *active = Some(turn);
     }
 
-    async fn take_all_running_tasks(&self) -> Vec<(String, RunningTask)> {
+    async fn take_all_running_tasks(
+        &self,
+    ) -> (Vec<ProcessedResponseItem>, Vec<(String, RunningTask)>) {
         let mut active = self.active_turn.lock().await;
         match active.take() {
             Some(mut at) => {
+                let pending_processed_items = {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.take_processed_items()
+                };
                 at.clear_pending().await;
                 let tasks = at.drain_tasks();
-                tasks.into_iter().collect()
+                (pending_processed_items, tasks.into_iter().collect())
             }
-            None => Vec::new(),
+            None => (Vec::new(), Vec::new()),
         }
     }
 
