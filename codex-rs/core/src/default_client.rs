@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn test_get_codex_user_agent() {
         let user_agent = get_codex_user_agent();
-        assert!(user_agent.starts_with("codex_cli_rs/"));
+        assert!(user_agent.starts_with(&format!("{}/", originator().value)));
     }
 
     #[tokio::test]
@@ -329,7 +329,10 @@ mod tests {
         let originator_header = headers
             .get("originator")
             .expect("originator header missing");
-        assert_eq!(originator_header.to_str().unwrap(), "codex_cli_rs");
+        assert_eq!(
+            originator_header.to_str().unwrap(),
+            originator().value.as_str()
+        );
 
         // User-Agent matches the computed Codex UA for that originator
         let expected_ua = get_codex_user_agent();

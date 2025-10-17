@@ -143,13 +143,17 @@ impl McpProcess {
 
         let initialized = self.read_jsonrpc_message().await?;
         let os_info = os_info::get();
+        let originator = codex_core::default_client::originator().value.clone();
         let user_agent = format!(
-            "codex_cli_rs/0.0.0 ({} {}; {}) {} (elicitation test; 0.0.0)",
+            "{}/{env_version} ({} {}; {}) {} (elicitation test; 0.0.0)",
+            originator,
             os_info.os_type(),
             os_info.version(),
             os_info.architecture().unwrap_or("unknown"),
-            codex_core::terminal::user_agent()
+            codex_core::terminal::user_agent(),
+            env_version = env!("CARGO_PKG_VERSION")
         );
+        let server_version = env!("CARGO_PKG_VERSION");
         assert_eq!(
             JSONRPCMessage::Response(JSONRPCResponse {
                 jsonrpc: JSONRPC_VERSION.into(),
@@ -163,7 +167,7 @@ impl McpProcess {
                     "serverInfo": {
                         "name": "codex-mcp-server",
                         "title": "Codex",
-                        "version": "0.0.0",
+                        "version": server_version,
                         "user_agent": user_agent
                     },
                     "protocolVersion": mcp_types::MCP_SCHEMA_VERSION

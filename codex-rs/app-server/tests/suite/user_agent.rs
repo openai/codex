@@ -13,9 +13,15 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 async fn get_user_agent_returns_current_codex_user_agent() {
     let codex_home = TempDir::new().unwrap_or_else(|err| panic!("create tempdir: {err}"));
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[(
+            codex_core::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR,
+            None,
+        )],
+    )
+    .await
+    .expect("spawn mcp process");
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
         .await
         .expect("initialize timeout")
@@ -35,7 +41,9 @@ async fn get_user_agent_returns_current_codex_user_agent() {
 
     let os_info = os_info::get();
     let user_agent = format!(
-        "codex_cli_rs/0.0.0 ({} {}; {}) {} (codex-app-server-tests; 0.1.0)",
+        "{}/{} ({} {}; {}) {} (codex-app-server-tests; 0.1.0)",
+        codex_core::default_client::DEFAULT_ORIGINATOR,
+        env!("CARGO_PKG_VERSION"),
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
