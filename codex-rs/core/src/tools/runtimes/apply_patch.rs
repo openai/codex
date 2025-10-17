@@ -107,9 +107,6 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
             });
         }
 
-        // `apply_patch` verification/approval was already handled upstream in tools::mod
-        // via `apply_patch::apply_patch`, which requests explicit approval when needed.
-        // Avoid re-prompting here; map explicit approval to ApprovedForSession, else Approved.
         let decision = if req.user_explicitly_approved {
             ApprovalDecision::ApprovedForSession
         } else {
