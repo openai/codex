@@ -43,7 +43,7 @@ use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
-use crate::openai_tools::create_tools_json_for_responses_api;
+use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::TokenUsage;

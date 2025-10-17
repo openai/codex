@@ -1,8 +1,11 @@
 pub mod context;
 pub(crate) mod handlers;
+pub mod orchestrator;
 pub mod parallel;
 pub mod registry;
 pub mod router;
+pub mod runtimes;
+pub mod sandboxing;
 pub mod spec;
 
 use crate::apply_patch;
@@ -17,6 +20,13 @@ use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 // no longer need ExecCommandContext/ApplyPatchCommandContext in orchestrated flow
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
+use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+use crate::tools::runtimes::shell::ShellRequest;
+use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::protocol::AskForApproval;
@@ -98,16 +108,16 @@ pub(crate) async fn handle_container_exec_with_params(
 
     if let Some(exec) = apply_patch_exec {
         // Route apply_patch execution through the new orchestrator/runtime.
-        let req = crate::runtime::apply_patch_runtime::ApplyPatchRequest {
+        let req = ApplyPatchRequest {
             patch: exec.action.patch.clone(),
             cwd: params.cwd.clone(),
             timeout_ms: params.timeout_ms,
             user_explicitly_approved: exec.user_explicitly_approved_this_action,
         };
 
-        let mut orchestrator = crate::orchestrator::ToolOrchestrator::new();
-        let mut runtime = crate::runtime::apply_patch_runtime::ApplyPatchRuntime::new();
-        let tool_ctx = crate::orchestrator::ToolCtx {
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = ApplyPatchRuntime::new();
+        let tool_ctx = ToolCtx {
             session: sess.as_ref(),
             sub_id: sub_id.clone(),
             call_id: call_id.clone(),
@@ -133,30 +143,29 @@ pub(crate) async fn handle_container_exec_with_params(
                     Err(FunctionCallError::RespondToModel(content))
                 }
             }
-            Err(crate::orchestrator::ToolError::Codex(CodexErr::Sandbox(
+            Err(ToolError::Codex(CodexErr::Sandbox(
                 SandboxErr::Timeout { output },
             ))) => Err(FunctionCallError::RespondToModel(
                 format_exec_output_apply_patch(&output),
             )),
-            Err(crate::orchestrator::ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                 output,
             }))) => Err(FunctionCallError::RespondToModel(
                 format_exec_output_apply_patch(&output),
             )),
-            Err(crate::orchestrator::ToolError::Codex(err)) => {
+            Err(ToolError::Codex(err)) => {
                 let message = format!("execution error: {err:?}");
                 Err(FunctionCallError::RespondToModel(format_exec_output(
                     &message,
                 )))
             }
-            Err(crate::orchestrator::ToolError::Rejected(msg))
-            | Err(crate::orchestrator::ToolError::SandboxDenied(msg)) => {
+            Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
                 Err(FunctionCallError::RespondToModel(format_exec_output(&msg)))
             }
         }
     } else {
         // Route shell execution through the new orchestrator/runtime.
-        let req = crate::runtime::shell_runtime::ShellRequest {
+        let req = ShellRequest {
             command: params.command.clone(),
             cwd: params.cwd.clone(),
             timeout_ms: params.timeout_ms,
@@ -165,9 +174,9 @@ pub(crate) async fn handle_container_exec_with_params(
             justification: params.justification.clone(),
         };
 
-        let mut orchestrator = crate::orchestrator::ToolOrchestrator::new();
-        let mut runtime = crate::runtime::shell_runtime::ShellRuntime::new();
-        let tool_ctx = crate::orchestrator::ToolCtx {
+        let mut orchestrator = ToolOrchestrator::new();
+        let mut runtime = ShellRuntime::new();
+        let tool_ctx = ToolCtx {
             session: sess.as_ref(),
             sub_id: sub_id.clone(),
             call_id: call_id.clone(),
@@ -192,24 +201,23 @@ pub(crate) async fn handle_container_exec_with_params(
                     Err(FunctionCallError::RespondToModel(content))
                 }
             }
-            Err(crate::orchestrator::ToolError::Codex(CodexErr::Sandbox(
+            Err(ToolError::Codex(CodexErr::Sandbox(
                 SandboxErr::Timeout { output },
             ))) => Err(FunctionCallError::RespondToModel(
                 format_exec_output_apply_patch(&output),
             )),
-            Err(crate::orchestrator::ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+            Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                 output,
             }))) => Err(FunctionCallError::RespondToModel(
                 format_exec_output_apply_patch(&output),
             )),
-            Err(crate::orchestrator::ToolError::Codex(err)) => {
+            Err(ToolError::Codex(err)) => {
                 let message = format!("execution error: {err:?}");
                 Err(FunctionCallError::RespondToModel(format_exec_output(
                     &message,
                 )))
             }
-            Err(crate::orchestrator::ToolError::Rejected(msg))
-            | Err(crate::orchestrator::ToolError::SandboxDenied(msg)) => {
+            Err(ToolError::Rejected(msg)) | Err(ToolError::SandboxDenied(msg)) => {
                 Err(FunctionCallError::RespondToModel(format_exec_output(&msg)))
             }
         }

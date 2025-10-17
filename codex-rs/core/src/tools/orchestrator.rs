@@ -5,79 +5,21 @@ Central place for approvals + sandbox selection + retry semantics. Drives a
 simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry without sandbox on denial (no re‑approval thanks to caching).
 */
-use crate::approvals::Approvable;
-use crate::approvals::ApprovalCtx;
-use crate::approvals::ApprovalDecision;
-use crate::approvals::ApprovalStore;
-use crate::codex::Session;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::error::get_error_message_ui;
 use crate::exec::ExecToolCallOutput;
-use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
-use crate::sandboxing::SandboxTransformError;
 use codex_protocol::protocol::AskForApproval;
-use std::path::Path;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SandboxablePreference {
-    Auto,
-    Require,
-    Forbid,
-}
-
-pub(crate) trait Sandboxable {
-    fn sandbox_preference(&self) -> SandboxablePreference;
-    fn escalate_on_failure(&self) -> bool {
-        true
-    }
-}
-
-pub(crate) struct ToolCtx<'a> {
-    pub session: &'a Session,
-    pub sub_id: String,
-    pub call_id: String,
-}
-
-#[derive(Debug)]
-pub(crate) enum ToolError {
-    Rejected(String),
-    SandboxDenied(String),
-    Codex(CodexErr),
-}
-
-pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
-    async fn run(
-        &mut self,
-        req: &Req,
-        attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx,
-    ) -> Result<Out, ToolError>;
-}
-
-pub(crate) struct SandboxAttempt<'a> {
-    pub sandbox: crate::exec::SandboxType,
-    pub policy: &'a crate::protocol::SandboxPolicy,
-    manager: &'a SandboxManager,
-    sandbox_cwd: &'a Path,
-    pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
-}
-
-impl<'a> SandboxAttempt<'a> {
-    pub fn env_for(
-        &self,
-        spec: &CommandSpec,
-    ) -> Result<crate::sandboxing::ExecEnv, SandboxTransformError> {
-        self.manager.transform(
-            spec,
-            self.policy,
-            self.sandbox,
-            self.sandbox_cwd,
-            self.codex_linux_sandbox_exe,
-        )
-    }
-}
+use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalDecision;
+use crate::tools::sandboxing::ApprovalStore;
+use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::Sandboxable;
+use crate::tools::sandboxing::SandboxablePreference;
+use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
+use crate::tools::sandboxing::ToolRuntime;
 
 pub(crate) struct ToolOrchestrator {
     approvals: ApprovalStore,

@@ -1,4 +1,4 @@
-use crate::orchestrator::ToolError;
+use crate::tools::sandboxing::ToolError;
 use crate::sandboxing::CommandSpec;
 use std::collections::HashMap;
 use std::path::PathBuf;

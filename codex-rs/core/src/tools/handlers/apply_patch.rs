@@ -8,7 +8,7 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::exec::ExecParams;
 use crate::function_tool::FunctionCallError;
-use crate::openai_tools::JsonSchema;
+use crate::tools::spec::JsonSchema;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;

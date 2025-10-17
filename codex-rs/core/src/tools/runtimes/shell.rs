@@ -4,17 +4,19 @@ Runtime: shell
 Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
-use crate::approvals::Approvable;
-use crate::approvals::ApprovalCtx;
-use crate::approvals::ApprovalDecision;
 use crate::exec::ExecToolCallOutput;
-use crate::orchestrator::SandboxAttempt;
-use crate::orchestrator::Sandboxable;
-use crate::orchestrator::SandboxablePreference;
-use crate::orchestrator::ToolCtx;
-use crate::orchestrator::ToolError;
-use crate::orchestrator::ToolRuntime;
 use crate::sandboxing::execute_env;
+use crate::tools::sandboxing::{
+    Approvable,
+    ApprovalCtx,
+    ApprovalDecision,
+    SandboxAttempt,
+    Sandboxable,
+    SandboxablePreference,
+    ToolCtx,
+    ToolError,
+    ToolRuntime,
+};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
@@ -105,7 +107,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let spec = crate::runtime::command_spec::build_command_spec(
+        let spec = crate::tools::runtimes::command_spec::build_command_spec(
             &req.command,
             &req.cwd,
             &req.env,

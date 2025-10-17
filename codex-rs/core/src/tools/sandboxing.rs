@@ -1,21 +1,21 @@
-//! Approvals layer: request-aware approvals with session caching.
+//! Shared approvals and sandboxing traits used by tool runtimes.
 //!
-//! Defines `Approvable<Req>`, a lightweight `ApprovalStore` used to cache
-//! decisions across retries, and `ApprovalCtx` passed to runtimes when they
-//! need to ask for approval.
-/*
-Module: approvals
+//! Consolidates the approval flow primitives (`ApprovalDecision`, `ApprovalStore`,
+//! `ApprovalCtx`, `Approvable`) together with the sandbox orchestration traits
+//! and helpers (`Sandboxable`, `ToolRuntime`, `SandboxAttempt`, etc.).
 
-Request-aware approvals with a small cache to avoid re-prompting on retries.
-Defines `Approvable<Req>`, `ApprovalStore`, and `ApprovalCtx`.
-*/
 use crate::codex::Session;
+use crate::error::CodexErr;
+use crate::sandboxing::CommandSpec;
+use crate::sandboxing::SandboxManager;
+use crate::sandboxing::SandboxTransformError;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApprovalDecision {
@@ -80,13 +80,68 @@ pub(crate) trait Approvable<Req> {
         matches!(policy, AskForApproval::Never)
     }
 
-    // Optional helpers are intentionally omitted to keep the trait minimal.
-
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'a>>;
+}
 
-    // Retrying flows reuse start_approval_async; see ApprovalCtx::retry_reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SandboxablePreference {
+    Auto,
+    Require,
+    Forbid,
+}
+
+pub(crate) trait Sandboxable {
+    fn sandbox_preference(&self) -> SandboxablePreference;
+    fn escalate_on_failure(&self) -> bool {
+        true
+    }
+}
+
+pub(crate) struct ToolCtx<'a> {
+    pub session: &'a Session,
+    pub sub_id: String,
+    pub call_id: String,
+}
+
+#[derive(Debug)]
+pub(crate) enum ToolError {
+    Rejected(String),
+    SandboxDenied(String),
+    Codex(CodexErr),
+}
+
+pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
+    async fn run(
+        &mut self,
+        req: &Req,
+        attempt: &SandboxAttempt<'_>,
+        ctx: &ToolCtx,
+    ) -> Result<Out, ToolError>;
+}
+
+pub(crate) struct SandboxAttempt<'a> {
+    pub sandbox: crate::exec::SandboxType,
+    pub policy: &'a crate::protocol::SandboxPolicy,
+    pub(crate) manager: &'a SandboxManager,
+    pub(crate) sandbox_cwd: &'a Path,
+    pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
+}
+
+impl<'a> SandboxAttempt<'a> {
+    pub fn env_for(
+        &self,
+        spec: &CommandSpec,
+    ) -> Result<crate::sandboxing::ExecEnv, SandboxTransformError> {
+        self.manager.transform(
+            spec,
+            self.policy,
+            self.sandbox,
+            self.sandbox_cwd,
+            self.codex_linux_sandbox_exe,
+        )
+    }
 }

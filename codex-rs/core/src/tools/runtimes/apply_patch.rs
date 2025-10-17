@@ -5,18 +5,20 @@
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
 use crate::CODEX_APPLY_PATCH_ARG1;
-use crate::approvals::Approvable;
-use crate::approvals::ApprovalCtx;
-use crate::approvals::ApprovalDecision;
 use crate::exec::ExecToolCallOutput;
-use crate::orchestrator::SandboxAttempt;
-use crate::orchestrator::Sandboxable;
-use crate::orchestrator::SandboxablePreference;
-use crate::orchestrator::ToolCtx;
-use crate::orchestrator::ToolError;
-use crate::orchestrator::ToolRuntime;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::execute_env;
+use crate::tools::sandboxing::{
+    Approvable,
+    ApprovalCtx,
+    ApprovalDecision,
+    SandboxAttempt,
+    Sandboxable,
+    SandboxablePreference,
+    ToolCtx,
+    ToolError,
+    ToolRuntime,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 

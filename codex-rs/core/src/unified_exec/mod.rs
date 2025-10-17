@@ -32,24 +32,26 @@ use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
-use crate::approvals::Approvable;
-use crate::approvals::ApprovalCtx;
-use crate::approvals::ApprovalDecision;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
-use crate::exec_command::ExecCommandSession;
-use crate::orchestrator::SandboxAttempt;
-use crate::orchestrator::Sandboxable;
-use crate::orchestrator::SandboxablePreference;
-use crate::orchestrator::ToolCtx;
-use crate::orchestrator::ToolError;
-use crate::orchestrator::ToolOrchestrator;
-use crate::orchestrator::ToolRuntime;
-use crate::pty::SpawnedPty;
+use codex_utils_pty::ExecCommandSession;
+use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::sandboxing::{
+    Approvable,
+    ApprovalCtx,
+    ApprovalDecision,
+    SandboxAttempt,
+    Sandboxable,
+    SandboxablePreference,
+    ToolCtx,
+    ToolError,
+    ToolRuntime,
+};
+use codex_utils_pty::SpawnedPty;
 use crate::sandboxing::ExecEnv;
 use crate::truncate::truncate_middle;
 
@@ -291,7 +293,7 @@ impl UnifiedExecSessionManager {
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let spawned = crate::pty::spawn_pty_process(program, args, &env.env)
+        let spawned = codex_utils_pty::spawn_pty_process(program, args, &env.env)
             .await
             .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
         UnifiedExecSession::from_spawned(spawned, env.sandbox).await
@@ -897,3 +899,10 @@ mod tests {
         Ok(())
     }
 }
+use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::Sandboxable;
+use crate::tools::sandboxing::SandboxablePreference;
+use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
+use crate::tools::sandboxing::ToolRuntime;
