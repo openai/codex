@@ -26,6 +26,7 @@ codex-mcp-client = { workspace = true }
 codex-otel = { workspace = true, features = ["otel"] }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-async-utils = { workspace = true }
 codex-utils-string = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
@@ -47,6 +48,7 @@ shlex = { workspace = true }
 similar = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
+test-log = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = [
     "formatting",

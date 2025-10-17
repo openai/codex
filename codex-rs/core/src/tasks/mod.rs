@@ -3,9 +3,15 @@ mod regular;
 mod review;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::select;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::trace;
+use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -22,6 +28,8 @@ use crate::state::TaskKind;
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
+
+const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -49,6 +57,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         ctx: Arc<TurnContext>,
         sub_id: String,
         input: Vec<InputItem>,
+        cancellation_token: CancellationToken,
     ) -> Option<String>;
 
     async fn abort(&self, session: Arc<SessionTaskContext>, sub_id: &str) {
@@ -69,26 +78,42 @@ impl Session {
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
 
+        let cancellation_token = CancellationToken::new();
+        let done = Arc::new(Notify::new());
+
+        let done_clone = Arc::clone(&done);
         let handle = {
             let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
             let sub_clone = sub_id.clone();
+            let task_cancellation_token = cancellation_token.child_token();
             tokio::spawn(async move {
                 let last_agent_message = task_for_run
-                    .run(Arc::clone(&session_ctx), ctx, sub_clone.clone(), input)
+                    .run(
+                        Arc::clone(&session_ctx),
+                        ctx,
+                        sub_clone.clone(),
+                        input,
+                        task_cancellation_token.child_token(),
+                    )
                     .await;
-                // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                let sess = session_ctx.clone_session();
-                sess.on_task_finished(sub_clone, last_agent_message).await;
+
+                if !task_cancellation_token.is_cancelled() {
+                    // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                    let sess = session_ctx.clone_session();
+                    sess.on_task_finished(sub_clone, last_agent_message).await;
+                }
+                done_clone.notify_waiters();
             })
-            .abort_handle()
         };
 
         let running_task = RunningTask {
-            handle,
+            done,
+            handle: Arc::new(AbortOnDropHandle::new(handle)),
             kind: task_kind,
             task,
+            cancellation_token,
         };
         self.register_new_active_task(sub_id, running_task).await;
     }
@@ -143,14 +168,24 @@ impl Session {
         task: RunningTask,
         reason: TurnAbortReason,
     ) {
-        if task.handle.is_finished() {
+        if task.cancellation_token.is_cancelled() {
             return;
         }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
+        task.cancellation_token.cancel();
         let session_task = task.task;
-        let handle = task.handle;
-        handle.abort();
+
+        select! {
+            _ = task.done.notified() => {
+            },
+            _ = tokio::time::sleep(Duration::from_millis(GRACEFULL_INTERRUPTION_TIMEOUT_MS)) => {
+                warn!("task {sub_id} didn't complete gracefully after {}ms", GRACEFULL_INTERRUPTION_TIMEOUT_MS);
+            }
+        }
+
+        task.handle.abort();
+
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task.abort(session_ctx, &sub_id).await;
 
