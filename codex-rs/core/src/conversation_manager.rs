@@ -7,10 +7,16 @@ use crate::codex::compact::content_items_to_text;
 use crate::codex::compact::is_session_prefix_message;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
+use crate::cross_session::CrossSessionError;
+use crate::cross_session::CrossSessionHub;
+use crate::cross_session::RegisteredSession;
+use crate::cross_session::SessionDefaults;
+use crate::cross_session::SessionRegistration;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
+use crate::protocol::Op;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use codex_protocol::ConversationId;
@@ -22,6 +28,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::warn;
 
 /// Represents a newly created Codex conversation, including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
@@ -31,10 +38,17 @@ pub struct NewConversation {
     pub session_configured: SessionConfiguredEvent,
 }
 
+pub struct CrossSessionSpawnParams {
+    pub hub: Arc<CrossSessionHub>,
+    pub run_id: Option<String>,
+    pub role: Option<String>,
+}
+
 /// [`ConversationManager`] is responsible for creating conversations and
 /// maintaining them in memory.
 pub struct ConversationManager {
     conversations: Arc<RwLock<HashMap<ConversationId, Arc<CodexConversation>>>>,
+    cross_session_registrations: Arc<RwLock<HashMap<ConversationId, RegisteredSession>>>,
     auth_manager: Arc<AuthManager>,
     session_source: SessionSource,
 }
@@ -43,6 +57,7 @@ impl ConversationManager {
     pub fn new(auth_manager: Arc<AuthManager>, session_source: SessionSource) -> Self {
         Self {
             conversations: Arc::new(RwLock::new(HashMap::new())),
+            cross_session_registrations: Arc::new(RwLock::new(HashMap::new())),
             auth_manager,
             session_source,
         }
@@ -58,26 +73,104 @@ impl ConversationManager {
     }
 
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
-        self.spawn_conversation(config, self.auth_manager.clone())
-            .await
+        self.spawn_conversation_with_history(
+            config,
+            self.auth_manager.clone(),
+            InitialHistory::New,
+            None,
+        )
+        .await
     }
 
-    async fn spawn_conversation(
+    pub async fn new_conversation_with_cross_session(
+        &self,
+        config: Config,
+        params: CrossSessionSpawnParams,
+    ) -> CodexResult<NewConversation> {
+        self.spawn_conversation_with_history(
+            config,
+            self.auth_manager.clone(),
+            InitialHistory::New,
+            Some(params),
+        )
+        .await
+    }
+
+    async fn spawn_conversation_with_history(
         &self,
         config: Config,
         auth_manager: Arc<AuthManager>,
+        initial_history: InitialHistory,
+        cross_session: Option<CrossSessionSpawnParams>,
     ) -> CodexResult<NewConversation> {
+        let cross_session =
+            cross_session.map(|params| (SessionDefaults::from_config(&config), params));
+
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(
-            config,
-            auth_manager,
-            InitialHistory::New,
-            self.session_source,
-        )
-        .await?;
-        self.finalize_spawn(codex, conversation_id).await
+        } = Codex::spawn(config, auth_manager, initial_history, self.session_source).await?;
+
+        let new_conversation = self.finalize_spawn(codex, conversation_id).await?;
+
+        if let Some((defaults, params)) = cross_session
+            && let Err(err) = self
+                .register_cross_session(
+                    conversation_id,
+                    defaults,
+                    params,
+                    Arc::clone(&new_conversation.conversation),
+                )
+                .await
+        {
+            self.abort_conversation(conversation_id, Arc::clone(&new_conversation.conversation))
+                .await;
+            return Err(CodexErr::Fatal(format!(
+                "failed to register cross-session for conversation {conversation_id}: {err}"
+            )));
+        }
+
+        Ok(new_conversation)
+    }
+
+    async fn register_cross_session(
+        &self,
+        conversation_id: ConversationId,
+        defaults: SessionDefaults,
+        params: CrossSessionSpawnParams,
+        conversation: Arc<CodexConversation>,
+    ) -> Result<(), CrossSessionError> {
+        let CrossSessionSpawnParams { hub, run_id, role } = params;
+
+        let registration = SessionRegistration {
+            conversation_id,
+            conversation,
+            defaults,
+            run_id,
+            role,
+        };
+
+        let guard = hub.register_session(registration)?;
+        self.cross_session_registrations
+            .write()
+            .await
+            .insert(conversation_id, guard);
+        Ok(())
+    }
+
+    async fn abort_conversation(
+        &self,
+        conversation_id: ConversationId,
+        conversation: Arc<CodexConversation>,
+    ) {
+        let _ = self.remove_conversation(&conversation_id).await;
+        if let Err(err) = conversation.submit(Op::Shutdown).await {
+            warn!(
+                %conversation_id,
+                ?err,
+                "failed to shutdown conversation after cross-session registration error"
+            );
+        }
     }
 
     async fn finalize_spawn(
@@ -130,11 +223,35 @@ impl ConversationManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewConversation> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        let CodexSpawnOk {
-            codex,
-            conversation_id,
-        } = Codex::spawn(config, auth_manager, initial_history, self.session_source).await?;
-        self.finalize_spawn(codex, conversation_id).await
+        self.spawn_conversation_with_history(config, auth_manager, initial_history, None)
+            .await
+    }
+
+    pub async fn resume_conversation_from_rollout_with_cross_session(
+        &self,
+        config: Config,
+        rollout_path: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        params: CrossSessionSpawnParams,
+    ) -> CodexResult<NewConversation> {
+        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        self.spawn_conversation_with_history(config, auth_manager, initial_history, Some(params))
+            .await
+    }
+
+    pub async fn resume_conversation_with_cross_session(
+        &self,
+        config: Config,
+        rollout_path: PathBuf,
+        params: CrossSessionSpawnParams,
+    ) -> CodexResult<NewConversation> {
+        self.resume_conversation_from_rollout_with_cross_session(
+            config,
+            rollout_path,
+            self.auth_manager.clone(),
+            params,
+        )
+        .await
     }
 
     /// Removes the conversation from the manager's internal map, though the
@@ -145,6 +262,10 @@ impl ConversationManager {
         &self,
         conversation_id: &ConversationId,
     ) -> Option<Arc<CodexConversation>> {
+        self.cross_session_registrations
+            .write()
+            .await
+            .remove(conversation_id);
         self.conversations.write().await.remove(conversation_id)
     }
 
@@ -164,12 +285,23 @@ impl ConversationManager {
 
         // Spawn a new conversation with the computed initial history.
         let auth_manager = self.auth_manager.clone();
-        let CodexSpawnOk {
-            codex,
-            conversation_id,
-        } = Codex::spawn(config, auth_manager, history, self.session_source).await?;
+        self.spawn_conversation_with_history(config, auth_manager, history, None)
+            .await
+    }
 
-        self.finalize_spawn(codex, conversation_id).await
+    pub async fn fork_conversation_with_cross_session(
+        &self,
+        nth_user_message: usize,
+        config: Config,
+        path: PathBuf,
+        params: CrossSessionSpawnParams,
+    ) -> CodexResult<NewConversation> {
+        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let history = truncate_before_nth_user_message(history, nth_user_message);
+
+        let auth_manager = self.auth_manager.clone();
+        self.spawn_conversation_with_history(config, auth_manager, history, Some(params))
+            .await
     }
 }
 

@@ -68,7 +68,11 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
             auto_compact_token_limit: Some(350_000),
         }),
 
-        _ if slug.starts_with("gpt-5") => Some(ModelInfo::new(272_000, 128_000)),
+        _ if slug.starts_with("gpt-5") => Some(ModelInfo {
+            context_window: 272_000,
+            max_output_tokens: 128_000,
+            auto_compact_token_limit: Some(250_000),
+        }),
 
         _ if slug.starts_with("codex-") => Some(ModelInfo::new(272_000, 128_000)),
 

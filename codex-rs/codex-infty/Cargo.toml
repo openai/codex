@@ -1,0 +1,24 @@
+[package]
+name = "codex-infty"
+version = { workspace = true }
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+codex-core = { path = "../core" }
+codex-protocol = { path = "../protocol" }
+dirs = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "signal"] }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+futures = "0.3"
+
+[dev-dependencies]
+core_test_support = { path = "../core/tests/common" }
+tempfile = { workspace = true }
+wiremock = { workspace = true }

@@ -941,6 +941,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "assert_matches",
+ "chrono",
  "clap",
  "clap_complete",
  "codex-app-server",
@@ -951,6 +952,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-exec",
+ "codex-infty",
  "codex-login",
  "codex-mcp-server",
  "codex-process-hardening",
@@ -959,14 +961,20 @@ dependencies = [
  "codex-responses-api-proxy",
  "codex-rmcp-client",
  "codex-tui",
+ "crossterm",
  "ctor 0.5.0",
  "owo-colors",
  "predicates",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "supports-color",
  "tempfile",
+ "textwrap 0.16.2",
  "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1076,6 +1084,7 @@ dependencies = [
  "thiserror 2.0.16",
  "time",
  "tokio",
+ "tokio-stream",
  "tokio-test",
  "tokio-util",
  "toml",
@@ -1186,6 +1195,27 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.16",
  "walkdir",
+]
+
+[[package]]
+name = "codex-infty"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-core",
+ "codex-protocol",
+ "core_test_support",
+ "dirs",
+ "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]
@@ -6244,6 +6274,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

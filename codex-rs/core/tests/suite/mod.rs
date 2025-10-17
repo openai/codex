@@ -6,6 +6,7 @@ mod cli_stream;
 mod client;
 mod compact;
 mod compact_resume_fork;
+mod cross_session;
 mod exec;
 mod exec_stream_events;
 mod fork_conversation;

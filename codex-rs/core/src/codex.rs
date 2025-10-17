@@ -1034,11 +1034,16 @@ impl Session {
     }
 
     async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
+        let message = message.into();
+        warn!(
+            conversation_id = %self.conversation_id,
+            sub_id = %sub_id,
+            %message,
+            "stream error while streaming model response",
+        );
         let event = Event {
             id: sub_id.to_string(),
-            msg: EventMsg::StreamError(StreamErrorEvent {
-                message: message.into(),
-            }),
+            msg: EventMsg::StreamError(StreamErrorEvent { message }),
         };
         self.send_event(event).await;
     }

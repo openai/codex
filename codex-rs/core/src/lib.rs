@@ -13,6 +13,7 @@ mod client;
 mod client_common;
 pub mod codex;
 mod codex_conversation;
+pub mod cross_session;
 pub mod token_data;
 pub use codex_conversation::CodexConversation;
 mod command_safety;
@@ -52,6 +53,7 @@ mod event_mapping;
 pub mod review_format;
 pub use codex_protocol::protocol::InitialHistory;
 pub use conversation_manager::ConversationManager;
+pub use conversation_manager::CrossSessionSpawnParams;
 pub use conversation_manager::NewConversation;
 // Re-export common auth types for workspace consumers
 pub use auth::AuthManager;
