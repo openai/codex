@@ -809,22 +809,33 @@ async fn token_count_includes_rate_limits_snapshot() {
         _ => unreachable!(),
     };
 
-    let rate_limit_json = serde_json::to_value(&rate_limit_only).unwrap();
+    assert!(
+        rate_limit_only.info.is_none(),
+        "expected first token event to omit usage info"
+    );
+    let mut initial_snapshot = rate_limit_only
+        .rate_limits
+        .clone()
+        .expect("rate_limits missing from event");
+    let captured_at = initial_snapshot
+        .captured_at
+        .take()
+        .expect("captured_at missing from rate limit event");
+    chrono::DateTime::parse_from_rfc3339(&captured_at.to_rfc3339())
+        .expect("captured_at should be an RFC3339 timestamp");
     pretty_assertions::assert_eq!(
-        rate_limit_json,
+        serde_json::to_value(&initial_snapshot).unwrap(),
         json!({
-            "info": null,
-            "rate_limits": {
-                "primary": {
-                    "used_percent": 12.5,
-                    "window_minutes": 10,
-                    "resets_in_seconds": 1800
-                },
-                "secondary": {
-                    "used_percent": 40.0,
-                    "window_minutes": 60,
-                    "resets_in_seconds": 7200
-                }
+            "captured_at": null,
+            "primary": {
+                "used_percent": 12.5,
+                "window_minutes": 10,
+                "resets_in_seconds": 1800
+            },
+            "secondary": {
+                "used_percent": 40.0,
+                "window_minutes": 60,
+                "resets_in_seconds": 7200
             }
         })
     );
@@ -838,10 +849,25 @@ async fn token_count_includes_rate_limits_snapshot() {
         EventMsg::TokenCount(ev) => ev,
         _ => unreachable!(),
     };
-    // Assert full JSON for the final token count event (usage + rate limits)
-    let final_json = serde_json::to_value(&final_payload).unwrap();
+    let info = final_payload
+        .info
+        .clone()
+        .expect("usage info should be present in final token event");
+    let mut final_snapshot = final_payload
+        .rate_limits
+        .clone()
+        .expect("rate limits snapshot should be present in final token event");
+    let final_captured_at = final_snapshot
+        .captured_at
+        .take()
+        .expect("captured_at missing from final token count event");
+    chrono::DateTime::parse_from_rfc3339(&final_captured_at.to_rfc3339())
+        .expect("captured_at should be an RFC3339 timestamp");
     pretty_assertions::assert_eq!(
-        final_json,
+        json!({
+            "info": serde_json::to_value(&info).unwrap(),
+            "rate_limits": serde_json::to_value(&final_snapshot).unwrap()
+        }),
         json!({
             "info": {
                 "total_token_usage": {
@@ -862,6 +888,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                 "model_context_window": 272000
             },
             "rate_limits": {
+                "captured_at": null,
                 "primary": {
                     "used_percent": 12.5,
                     "window_minutes": 10,
@@ -875,13 +902,7 @@ async fn token_count_includes_rate_limits_snapshot() {
             }
         })
     );
-    let usage = final_payload
-        .info
-        .expect("token usage info should be recorded after completion");
-    assert_eq!(usage.total_token_usage.total_tokens, 123);
-    let final_snapshot = final_payload
-        .rate_limits
-        .expect("latest rate limit snapshot should be retained");
+    assert_eq!(info.total_token_usage.total_tokens, 123);
     assert_eq!(
         final_snapshot
             .primary
@@ -932,6 +953,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
     let codex = codex_fixture.codex.clone();
 
     let expected_limits = json!({
+        "captured_at": null,
         "primary": {
             "used_percent": 100.0,
             "window_minutes": 15,
@@ -958,13 +980,23 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         unreachable!();
     };
 
-    let event_json = serde_json::to_value(&event).expect("serialize token count event");
+    assert!(
+        event.info.is_none(),
+        "usage limit error token event should not include usage info"
+    );
+    let mut snapshot = event
+        .rate_limits
+        .clone()
+        .expect("rate limits missing from token count event");
+    let captured_at = snapshot
+        .captured_at
+        .take()
+        .expect("captured_at missing from event");
+    chrono::DateTime::parse_from_rfc3339(&captured_at.to_rfc3339())
+        .expect("captured_at should be an RFC3339 timestamp");
     pretty_assertions::assert_eq!(
-        event_json,
-        json!({
-            "info": null,
-            "rate_limits": expected_limits
-        })
+        serde_json::to_value(&snapshot).expect("serialize token count event"),
+        expected_limits
     );
 
     let error_event = wait_for_event(&codex, |msg| matches!(msg, EventMsg::Error(_))).await;
