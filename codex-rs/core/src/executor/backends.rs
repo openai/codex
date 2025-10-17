@@ -11,6 +11,7 @@ use crate::function_tool::FunctionCallError;
 
 pub(crate) enum ExecutionMode {
     Shell,
+    InteractiveShell,
     ApplyPatch(ApplyPatchExec),
 }
 
@@ -36,7 +37,7 @@ static APPLY_PATCH_BACKEND: ApplyPatchBackend = ApplyPatchBackend;
 
 pub(crate) fn backend_for_mode(mode: &ExecutionMode) -> &'static dyn ExecutionBackend {
     match mode {
-        ExecutionMode::Shell => &SHELL_BACKEND,
+        ExecutionMode::Shell | ExecutionMode::InteractiveShell => &SHELL_BACKEND,
         ExecutionMode::ApplyPatch(_) => &APPLY_PATCH_BACKEND,
     }
 }
@@ -52,7 +53,7 @@ impl ExecutionBackend for ShellBackend {
         _config: &ExecutorConfig,
     ) -> Result<ExecParams, FunctionCallError> {
         match mode {
-            ExecutionMode::Shell => Ok(params),
+            ExecutionMode::Shell | ExecutionMode::InteractiveShell => Ok(params),
             _ => Err(FunctionCallError::RespondToModel(
                 "shell backend invoked with non-shell mode".to_string(),
             )),
@@ -97,9 +98,11 @@ impl ExecutionBackend for ApplyPatchBackend {
                     justification: params.justification,
                 })
             }
-            ExecutionMode::Shell => Err(FunctionCallError::RespondToModel(
-                "apply_patch backend invoked without patch context".to_string(),
-            )),
+            ExecutionMode::Shell | ExecutionMode::InteractiveShell => {
+                Err(FunctionCallError::RespondToModel(
+                    "apply_patch backend invoked without patch context".to_string(),
+                ))
+            }
         }
     }
 

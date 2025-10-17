@@ -27,9 +27,12 @@ pub(crate) struct ExecCommandSession {
 
     /// Tracks whether the underlying process has exited.
     exit_status: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Captures the process exit code once it becomes available.
+    exit_code: std::sync::Arc<StdMutex<Option<i32>>>,
 }
 
 impl ExecCommandSession {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         writer_tx: mpsc::Sender<Vec<u8>>,
         output_tx: broadcast::Sender<Vec<u8>>,
@@ -38,6 +41,7 @@ impl ExecCommandSession {
         writer_handle: JoinHandle<()>,
         wait_handle: JoinHandle<()>,
         exit_status: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        exit_code: std::sync::Arc<StdMutex<Option<i32>>>,
     ) -> (Self, broadcast::Receiver<Vec<u8>>) {
         let initial_output_rx = output_tx.subscribe();
         (
@@ -49,6 +53,7 @@ impl ExecCommandSession {
                 writer_handle: StdMutex::new(Some(writer_handle)),
                 wait_handle: StdMutex::new(Some(wait_handle)),
                 exit_status,
+                exit_code,
             },
             initial_output_rx,
         )
@@ -64,6 +69,10 @@ impl ExecCommandSession {
 
     pub(crate) fn has_exited(&self) -> bool {
         self.exit_status.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn exit_code(&self) -> Option<i32> {
+        self.exit_code.lock().ok().and_then(|guard| *guard)
     }
 }
 

@@ -55,23 +55,23 @@ pub fn assess_patch_safety(
     if is_write_patch_constrained_to_writable_paths(action, sandbox_policy, cwd)
         || policy == AskForApproval::OnFailure
     {
-        // Only auto‑approve when we can actually enforce a sandbox. Otherwise
-        // fall back to asking the user because the patch may touch arbitrary
-        // paths outside the project.
-        match get_platform_sandbox() {
-            Some(sandbox_type) => SafetyCheck::AutoApprove {
-                sandbox_type,
+        if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+            // DangerFullAccess is intended to bypass sandboxing entirely.
+            SafetyCheck::AutoApprove {
+                sandbox_type: SandboxType::None,
                 user_explicitly_approved: false,
-            },
-            None if sandbox_policy == &SandboxPolicy::DangerFullAccess => {
-                // If the user has explicitly requested DangerFullAccess, then
-                // we can auto-approve even without a sandbox.
-                SafetyCheck::AutoApprove {
-                    sandbox_type: SandboxType::None,
-                    user_explicitly_approved: false,
-                }
             }
-            None => SafetyCheck::AskUser,
+        } else {
+            // Only auto‑approve when we can actually enforce a sandbox. Otherwise
+            // fall back to asking the user because the patch may touch arbitrary
+            // paths outside the project.
+            match get_platform_sandbox() {
+                Some(sandbox_type) => SafetyCheck::AutoApprove {
+                    sandbox_type,
+                    user_explicitly_approved: false,
+                },
+                None => SafetyCheck::AskUser,
+            }
         }
     } else if policy == AskForApproval::Never {
         SafetyCheck::Reject {

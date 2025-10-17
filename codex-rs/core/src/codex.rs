@@ -508,6 +508,7 @@ impl Session {
                 turn_context.sandbox_policy.clone(),
                 turn_context.cwd.clone(),
                 config.codex_linux_sandbox_exe.clone(),
+                None,
             )),
         };
 
@@ -1139,16 +1140,6 @@ impl Session {
             .await
             .map(|output| output.to_text_output())
             .map_err(FunctionCallError::RespondToModel)
-    }
-
-    pub(crate) async fn run_unified_exec_request(
-        &self,
-        request: crate::unified_exec::UnifiedExecRequest<'_>,
-    ) -> Result<crate::unified_exec::UnifiedExecResult, crate::unified_exec::UnifiedExecError> {
-        self.services
-            .unified_exec_manager
-            .handle_request(request)
-            .await
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
@@ -2847,6 +2838,7 @@ mod tests {
                 turn_context.sandbox_policy.clone(),
                 turn_context.cwd.clone(),
                 None,
+                None,
             )),
         };
         let session = Session {
@@ -2914,6 +2906,7 @@ mod tests {
             executor: Executor::new(ExecutorConfig::new(
                 config.sandbox_policy.clone(),
                 config.cwd.clone(),
+                None,
                 None,
             )),
         };

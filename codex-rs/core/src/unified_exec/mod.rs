@@ -1,23 +1,61 @@
-use portable_pty::CommandBuilder;
-use portable_pty::PtySize;
-use portable_pty::native_pty_system;
+//! Unified Exec: interactive PTY execution with session management.
+//!
+//! Purpose and responsibilities
+//! - Manages interactive PTY sessions (create, reuse, buffer output with caps).
+//! - Delegates sandbox selection, approvals, and policy decisions to the
+//!   executor (single source of truth) via `prepare_execution_plan`.
+//! - Spawns the PTY using the `SandboxLaunch` produced by the plan and reuses
+//!   `ExecutionPlan::attempt_with_retry_if` to optionally retry without a
+//!   sandbox when policy allows and the user approves.
+//! - After process exit, classifies sandbox denials using the shared
+//!   `is_likely_sandbox_denied` heuristic so denial messages stay consistent.
+//!
+//! Why not call `executor.run`?
+//! `executor.run` drives a non‑PTY (piped) execution flow end‑to‑end. Unified
+//! Exec needs an interactive PTY that persists across requests and supports
+//! streaming I/O. To keep policy logic centralized while still owning the PTY
+//! lifecycle, Unified Exec builds an `ExecutionRequest` with
+//! `ExecutionMode::InteractiveShell`, asks the executor for an
+//! `ExecutionPlan`, then performs the PTY spawn itself with the plan’s
+//! sandboxed command and environment.
+//!
+//! Handoff at a glance
+//! 1) Build `ExecutionRequest` (interactive shell).
+//! 2) `executor.update_environment(turn.sandbox_policy, turn.cwd)`.
+//! 3) `plan = executor.prepare_execution_plan(request, …)`.
+//! 4) `plan.attempt_with_retry_if(|launch| spawn_pty_process(launch), retry_on_denied)`.
+//! 5) Buffer+stream output, apply timeouts, and return `UnifiedExecResult`.
+//!
+//! This structure ensures Unified Exec benefits from the same approval,
+//! sandbox selection, and escalation rules as regular exec, while keeping the
+//! PTY/session concerns isolated here.
+
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::io::ErrorKind;
-use std::io::Read;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot::error::TryRecvError;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
+use crate::codex::Session;
+use crate::codex::TurnContext;
+use crate::exec::ExecParams;
+use crate::exec::ExecToolCallOutput;
+use crate::exec::SandboxType;
+use crate::exec::StreamOutput;
+use crate::exec::is_likely_sandbox_denied;
 use crate::exec_command::ExecCommandSession;
+use crate::executor::ExecutionMode;
+use crate::executor::ExecutionPlan;
+use crate::executor::ExecutionRequest;
+use crate::pty::SpawnedPty;
+use crate::tools::context::ExecCommandContext;
 use crate::truncate::truncate_middle;
 
 mod errors;
@@ -28,9 +66,17 @@ const DEFAULT_TIMEOUT_MS: u64 = 1_000;
 const MAX_TIMEOUT_MS: u64 = 60_000;
 const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 128 * 1024; // 128 KiB
 
+pub(crate) struct UnifiedExecContext<'a> {
+    pub session: &'a Session,
+    pub turn: &'a TurnContext,
+    pub sub_id: &'a str,
+    pub call_id: &'a str,
+    pub tool_name: &'a str,
+    pub session_id: Option<i32>,
+}
+
 #[derive(Debug)]
 pub(crate) struct UnifiedExecRequest<'a> {
-    pub session_id: Option<i32>,
     pub input_chunks: &'a [String],
     pub timeout_ms: Option<u64>,
 }
@@ -44,17 +90,19 @@ pub(crate) struct UnifiedExecResult {
 #[derive(Debug, Default)]
 pub(crate) struct UnifiedExecSessionManager {
     next_session_id: AtomicI32,
-    sessions: Mutex<HashMap<i32, ManagedUnifiedExecSession>>,
+    sessions: Mutex<HashMap<i32, UnifiedExecSession>>,
 }
 
 #[derive(Debug)]
-struct ManagedUnifiedExecSession {
+/// Wraps a PTY session with buffered output and sandbox metadata for unified exec.
+struct UnifiedExecSession {
     session: ExecCommandSession,
     output_buffer: OutputBuffer,
     /// Notifies waiters whenever new output has been appended to
     /// `output_buffer`, allowing clients to poll for fresh data.
     output_notify: Arc<Notify>,
     output_task: JoinHandle<()>,
+    sandbox_type: SandboxType,
 }
 
 #[derive(Debug, Default)]
@@ -94,15 +142,20 @@ impl OutputBufferState {
         self.total_bytes = 0;
         drained
     }
+
+    fn snapshot(&self) -> Vec<Vec<u8>> {
+        self.chunks.iter().cloned().collect()
+    }
 }
 
 type OutputBuffer = Arc<Mutex<OutputBufferState>>;
 type OutputHandles = (OutputBuffer, Arc<Notify>);
 
-impl ManagedUnifiedExecSession {
+impl UnifiedExecSession {
     fn new(
         session: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+        sandbox_type: SandboxType,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(OutputBufferState::default()));
         let output_notify = Arc::new(Notify::new());
@@ -134,6 +187,7 @@ impl ManagedUnifiedExecSession {
             output_buffer,
             output_notify,
             output_task,
+            sandbox_type,
         }
     }
 
@@ -151,18 +205,158 @@ impl ManagedUnifiedExecSession {
     fn has_exited(&self) -> bool {
         self.session.has_exited()
     }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.session.exit_code()
+    }
+
+    async fn snapshot_output(&self) -> Vec<Vec<u8>> {
+        let guard = self.output_buffer.lock().await;
+        guard.snapshot()
+    }
+
+    fn sandbox_type(&self) -> SandboxType {
+        self.sandbox_type
+    }
+
+    async fn check_for_sandbox_denial(&self) -> Result<(), UnifiedExecError> {
+        if self.sandbox_type() == SandboxType::None || !self.has_exited() {
+            return Ok(());
+        }
+
+        // Give the reader task a brief moment to flush any final PTY bytes after exit.
+        let _ =
+            tokio::time::timeout(Duration::from_millis(20), self.output_notify.notified()).await;
+
+        let collected_chunks = self.snapshot_output().await;
+        let mut aggregated: Vec<u8> = Vec::new();
+        for chunk in collected_chunks {
+            aggregated.extend_from_slice(&chunk);
+        }
+        let aggregated_text = String::from_utf8_lossy(&aggregated).to_string();
+        let exit_code = self.exit_code().unwrap_or(-1);
+
+        let exec_output = ExecToolCallOutput {
+            exit_code,
+            stdout: StreamOutput::new(aggregated_text.clone()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(aggregated_text.clone()),
+            duration: Duration::ZERO,
+            timed_out: false,
+        };
+
+        if is_likely_sandbox_denied(self.sandbox_type(), &exec_output) {
+            let (snippet, _) = truncate_middle(&aggregated_text, UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+            let message = if snippet.is_empty() {
+                format!("exit code {exit_code}")
+            } else {
+                snippet
+            };
+            return Err(UnifiedExecError::sandbox_denied(message));
+        }
+
+        Ok(())
+    }
+
+    async fn from_spawned(
+        spawned: SpawnedPty,
+        sandbox_type: SandboxType,
+    ) -> Result<Self, UnifiedExecError> {
+        let SpawnedPty {
+            session,
+            output_rx,
+            mut exit_rx,
+        } = spawned;
+        let managed = Self::new(session, output_rx, sandbox_type);
+
+        let exit_ready = match exit_rx.try_recv() {
+            Ok(_) | Err(TryRecvError::Closed) => true,
+            Err(TryRecvError::Empty) => false,
+        };
+
+        if exit_ready {
+            managed.check_for_sandbox_denial().await?;
+        }
+
+        Ok(managed)
+    }
 }
 
-impl Drop for ManagedUnifiedExecSession {
+impl Drop for UnifiedExecSession {
     fn drop(&mut self) {
         self.output_task.abort();
     }
 }
 
 impl UnifiedExecSessionManager {
+    async fn open_session_with_sandbox(
+        &self,
+        command: Vec<String>,
+        context: &UnifiedExecContext<'_>,
+    ) -> Result<UnifiedExecSession, UnifiedExecError> {
+        let executor = &context.session.services.executor;
+        let otel_event_manager = context.turn.client.get_otel_event_manager();
+        let approval_command = command.clone();
+        let exec_context = ExecCommandContext {
+            sub_id: context.sub_id.to_string(),
+            call_id: context.call_id.to_string(),
+            command_for_display: approval_command.clone(),
+            cwd: context.turn.cwd.clone(),
+            apply_patch: None,
+            tool_name: context.tool_name.to_string(),
+            otel_event_manager,
+        };
+
+        let execution_request = ExecutionRequest {
+            params: ExecParams {
+                command,
+                cwd: context.turn.cwd.clone(),
+                timeout_ms: None,
+                env: HashMap::new(),
+                with_escalated_permissions: None,
+                justification: None,
+            },
+            approval_command,
+            mode: ExecutionMode::InteractiveShell,
+            stdout_stream: None,
+            use_shell_profile: false,
+        };
+
+        // Ensure the executor's environment reflects this turn before planning
+        executor.update_environment(
+            context.turn.sandbox_policy.clone(),
+            context.turn.cwd.clone(),
+        );
+
+        let plan: ExecutionPlan = executor
+            .prepare_execution_plan(
+                execution_request,
+                context.session,
+                context.turn.approval_policy,
+                &exec_context,
+            )
+            .await
+            .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
+
+        plan.attempt_with_retry_if(
+            context.session,
+            |launch| async move {
+                let sandbox_type = launch.sandbox_type;
+                let spawned =
+                    crate::pty::spawn_pty_process(&launch.program, &launch.args, &launch.env)
+                        .await
+                        .map_err(|err| UnifiedExecError::create_session(err.to_string()))?;
+                UnifiedExecSession::from_spawned(spawned, sandbox_type).await
+            },
+            |err: &UnifiedExecError| matches!(err, UnifiedExecError::SandboxDenied { .. }),
+        )
+        .await
+    }
+
     pub async fn handle_request(
         &self,
         request: UnifiedExecRequest<'_>,
+        context: UnifiedExecContext<'_>,
     ) -> Result<UnifiedExecResult, UnifiedExecError> {
         let (timeout_ms, timeout_warning) = match request.timeout_ms {
             Some(requested) if requested > MAX_TIMEOUT_MS => (
@@ -175,13 +369,13 @@ impl UnifiedExecSessionManager {
             None => (DEFAULT_TIMEOUT_MS, None),
         };
 
-        let mut new_session: Option<ManagedUnifiedExecSession> = None;
+        let mut new_session: Option<UnifiedExecSession> = None;
         let session_id;
         let writer_tx;
         let output_buffer;
         let output_notify;
 
-        if let Some(existing_id) = request.session_id {
+        if let Some(existing_id) = context.session_id {
             let mut sessions = self.sessions.lock().await;
             match sessions.get(&existing_id) {
                 Some(session) => {
@@ -207,8 +401,7 @@ impl UnifiedExecSessionManager {
         } else {
             let command = request.input_chunks.to_vec();
             let new_id = self.next_session_id.fetch_add(1, Ordering::SeqCst);
-            let (session, initial_output_rx) = create_unified_exec_session(&command).await?;
-            let managed_session = ManagedUnifiedExecSession::new(session, initial_output_rx);
+            let managed_session = self.open_session_with_sandbox(command, &context).await?;
             let (buffer, notify) = managed_session.output_handles();
             writer_tx = managed_session.writer_sender();
             output_buffer = buffer;
@@ -217,11 +410,35 @@ impl UnifiedExecSessionManager {
             new_session = Some(managed_session);
         };
 
-        if request.session_id.is_some() {
-            let joined_input = request.input_chunks.join(" ");
-            if !joined_input.is_empty() && writer_tx.send(joined_input.into_bytes()).await.is_err()
-            {
-                return Err(UnifiedExecError::WriteToStdin);
+        if context.session_id.is_some() {
+            let mut trailing_whitespace = true;
+            for chunk in request.input_chunks {
+                if chunk.is_empty() {
+                    continue;
+                }
+
+                let leading_whitespace = chunk
+                    .chars()
+                    .next()
+                    .map(char::is_whitespace)
+                    .unwrap_or(true);
+
+                if !trailing_whitespace
+                    && !leading_whitespace
+                    && writer_tx.send(vec![b' ']).await.is_err()
+                {
+                    return Err(UnifiedExecError::WriteToStdin);
+                }
+
+                if writer_tx.send(chunk.as_bytes().to_vec()).await.is_err() {
+                    return Err(UnifiedExecError::WriteToStdin);
+                }
+
+                trailing_whitespace = chunk
+                    .chars()
+                    .next_back()
+                    .map(char::is_whitespace)
+                    .unwrap_or(trailing_whitespace);
             }
         }
 
@@ -276,7 +493,7 @@ impl UnifiedExecSessionManager {
 
         let should_store_session = if let Some(session) = new_session.as_ref() {
             !session.has_exited()
-        } else if request.session_id.is_some() {
+        } else if context.session_id.is_some() {
             let mut sessions = self.sessions.lock().await;
             if let Some(existing) = sessions.get(&session_id) {
                 if existing.has_exited() {
@@ -309,114 +526,55 @@ impl UnifiedExecSessionManager {
     }
 }
 
-async fn create_unified_exec_session(
-    command: &[String],
-) -> Result<
-    (
-        ExecCommandSession,
-        tokio::sync::broadcast::Receiver<Vec<u8>>,
-    ),
-    UnifiedExecError,
-> {
-    if command.is_empty() {
-        return Err(UnifiedExecError::MissingCommandLine);
-    }
-
-    let pty_system = native_pty_system();
-
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(UnifiedExecError::create_session)?;
-
-    // Safe thanks to the check at the top of the function.
-    let mut command_builder = CommandBuilder::new(command[0].clone());
-    for arg in &command[1..] {
-        command_builder.arg(arg);
-    }
-
-    let mut child = pair
-        .slave
-        .spawn_command(command_builder)
-        .map_err(UnifiedExecError::create_session)?;
-    let killer = child.clone_killer();
-
-    let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
-    let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(UnifiedExecError::create_session)?;
-    let output_tx_clone = output_tx.clone();
-    let reader_handle = tokio::task::spawn_blocking(move || {
-        let mut buf = [0u8; 8192];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let _ = output_tx_clone.send(buf[..n].to_vec());
-                }
-                Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
-                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(5));
-                    continue;
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(UnifiedExecError::create_session)?;
-    let writer = Arc::new(StdMutex::new(writer));
-    let writer_handle = tokio::spawn({
-        let writer = writer.clone();
-        async move {
-            while let Some(bytes) = writer_rx.recv().await {
-                let writer = writer.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    if let Ok(mut guard) = writer.lock() {
-                        use std::io::Write;
-                        let _ = guard.write_all(&bytes);
-                        let _ = guard.flush();
-                    }
-                })
-                .await;
-            }
-        }
-    });
-
-    let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = Arc::clone(&exit_status);
-    let wait_handle = tokio::task::spawn_blocking(move || {
-        let _ = child.wait();
-        wait_exit_status.store(true, Ordering::SeqCst);
-    });
-
-    let (session, initial_output_rx) = ExecCommandSession::new(
-        writer_tx,
-        output_tx,
-        killer,
-        reader_handle,
-        writer_handle,
-        wait_handle,
-        exit_status,
-    );
-    Ok((session, initial_output_rx))
-}
-
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
+
+    use crate::codex::Session;
+    use crate::codex::TurnContext;
+    use crate::codex::make_session_and_context;
+    use crate::protocol::AskForApproval;
+    use crate::protocol::SandboxPolicy;
     use core_test_support::skip_if_sandbox;
+    use std::sync::Arc;
+
+    fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
+        let (session, mut turn) = make_session_and_context();
+        turn.approval_policy = AskForApproval::Never;
+        turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        (Arc::new(session), Arc::new(turn))
+    }
+
+    async fn run_unified_exec_request(
+        session: &Arc<Session>,
+        turn: &Arc<TurnContext>,
+        session_id: Option<i32>,
+        input: Vec<String>,
+        timeout_ms: Option<u64>,
+    ) -> Result<UnifiedExecResult, UnifiedExecError> {
+        let request_input = input;
+        let request = UnifiedExecRequest {
+            input_chunks: &request_input,
+            timeout_ms,
+        };
+
+        session
+            .services
+            .unified_exec_manager
+            .handle_request(
+                request,
+                UnifiedExecContext {
+                    session,
+                    turn: turn.as_ref(),
+                    sub_id: "sub",
+                    call_id: "call",
+                    tool_name: "unified_exec",
+                    session_id,
+                },
+            )
+            .await
+    }
 
     #[test]
     fn push_chunk_trims_only_excess_bytes() {
@@ -435,158 +593,160 @@ mod tests {
         assert_eq!(buffer.chunks.pop_back().unwrap(), vec![b'b']);
     }
 
-    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unified_exec_persists_across_requests_jif() -> Result<(), UnifiedExecError> {
         skip_if_sandbox!(Ok(()));
 
-        let manager = UnifiedExecSessionManager::default();
+        let (session, turn) = test_session_and_turn();
 
-        let open_shell = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: None,
-                input_chunks: &["bash".to_string(), "-i".to_string()],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        let open_shell = run_unified_exec_request(
+            &session,
+            &turn,
+            None,
+            vec!["bash".to_string(), "-i".to_string()],
+            Some(2_500),
+        )
+        .await?;
         let session_id = open_shell.session_id.expect("expected session_id");
 
-        manager
-            .handle_request(UnifiedExecRequest {
-                session_id: Some(session_id),
-                input_chunks: &[
-                    "export".to_string(),
-                    "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
-                ],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        run_unified_exec_request(
+            &session,
+            &turn,
+            Some(session_id),
+            vec![
+                "export".to_string(),
+                "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
+            ],
+            Some(2_500),
+        )
+        .await?;
 
-        let out_2 = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: Some(session_id),
-                input_chunks: &["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        let out_2 = run_unified_exec_request(
+            &session,
+            &turn,
+            Some(session_id),
+            vec!["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
+            Some(2_500),
+        )
+        .await?;
         assert!(out_2.output.contains("codex"));
 
         Ok(())
     }
 
-    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn multi_unified_exec_sessions() -> Result<(), UnifiedExecError> {
         skip_if_sandbox!(Ok(()));
 
-        let manager = UnifiedExecSessionManager::default();
+        let (session, turn) = test_session_and_turn();
 
-        let shell_a = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: None,
-                input_chunks: &["/bin/bash".to_string(), "-i".to_string()],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        let shell_a = run_unified_exec_request(
+            &session,
+            &turn,
+            None,
+            vec!["/bin/bash".to_string(), "-i".to_string()],
+            Some(2_500),
+        )
+        .await?;
         let session_a = shell_a.session_id.expect("expected session id");
 
-        manager
-            .handle_request(UnifiedExecRequest {
-                session_id: Some(session_a),
-                input_chunks: &["export CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string()],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        run_unified_exec_request(
+            &session,
+            &turn,
+            Some(session_a),
+            vec!["export CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string()],
+            Some(2_500),
+        )
+        .await?;
 
-        let out_2 = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: None,
-                input_chunks: &[
-                    "echo".to_string(),
-                    "$CODEX_INTERACTIVE_SHELL_VAR\n".to_string(),
-                ],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        let out_2 = run_unified_exec_request(
+            &session,
+            &turn,
+            None,
+            vec![
+                "echo".to_string(),
+                "$CODEX_INTERACTIVE_SHELL_VAR\n".to_string(),
+            ],
+            Some(2_500),
+        )
+        .await?;
         assert!(!out_2.output.contains("codex"));
 
-        let out_3 = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: Some(session_a),
-                input_chunks: &["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        let out_3 = run_unified_exec_request(
+            &session,
+            &turn,
+            Some(session_a),
+            vec!["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
+            Some(2_500),
+        )
+        .await?;
         assert!(out_3.output.contains("codex"));
 
         Ok(())
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn unified_exec_timeouts() -> Result<(), UnifiedExecError> {
         skip_if_sandbox!(Ok(()));
 
-        let manager = UnifiedExecSessionManager::default();
+        let (session, turn) = test_session_and_turn();
 
-        let open_shell = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: None,
-                input_chunks: &["bash".to_string(), "-i".to_string()],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        let open_shell = run_unified_exec_request(
+            &session,
+            &turn,
+            None,
+            vec!["bash".to_string(), "-i".to_string()],
+            Some(2_500),
+        )
+        .await?;
         let session_id = open_shell.session_id.expect("expected session id");
 
-        manager
-            .handle_request(UnifiedExecRequest {
-                session_id: Some(session_id),
-                input_chunks: &[
-                    "export".to_string(),
-                    "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
-                ],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        run_unified_exec_request(
+            &session,
+            &turn,
+            Some(session_id),
+            vec![
+                "export".to_string(),
+                "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
+            ],
+            Some(2_500),
+        )
+        .await?;
 
-        let out_2 = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: Some(session_id),
-                input_chunks: &["sleep 5 && echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
-                timeout_ms: Some(10),
-            })
-            .await?;
+        let out_2 = run_unified_exec_request(
+            &session,
+            &turn,
+            Some(session_id),
+            vec!["sleep 5 && echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
+            Some(10),
+        )
+        .await?;
         assert!(!out_2.output.contains("codex"));
 
         tokio::time::sleep(Duration::from_secs(7)).await;
 
-        let empty = Vec::new();
-        let out_3 = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: Some(session_id),
-                input_chunks: &empty,
-                timeout_ms: Some(100),
-            })
-            .await?;
+        let out_3 =
+            run_unified_exec_request(&session, &turn, Some(session_id), Vec::new(), Some(100))
+                .await?;
 
         assert!(out_3.output.contains("codex"));
 
         Ok(())
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     #[ignore] // Ignored while we have a better way to test this.
     async fn requests_with_large_timeout_are_capped() -> Result<(), UnifiedExecError> {
-        let manager = UnifiedExecSessionManager::default();
+        let (session, turn) = test_session_and_turn();
 
-        let result = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: None,
-                input_chunks: &["echo".to_string(), "codex".to_string()],
-                timeout_ms: Some(120_000),
-            })
-            .await?;
+        let result = run_unified_exec_request(
+            &session,
+            &turn,
+            None,
+            vec!["echo".to_string(), "codex".to_string()],
+            Some(120_000),
+        )
+        .await?;
 
         assert!(result.output.starts_with(
             "Warning: requested timeout 120000ms exceeds maximum of 60000ms; clamping to 60000ms.\n"
@@ -596,61 +756,66 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     #[ignore] // Ignored while we have a better way to test this.
     async fn completed_commands_do_not_persist_sessions() -> Result<(), UnifiedExecError> {
-        let manager = UnifiedExecSessionManager::default();
-        let result = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: None,
-                input_chunks: &["/bin/echo".to_string(), "codex".to_string()],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        let (session, turn) = test_session_and_turn();
+        let result = run_unified_exec_request(
+            &session,
+            &turn,
+            None,
+            vec!["/bin/echo".to_string(), "codex".to_string()],
+            Some(2_500),
+        )
+        .await?;
 
         assert!(result.session_id.is_none());
         assert!(result.output.contains("codex"));
 
-        assert!(manager.sessions.lock().await.is_empty());
+        assert!(
+            session
+                .services
+                .unified_exec_manager
+                .sessions
+                .lock()
+                .await
+                .is_empty()
+        );
 
         Ok(())
     }
 
-    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reusing_completed_session_returns_unknown_session() -> Result<(), UnifiedExecError> {
         skip_if_sandbox!(Ok(()));
 
-        let manager = UnifiedExecSessionManager::default();
+        let (session, turn) = test_session_and_turn();
 
-        let open_shell = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: None,
-                input_chunks: &["/bin/bash".to_string(), "-i".to_string()],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        let open_shell = run_unified_exec_request(
+            &session,
+            &turn,
+            None,
+            vec!["/bin/bash".to_string(), "-i".to_string()],
+            Some(2_500),
+        )
+        .await?;
         let session_id = open_shell.session_id.expect("expected session id");
 
-        manager
-            .handle_request(UnifiedExecRequest {
-                session_id: Some(session_id),
-                input_chunks: &["exit\n".to_string()],
-                timeout_ms: Some(2_500),
-            })
-            .await?;
+        run_unified_exec_request(
+            &session,
+            &turn,
+            Some(session_id),
+            vec!["exit\n".to_string()],
+            Some(2_500),
+        )
+        .await?;
 
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let err = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: Some(session_id),
-                input_chunks: &[],
-                timeout_ms: Some(100),
-            })
-            .await
-            .expect_err("expected unknown session error");
+        let err =
+            run_unified_exec_request(&session, &turn, Some(session_id), Vec::new(), Some(100))
+                .await
+                .expect_err("expected unknown session error");
 
         match err {
             UnifiedExecError::UnknownSessionId { session_id: err_id } => {
@@ -659,7 +824,15 @@ mod tests {
             other => panic!("expected UnknownSessionId, got {other:?}"),
         }
 
-        assert!(!manager.sessions.lock().await.contains_key(&session_id));
+        assert!(
+            !session
+                .services
+                .unified_exec_manager
+                .sessions
+                .lock()
+                .await
+                .contains_key(&session_id)
+        );
 
         Ok(())
     }

@@ -14,7 +14,7 @@ const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl
 /// to defend against an attacker trying to inject a malicious version on the
 /// PATH. If /usr/bin/sandbox-exec has been tampered with, then the attacker
 /// already has root access.
-const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
+pub(crate) const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 
 pub async fn spawn_command_under_seatbelt(
     command: Vec<String>,
@@ -39,7 +39,7 @@ pub async fn spawn_command_under_seatbelt(
     .await
 }
 
-fn create_seatbelt_command_args(
+pub(crate) fn create_seatbelt_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,

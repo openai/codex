@@ -1,16 +1,7 @@
 use std::collections::HashMap;
-use std::io::ErrorKind;
-use std::io::Read;
-use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 
-use portable_pty::CommandBuilder;
-use portable_pty::PtySize;
-use portable_pty::native_pty_system;
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -20,6 +11,7 @@ use crate::exec_command::exec_command_params::ExecCommandParams;
 use crate::exec_command::exec_command_params::WriteStdinParams;
 use crate::exec_command::exec_command_session::ExecCommandSession;
 use crate::exec_command::session_id::SessionId;
+use crate::pty::spawn_pty_process;
 use crate::truncate::truncate_middle;
 
 #[derive(Debug, Default)]
@@ -242,102 +234,12 @@ async fn create_exec_command_session(
         login,
     } = params;
 
-    // Use the native pty implementation for the system
-    let pty_system = native_pty_system();
-
-    // Create a new pty
-    let pair = pty_system.openpty(PtySize {
-        rows: 24,
-        cols: 80,
-        pixel_width: 0,
-        pixel_height: 0,
-    })?;
-
-    // Spawn a shell into the pty
-    let mut command_builder = CommandBuilder::new(shell);
     let shell_mode_opt = if login { "-lc" } else { "-c" };
-    command_builder.arg(shell_mode_opt);
-    command_builder.arg(cmd);
+    let args = vec![shell_mode_opt.to_string(), cmd];
 
-    let mut child = pair.slave.spawn_command(command_builder)?;
-    // Obtain a killer that can signal the process independently of `.wait()`.
-    let killer = child.clone_killer();
-
-    // Channel to forward write requests to the PTY writer.
-    let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
-    // Broadcast for streaming PTY output to readers: subscribers receive from subscription time.
-    let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
-    // Reader task: drain PTY and forward chunks to output channel.
-    let mut reader = pair.master.try_clone_reader()?;
-    let output_tx_clone = output_tx.clone();
-    let reader_handle = tokio::task::spawn_blocking(move || {
-        let mut buf = [0u8; 8192];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    // Forward to broadcast; best-effort if there are subscribers.
-                    let _ = output_tx_clone.send(buf[..n].to_vec());
-                }
-                Err(ref e) if e.kind() == ErrorKind::Interrupted => {
-                    // Retry on EINTR
-                    continue;
-                }
-                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                    // We're in a blocking thread; back off briefly and retry.
-                    std::thread::sleep(Duration::from_millis(5));
-                    continue;
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    // Writer task: apply stdin writes to the PTY writer.
-    let writer = pair.master.take_writer()?;
-    let writer = Arc::new(StdMutex::new(writer));
-    let writer_handle = tokio::spawn({
-        let writer = writer.clone();
-        async move {
-            while let Some(bytes) = writer_rx.recv().await {
-                let writer = writer.clone();
-                // Perform blocking write on a blocking thread.
-                let _ = tokio::task::spawn_blocking(move || {
-                    if let Ok(mut guard) = writer.lock() {
-                        use std::io::Write;
-                        let _ = guard.write_all(&bytes);
-                        let _ = guard.flush();
-                    }
-                })
-                .await;
-            }
-        }
-    });
-
-    // Keep the child alive until it exits, then signal exit code.
-    let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-    let exit_status = Arc::new(AtomicBool::new(false));
-    let wait_exit_status = exit_status.clone();
-    let wait_handle = tokio::task::spawn_blocking(move || {
-        let code = match child.wait() {
-            Ok(status) => status.exit_code() as i32,
-            Err(_) => -1,
-        };
-        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
-        let _ = exit_tx.send(code);
-    });
-
-    // Create and store the session with channels.
-    let (session, initial_output_rx) = ExecCommandSession::new(
-        writer_tx,
-        output_tx,
-        killer,
-        reader_handle,
-        writer_handle,
-        wait_handle,
-        exit_status,
-    );
-    Ok((session, initial_output_rx, exit_rx))
+    let env = HashMap::new();
+    let spawned = spawn_pty_process(&shell, &args, &env).await?;
+    Ok((spawned.session, spawned.output_rx, spawned.exit_rx))
 }
 
 #[cfg(test)]
