@@ -568,8 +568,14 @@ impl ChatComposer {
 
     #[inline]
     fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
-        if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
-            self.handle_paste(pasted);
+        match self.paste_burst.flush_before_modified_input() {
+            FlushResult::Paste(pasted) => {
+                self.handle_paste(pasted);
+            }
+            FlushResult::Typed(ch) => {
+                self.textarea.insert_str(&ch.to_string());
+            }
+            FlushResult::None => {}
         }
         self.textarea.input(input);
         let text_after = self.textarea.text();
@@ -1137,8 +1143,14 @@ impl ChatComposer {
                     }
                 }
             }
-            if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
-                self.handle_paste(pasted);
+            match self.paste_burst.flush_before_modified_input() {
+                FlushResult::Paste(pasted) => {
+                    self.handle_paste(pasted);
+                }
+                FlushResult::Typed(ch) => {
+                    self.textarea.insert_str(&ch.to_string());
+                }
+                FlushResult::None => {}
             }
         }
 
@@ -3336,6 +3348,84 @@ mod tests {
             composer.pending_pastes.is_empty(),
             "no placeholder for small burst"
         );
+    }
+
+    #[test]
+    fn ime_telex_sequence_keeps_pending_ascii_char() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(composer.textarea.text(), "");
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('ắ'), KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(needs_redraw);
+        assert_eq!(composer.textarea.text(), "aắ");
+        assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn ime_telex_sequences_keep_initial_ascii_for_common_words() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let cases: &[(char, &[char], &str)] = &[
+            ('l', &['ỗ', 'i'], "lỗi"),
+            ('n', &['à', 'y'], "này"),
+            ('c', &['á', 'i'], "cái"),
+        ];
+
+        for (initial, trailing, expected) in cases {
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let sender = AppEventSender::new(tx);
+            let mut composer = ChatComposer::new(
+                true,
+                sender,
+                false,
+                "Ask Codex to do anything".to_string(),
+                false,
+            );
+
+            let (result, needs_redraw) = composer
+                .handle_key_event(KeyEvent::new(KeyCode::Char(*initial), KeyModifiers::NONE));
+            assert_eq!(result, InputResult::None);
+            assert!(needs_redraw);
+            assert_eq!(composer.textarea.text(), "");
+
+            for &ch in *trailing {
+                if ch.is_ascii() {
+                    std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+                    let _ = composer.flush_paste_burst_if_due();
+                }
+                let (result, needs_redraw) =
+                    composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+                assert_eq!(result, InputResult::None);
+                assert!(needs_redraw);
+            }
+
+            std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+            let _ = composer.flush_paste_burst_if_due();
+
+            assert_eq!(composer.textarea.text(), *expected);
+            assert!(composer.pending_pastes.is_empty());
+        }
     }
 
     #[test]
