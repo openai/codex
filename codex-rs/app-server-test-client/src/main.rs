@@ -77,16 +77,16 @@ fn send_message(codex_bin: String, user_message: String) -> Result<()> {
     let mut client = CodexClient::spawn(codex_bin)?;
 
     let initialize = client.initialize()?;
-    println!("< initialize response: {:?}", initialize);
+    println!("< initialize response: {initialize:?}");
 
     let conversation = client.new_conversation()?;
-    println!("< newConversation response: {:?}", conversation);
+    println!("< newConversation response: {conversation:?}");
 
     let subscription = client.add_conversation_listener(&conversation.conversation_id)?;
-    println!("< addConversationListener response: {:?}", subscription);
+    println!("< addConversationListener response: {subscription:?}");
 
     let send_response = client.send_user_message(&conversation.conversation_id, &user_message)?;
-    println!("< sendUserMessage response: {:?}", send_response);
+    println!("< sendUserMessage response: {send_response:?}");
 
     client.stream_conversation(&conversation.conversation_id)?;
 
@@ -99,17 +99,17 @@ fn test_login(codex_bin: String) -> Result<()> {
     let mut client = CodexClient::spawn(codex_bin)?;
 
     let initialize = client.initialize()?;
-    println!("< initialize response: {:?}", initialize);
+    println!("< initialize response: {initialize:?}");
 
     let login_response = client.login_chat_gpt()?;
-    println!("< loginChatGpt response: {:?}", login_response);
+    println!("< loginChatGpt response: {login_response:?}");
     println!(
         "Open the following URL in your browser to continue:\n{}",
         login_response.auth_url
     );
 
     let completion = client.wait_for_login_completion(&login_response.login_id)?;
-    println!("< loginChatGptComplete notification: {:?}", completion);
+    println!("< loginChatGptComplete notification: {completion:?}");
 
     if completion.success {
         println!("Login succeeded.");
@@ -140,7 +140,7 @@ impl CodexClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .with_context(|| format!("failed to start `{}` app-server", codex_bin))?;
+            .with_context(|| format!("failed to start `{codex_bin}` app-server"))?;
 
         let stdin = codex_app_server
             .stdin
@@ -193,7 +193,7 @@ impl CodexClient {
         let request = ClientRequest::AddConversationListener {
             request_id: request_id.clone(),
             params: AddConversationListenerParams {
-                conversation_id: conversation_id.clone(),
+                conversation_id: *conversation_id,
             },
         };
 
@@ -225,7 +225,7 @@ impl CodexClient {
         let request = ClientRequest::SendUserMessage {
             request_id: request_id.clone(),
             params: SendUserMessageParams {
-                conversation_id: conversation_id.clone(),
+                conversation_id: *conversation_id,
                 items: vec![InputItem::Text {
                     text: message.to_string(),
                 }],
@@ -263,7 +263,7 @@ impl CodexClient {
                         std::io::stdout().flush().ok();
                     }
                     EventMsg::TaskComplete(event) => {
-                        println!("\n[task complete: {:?}]", event);
+                        println!("\n[task complete: {event:?}]");
                         break;
                     }
                     EventMsg::TurnAborted(event) => {
@@ -271,7 +271,7 @@ impl CodexClient {
                         break;
                     }
                     EventMsg::Error(event) => {
-                        println!("[error] {:?}", event);
+                        println!("[error] {event:?}");
                     }
                     _ => {
                         println!("[UNKNOWN EVENT] {:?}", event.msg);
@@ -303,7 +303,7 @@ impl CodexClient {
                         );
                     }
                     ServerNotification::AuthStatusChange(status) => {
-                        println!("< authStatusChange notification: {:?}", status);
+                        println!("< authStatusChange notification: {status:?}");
                     }
                     ServerNotification::SessionConfigured(_) => {
                         // SessionConfigured notifications are unrelated to login; skip.
@@ -364,7 +364,7 @@ impl CodexClient {
         print_multiline_with_prefix("> ", &request_pretty);
 
         if let Some(stdin) = self.stdin.as_mut() {
-            writeln!(stdin, "{}", request_json)?;
+            writeln!(stdin, "{request_json}")?;
             stdin
                 .flush()
                 .context("failed to flush request to codex app-server")?;
@@ -459,7 +459,7 @@ impl CodexClient {
 
 fn print_multiline_with_prefix(prefix: &str, payload: &str) {
     for line in payload.lines() {
-        println!("{}{}", prefix, line);
+        println!("{prefix}{line}");
     }
 }
 
