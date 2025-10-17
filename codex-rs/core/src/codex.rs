@@ -1942,7 +1942,7 @@ pub(crate) async fn run_task(
                 continue;
             }
             Err(CodexErr::TurnAborted) => {
-                // Aborted turn is repored via a different event.
+                // Aborted turn is reported via a different event.
                 break;
             }
             Err(e) => {
