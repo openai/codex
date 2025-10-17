@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::codex::TurnContext;
 use crate::codex::compact;
-use crate::protocol::InputItem;
+use codex_protocol::user_input::UserInput;
 use crate::state::TaskKind;
 
 use super::SessionTask;
@@ -24,7 +24,7 @@ impl SessionTask for CompactTask {
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
         sub_id: String,
-        input: Vec<InputItem>,
+        input: Vec<UserInput>,
     ) -> Option<String> {
         compact::run_compact_task(session.clone_session(), ctx, sub_id, input).await
     }

@@ -85,7 +85,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
-use crate::protocol::InputItem;
+use codex_protocol::user_input::UserInput;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
@@ -1054,7 +1054,7 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into
-    pub async fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
+    pub async fn inject_input(&self, input: Vec<UserInput>) -> Result<(), Vec<UserInput>> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -1516,7 +1516,7 @@ async fn submission_loop(
             Op::Compact => {
                 // Attempt to inject input into current task
                 if let Err(items) = sess
-                    .inject_input(vec![InputItem::Text {
+                    .inject_input(vec![UserInput::Text {
                         text: compact::SUMMARIZATION_PROMPT.to_string(),
                     }])
                     .await
@@ -1671,7 +1671,7 @@ async fn spawn_review_thread(
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input: Vec<InputItem> = vec![InputItem::Text {
+    let input: Vec<UserInput> = vec![UserInput::Text {
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
@@ -1709,7 +1709,7 @@ pub(crate) async fn run_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,
-    input: Vec<InputItem>,
+    input: Vec<UserInput>,
     task_kind: TaskKind,
 ) -> Option<String> {
     if input.is_empty() {
@@ -2957,7 +2957,7 @@ mod tests {
             _session: Arc<SessionTaskContext>,
             _ctx: Arc<TurnContext>,
             _sub_id: String,
-            _input: Vec<InputItem>,
+            _input: Vec<UserInput>,
         ) -> Option<String> {
             loop {
                 sleep(Duration::from_secs(60)).await;
@@ -2975,7 +2975,7 @@ mod tests {
     async fn abort_regular_task_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-regular".to_string();
-        let input = vec![InputItem::Text {
+        let input = vec![UserInput::Text {
             text: "hello".to_string(),
         }];
         sess.spawn_task(
@@ -3000,7 +3000,7 @@ mod tests {
     async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-review".to_string();
-        let input = vec![InputItem::Text {
+        let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
         sess.spawn_task(

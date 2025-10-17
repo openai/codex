@@ -2,7 +2,7 @@
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
+use codex_protocol::user_input::UserInput;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -74,7 +74,7 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
     // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello world".into(),
             }],
             final_output_json_schema: Some(serde_json::from_str(SCHEMA)?),

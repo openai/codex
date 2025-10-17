@@ -3,7 +3,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
+use codex_protocol::user_input::UserInput;
 use codex_core::protocol::Op;
 use core_test_support::fs_wait;
 use core_test_support::responses;
@@ -52,7 +52,7 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
     // 1) Normal user input – should hit server once.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello world".into(),
             }],
         })

@@ -3,7 +3,7 @@ use std::time::Duration;
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
+use codex_protocol::user_input::UserInput;
 use codex_core::protocol::Op;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
@@ -87,7 +87,7 @@ async fn continue_after_stream_error() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "first message".into(),
             }],
         })
@@ -114,7 +114,7 @@ async fn continue_after_stream_error() {
     // error above, this submission would be rejected/queued indefinitely.
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "follow up".into(),
             }],
         })

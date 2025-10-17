@@ -14,6 +14,7 @@ use crate::ConversationId;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
+use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
@@ -30,6 +31,7 @@ use serde_json::Value;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
+use crate::user_input::UserInput;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -61,14 +63,14 @@ pub enum Op {
     /// Input from the user
     UserInput {
         /// User input items, see `InputItem`
-        items: Vec<InputItem>,
+        items: Vec<UserInput>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
     /// for a turn of a [`crate::codex_conversation::CodexConversation`].
     UserTurn {
         /// User input items, see `InputItem`
-        items: Vec<InputItem>,
+        items: Vec<UserInput>,
 
         /// `cwd` to use with the [`SandboxPolicy`] and potentially tool calls
         /// such as `local_shell`.
@@ -389,26 +391,6 @@ impl SandboxPolicy {
     }
 }
 
-/// User input
-#[non_exhaustive]
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum InputItem {
-    Text {
-        text: String,
-    },
-    /// Pre‑encoded data: URI image.
-    Image {
-        image_url: String,
-    },
-
-    /// Local image path provided by the user.  This will be converted to an
-    /// `Image` variant (base64 data URL) during request serialization.
-    LocalImage {
-        path: std::path::PathBuf,
-    },
-}
-
 /// Event Queue Entry - events from agent
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Event {
@@ -524,6 +506,23 @@ pub enum EventMsg {
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
+
+    ItemStarted(ItemStartedEvent),
+    ItemCompleted(ItemCompletedEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ItemStartedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item: TurnItem,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ItemCompletedEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item: TurnItem,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]

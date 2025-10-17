@@ -2,7 +2,7 @@
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
+use codex_protocol::user_input::UserInput;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -66,7 +66,7 @@ async fn list_dir_tool_returns_entries() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "list directory contents".into(),
             }],
             final_output_json_schema: None,
@@ -171,7 +171,7 @@ async fn list_dir_tool_depth_one_omits_children() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "list directory contents depth one".into(),
             }],
             final_output_json_schema: None,
@@ -283,7 +283,7 @@ async fn list_dir_tool_depth_two_includes_children_only() -> anyhow::Result<()> 
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "list directory contents depth two".into(),
             }],
             final_output_json_schema: None,
@@ -398,7 +398,7 @@ async fn list_dir_tool_depth_three_includes_grandchildren() -> anyhow::Result<()
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "list directory contents depth three".into(),
             }],
             final_output_json_schema: None,

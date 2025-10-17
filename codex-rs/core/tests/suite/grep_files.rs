@@ -4,7 +4,7 @@ use anyhow::Result;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
+use codex_protocol::user_input::UserInput;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
@@ -149,7 +149,7 @@ async fn submit_turn(test: &TestCodex, prompt: &str) -> Result<()> {
 
     test.codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: prompt.into(),
             }],
             final_output_json_schema: None,

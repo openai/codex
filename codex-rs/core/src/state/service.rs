@@ -5,6 +5,7 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_notification::UserNotifier;
 use tokio::sync::Mutex;
+use crate::state::item_collector::ItemCollector;
 
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: McpConnectionManager,
@@ -15,4 +16,5 @@ pub(crate) struct SessionServices {
     pub(crate) user_shell: crate::shell::Shell,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) executor: Executor,
+    pub(crate) item_collector: ItemCollector,
 }

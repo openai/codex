@@ -11,7 +11,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
-use crate::protocol::InputItem;
+use codex_protocol::user_input::UserInput;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
@@ -48,7 +48,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
         sub_id: String,
-        input: Vec<InputItem>,
+        input: Vec<UserInput>,
     ) -> Option<String>;
 
     async fn abort(&self, session: Arc<SessionTaskContext>, sub_id: &str) {
@@ -61,7 +61,7 @@ impl Session {
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         sub_id: String,
-        input: Vec<InputItem>,
+        input: Vec<UserInput>,
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::codex::TurnContext;
 use crate::codex::exit_review_mode;
 use crate::codex::run_task;
-use crate::protocol::InputItem;
+use codex_protocol::user_input::UserInput;
 use crate::state::TaskKind;
 
 use super::SessionTask;
@@ -25,7 +25,7 @@ impl SessionTask for ReviewTask {
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
         sub_id: String,
-        input: Vec<InputItem>,
+        input: Vec<UserInput>,
     ) -> Option<String> {
         let sess = session.clone_session();
         run_task(sess, ctx, sub_id, input, TaskKind::Review).await

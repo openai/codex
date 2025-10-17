@@ -77,7 +77,7 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::InputItem as CoreInputItem;
+use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use codex_login::ServerOptions as LoginServerOptions;
