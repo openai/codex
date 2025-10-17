@@ -21,9 +21,9 @@ from typing import Any, Literal
 SCHEMA_VERSION = "2025-06-18"
 JSONRPC_VERSION = "2.0"
 
-STANDARD_DERIVE = "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]\n"
+STANDARD_DERIVE = "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]\n"
 STANDARD_HASHABLE_DERIVE = (
-    "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq, TS)]\n"
+    "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq, JsonSchema, TS)]\n"
 )
 
 # Will be populated with the schema's `definitions` map in `main()` so that
@@ -94,6 +94,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::convert::TryFrom;
 
+use schemars::JsonSchema;
 use ts_rs::TS;
 
 pub const MCP_SCHEMA_VERSION: &str = "{SCHEMA_VERSION}";
