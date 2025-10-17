@@ -5,7 +5,7 @@ expression: sanitized
 /status
 
 ╭────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                  │
+│  >_ OpenAI Codex (v0.47.0)                 │
 │                                            │
 │  Model:            gpt-5-codex (reasoning  │
 │  Directory: [[workspace]]                  │

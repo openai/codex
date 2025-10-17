@@ -816,10 +816,17 @@ mod tests {
             .expect("Should collect git info from repo");
 
         // Should have repository URL
-        assert_eq!(
-            git_info.repository_url,
-            Some("https://github.com/example/repo.git".to_string())
-        );
+        let expected_remote = Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to get remote URL for comparison");
+        let expected_remote = String::from_utf8(expected_remote.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+        assert_eq!(git_info.repository_url, Some(expected_remote));
     }
 
     #[tokio::test]

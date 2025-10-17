@@ -60,6 +60,7 @@ pub async fn run(cli: CloudCli, sandbox: Option<PathBuf>) -> Result<()> {
         None | Some(CloudCommand::Tui) => {
             let tui_cli = codex_cloud_tasks::Cli {
                 config_overrides: cli.config_overrides,
+                command: None,
             };
             codex_cloud_tasks::run_main(tui_cli, sandbox).await
         }
