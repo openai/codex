@@ -22,7 +22,7 @@ use super::UNIFIED_EXEC_OUTPUT_MAX_BYTES;
 use super::UnifiedExecError;
 
 #[derive(Debug, Default)]
-pub(super) struct OutputBufferState {
+pub(crate) struct OutputBufferState {
     chunks: VecDeque<Vec<u8>>,
     total_bytes: usize,
 }
@@ -68,11 +68,11 @@ impl OutputBufferState {
     }
 }
 
-pub(super) type OutputBuffer = Arc<Mutex<OutputBufferState>>;
-pub(super) type OutputHandles = (OutputBuffer, Arc<Notify>);
+pub(crate) type OutputBuffer = Arc<Mutex<OutputBufferState>>;
+pub(crate) type OutputHandles = (OutputBuffer, Arc<Notify>);
 
 #[derive(Debug)]
-pub(super) struct UnifiedExecSession {
+pub(crate) struct UnifiedExecSession {
     session: ExecCommandSession,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,

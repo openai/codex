@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::Notify;
@@ -6,19 +5,11 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
-use crate::error::CodexErr;
-use crate::error::SandboxErr;
 use crate::sandboxing::ExecEnv;
 use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::sandboxing::Approvable;
-use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalDecision;
-use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::Sandboxable;
-use crate::tools::sandboxing::SandboxablePreference;
+use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
+use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
-use crate::tools::sandboxing::ToolError;
-use crate::tools::sandboxing::ToolRuntime;
 use crate::truncate::truncate_middle;
 
 use super::DEFAULT_TIMEOUT_MS;
@@ -39,102 +30,6 @@ pub(super) struct SessionAcquisition {
     pub(super) output_notify: Arc<Notify>,
     pub(super) new_session: Option<UnifiedExecSession>,
     pub(super) reuse_requested: bool,
-}
-
-#[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
-struct OpenShellApprovalKey {
-    command: Vec<String>,
-    cwd: std::path::PathBuf,
-}
-
-#[derive(Clone, Debug)]
-struct OpenShellRequest {
-    command: Vec<String>,
-    cwd: std::path::PathBuf,
-}
-
-struct OpenShellRuntime<'a> {
-    manager: &'a UnifiedExecSessionManager,
-}
-
-impl OpenShellRuntime<'_> {
-    fn build_command_spec(
-        req: &OpenShellRequest,
-    ) -> Result<crate::sandboxing::CommandSpec, ToolError> {
-        let env = HashMap::new();
-        crate::tools::runtimes::command_spec::build_command_spec(
-            &req.command,
-            &req.cwd,
-            &env,
-            None,
-            None,
-            None,
-        )
-        .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))
-    }
-}
-
-impl Sandboxable for OpenShellRuntime<'_> {
-    fn sandbox_preference(&self) -> SandboxablePreference {
-        SandboxablePreference::Auto
-    }
-    fn escalate_on_failure(&self) -> bool {
-        true
-    }
-}
-
-impl Approvable<OpenShellRequest> for OpenShellRuntime<'_> {
-    type ApprovalKey = OpenShellApprovalKey;
-    fn approval_key(&self, req: &OpenShellRequest) -> OpenShellApprovalKey {
-        OpenShellApprovalKey {
-            command: req.command.clone(),
-            cwd: req.cwd.clone(),
-        }
-    }
-    fn start_approval_async<'b>(
-        &'b mut self,
-        req: &'b OpenShellRequest,
-        ctx: ApprovalCtx<'b>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApprovalDecision> + Send + 'b>> {
-        let reason = ctx.retry_reason.clone();
-        Box::pin(async move {
-            ctx.session
-                .request_command_approval(
-                    ctx.sub_id.to_string(),
-                    ctx.call_id.to_string(),
-                    req.command.clone(),
-                    req.cwd.clone(),
-                    reason,
-                )
-                .await
-                .into()
-        })
-    }
-}
-
-impl<'a> ToolRuntime<OpenShellRequest, UnifiedExecSession> for OpenShellRuntime<'a> {
-    async fn run(
-        &mut self,
-        req: &OpenShellRequest,
-        attempt: &SandboxAttempt<'_>,
-        _ctx: &ToolCtx<'_>,
-    ) -> Result<UnifiedExecSession, ToolError> {
-        let spec = Self::build_command_spec(req)?;
-        let env = attempt
-            .env_for(&spec)
-            .map_err(|err| ToolError::Codex(err.into()))?;
-        self.manager
-            .open_session_with_exec_env(&env)
-            .await
-            .map_err(|err| match err {
-                UnifiedExecError::SandboxDenied { output, .. } => {
-                    ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
-                        output: Box::new(output),
-                    }))
-                }
-                other => ToolError::Rejected(other.to_string()),
-            })
-    }
 }
 
 impl UnifiedExecSessionManager {
@@ -188,7 +83,7 @@ impl UnifiedExecSessionManager {
         }
     }
 
-    pub(super) async fn open_session_with_exec_env(
+    pub(crate) async fn open_session_with_exec_env(
         &self,
         env: &ExecEnv,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
@@ -209,11 +104,8 @@ impl UnifiedExecSessionManager {
         context: &UnifiedExecContext<'_>,
     ) -> Result<UnifiedExecSession, UnifiedExecError> {
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = OpenShellRuntime { manager: self };
-        let req = OpenShellRequest {
-            command,
-            cwd: context.turn.cwd.clone(),
-        };
+        let mut runtime = UnifiedExecRuntime::new(self);
+        let req = UnifiedExecToolRequest::new(command, context.turn.cwd.clone());
         let tool_ctx = ToolCtx {
             session: context.session,
             sub_id: context.sub_id.to_string(),
