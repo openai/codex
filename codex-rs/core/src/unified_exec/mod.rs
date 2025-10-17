@@ -137,7 +137,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn unified_exec_persists_across_requests_jif() -> anyhow::Result<()> {
+    async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
         let (session, turn) = test_session_and_turn();

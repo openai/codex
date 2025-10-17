@@ -44,13 +44,21 @@ impl ToolOrchestrator {
         T: ToolRuntime<Rq, Out>,
     {
         // 1) Approval
+        // Policy semantics:
+        // - Never: bypass approval entirely
+        // - OnFailure: bypass initial approval; ask only if we need to escalate
+        // - OnRequest/UnlessTrusted: require approval up-front
         let key = tool.approval_key(req);
-        let decision = match self.approvals.get(&key) {
-            Some(d) => d,
-            None => {
-                if tool.should_bypass_approval(approval_policy) {
-                    ApprovalDecision::Approved
-                } else {
+        let needs_initial_approval = matches!(
+            approval_policy,
+            AskForApproval::OnRequest | AskForApproval::UnlessTrusted
+        );
+
+        if needs_initial_approval {
+            let key = tool.approval_key(req);
+            let decision = match self.approvals.get(&key) {
+                Some(d) => d,
+                None => {
                     let ctx = ApprovalCtx {
                         session: tool_ctx.session,
                         sub_id: &tool_ctx.sub_id,
@@ -59,14 +67,14 @@ impl ToolOrchestrator {
                     };
                     tool.start_approval_async(req, ctx).await
                 }
+            };
+            match decision {
+                ApprovalDecision::Denied | ApprovalDecision::Abort => {
+                    return Err(ToolError::Rejected("rejected by user".to_string()));
+                }
+                ApprovalDecision::ApprovedForSession => self.approvals.put(key.clone(), decision),
+                ApprovalDecision::Approved => {}
             }
-        };
-        match decision {
-            ApprovalDecision::Denied | ApprovalDecision::Abort => {
-                return Err(ToolError::Rejected("rejected by user".to_string()));
-            }
-            ApprovalDecision::ApprovedForSession => self.approvals.put(key.clone(), decision),
-            ApprovalDecision::Approved => {}
         }
 
         // 2) First attempt under the selected sandbox.
