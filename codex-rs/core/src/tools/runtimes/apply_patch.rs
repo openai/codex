@@ -16,9 +16,9 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use codex_protocol::protocol::ReviewDecision;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use codex_protocol::protocol::ReviewDecision;
 
 #[derive(Clone, Debug)]
 pub struct ApplyPatchRequest {
@@ -103,7 +103,6 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         Some(reason),
                     )
                     .await
-                    .into()
             });
         }
 

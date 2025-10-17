@@ -8,6 +8,7 @@ use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::function_tool::FunctionCallError;
+use crate::parse_command::parse_command;
 use crate::review_format::format_review_findings_block;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
@@ -2314,7 +2315,6 @@ pub(crate) async fn exit_review_mode(
         .await;
 }
 
-// Legacy executor types no longer used after orchestrator migration.
 #[cfg(test)]
 pub(crate) use tests::make_session_and_context;
 

@@ -4,9 +4,6 @@ Runtime: unified exec
 Handles approval + sandbox orchestration for unified exec requests, delegating to
 the session manager to spawn PTYs once an ExecEnv is prepared.
 */
-use std::collections::HashMap;
-use std::path::PathBuf;
-use codex_protocol::protocol::ReviewDecision;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::tools::runtimes::build_command_spec;
@@ -21,11 +18,15 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecSession;
 use crate::unified_exec::UnifiedExecSessionManager;
+use codex_protocol::protocol::ReviewDecision;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
+    pub env: HashMap<String, String>,
 }
 
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
@@ -39,8 +40,8 @@ pub struct UnifiedExecRuntime<'a> {
 }
 
 impl UnifiedExecRequest {
-    pub fn new(command: Vec<String>, cwd: PathBuf) -> Self {
-        Self { command, cwd }
+    pub fn new(command: Vec<String>, cwd: PathBuf, env: HashMap<String, String>) -> Self {
+        Self { command, cwd, env }
     }
 }
 
@@ -86,7 +87,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     reason,
                 )
                 .await
-                .into()
         })
     }
 }
@@ -98,8 +98,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
         attempt: &SandboxAttempt<'_>,
         _ctx: &ToolCtx<'_>,
     ) -> Result<UnifiedExecSession, ToolError> {
-        let empty_env = HashMap::new();
-        let spec = build_command_spec(&req.command, &req.cwd, &empty_env, None, None, None)
+        let spec = build_command_spec(&req.command, &req.cwd, &req.env, None, None, None)
             .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
             .env_for(&spec)

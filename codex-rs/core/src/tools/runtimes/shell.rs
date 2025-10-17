@@ -15,8 +15,8 @@ use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
-use std::path::PathBuf;
 use codex_protocol::protocol::ReviewDecision;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
@@ -82,8 +82,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
             .clone()
             .or_else(|| req.justification.clone());
         Box::pin(async move {
-            let decision = ctx
-                .session
+            ctx.session
                 .request_command_approval(
                     ctx.sub_id.to_string(),
                     ctx.call_id.to_string(),
@@ -91,8 +90,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     req.cwd.clone(),
                     reason,
                 )
-                .await;
-            ReviewDecision::from(decision)
+                .await
         })
     }
 }

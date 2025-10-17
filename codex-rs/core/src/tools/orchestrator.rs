@@ -135,8 +135,7 @@ impl ToolOrchestrator {
                         }
                         ReviewDecision::ApprovedForSession => {
                             let key = tool.approval_key(req);
-                            self.approvals
-                                .put(key.clone(), ReviewDecision::ApprovedForSession);
+                            self.approvals.put(key, ReviewDecision::ApprovedForSession);
                         }
                         ReviewDecision::Approved => {}
                     }
