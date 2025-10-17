@@ -113,6 +113,7 @@ pub(crate) async fn handle_container_exec_with_params(
             cwd: params.cwd.clone(),
             timeout_ms: params.timeout_ms,
             user_explicitly_approved: exec.user_explicitly_approved_this_action,
+            codex_exe: turn_context.codex_linux_sandbox_exe.clone(),
         };
 
         let mut orchestrator = ToolOrchestrator::new();

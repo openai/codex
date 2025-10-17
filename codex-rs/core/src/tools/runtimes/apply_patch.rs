@@ -26,6 +26,7 @@ pub struct ApplyPatchRequest {
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
     pub user_explicitly_approved: bool,
+    pub codex_exe: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -44,8 +45,13 @@ impl ApplyPatchRuntime {
 
     fn build_command_spec(req: &ApplyPatchRequest) -> Result<CommandSpec, ToolError> {
         use std::env;
-        let exe = env::current_exe()
-            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?;
+        let exe = if let Some(path) = &req.codex_exe {
+            path.clone()
+        } else {
+            env::current_exe().map_err(|e| {
+                ToolError::Rejected(format!("failed to determine codex exe: {e}"))
+            })?
+        };
         let program = exe.to_string_lossy().to_string();
         Ok(CommandSpec {
             program,
