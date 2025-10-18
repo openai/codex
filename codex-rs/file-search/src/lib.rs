@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering;
 use tokio::process::Command;
 
 mod cli;
+pub mod search_manager;
 
 pub use cli::Cli;
 
