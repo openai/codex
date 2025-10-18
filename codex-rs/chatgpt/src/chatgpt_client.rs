@@ -1,4 +1,5 @@
 use codex_core::config::Config;
+use codex_core::default_client::create_client;
 
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
@@ -15,7 +16,7 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     init_chatgpt_token_from_auth(&config.codex_home).await?;
 
     // Make direct HTTP request to ChatGPT backend API with the token
-    let client = reqwest::Client::new();
+    let client = create_client();
     let url = format!("{chatgpt_base_url}{path}");
 
     let token =
@@ -30,7 +31,6 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
         .bearer_auth(&token.access_token)
         .header("chatgpt-account-id", account_id?)
         .header("Content-Type", "application/json")
-        .header("User-Agent", "codex-cli")
         .send()
         .await
         .context("Failed to send request")?;
@@ -44,6 +44,6 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     } else {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Request failed with status {}: {}", status, body)
+        anyhow::bail!("Request failed with status {status}: {body}")
     }
 }

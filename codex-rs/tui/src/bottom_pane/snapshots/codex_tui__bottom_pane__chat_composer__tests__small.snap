@@ -2,13 +2,13 @@
 source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
-"▌short                                                                                              "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-" ⏎ send   Ctrl+J newline   Ctrl+C quit                                                              "
+"                                                                                                    "
+"› short                                                                                             "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"  100% context left                                                                                 "

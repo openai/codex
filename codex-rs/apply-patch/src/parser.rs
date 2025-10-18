@@ -175,7 +175,11 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
         remaining_lines = &remaining_lines[hunk_lines..]
     }
     let patch = lines.join("\n");
-    Ok(ApplyPatchArgs { hunks, patch })
+    Ok(ApplyPatchArgs {
+        hunks,
+        patch,
+        workdir: None,
+    })
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,
@@ -427,7 +431,6 @@ fn parse_update_file_chunk(
 }
 
 #[test]
-#[allow(clippy::unwrap_used)]
 fn test_parse_patch() {
     assert_eq!(
         parse_patch_text("bad", ParseMode::Strict),
@@ -587,7 +590,8 @@ fn test_parse_patch_lenient() {
         parse_patch_text(&patch_text_in_heredoc, ParseMode::Lenient),
         Ok(ApplyPatchArgs {
             hunks: expected_patch.clone(),
-            patch: patch_text.to_string()
+            patch: patch_text.to_string(),
+            workdir: None,
         })
     );
 
@@ -600,7 +604,8 @@ fn test_parse_patch_lenient() {
         parse_patch_text(&patch_text_in_single_quoted_heredoc, ParseMode::Lenient),
         Ok(ApplyPatchArgs {
             hunks: expected_patch.clone(),
-            patch: patch_text.to_string()
+            patch: patch_text.to_string(),
+            workdir: None,
         })
     );
 
@@ -612,8 +617,9 @@ fn test_parse_patch_lenient() {
     assert_eq!(
         parse_patch_text(&patch_text_in_double_quoted_heredoc, ParseMode::Lenient),
         Ok(ApplyPatchArgs {
-            hunks: expected_patch.clone(),
-            patch: patch_text.to_string()
+            hunks: expected_patch,
+            patch: patch_text.to_string(),
+            workdir: None,
         })
     );
 
@@ -631,7 +637,7 @@ fn test_parse_patch_lenient() {
         "<<EOF\n*** Begin Patch\n*** Update File: file2.py\nEOF\n".to_string();
     assert_eq!(
         parse_patch_text(&patch_text_with_missing_closing_heredoc, ParseMode::Strict),
-        Err(expected_error.clone())
+        Err(expected_error)
     );
     assert_eq!(
         parse_patch_text(&patch_text_with_missing_closing_heredoc, ParseMode::Lenient),

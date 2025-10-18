@@ -7,83 +7,15 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=22"
-  },
-  "scripts": {
-    "format": "prettier --check src tests",
-    "format:fix": "prettier --write src tests",
-    "dev": "tsc --watch",
-    "lint": "eslint src tests --ext ts --ext tsx --report-unused-disable-directives --max-warnings 0",
-    "lint:fix": "eslint src tests --ext ts --ext tsx --fix",
-    "test": "vitest run",
-    "test:watch": "vitest --watch",
-    "typecheck": "tsc --noEmit",
-    "build": "node build.mjs",
-    "build:dev": "NODE_ENV=development node build.mjs --dev && NODE_OPTIONS=--enable-source-maps node dist/cli-dev.js",
-    "stage-release": "./scripts/stage_release.sh"
+    "node": ">=16"
   },
   "files": [
     "bin",
-    "dist"
+    "vendor"
   ],
-  "dependencies": {
-    "@inkjs/ui": "^2.0.0",
-    "chalk": "^5.2.0",
-    "diff": "^7.0.0",
-    "dotenv": "^16.1.4",
-    "express": "^5.1.0",
-    "fast-deep-equal": "^3.1.3",
-    "fast-npm-meta": "^0.4.2",
-    "figures": "^6.1.0",
-    "file-type": "^20.1.0",
-    "https-proxy-agent": "^7.0.6",
-    "ink": "^5.2.0",
-    "js-yaml": "^4.1.0",
-    "marked": "^15.0.7",
-    "marked-terminal": "^7.3.0",
-    "meow": "^13.2.0",
-    "open": "^10.1.0",
-    "openai": "^4.95.1",
-    "package-manager-detector": "^1.2.0",
-    "react": "^18.2.0",
-    "shell-quote": "^1.8.2",
-    "strip-ansi": "^7.1.0",
-    "to-rotated": "^1.0.0",
-    "use-interval": "1.4.0",
-    "zod": "^3.24.3"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.22.0",
-    "@types/diff": "^7.0.2",
-    "@types/express": "^5.0.1",
-    "@types/js-yaml": "^4.0.9",
-    "@types/marked-terminal": "^6.1.1",
-    "@types/react": "^18.0.32",
-    "@types/semver": "^7.7.0",
-    "@types/shell-quote": "^1.7.5",
-    "@types/which": "^3.0.4",
-    "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
-    "boxen": "^8.0.1",
-    "esbuild": "^0.25.2",
-    "eslint-plugin-import": "^2.31.0",
-    "eslint-plugin-react": "^7.32.2",
-    "eslint-plugin-react-hooks": "^4.6.0",
-    "eslint-plugin-react-refresh": "^0.4.19",
-    "husky": "^9.1.7",
-    "ink-testing-library": "^3.0.0",
-    "prettier": "^3.5.3",
-    "punycode": "^2.3.1",
-    "semver": "^7.7.1",
-    "ts-node": "^10.9.1",
-    "typescript": "^5.0.3",
-    "vite": "^6.3.4",
-    "vitest": "^3.1.2",
-    "whatwg-url": "^14.2.0",
-    "which": "^5.0.0"
-  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git"
+    "url": "git+https://github.com/openai/codex.git",
+    "directory": "codex-cli"
   }
 }

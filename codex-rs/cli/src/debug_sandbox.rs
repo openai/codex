@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config_types::SandboxMode;
-use codex_core::exec::spawn_command_under_linux_sandbox;
 use codex_core::exec_env::create_env;
+use codex_core::landlock::spawn_command_under_linux_sandbox;
 use codex_core::seatbelt::spawn_command_under_seatbelt;
 use codex_core::spawn::StdioPolicy;
+use codex_protocol::config_types::SandboxMode;
 
 use crate::LandlockCommand;
 use crate::SeatbeltCommand;
@@ -64,7 +64,6 @@ async fn run_command_under_sandbox(
     sandbox_type: SandboxType,
 ) -> anyhow::Result<()> {
     let sandbox_mode = create_sandbox_mode(full_auto);
-    let cwd = std::env::current_dir()?;
     let config = Config::load_with_cli_overrides(
         config_overrides
             .parse_overrides()
@@ -74,14 +73,31 @@ async fn run_command_under_sandbox(
             codex_linux_sandbox_exe,
             ..Default::default()
         },
-    )?;
+    )
+    .await?;
+
+    // In practice, this should be `std::env::current_dir()` because this CLI
+    // does not support `--cwd`, but let's use the config value for consistency.
+    let cwd = config.cwd.clone();
+    // For now, we always use the same cwd for both the command and the
+    // sandbox policy. In the future, we could add a CLI option to set them
+    // separately.
+    let sandbox_policy_cwd = cwd.clone();
+
     let stdio_policy = StdioPolicy::Inherit;
     let env = create_env(&config.shell_environment_policy);
 
     let mut child = match sandbox_type {
         SandboxType::Seatbelt => {
-            spawn_command_under_seatbelt(command, &config.sandbox_policy, cwd, stdio_policy, env)
-                .await?
+            spawn_command_under_seatbelt(
+                command,
+                cwd,
+                &config.sandbox_policy,
+                sandbox_policy_cwd.as_path(),
+                stdio_policy,
+                env,
+            )
+            .await?
         }
         SandboxType::Landlock => {
             #[expect(clippy::expect_used)]
@@ -91,8 +107,9 @@ async fn run_command_under_sandbox(
             spawn_command_under_linux_sandbox(
                 codex_linux_sandbox_exe,
                 command,
-                &config.sandbox_policy,
                 cwd,
+                &config.sandbox_policy,
+                sandbox_policy_cwd.as_path(),
                 stdio_policy,
                 env,
             )

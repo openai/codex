@@ -1,10 +1,6 @@
 packages:
-  - codex-cli
   - docs
-  - packages/*
+  - sdk/typescript
 
 ignoredBuiltDependencies:
   - esbuild
-
-patchedDependencies:
-  marked-terminal@7.3.0: patches/marked-terminal@7.3.0.patch

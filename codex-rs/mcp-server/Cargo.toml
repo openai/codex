@@ -15,31 +15,32 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-anyhow = "1"
-codex-arg0 = { path = "../arg0" }
-codex-core = { path = "../core" }
-mcp-types = { path = "../mcp-types" }
-schemars = "0.8.22"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-shlex = "1.3.0"
-strum_macros = "0.27.2"
-tokio = { version = "1", features = [
+anyhow = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-common = { workspace = true, features = ["cli"] }
+codex-core = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-json-to-toml = { workspace = true }
+mcp-types = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+tokio = { workspace = true, features = [
     "io-std",
     "macros",
     "process",
     "rt-multi-thread",
     "signal",
 ] }
-toml = "0.9"
-tracing = { version = "0.1.41", features = ["log"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-uuid = { version = "1", features = ["serde", "v4"] }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
-assert_cmd = "2"
-mcp_test_support = { path = "tests/common" }
-pretty_assertions = "1.4.1"
-tempfile = "3"
-tokio-test = "0.4"
-wiremock = "0.6"
+assert_cmd = { workspace = true }
+core_test_support = { workspace = true }
+mcp_test_support = { workspace = true }
+os_info = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+wiremock = { workspace = true }
