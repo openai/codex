@@ -11,7 +11,6 @@ use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
@@ -20,6 +19,7 @@ use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::skip_if_no_network;
@@ -566,7 +566,7 @@ async fn review_history_does_not_leak_into_parent_session() {
     let followup = "back to parent".to_string();
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: followup.clone(),
             }],
         })

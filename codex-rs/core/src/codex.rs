@@ -9,12 +9,15 @@ use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::function_tool::FunctionCallError;
 use crate::review_format::format_review_findings_block;
+use crate::state::ItemCollector;
 use crate::terminal;
 use crate::user_notification::UserNotifier;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_protocol::ConversationId;
+use codex_protocol::items::TurnItem;
+use codex_protocol::items::UserMessageItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::McpAuthStatus;
@@ -86,7 +89,6 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
-use crate::protocol::InputItem;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
@@ -130,6 +132,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::user_input::UserInput;
 
 pub mod compact;
 use self::compact::build_compacted_history;
@@ -273,6 +276,7 @@ pub(crate) struct TurnContext {
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) item_collector: ItemCollector,
 }
 
 impl TurnContext {
@@ -500,6 +504,11 @@ impl Session {
             cwd,
             is_review_mode: false,
             final_output_json_schema: None,
+            item_collector: ItemCollector::new(
+                tx_event.clone(),
+                conversation_id,
+                "turn_id".to_string(),
+            ),
         };
         let services = SessionServices {
             mcp_connection_manager,
@@ -1059,7 +1068,7 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into
-    pub async fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
+    pub async fn inject_input(&self, input: Vec<UserInput>) -> Result<(), Vec<UserInput>> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -1275,6 +1284,11 @@ async fn submission_loop(
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
                     final_output_json_schema: None,
+                    item_collector: ItemCollector::new(
+                        sess.get_tx_event().clone(),
+                        sess.conversation_id,
+                        "submission_id".to_string(),
+                    ),
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1297,6 +1311,12 @@ async fn submission_loop(
                     .client
                     .get_otel_event_manager()
                     .user_prompt(&items);
+
+                turn_context
+                    .item_collector
+                    .started_completed(TurnItem::UserMessage(UserMessageItem::new(&items)))
+                    .await;
+
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
                     // no current task, spawn a new one
@@ -1368,6 +1388,11 @@ async fn submission_loop(
                         cwd,
                         is_review_mode: false,
                         final_output_json_schema,
+                        item_collector: ItemCollector::new(
+                            sess.get_tx_event().clone(),
+                            sess.conversation_id,
+                            sub.id.clone(),
+                        ),
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1391,6 +1416,11 @@ async fn submission_loop(
 
                     // Install the new persistent context for subsequent tasks/turns.
                     turn_context = Arc::new(fresh_turn_context);
+
+                    turn_context
+                        .item_collector
+                        .started_completed(TurnItem::UserMessage(UserMessageItem::new(&items)))
+                        .await;
 
                     // no current task, spawn a new one with the per-turn context
                     sess.spawn_task(Arc::clone(&turn_context), sub.id, items, RegularTask)
@@ -1502,7 +1532,7 @@ async fn submission_loop(
             Op::Compact => {
                 // Attempt to inject input into current task
                 if let Err(items) = sess
-                    .inject_input(vec![InputItem::Text {
+                    .inject_input(vec![UserInput::Text {
                         text: compact::SUMMARIZATION_PROMPT.to_string(),
                     }])
                     .await
@@ -1654,10 +1684,15 @@ async fn spawn_review_thread(
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
         final_output_json_schema: None,
+        item_collector: ItemCollector::new(
+            sess.get_tx_event(),
+            sess.conversation_id,
+            sub_id.to_string(),
+        ),
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input: Vec<InputItem> = vec![InputItem::Text {
+    let input: Vec<UserInput> = vec![UserInput::Text {
         text: review_prompt,
     }];
     let tc = Arc::new(review_turn_context);
@@ -1695,7 +1730,7 @@ pub(crate) async fn run_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,
-    input: Vec<InputItem>,
+    input: Vec<UserInput>,
     task_kind: TaskKind,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
@@ -2856,6 +2891,11 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            item_collector: ItemCollector::new(
+                tx_event.clone(),
+                conversation_id,
+                "turn_id".to_string(),
+            ),
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2924,6 +2964,11 @@ mod tests {
             tools_config,
             is_review_mode: false,
             final_output_json_schema: None,
+            item_collector: ItemCollector::new(
+                tx_event.clone(),
+                conversation_id,
+                "turn_id".to_string(),
+            ),
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2967,7 +3012,7 @@ mod tests {
             _session: Arc<SessionTaskContext>,
             _ctx: Arc<TurnContext>,
             _sub_id: String,
-            _input: Vec<InputItem>,
+            _input: Vec<UserInput>,
             cancellation_token: CancellationToken,
         ) -> Option<String> {
             if self.listen_to_cancellation_token {
@@ -2991,7 +3036,7 @@ mod tests {
     async fn abort_regular_task_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-regular".to_string();
-        let input = vec![InputItem::Text {
+        let input = vec![UserInput::Text {
             text: "hello".to_string(),
         }];
         sess.spawn_task(
@@ -3050,7 +3095,7 @@ mod tests {
     async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-review".to_string();
-        let input = vec![InputItem::Text {
+        let input = vec![UserInput::Text {
             text: "start review".to_string(),
         }];
         sess.spawn_task(

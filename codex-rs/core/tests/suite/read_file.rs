@@ -2,10 +2,10 @@
 
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -64,7 +64,7 @@ async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "please inspect sample.txt".into(),
             }],
             final_output_json_schema: None,

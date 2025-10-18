@@ -4,10 +4,10 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -90,7 +90,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "please add the screenshot".into(),
             }],
             final_output_json_schema: None,
@@ -189,7 +189,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "please attach the folder".into(),
             }],
             final_output_json_schema: None,
@@ -254,7 +254,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "please attach the missing image".into(),
             }],
             final_output_json_schema: None,

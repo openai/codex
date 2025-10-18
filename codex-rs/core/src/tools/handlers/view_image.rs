@@ -5,13 +5,13 @@ use tokio::fs;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
-use crate::protocol::InputItem;
 use crate::protocol::ViewImageToolCallEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_protocol::user_input::UserInput;
 
 pub struct ViewImageHandler;
 
@@ -67,7 +67,7 @@ impl ToolHandler for ViewImageHandler {
         let event_path = abs_path.clone();
 
         session
-            .inject_input(vec![InputItem::LocalImage { path: abs_path }])
+            .inject_input(vec![UserInput::LocalImage { path: abs_path }])
             .await
             .map_err(|_| {
                 FunctionCallError::RespondToModel(

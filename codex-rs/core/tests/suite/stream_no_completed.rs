@@ -6,8 +6,8 @@ use std::time::Duration;
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
@@ -94,7 +94,7 @@ async fn retries_on_early_close() {
 
     codex
         .submit(Op::UserInput {
-            items: vec![InputItem::Text {
+            items: vec![UserInput::Text {
                 text: "hello".into(),
             }],
         })

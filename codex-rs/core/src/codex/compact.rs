@@ -12,7 +12,6 @@ use crate::protocol::CompactedItem;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
-use crate::protocol::InputItem;
 use crate::protocol::InputMessageKind;
 use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
@@ -24,6 +23,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
@@ -41,7 +41,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     turn_context: Arc<TurnContext>,
 ) {
     let sub_id = sess.next_internal_sub_id();
-    let input = vec![InputItem::Text {
+    let input = vec![UserInput::Text {
         text: SUMMARIZATION_PROMPT.to_string(),
     }];
     run_compact_task_inner(sess, turn_context, sub_id, input).await;
@@ -51,7 +51,7 @@ pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,
-    input: Vec<InputItem>,
+    input: Vec<UserInput>,
 ) -> Option<String> {
     let start_event = Event {
         id: sub_id.clone(),
@@ -68,7 +68,7 @@ async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,
-    input: Vec<InputItem>,
+    input: Vec<UserInput>,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let mut turn_input = sess

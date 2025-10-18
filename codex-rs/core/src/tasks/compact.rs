@@ -5,8 +5,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
 use crate::codex::compact;
-use crate::protocol::InputItem;
 use crate::state::TaskKind;
+use codex_protocol::user_input::UserInput;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -25,7 +25,7 @@ impl SessionTask for CompactTask {
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
         sub_id: String,
-        input: Vec<InputItem>,
+        input: Vec<UserInput>,
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
         compact::run_compact_task(session.clone_session(), ctx, sub_id, input).await
