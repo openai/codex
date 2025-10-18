@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
 use crate::codex::compact;
@@ -25,6 +26,7 @@ impl SessionTask for CompactTask {
         ctx: Arc<TurnContext>,
         sub_id: String,
         input: Vec<InputItem>,
+        _cancellation_token: CancellationToken,
     ) -> Option<String> {
         compact::run_compact_task(session.clone_session(), ctx, sub_id, input).await
     }

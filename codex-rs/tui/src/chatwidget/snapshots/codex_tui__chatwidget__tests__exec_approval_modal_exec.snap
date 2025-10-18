@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 409
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
-    area: Rect { x: 0, y: 0, width: 80, height: 15 },
+    area: Rect { x: 0, y: 0, width: 80, height: 14 },
     content: [
         "                                                                                ",
         "                                                                                ",
@@ -19,7 +20,6 @@ Buffer {
         "  3. No, and tell Codex what to do differently esc                              ",
         "                                                                                ",
         "  Press enter to confirm or esc to cancel                                       ",
-        "                                                                                ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -34,6 +34,5 @@ Buffer {
         x: 47, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 50, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 0, y: 14, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

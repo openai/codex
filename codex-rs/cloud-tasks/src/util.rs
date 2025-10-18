@@ -91,3 +91,18 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
     }
     headers
 }
+
+/// Construct a browser-friendly task URL for the given backend base URL.
+pub fn task_url(base_url: &str, task_id: &str) -> String {
+    let normalized = normalize_base_url(base_url);
+    if let Some(root) = normalized.strip_suffix("/backend-api") {
+        return format!("{root}/codex/tasks/{task_id}");
+    }
+    if let Some(root) = normalized.strip_suffix("/api/codex") {
+        return format!("{root}/codex/tasks/{task_id}");
+    }
+    if normalized.ends_with("/codex") {
+        return format!("{normalized}/tasks/{task_id}");
+    }
+    format!("{normalized}/codex/tasks/{task_id}")
+}

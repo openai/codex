@@ -2,12 +2,13 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Select Reasoning Level
-  Reasoning for model gpt-5-codex
+  Select Reasoning Level for gpt-5-codex
 
   1. Low               Fastest responses with limited reasoning
   2. Medium (default)  Dynamically adjusts reasoning based on the task
 › 3. High (current)    Maximizes reasoning depth for complex or ambiguous
                        problems
+                       ⚠ High reasoning effort can quickly consume Plus plan
+                       rate limits.
 
   Press enter to confirm or esc to go back

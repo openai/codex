@@ -135,6 +135,10 @@ impl CodexAuth {
         self.get_current_token_data().and_then(|t| t.account_id)
     }
 
+    pub fn get_account_email(&self) -> Option<String> {
+        self.get_current_token_data().and_then(|t| t.id_token.email)
+    }
+
     pub(crate) fn get_plan_type(&self) -> Option<PlanType> {
         self.get_current_token_data()
             .and_then(|t| t.id_token.chatgpt_plan_type)

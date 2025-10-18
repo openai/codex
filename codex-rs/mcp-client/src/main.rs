@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
     // Spawn the subprocess and connect the client.
     let program = args.remove(0);
     let env = None;
-    let client = McpClient::new_stdio_client(program, args, env)
+    let client = McpClient::new_stdio_client(program, args, env, &[], None)
         .await
         .with_context(|| format!("failed to spawn subprocess: {original_args:?}"))?;
 
