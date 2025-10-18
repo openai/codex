@@ -181,6 +181,14 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
         drive || unc
     };
     if looks_like_windows_path {
+        #[cfg(target_os = "linux")]
+        {
+            if is_probably_wsl()
+                && let Some(converted) = convert_windows_path_to_wsl(pasted)
+            {
+                return Some(converted);
+            }
+        }
         return Some(PathBuf::from(pasted));
     }
 
@@ -191,6 +199,41 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(target_os = "linux")]
+fn is_probably_wsl() -> bool {
+    std::env::var_os("WSL_DISTRO_NAME").is_some()
+        || std::env::var_os("WSL_INTEROP").is_some()
+        || std::env::var_os("WSLENV").is_some()
+}
+
+#[cfg(target_os = "linux")]
+fn convert_windows_path_to_wsl(input: &str) -> Option<PathBuf> {
+    if input.starts_with("\\\\") {
+        return None;
+    }
+
+    let drive_letter = input.chars().next()?.to_ascii_lowercase();
+    if !drive_letter.is_ascii_lowercase() {
+        return None;
+    }
+
+    if input.get(1..2) != Some(":") {
+        return None;
+    }
+
+    let mut result = PathBuf::from(format!("/mnt/{drive_letter}"));
+    for component in input
+        .get(2..)?
+        .trim_start_matches(['\\', '/'])
+        .split(['\\', '/'])
+        .filter(|component| !component.is_empty())
+    {
+        result.push(component);
+    }
+
+    Some(result)
 }
 
 /// Infer an image format for the provided path based on its extension.
@@ -210,6 +253,40 @@ pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
 #[cfg(test)]
 mod pasted_paths_tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use std::ffi::OsString;
+
+    #[cfg(target_os = "linux")]
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, original }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(original) = &self.original {
+                unsafe {
+                    std::env::set_var(self.key, original);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
 
     #[cfg(not(windows))]
     #[test]
@@ -223,7 +300,17 @@ mod pasted_paths_tests {
     fn normalize_file_url_windows() {
         let input = r"C:\Temp\example.png";
         let result = normalize_pasted_path(input).expect("should parse file URL");
-        assert_eq!(result, PathBuf::from(r"C:\Temp\example.png"));
+        #[cfg(target_os = "linux")]
+        let expected = if is_probably_wsl()
+            && let Some(converted) = convert_windows_path_to_wsl(input)
+        {
+            converted
+        } else {
+            PathBuf::from(r"C:\Temp\example.png")
+        };
+        #[cfg(not(target_os = "linux"))]
+        let expected = PathBuf::from(r"C:\Temp\example.png");
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -291,10 +378,17 @@ mod pasted_paths_tests {
     fn normalize_unquoted_windows_path_with_spaces() {
         let input = r"C:\\Users\\Alice\\My Pictures\\example image.png";
         let result = normalize_pasted_path(input).expect("should accept unquoted windows path");
-        assert_eq!(
-            result,
+        #[cfg(target_os = "linux")]
+        let expected = if is_probably_wsl()
+            && let Some(converted) = convert_windows_path_to_wsl(input)
+        {
+            converted
+        } else {
             PathBuf::from(r"C:\\Users\\Alice\\My Pictures\\example image.png")
-        );
+        };
+        #[cfg(not(target_os = "linux"))]
+        let expected = PathBuf::from(r"C:\\Users\\Alice\\My Pictures\\example image.png");
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -320,6 +414,18 @@ mod pasted_paths_tests {
         assert_eq!(
             pasted_image_format(Path::new(r"C:\\a\\b\\noext")),
             EncodedImageFormat::Other
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn normalize_windows_path_in_wsl() {
+        let _guard = EnvVarGuard::set("WSL_DISTRO_NAME", "Ubuntu-24.04");
+        let input = r"C:\\Users\\Alice\\Pictures\\example image.png";
+        let result = normalize_pasted_path(input).expect("should convert windows path on wsl");
+        assert_eq!(
+            result,
+            PathBuf::from("/mnt/c/Users/Alice/Pictures/example image.png")
         );
     }
 }
