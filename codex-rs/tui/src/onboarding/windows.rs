@@ -20,11 +20,24 @@ use crate::onboarding::onboarding_screen::StepStateProvider;
 use super::onboarding_screen::StepState;
 
 pub(crate) const WSL_INSTRUCTIONS: &str = r"Install WSL2 by opening PowerShell as Administrator and running:
-
+    # Install default Linux distribution (like Ubuntu)
     wsl --install
 
-Instructions for how to install and run Codex in WSL:
+    # Restart your computer, then start a shell inside of Windows Subsystem for Linux
+    wsl
 
+    # Install Node.js in WSL via nvm
+    # Documentation: https://learn.microsoft.com/en-us/windows/dev-environment/javascript/nodejs-on-wsl
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+
+    # In a new tab or after exiting and running `wsl` again to install Node.js
+    nvm install 22
+
+    # Install and run Codex in WSL
+    npm i -g @openai/codex
+    codex
+
+    # Additional details and instructions for how to install and run Codex in WSL:
     https://developers.openai.com/codex/windows";
 
 pub(crate) struct WindowsSetupWidget {
@@ -84,7 +97,7 @@ impl WidgetRef for &WindowsSetupWidget {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
                 "> ".into(),
-                "For best performance, run Codex in Windows Subsystem for Linux (WSL2)".bold(),
+                "We strongly recommend running Codex in Windows Subsystem for Linux (WSL2)".bold(),
             ]),
             Line::from(""),
         ];
