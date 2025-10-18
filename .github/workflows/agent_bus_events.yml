@@ -1,0 +1,44 @@
+name: Agent Bus (events)
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Command to run (/status, /rerun, /handoff, /notify)'
+        required: false
+        default: '/status'
+  issue_comment:
+    types: [created]
+  check_suite:
+    types: [completed]
+  workflow_run:
+    workflows: ["CI", "Build", "Tests", "Format / etc", "build-test"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  bus:
+    concurrency:
+      group: agent-bus-events-${{ github.ref_name }}
+      cancel-in-progress: true
+    if: |
+      github.event_name != 'workflow_run' && (github.ref_name == 'main' || github.ref_name == 'feat/agent-bus') ||
+      (github.event_name == 'workflow_run' && (github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'feat/agent-bus'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: cli/gh-action@v2
+      - name: Run agent bus
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_GH_TOKEN }}
+          UPSTREAM_GH_TOKEN: ${{ secrets.UPSTREAM_GH_TOKEN }}
+          AGENT_BUS_COMMAND: ${{ github.event.inputs.command }}
+        run: |
+          python3 scripts/agent_bus.py

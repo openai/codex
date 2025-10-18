@@ -1,0 +1,31 @@
+name: Agent Bus (queue)
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  queue:
+    concurrency:
+      group: agent-bus-queue-${{ github.ref_name }}
+      cancel-in-progress: true
+    if: github.ref_name == 'main' || github.ref_name == 'feat/agent-bus'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: cli/gh-action@v2
+      - name: Run queue processor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_GH_TOKEN: ${{ secrets.UPSTREAM_GH_TOKEN }}
+        run: |
+          python3 scripts/agent_bus_queue.py
