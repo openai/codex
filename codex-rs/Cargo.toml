@@ -35,6 +35,7 @@ members = [
     "utils/json-to-toml",
     "utils/readiness",
     "utils/string",
+    "utils/time",
 ]
 resolver = "2"
 
@@ -77,6 +78,7 @@ codex-tui = { path = "tui" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-string = { path = "utils/string" }
+codex-utils-time = { path = "utils/time" }
 core_test_support = { path = "core/tests/common" }
 mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }

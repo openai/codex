@@ -1,0 +1,17 @@
+[package]
+name = "codex-utils-time"
+version = { workspace = true }
+edition = "2024"
+
+[lib]
+name = "codex_utils_time"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]
