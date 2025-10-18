@@ -1,6 +1,5 @@
 #![cfg(not(debug_assertions))]
 
-use crate::UpdateAction;
 use crate::history_cell::padded_emoji;
 use crate::key_hint;
 use crate::render::Insets;
@@ -12,6 +11,7 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use crate::updates;
+use crate::updates::UpdateAction;
 use codex_core::config::Config;
 use color_eyre::Result;
 use crossterm::event::KeyCode;
@@ -39,7 +39,7 @@ pub(crate) async fn run_update_prompt_if_needed(
     let Some(latest_version) = updates::get_upgrade_version_for_popup(config) else {
         return Ok(UpdatePromptOutcome::Continue);
     };
-    let Some(update_action) = crate::get_update_action() else {
+    let Some(update_action) = crate::updates::get_update_action() else {
         return Ok(UpdatePromptOutcome::Continue);
     };
 
