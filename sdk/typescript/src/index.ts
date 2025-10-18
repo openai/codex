@@ -24,7 +24,7 @@ export type {
 } from "./items";
 
 export { Thread } from "./thread";
-export type { RunResult, RunStreamedResult, Input } from "./thread";
+export type { RunResult, RunStreamedResult, Input, UserInput } from "./thread";
 
 export { Codex } from "./codex";
 

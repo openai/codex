@@ -25,7 +25,17 @@ export type StreamedTurn = {
 export type RunStreamedResult = StreamedTurn;
 
 /** An input to send to the agent. */
-export type Input = string;
+export type UserInput =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "local_image";
+      path: string;
+    };
+
+export type Input = string | UserInput[];
 
 /** Respesent a thread of conversation with the agent. One thread can have multiple consecutive turns. */
 export class Thread {
@@ -53,21 +63,23 @@ export class Thread {
   }
 
   /** Provides the input to the agent and streams events as they are produced during the turn. */
-  async runStreamed(input: string, turnOptions: TurnOptions = {}): Promise<StreamedTurn> {
+  async runStreamed(input: Input, turnOptions: TurnOptions = {}): Promise<StreamedTurn> {
     return { events: this.runStreamedInternal(input, turnOptions) };
   }
 
   private async *runStreamedInternal(
-    input: string,
+    input: Input,
     turnOptions: TurnOptions = {},
   ): AsyncGenerator<ThreadEvent> {
     const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);
     const options = this._threadOptions;
+    const { prompt, images } = normalizeInput(input);
     const generator = this._exec.run({
-      input,
+      input: prompt,
       baseUrl: this._options.baseUrl,
       apiKey: this._options.apiKey,
       threadId: this._id,
+      images,
       model: options?.model,
       sandboxMode: options?.sandboxMode,
       workingDirectory: options?.workingDirectory,
@@ -93,7 +105,7 @@ export class Thread {
   }
 
   /** Provides the input to the agent and returns the completed turn. */
-  async run(input: string, turnOptions: TurnOptions = {}): Promise<Turn> {
+  async run(input: Input, turnOptions: TurnOptions = {}): Promise<Turn> {
     const generator = this.runStreamedInternal(input, turnOptions);
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
@@ -117,4 +129,20 @@ export class Thread {
     }
     return { items, finalResponse, usage };
   }
+}
+
+function normalizeInput(input: Input): { prompt: string; images: string[] } {
+  if (typeof input === "string") {
+    return { prompt: input, images: [] };
+  }
+  const promptParts: string[] = [];
+  const images: string[] = [];
+  for (const item of input) {
+    if (item.type === "text") {
+      promptParts.push(item.text);
+    } else if (item.type === "local_image") {
+      images.push(item.path);
+    }
+  }
+  return { prompt: promptParts.join("\n\n"), images };
 }
