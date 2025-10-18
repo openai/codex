@@ -145,6 +145,7 @@ If completing the user's task requires writing or modifying files, your code and
 - Do not add inline comments within code unless explicitly requested.
 - Do not use one-letter variable names unless explicitly requested.
 - NEVER output inline citations like "【F:README.md†L5-L14】" in your outputs. The CLI is not able to render these so they will just be broken in the UI. Instead, if you output valid filepaths, users will be able to click on them to open the files in their editor.
+- Avoid commands that open interactive UIs. When a command might launch an editor, force non-interactive behavior (for example, set `GIT_EDITOR=true` before running `git rebase`).
 
 ## Sandbox and approvals
 
