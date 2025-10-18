@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::GetUserSavedConfigResponse;
@@ -18,8 +19,6 @@ use codex_protocol::config_types::Verbosity;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
-
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");

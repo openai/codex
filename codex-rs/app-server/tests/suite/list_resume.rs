@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -18,8 +19,6 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use uuid::Uuid;
-
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_list_and_resume_conversations() {

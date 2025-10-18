@@ -1,5 +1,5 @@
-use std::path::Path;
-
+use app_test_support::ConfigBuilder;
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::ArchiveConversationParams;
@@ -9,15 +9,18 @@ use codex_app_server_protocol::NewConversationParams;
 use codex_app_server_protocol::NewConversationResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
+use codex_protocol::config_types::SandboxMode;
 use tempfile::TempDir;
 use tokio::time::timeout;
-
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn archive_conversation_moves_rollout_into_archived_directory() {
     let codex_home = TempDir::new().expect("create temp dir");
-    create_config_toml(codex_home.path()).expect("write config.toml");
+    ConfigBuilder::default()
+        .with_defaults()
+        .sandbox_mode(Some(SandboxMode::ReadOnly))
+        .write(codex_home.path())
+        .expect("write config.toml");
 
     let mut mcp = McpProcess::new(codex_home.path())
         .await
@@ -90,16 +93,4 @@ async fn archive_conversation_moves_rollout_into_archived_directory() {
         "expected archived rollout path {} to exist",
         archived_rollout_path.display()
     );
-}
-
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(config_toml, config_contents())
-}
-
-fn config_contents() -> &'static str {
-    r#"model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-"#
 }

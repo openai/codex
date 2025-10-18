@@ -1,6 +1,7 @@
-use std::path::Path;
-
+use app_test_support::ConfigBuilder;
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
+use app_test_support::MockProviderConfig;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::to_response;
@@ -18,8 +19,6 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_conversation_create_and_send_message_ok() {
     // Mock server – we won't strictly rely on it, but provide one to satisfy any model wiring.
@@ -30,7 +29,11 @@ async fn test_conversation_create_and_send_message_ok() {
 
     // Temporary Codex home with config pointing at the mock server.
     let codex_home = TempDir::new().expect("create temp dir");
-    create_config_toml(codex_home.path(), &server.uri()).expect("write config.toml");
+    ConfigBuilder::default()
+        .with_defaults()
+        .with_mock_provider(MockProviderConfig::new(format!("{}/v1", server.uri())))
+        .write(codex_home.path())
+        .expect("write config.toml");
 
     // Start MCP server process and initialize.
     let mut mcp = McpProcess::new(codex_home.path())
@@ -130,28 +133,4 @@ async fn test_conversation_create_and_send_message_ok() {
     assert_eq!(last["content"], json!("Hello"));
 
     drop(server);
-}
-
-// Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "chat"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
 }

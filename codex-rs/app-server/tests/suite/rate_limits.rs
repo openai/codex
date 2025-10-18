@@ -1,21 +1,15 @@
-use std::path::Path;
-
+use app_test_support::ConfigBuilder;
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
+use app_test_support::login_with_api_key_via_mcp;
 use app_test_support::to_response;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use app_test_support::write_chatgpt_auth;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::RequestId;
-use codex_core::auth::AuthDotJson;
-use codex_core::auth::get_auth_file;
-use codex_core::auth::write_auth_json;
-use codex_core::token_data::TokenData;
-use codex_core::token_data::parse_id_token;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use pretty_assertions::assert_eq;
@@ -29,13 +23,14 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_account_rate_limits_requires_auth() {
     let codex_home = TempDir::new().unwrap_or_else(|err| panic!("create tempdir: {err}"));
-    create_config_toml(codex_home.path(), None)
+    ConfigBuilder::default()
+        .with_defaults()
+        .write(codex_home.path())
         .unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)])
@@ -103,9 +98,12 @@ async fn get_account_rate_limits_returns_snapshot() {
         .await;
 
     let base_url = server.uri();
-    create_config_toml(codex_home.path(), Some(base_url.as_str()))
+    ConfigBuilder::default()
+        .with_defaults()
+        .chatgpt_base_url(base_url.as_str())
+        .write(codex_home.path())
         .unwrap_or_else(|err| panic!("write config.toml: {err}"));
-    write_chatgpt_auth(codex_home.path(), "chatgpt-token", "account-123")
+    write_chatgpt_auth(codex_home.path(), "chatgpt-token", "account-123", "pro")
         .unwrap_or_else(|err| panic!("write chatgpt auth: {err}"));
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)])
@@ -162,7 +160,9 @@ async fn get_account_rate_limits_returns_snapshot() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_account_rate_limits_requires_chatgpt_auth() {
     let codex_home = TempDir::new().unwrap_or_else(|err| panic!("create tempdir: {err}"));
-    create_config_toml(codex_home.path(), None)
+    ConfigBuilder::default()
+        .with_defaults()
+        .write(codex_home.path())
         .unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
     let mut mcp = McpProcess::new(codex_home.path())
@@ -173,7 +173,9 @@ async fn get_account_rate_limits_requires_chatgpt_auth() {
         .expect("initialize timeout")
         .expect("initialize request");
 
-    login_with_api_key(&mut mcp, "sk-test-key").await;
+    login_with_api_key_via_mcp(&mut mcp, "sk-test-key")
+        .await
+        .expect("login with api key");
 
     let request_id = mcp
         .send_get_account_rate_limits_request()
@@ -194,77 +196,4 @@ async fn get_account_rate_limits_requires_chatgpt_auth() {
         error.error.message,
         "chatgpt authentication required to read rate limits"
     );
-}
-
-#[expect(clippy::expect_used)]
-async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) {
-    let request_id = mcp
-        .send_login_api_key_request(LoginApiKeyParams {
-            api_key: api_key.to_string(),
-        })
-        .await
-        .expect("send loginApiKey");
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await
-    .expect("loginApiKey timeout")
-    .expect("loginApiKey response");
-}
-
-fn create_config_toml(codex_home: &Path, chatgpt_base_url: Option<&str>) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    let mut contents = String::from(
-        r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-"#,
-    );
-
-    if let Some(base_url) = chatgpt_base_url {
-        contents.push_str("chatgpt_base_url = \"");
-        contents.push_str(base_url);
-        contents.push_str("\"\n");
-    }
-
-    std::fs::write(config_toml, contents)
-}
-
-fn write_chatgpt_auth(
-    codex_home: &Path,
-    access_token: &str,
-    account_id: &str,
-) -> std::io::Result<()> {
-    let auth_path = get_auth_file(codex_home);
-    let id_token_raw = encode_chatgpt_id_token("pro");
-    let id_token = parse_id_token(&id_token_raw).map_err(std::io::Error::other)?;
-    let auth = AuthDotJson {
-        openai_api_key: None,
-        tokens: Some(TokenData {
-            id_token,
-            access_token: access_token.to_string(),
-            refresh_token: "refresh-token".to_string(),
-            account_id: Some(account_id.to_string()),
-        }),
-        last_refresh: Some(Utc::now()),
-    };
-    write_auth_json(&auth_path, &auth)
-}
-
-fn encode_chatgpt_id_token(plan_type: &str) -> String {
-    let header = json!({ "alg": "none", "typ": "JWT" });
-    let payload = json!({
-        "https://api.openai.com/auth": {
-            "chatgpt_plan_type": plan_type
-        }
-    });
-    let header_b64 =
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("serialize jwt header"));
-    let payload_b64 =
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("serialize jwt payload"));
-    let signature_b64 = URL_SAFE_NO_PAD.encode(b"signature");
-    format!("{header_b64}.{payload_b64}.{signature_b64}")
 }

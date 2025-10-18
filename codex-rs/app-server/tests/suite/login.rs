@@ -1,7 +1,9 @@
-use std::path::Path;
 use std::time::Duration;
 
+use app_test_support::ConfigBuilder;
+use app_test_support::DEFAULT_READ_TIMEOUT;
 use app_test_support::McpProcess;
+use app_test_support::MockProviderConfig;
 use app_test_support::to_response;
 use codex_app_server_protocol::CancelLoginChatGptParams;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
@@ -15,34 +17,14 @@ use codex_login::login_with_api_key;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-// Helper to create a config.toml; mirrors create_conversation.rs
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "http://127.0.0.1:0/v1"
-wire_api = "chat"
-request_max_retries = 0
-stream_max_retries = 0
-"#,
-    )
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn logout_chatgpt_removes_auth() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    create_config_toml(codex_home.path()).expect("write config.toml");
+    ConfigBuilder::default()
+        .with_defaults()
+        .with_mock_provider(MockProviderConfig::new("http://127.0.0.1:0/v1"))
+        .write(codex_home.path())
+        .expect("write config.toml");
     login_with_api_key(codex_home.path(), "sk-test-key").expect("seed api key");
     assert!(codex_home.path().join("auth.json").exists());
 
@@ -95,7 +77,11 @@ async fn logout_chatgpt_removes_auth() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn login_and_cancel_chatgpt() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
+    ConfigBuilder::default()
+        .with_defaults()
+        .with_mock_provider(MockProviderConfig::new("http://127.0.0.1:0/v1"))
+        .write(codex_home.path())
+        .unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
     let mut mcp = McpProcess::new(codex_home.path())
         .await
