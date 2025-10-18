@@ -45,7 +45,9 @@ fn should_escalate_on_failure(approval: AskForApproval, sandbox: SandboxType) ->
         (approval, sandbox),
         (
             AskForApproval::UnlessTrusted | AskForApproval::OnFailure,
-            SandboxType::MacosSeatbelt | SandboxType::LinuxSeccomp
+            SandboxType::MacosSeatbelt
+                | SandboxType::LinuxSeccomp
+                | SandboxType::WindowsRestrictedToken
         )
     )
 }
