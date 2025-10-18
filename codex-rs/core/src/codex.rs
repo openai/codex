@@ -354,7 +354,7 @@ pub(crate) struct SessionSettingsUpdate {
 impl Session {
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
-        otel_event_manager: OtelEventManager,
+        otel_event_manager: &OtelEventManager,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
         conversation_id: ConversationId,
@@ -370,6 +370,10 @@ impl Session {
         if let Some(model_info) = get_model_info(&model_family) {
             per_turn_config.model_context_window = Some(model_info.context_window);
         }
+
+        let otel_event_manager = otel_event_manager
+            .clone()
+            .with_model(session_configuration.model.as_str(), "TODO");
 
         let client = ModelClient::new(
             Arc::new(per_turn_config),
@@ -653,15 +657,9 @@ impl Session {
             session_configuration.cwd.clone(),
         );
 
-        let otel_event_manager = self
-            .services
-            .otel_event_manager
-            .clone()
-            .with_model(session_configuration.model.as_str(), "TODO");
-
         let mut turn_context = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
-            otel_event_manager,
+            &self.services.otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
             self.conversation_id,
@@ -674,12 +672,12 @@ impl Session {
 
     fn build_environment_update_item(
         &self,
-        previous: Option<&TurnContext>,
+        previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
     ) -> Option<ResponseItem> {
         let prev = previous?;
 
-        let prev_context = EnvironmentContext::from(prev);
+        let prev_context = EnvironmentContext::from(prev.as_ref());
         let next_context = EnvironmentContext::from(next);
         if prev_context.equals_except_shell(&next_context) {
             return None;
@@ -1303,7 +1301,7 @@ impl Drop for Session {
 }
 
 async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
-    let mut turn_context = sess.new_turn(SessionSettingsUpdate::default()).await;
+    let mut previous_context: Option<Arc<TurnContext>> = None;
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
@@ -1330,48 +1328,42 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 };
                 sess.update_settings(updates).await;
             }
-            Op::UserInput { items } => {
-                let current_context = Arc::clone(&turn_context);
+
+            Op::UserInput { .. } | Op::UserTurn { .. } => {
+                let (items, updates) = match sub.op {
+                    Op::UserTurn {
+                        cwd,
+                        approval_policy,
+                        sandbox_policy,
+                        model,
+                        effort,
+                        summary,
+                        final_output_json_schema,
+                        items,
+                    } => (
+                        items,
+                        SessionSettingsUpdate {
+                            cwd: Some(cwd),
+                            approval_policy: Some(approval_policy),
+                            sandbox_policy: Some(sandbox_policy),
+                            model: Some(model),
+                            reasoning_effort: Some(effort),
+                            reasoning_summary: Some(summary),
+                            final_output_json_schema: Some(final_output_json_schema),
+                        },
+                    ),
+                    Op::UserInput { items } => (items, SessionSettingsUpdate::default()),
+                    _ => unreachable!(),
+                };
+                let current_context = sess.new_turn(updates).await;
                 current_context
                     .client
                     .get_otel_event_manager()
                     .user_prompt(&items);
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
-                    // no current task, spawn a new one
-                    sess.spawn_task(Arc::clone(&current_context), sub.id, items, RegularTask)
-                        .await;
-                }
-            }
-            Op::UserTurn {
-                items,
-                cwd,
-                approval_policy,
-                sandbox_policy,
-                model,
-                effort,
-                summary,
-                final_output_json_schema,
-            } => {
-                let base_context = Arc::clone(&turn_context);
-                base_context
-                    .client
-                    .get_otel_event_manager()
-                    .user_prompt(&items);
-                // attempt to inject input into current task
-                if let Err(items) = sess.inject_input(items).await {
-                    let updates = SessionSettingsUpdate {
-                        cwd: Some(cwd),
-                        approval_policy: Some(approval_policy),
-                        sandbox_policy: Some(sandbox_policy),
-                        model: Some(model),
-                        reasoning_effort: Some(effort),
-                        reasoning_summary: Some(summary),
-                        final_output_json_schema: Some(final_output_json_schema),
-                    };
-                    let fresh_context = sess.new_turn(updates).await;
-                    if let Some(env_item) =
-                        sess.build_environment_update_item(Some(&turn_context), &fresh_context)
+                    if let Some(env_item) = sess
+                        .build_environment_update_item(previous_context.as_ref(), &current_context)
                     {
                         sess.record_conversation_items(std::slice::from_ref(&env_item))
                             .await;
@@ -1387,9 +1379,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         }
                     }
 
-                    turn_context = Arc::clone(&fresh_context);
-                    sess.spawn_task(fresh_context, sub.id, items, RegularTask)
+                    sess.spawn_task(Arc::clone(&current_context), sub.id, items, RegularTask)
                         .await;
+                    previous_context = Some(current_context);
                 }
             }
             Op::ExecApproval { id, decision } => match decision {
@@ -1495,6 +1487,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 sess.send_event(event).await;
             }
             Op::Compact => {
+                let turn_context = sess.new_turn(SessionSettingsUpdate::default()).await;
                 // Attempt to inject input into current task
                 if let Err(items) = sess
                     .inject_input(vec![InputItem::Text {
@@ -1564,6 +1557,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 sess.send_event(event).await;
             }
             Op::Review { review_request } => {
+                let turn_context = sess.new_turn(SessionSettingsUpdate::default()).await;
                 spawn_review_thread(
                     sess.clone(),
                     config.clone(),
@@ -2848,7 +2842,7 @@ mod tests {
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
-            otel_event_manager,
+            &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
             conversation_id,
@@ -2919,7 +2913,7 @@ mod tests {
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
-            otel_event_manager,
+            &otel_event_manager,
             session_configuration.provider.clone(),
             &session_configuration,
             conversation_id,
