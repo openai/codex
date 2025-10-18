@@ -323,42 +323,38 @@ impl PagerView {
             return false;
         }
 
-        if self.vim_prefix.take().is_some() {
-            if let KeyCode::Char(ch) = key_event.code {
-                if ch.to_ascii_lowercase() == 'g' {
-                    self.scroll_offset = 0;
-                    Self::request_redraw(tui);
-                    return true;
-                }
-            }
+        if self.vim_prefix.take().is_some()
+            && let KeyCode::Char(ch) = key_event.code
+            && ch.eq_ignore_ascii_case(&'g')
+        {
+            self.scroll_offset = 0;
+            Self::request_redraw(tui);
+            return true;
         }
 
         let mut handled = false;
-        match key_event.code {
-            KeyCode::Char(ch) => {
-                let lower = ch.to_ascii_lowercase();
-                let shift = key_event.modifiers.contains(KeyModifiers::SHIFT);
-                handled = match lower {
-                    'j' => {
-                        self.scroll_lines(1);
-                        true
-                    }
-                    'k' => {
-                        self.scroll_lines(-1);
-                        true
-                    }
-                    'g' if shift => {
-                        self.scroll_offset = usize::MAX;
-                        true
-                    }
-                    'g' => {
-                        self.vim_prefix = Some(VimPrefix::G);
-                        true
-                    }
-                    _ => false,
-                };
-            }
-            _ => {}
+        if let KeyCode::Char(ch) = key_event.code {
+            let lower = ch.to_ascii_lowercase();
+            let shift = key_event.modifiers.contains(KeyModifiers::SHIFT);
+            handled = match lower {
+                'j' => {
+                    self.scroll_lines(1);
+                    true
+                }
+                'k' => {
+                    self.scroll_lines(-1);
+                    true
+                }
+                'g' if shift => {
+                    self.scroll_offset = usize::MAX;
+                    true
+                }
+                'g' => {
+                    self.vim_prefix = Some(VimPrefix::G);
+                    true
+                }
+                _ => false,
+            };
         }
 
         if handled && !matches!(self.vim_prefix, Some(VimPrefix::G)) {

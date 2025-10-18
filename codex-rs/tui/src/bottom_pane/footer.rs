@@ -80,25 +80,25 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     ))
     .render(area, buf);
 
-    if let Some(status) = props.vim_status {
-        if matches!(props.mode, FooterMode::ShortcutSummary) {
-            let label = match status {
-                VimStatus::Insert => "-- INSERT --",
-                VimStatus::Normal => "-- NORMAL --",
-                VimStatus::Visual => "-- VISUAL --",
-                VimStatus::VisualLine => "-- VISUAL LINE --",
-            };
-            let span = Span::from(label.to_string()).dim();
-            let label_width = label.len() as u16;
-            let available_width = area.width;
-            if available_width > label_width + 1 {
-                let mut x = area.x + available_width - label_width - 1;
-                let min_x = area.x + FOOTER_INDENT_COLS as u16 + 1;
-                if x < min_x {
-                    x = min_x;
-                }
-                buf.set_span(x, area.y, &span, label_width);
+    if let Some(status) = props.vim_status
+        && matches!(props.mode, FooterMode::ShortcutSummary)
+    {
+        let label = match status {
+            VimStatus::Insert => "-- INSERT --",
+            VimStatus::Normal => "-- NORMAL --",
+            VimStatus::Visual => "-- VISUAL --",
+            VimStatus::VisualLine => "-- VISUAL LINE --",
+        };
+        let span = Span::from(label.to_string()).dim();
+        let label_width = label.len() as u16;
+        let available_width = area.width;
+        if available_width > label_width + 1 {
+            let mut x = area.x + available_width - label_width - 1;
+            let min_x = area.x + FOOTER_INDENT_COLS as u16 + 1;
+            if x < min_x {
+                x = min_x;
             }
+            buf.set_span(x, area.y, &span, label_width);
         }
     }
 }

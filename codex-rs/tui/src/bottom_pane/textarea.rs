@@ -30,6 +30,7 @@ pub(crate) enum VisualSelectionMode {
 struct Selection {
     anchor: usize,
     mode: VisualSelectionMode,
+    tail_inclusive: bool,
 }
 
 #[derive(Debug)]
@@ -92,7 +93,11 @@ impl TextArea {
 
     pub(crate) fn start_selection(&mut self, mode: VisualSelectionMode) {
         let anchor = self.cursor_pos;
-        self.selection = Some(Selection { anchor, mode });
+        self.selection = Some(Selection {
+            anchor,
+            mode,
+            tail_inclusive: true,
+        });
     }
 
     pub(crate) fn update_selection_mode(&mut self, mode: VisualSelectionMode) {
@@ -103,6 +108,12 @@ impl TextArea {
         }
     }
 
+    pub(crate) fn set_selection_tail_inclusive(&mut self, inclusive: bool) {
+        if let Some(selection) = self.selection.as_mut() {
+            selection.tail_inclusive = inclusive;
+        }
+    }
+
     pub(crate) fn clear_selection(&mut self) {
         self.selection = None;
     }
@@ -110,9 +121,11 @@ impl TextArea {
     pub(crate) fn selection_range(&self) -> Option<Range<usize>> {
         let selection = self.selection.as_ref()?;
         match selection.mode {
-            VisualSelectionMode::Character => {
-                self.selection_range_character(selection.anchor, self.cursor_pos)
-            }
+            VisualSelectionMode::Character => self.selection_range_character(
+                selection.anchor,
+                self.cursor_pos,
+                selection.tail_inclusive,
+            ),
             VisualSelectionMode::Line => {
                 Some(self.selection_range_line(selection.anchor, self.cursor_pos))
             }
@@ -127,18 +140,24 @@ impl TextArea {
         Some(removed)
     }
 
-    fn selection_range_character(&self, anchor: usize, cursor: usize) -> Option<Range<usize>> {
+    fn selection_range_character(
+        &self,
+        anchor: usize,
+        cursor: usize,
+        tail_inclusive: bool,
+    ) -> Option<Range<usize>> {
         if self.text.is_empty() {
             return None;
         }
         let mut start = anchor.min(cursor).min(self.text.len());
         let mut end = anchor.max(cursor).min(self.text.len());
+        let forward = anchor <= cursor;
         if start == end {
             end = self.next_atomic_boundary(end);
             if start == end {
                 start = self.prev_atomic_boundary(start);
             }
-        } else {
+        } else if tail_inclusive || !forward {
             end = self.next_atomic_boundary(end);
         }
         start = start.min(self.text.len());
@@ -964,17 +983,108 @@ impl TextArea {
         self.adjust_pos_out_of_elements(candidate, true)
     }
 
+    pub(crate) fn beginning_of_next_word(&self) -> usize {
+        if self.cursor_pos >= self.text.len() {
+            return self.text.len();
+        }
+
+        let suffix = &self.text[self.cursor_pos..];
+        let iter = suffix.char_indices();
+        let at_whitespace = iter
+            .clone()
+            .next()
+            .map(|(_, ch)| ch.is_whitespace())
+            .unwrap_or(false);
+
+        if at_whitespace {
+            for (offset, ch) in iter {
+                if !ch.is_whitespace() {
+                    let pos = self.cursor_pos + offset;
+                    return self.adjust_pos_out_of_elements(pos, true);
+                }
+            }
+            return self.text.len();
+        }
+
+        let mut after_word = self.text.len();
+        for (offset, ch) in iter {
+            if ch.is_whitespace() {
+                after_word = self.cursor_pos + offset;
+                break;
+            }
+        }
+        if after_word >= self.text.len() {
+            return self.text.len();
+        }
+
+        for (offset, ch) in self.text[after_word..].char_indices() {
+            if !ch.is_whitespace() {
+                let pos = after_word + offset;
+                return self.adjust_pos_out_of_elements(pos, true);
+            }
+        }
+
+        self.text.len()
+    }
+
     pub(crate) fn end_of_next_word(&self) -> usize {
-        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
-        else {
+        self.end_of_next_word_from(self.cursor_pos)
+    }
+
+    fn end_of_next_word_from(&self, start: usize) -> usize {
+        if start >= self.text.len() {
+            return self.text.len();
+        }
+        let suffix = &self.text[start..];
+        let Some(first_non_ws) = suffix.find(|c: char| !c.is_whitespace()) else {
             return self.text.len();
         };
-        let word_start = self.cursor_pos + first_non_ws;
+        let word_start = start + first_non_ws;
         let candidate = match self.text[word_start..].find(|c: char| c.is_whitespace()) {
             Some(rel_idx) => word_start + rel_idx,
             None => self.text.len(),
         };
         self.adjust_pos_out_of_elements(candidate, false)
+    }
+
+    pub(crate) fn end_of_next_word_inclusive(&self) -> usize {
+        if self.text.is_empty() {
+            return 0;
+        }
+        let len = self.text.len();
+        let current = self.cursor_pos.min(len);
+        if current == len {
+            return len;
+        }
+
+        let mut search_start = current;
+
+        if let Some(ch) = self.text[current..].chars().next() {
+            if !ch.is_whitespace() {
+                let next_boundary = self.next_atomic_boundary(current);
+                let next_char = self.text[next_boundary..].chars().next();
+                if next_char.is_none_or(char::is_whitespace) {
+                    let idx = next_boundary;
+                    search_start = self.text[idx..]
+                        .char_indices()
+                        .find(|&(_, c)| !c.is_whitespace())
+                        .map(|(offset, _)| idx + offset)
+                        .unwrap_or(len);
+                    if search_start >= len {
+                        return current;
+                    }
+                }
+            }
+        } else {
+            return current;
+        }
+
+        let exclusive = self.end_of_next_word_from(search_start);
+        if exclusive == 0 {
+            0
+        } else {
+            self.prev_atomic_boundary(exclusive)
+        }
     }
 
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
@@ -1591,15 +1701,23 @@ mod tests {
         let after_alpha = t.text().find("alpha").unwrap() + "alpha".len();
         t.set_cursor(after_alpha);
         assert_eq!(t.beginning_of_previous_word(), 2); // skip initial spaces
+        assert_eq!(t.beginning_of_next_word(), t.text().find("beta").unwrap());
 
         // Put cursor at start of beta
         let beta_start = t.text().find("beta").unwrap();
         t.set_cursor(beta_start);
         assert_eq!(t.end_of_next_word(), beta_start + "beta".len());
+        assert_eq!(t.beginning_of_next_word(), t.text().find("gamma").unwrap());
+        assert_eq!(
+            t.end_of_next_word_inclusive(),
+            beta_start + "beta".len().saturating_sub(1)
+        );
 
         // If at end, end_of_next_word returns len
         t.set_cursor(t.text().len());
         assert_eq!(t.end_of_next_word(), t.text().len());
+        assert_eq!(t.beginning_of_next_word(), t.text().len());
+        assert_eq!(t.end_of_next_word_inclusive(), t.text().len());
     }
 
     #[test]

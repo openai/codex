@@ -141,7 +141,8 @@ enum VimPending {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VimDeleteMotion {
-    ToNextWord,
+    ToNextWordStart,
+    ThroughNextWordEnd,
     ToLineStart,
     ToLineEnd,
 }
@@ -545,12 +546,24 @@ impl ChatComposer {
     }
 
     fn apply_vim_delete_motion(&mut self, motion: VimDeleteMotion) -> bool {
-        let target = match motion {
-            VimDeleteMotion::ToNextWord => self.textarea.end_of_next_word(),
-            VimDeleteMotion::ToLineStart => self.textarea.current_line_start(),
-            VimDeleteMotion::ToLineEnd => self.textarea.current_line_end(),
-        };
-        self.delete_with_selection(target)
+        match motion {
+            VimDeleteMotion::ToNextWordStart => {
+                let target = self.textarea.beginning_of_next_word();
+                self.delete_forward_range(target)
+            }
+            VimDeleteMotion::ThroughNextWordEnd => {
+                let target = self.textarea.end_of_next_word();
+                self.delete_forward_range(target)
+            }
+            VimDeleteMotion::ToLineStart => {
+                let target = self.textarea.current_line_start();
+                self.delete_with_selection(target)
+            }
+            VimDeleteMotion::ToLineEnd => {
+                let target = self.textarea.current_line_end();
+                self.delete_with_selection(target)
+            }
+        }
     }
 
     fn delete_with_selection(&mut self, target: usize) -> bool {
@@ -575,6 +588,26 @@ impl ChatComposer {
         } else {
             false
         }
+    }
+
+    fn delete_forward_range(&mut self, target: usize) -> bool {
+        let start = self.textarea.cursor();
+        let end = target.min(self.textarea.text().len());
+        if start >= end {
+            return false;
+        }
+        let removed = self.textarea.text()[start..end].to_string();
+        if removed.is_empty() {
+            return false;
+        }
+
+        self.textarea.clear_selection();
+        self.textarea.replace_range(start..end, "");
+        self.textarea
+            .set_cursor(start.min(self.textarea.text().len()));
+        self.set_vim_clipboard(removed);
+        self.after_vim_text_edit();
+        true
     }
 
     fn open_newline_below(&mut self) {
@@ -612,10 +645,10 @@ impl ChatComposer {
         }
         self.after_vim_text_edit();
 
-        if let Some(text) = replaced {
-            if !text.is_empty() {
-                self.set_vim_clipboard(text);
-            }
+        if let Some(text) = replaced
+            && !text.is_empty()
+        {
+            self.set_vim_clipboard(text);
         }
         true
     }
@@ -680,10 +713,10 @@ impl ChatComposer {
     }
 
     pub(crate) fn allows_backtrack_escape(&self) -> bool {
-        match self.vim.as_ref().map(|v| v.mode) {
-            Some(VimMode::Normal) | None => true,
-            _ => false,
-        }
+        matches!(
+            self.vim.as_ref().map(|v| v.mode),
+            Some(VimMode::Normal) | None
+        )
     }
 
     /// Integrate results from an asynchronous file search.
@@ -818,7 +851,7 @@ impl ChatComposer {
                 return Some((InputResult::None, true));
             }
             KeyCode::Char('w') => {
-                let pos = self.textarea.end_of_next_word();
+                let pos = self.textarea.beginning_of_next_word();
                 self.textarea.set_cursor(pos);
                 self.after_vim_cursor_motion();
                 return Some((InputResult::None, true));
@@ -830,7 +863,7 @@ impl ChatComposer {
                 return Some((InputResult::None, true));
             }
             KeyCode::Char('e') => {
-                let pos = self.textarea.end_of_next_word();
+                let pos = self.textarea.end_of_next_word_inclusive();
                 self.textarea.set_cursor(pos);
                 self.after_vim_cursor_motion();
                 return Some((InputResult::None, true));
@@ -917,7 +950,8 @@ impl ChatComposer {
 
     fn handle_vim_delete_pending(&mut self, key_event: &KeyEvent) -> Option<(InputResult, bool)> {
         let motion = match key_event.code {
-            KeyCode::Char('w') => Some(VimDeleteMotion::ToNextWord),
+            KeyCode::Char('w') => Some(VimDeleteMotion::ToNextWordStart),
+            KeyCode::Char('e') => Some(VimDeleteMotion::ThroughNextWordEnd),
             KeyCode::Char('0') => Some(VimDeleteMotion::ToLineStart),
             KeyCode::Char('$') => Some(VimDeleteMotion::ToLineEnd),
             _ => None,
@@ -938,6 +972,7 @@ impl ChatComposer {
         mode: VisualSelectionMode,
     ) -> Option<(InputResult, bool)> {
         self.textarea.update_selection_mode(mode);
+        self.textarea.set_selection_tail_inclusive(true);
 
         if key_event.modifiers.contains(KeyModifiers::ALT) {
             self.clear_vim_pending();
@@ -987,7 +1022,8 @@ impl ChatComposer {
                 return Some((InputResult::None, true));
             }
             KeyCode::Char('w') => {
-                let pos = self.textarea.end_of_next_word();
+                self.textarea.set_selection_tail_inclusive(false);
+                let pos = self.textarea.beginning_of_next_word();
                 self.textarea.set_cursor(pos);
                 self.after_vim_cursor_motion();
                 return Some((InputResult::None, true));
@@ -999,7 +1035,8 @@ impl ChatComposer {
                 return Some((InputResult::None, true));
             }
             KeyCode::Char('e') => {
-                let pos = self.textarea.end_of_next_word();
+                self.textarea.set_selection_tail_inclusive(true);
+                let pos = self.textarea.end_of_next_word_inclusive();
                 self.textarea.set_cursor(pos);
                 self.after_vim_cursor_motion();
                 return Some((InputResult::None, true));
@@ -2238,6 +2275,7 @@ impl WidgetRef for ChatComposer {
 mod vim_tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn vim_composer() -> ChatComposer {
@@ -2277,18 +2315,105 @@ mod vim_tests {
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
-        assert_eq!(composer.textarea.cursor(), 3);
+        assert_eq!(composer.textarea.cursor(), 4);
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
-        assert_eq!(composer.textarea.cursor(), 7);
+        assert_eq!(composer.textarea.cursor(), 8);
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
         assert_eq!(composer.textarea.cursor(), 4);
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
-        assert_eq!(composer.textarea.cursor(), 7);
-
+        assert_eq!(composer.textarea.cursor(), 6);
         assert!(composer.textarea.has_selection());
+        let selection = composer.textarea.selection_range().unwrap();
+        assert_eq!(selection, 0..7);
+    }
+
+    #[test]
+    fn normal_mode_w_moves_to_word_start() {
+        let mut composer = vim_composer();
+        composer.set_text_content("foo bar baz".to_string());
+        composer.textarea.set_cursor(0);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 4);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 8);
+    }
+
+    #[test]
+    fn normal_mode_e_moves_to_word_end() {
+        let mut composer = vim_composer();
+        composer.set_text_content("foo bar".to_string());
+        composer.textarea.set_cursor(0);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 2);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 6);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 6);
+    }
+
+    #[test]
+    fn normal_mode_w_skips_consecutive_whitespace() {
+        let mut composer = vim_composer();
+        composer.set_text_content("foo  bar".to_string());
+        composer.textarea.set_cursor(1);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), 5);
+    }
+
+    #[test]
+    fn normal_mode_w_at_end_does_not_move() {
+        let mut composer = vim_composer();
+        composer.set_text_content("foo".to_string());
+        let len = composer.textarea.text().len();
+        composer.textarea.set_cursor(len);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.cursor(), len);
+    }
+
+    #[test]
+    fn operator_pending_dw_and_de_match_vim() {
+        let mut composer = vim_composer();
+        composer.set_text_content("foo bar".to_string());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "bar");
+
+        composer.set_text_content("foo bar".to_string());
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), " bar");
+    }
+
+    #[test]
+    fn visual_mode_w_excludes_next_word_start_from_selection() {
+        let mut composer = vim_composer();
+        composer.set_text_content("foo bar".to_string());
+        composer.textarea.set_cursor(0);
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+
+        assert_eq!(composer.textarea.cursor(), 4);
+        let selection = composer.textarea.selection_range().unwrap();
+        assert_eq!(selection, 0..4);
     }
 
     #[test]
