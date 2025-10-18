@@ -50,6 +50,7 @@ Custom prompts turn your repeatable instructions into reusable slash commands, s
 ---
 description: Create feature branch, commit and open draft PR.
 ---
+
 Create a branch named `tibo/<feature_name>`, commit the changes, and open a draft PR.
 ```
 
