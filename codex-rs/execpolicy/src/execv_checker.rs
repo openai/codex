@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
@@ -88,7 +89,7 @@ impl ExecvChecker {
         let mut program = valid_exec.program.to_string();
         for system_path in valid_exec.system_path {
             if is_executable_file(&system_path) {
-                program = system_path.to_string();
+                program = system_path;
                 break;
             }
         }
@@ -108,7 +109,7 @@ fn ensure_absolute_path(path: &str, cwd: &Option<OsString>) -> Result<PathBuf> {
         file.absolutize()
     };
     result
-        .map(|path| path.into_owned())
+        .map(Cow::into_owned)
         .map_err(|error| CannotCanonicalizePath {
             file: path.to_string(),
             error: error.kind(),
@@ -140,12 +141,13 @@ fn is_executable_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use tempfile::TempDir;
 
     use super::*;
     use crate::MatchedArg;
     use crate::PolicyParser;
+    use anyhow::Result;
+    use anyhow::anyhow;
 
     fn setup(fake_cp: &Path) -> ExecvChecker {
         let source = format!(
@@ -164,7 +166,7 @@ system_path=[{fake_cp:?}]
 
     #[test]
     fn test_check_valid_input_files() -> Result<()> {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new()?;
 
         // Create an executable file that can be used with the system_path arg.
         let fake_cp = temp_dir.path().join("cp");
@@ -172,14 +174,14 @@ system_path=[{fake_cp:?}]
         {
             use std::os::unix::fs::PermissionsExt;
 
-            let fake_cp_file = std::fs::File::create(&fake_cp).unwrap();
-            let mut permissions = fake_cp_file.metadata().unwrap().permissions();
+            let fake_cp_file = std::fs::File::create(&fake_cp)?;
+            let mut permissions = fake_cp_file.metadata()?.permissions();
             permissions.set_mode(0o755);
-            std::fs::set_permissions(&fake_cp, permissions).unwrap();
+            std::fs::set_permissions(&fake_cp, permissions)?;
         }
         #[cfg(windows)]
         {
-            std::fs::File::create(&fake_cp).unwrap();
+            std::fs::File::create(&fake_cp)?;
         }
 
         // Create root_path and reference to files under the root.
@@ -197,9 +199,9 @@ system_path=[{fake_cp:?}]
         let checker = setup(&fake_cp);
         let exec_call = ExecCall {
             program: "cp".into(),
-            args: vec![source.clone(), dest.clone()],
+            args: vec![source, dest.clone()],
         };
-        let valid_exec = match checker.r#match(&exec_call)? {
+        let valid_exec = match checker.r#match(&exec_call).map_err(|e| anyhow!("{e:?}"))? {
             MatchedExec::Match { exec } => exec,
             unexpected => panic!("Expected a safe exec but got {unexpected:?}"),
         };
@@ -208,14 +210,19 @@ system_path=[{fake_cp:?}]
         assert_eq!(
             checker.check(valid_exec.clone(), &cwd, &[], &[]),
             Err(ReadablePathNotInReadableFolders {
-                file: source_path.clone(),
+                file: source_path,
                 folders: vec![]
             }),
         );
 
         // Only readable folders specified.
         assert_eq!(
-            checker.check(valid_exec.clone(), &cwd, &[root_path.clone()], &[]),
+            checker.check(
+                valid_exec.clone(),
+                &cwd,
+                std::slice::from_ref(&root_path),
+                &[]
+            ),
             Err(WriteablePathNotInWriteableFolders {
                 file: dest_path.clone(),
                 folders: vec![]
@@ -225,10 +232,10 @@ system_path=[{fake_cp:?}]
         // Both readable and writeable folders specified.
         assert_eq!(
             checker.check(
-                valid_exec.clone(),
+                valid_exec,
                 &cwd,
-                &[root_path.clone()],
-                &[root_path.clone()]
+                std::slice::from_ref(&root_path),
+                std::slice::from_ref(&root_path)
             ),
             Ok(cp.clone()),
         );
@@ -237,9 +244,12 @@ system_path=[{fake_cp:?}]
         // folders.
         let exec_call_folders_as_args = ExecCall {
             program: "cp".into(),
-            args: vec![root.clone(), root.clone()],
+            args: vec![root.clone(), root],
         };
-        let valid_exec_call_folders_as_args = match checker.r#match(&exec_call_folders_as_args)? {
+        let valid_exec_call_folders_as_args = match checker
+            .r#match(&exec_call_folders_as_args)
+            .map_err(|e| anyhow!("{e:?}"))?
+        {
             MatchedExec::Match { exec } => exec,
             _ => panic!("Expected a safe exec"),
         };
@@ -247,10 +257,10 @@ system_path=[{fake_cp:?}]
             checker.check(
                 valid_exec_call_folders_as_args,
                 &cwd,
-                &[root_path.clone()],
-                &[root_path.clone()]
+                std::slice::from_ref(&root_path),
+                std::slice::from_ref(&root_path)
             ),
-            Ok(cp.clone()),
+            Ok(cp),
         );
 
         // Specify a parent of a readable folder as input.
@@ -261,8 +271,9 @@ system_path=[{fake_cp:?}]
                     0,
                     ArgType::ReadableFile,
                     root_path.parent().unwrap().to_str().unwrap(),
-                )?,
-                MatchedArg::new(1, ArgType::WriteableFile, &dest)?,
+                )
+                .map_err(|e| anyhow!("{e:?}"))?,
+                MatchedArg::new(1, ArgType::WriteableFile, &dest).map_err(|e| anyhow!("{e:?}"))?,
             ],
             ..Default::default()
         };
@@ -270,8 +281,8 @@ system_path=[{fake_cp:?}]
             checker.check(
                 exec_with_parent_of_readable_folder,
                 &cwd,
-                &[root_path.clone()],
-                &[dest_path.clone()]
+                std::slice::from_ref(&root_path),
+                std::slice::from_ref(&dest_path)
             ),
             Err(ReadablePathNotInReadableFolders {
                 file: root_path.parent().unwrap().to_path_buf(),

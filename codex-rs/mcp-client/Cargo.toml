@@ -7,13 +7,13 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-anyhow = "1"
-mcp-types = { path = "../mcp-types" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tracing = { version = "0.1.41", features = ["log"] }
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-tokio = { version = "1", features = [
+anyhow = { workspace = true }
+mcp-types = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+tokio = { workspace = true, features = [
     "io-util",
     "macros",
     "process",

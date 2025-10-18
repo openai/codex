@@ -1,8 +1,13 @@
 //! Prototype MCP server.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
+
+use codex_common::CliConfigOverrides;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
 
 use mcp_types::JSONRPCMessage;
 use tokio::io::AsyncBufReadExt;
@@ -17,14 +22,11 @@ use tracing_subscriber::EnvFilter;
 
 mod codex_tool_config;
 mod codex_tool_runner;
-mod conversation_loop;
+mod error_code;
 mod exec_approval;
-mod json_to_toml;
-pub mod mcp_protocol;
 pub(crate) mod message_processor;
 mod outgoing_message;
 mod patch_approval;
-pub(crate) mod tool_handlers;
 
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
@@ -42,7 +44,10 @@ pub use crate::patch_approval::PatchApprovalResponse;
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
 
-pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> {
+pub async fn run_main(
+    codex_linux_sandbox_exe: Option<PathBuf>,
+    cli_config_overrides: CliConfigOverrides,
+) -> IoResult<()> {
     // Install a simple subscriber so `tracing` output is visible.  Users can
     // control the log level with `RUST_LOG`.
     tracing_subscriber::fmt()
@@ -52,11 +57,10 @@ pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> 
 
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
-    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({
-        let incoming_tx = incoming_tx.clone();
         async move {
             let stdin = io::stdin();
             let reader = BufReader::new(stdin);
@@ -78,10 +82,28 @@ pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> 
         }
     });
 
+    // Parse CLI overrides once and derive the base Config eagerly so later
+    // components do not need to work with raw TOML values.
+    let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("error parsing -c overrides: {e}"),
+        )
+    })?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
+        .await
+        .map_err(|e| {
+            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+        })?;
+
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
-        let mut processor = MessageProcessor::new(outgoing_message_sender, codex_linux_sandbox_exe);
+        let mut processor = MessageProcessor::new(
+            outgoing_message_sender,
+            codex_linux_sandbox_exe,
+            std::sync::Arc::new(config),
+        );
         async move {
             while let Some(msg) = incoming_rx.recv().await {
                 match msg {
@@ -109,10 +131,6 @@ pub async fn run_main(codex_linux_sandbox_exe: Option<PathBuf>) -> IoResult<()> 
                     }
                     if let Err(e) = stdout.write_all(b"\n").await {
                         error!("Failed to write newline to stdout: {e}");
-                        break;
-                    }
-                    if let Err(e) = stdout.flush().await {
-                        error!("Failed to flush stdout: {e}");
                         break;
                     }
                 }

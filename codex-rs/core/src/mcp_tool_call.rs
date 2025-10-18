@@ -1,16 +1,15 @@
-use std::time::Duration;
 use std::time::Instant;
 
 use tracing::error;
 
 use crate::codex::Session;
-use crate::models::FunctionCallOutputPayload;
-use crate::models::ResponseInputItem;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
 
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
@@ -21,7 +20,6 @@ pub(crate) async fn handle_mcp_tool_call(
     server: String,
     tool_name: String,
     arguments: String,
-    timeout: Option<Duration>,
 ) -> ResponseInputItem {
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
     // is not.
@@ -58,9 +56,12 @@ pub(crate) async fn handle_mcp_tool_call(
     let start = Instant::now();
     // Perform the tool call.
     let result = sess
-        .call_tool(&server, &tool_name, arguments_value.clone(), timeout)
+        .call_tool(&server, &tool_name, arguments_value.clone())
         .await
-        .map_err(|e| format!("tool call error: {e}"));
+        .map_err(|e| format!("tool call error: {e:?}"));
+    if let Err(e) = &result {
+        tracing::warn!("MCP tool call error: {e:?}");
+    }
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.clone(),
         invocation,

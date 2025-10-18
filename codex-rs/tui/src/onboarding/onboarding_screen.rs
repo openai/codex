@@ -1,36 +1,46 @@
-use codex_core::util::is_inside_git_repo;
+use codex_core::AuthManager;
+use codex_core::config::Config;
+use codex_core::git_info::get_git_repo_root;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::prelude::Widget;
+use ratatui::style::Color;
+use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
-use codex_login::AuthMode;
+use codex_app_server_protocol::AuthMode;
 
-use crate::app::ChatWidgetArgs;
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
+use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
-use crate::onboarding::continue_to_chat::ContinueToChatWidget;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
-use std::path::PathBuf;
+use crate::onboarding::windows::WindowsSetupWidget;
+use crate::tui::FrameRequester;
+use crate::tui::Tui;
+use crate::tui::TuiEvent;
+use color_eyre::eyre::Result;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 #[allow(clippy::large_enum_variant)]
 enum Step {
+    Windows(WindowsSetupWidget),
     Welcome(WelcomeWidget),
     Auth(AuthModeWidget),
     TrustDirectory(TrustDirectoryWidget),
-    ContinueToChat(ContinueToChatWidget),
 }
 
 pub(crate) trait KeyboardHandler {
     fn handle_key_event(&mut self, key_event: KeyEvent);
+    fn handle_paste(&mut self, _pasted: String) {}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StepState {
     Hidden,
     InProgress,
@@ -42,51 +52,64 @@ pub(crate) trait StepStateProvider {
 }
 
 pub(crate) struct OnboardingScreen {
-    event_tx: AppEventSender,
+    request_frame: FrameRequester,
     steps: Vec<Step>,
+    is_done: bool,
+    windows_install_selected: bool,
 }
 
 pub(crate) struct OnboardingScreenArgs {
-    pub event_tx: AppEventSender,
-    pub chat_widget_args: ChatWidgetArgs,
-    pub codex_home: PathBuf,
-    pub cwd: PathBuf,
-    pub show_login_screen: bool,
+    pub show_windows_wsl_screen: bool,
     pub show_trust_screen: bool,
+    pub show_login_screen: bool,
+    pub login_status: LoginStatus,
+    pub auth_manager: Arc<AuthManager>,
+    pub config: Config,
+}
+
+pub(crate) struct OnboardingResult {
+    pub directory_trust_decision: Option<TrustDirectorySelection>,
+    pub windows_install_selected: bool,
 }
 
 impl OnboardingScreen {
-    pub(crate) fn new(args: OnboardingScreenArgs) -> Self {
+    pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
-            event_tx,
-            chat_widget_args,
-            codex_home,
-            cwd,
-            show_login_screen,
+            show_windows_wsl_screen,
             show_trust_screen,
+            show_login_screen,
+            login_status,
+            auth_manager,
+            config,
         } = args;
-        let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
-            is_logged_in: !show_login_screen,
-        })];
+        let cwd = config.cwd.clone();
+        let codex_home = config.codex_home;
+        let mut steps: Vec<Step> = Vec::new();
+        if show_windows_wsl_screen {
+            steps.push(Step::Windows(WindowsSetupWidget::new(codex_home.clone())));
+        }
+        steps.push(Step::Welcome(WelcomeWidget::new(
+            !matches!(login_status, LoginStatus::NotAuthenticated),
+            tui.frame_requester(),
+        )));
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {
-                event_tx: event_tx.clone(),
+                request_frame: tui.frame_requester(),
                 highlighted_mode: AuthMode::ChatGPT,
                 error: None,
-                sign_in_state: SignInState::PickMode,
+                sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                 codex_home: codex_home.clone(),
+                login_status,
+                auth_manager,
             }))
         }
-        let is_git_repo = is_inside_git_repo(&cwd);
+        let is_git_repo = get_git_repo_root(&cwd).is_some();
         let highlighted = if is_git_repo {
             TrustDirectorySelection::Trust
         } else {
             // Default to not trusting the directory if it's not a git repo.
             TrustDirectorySelection::DontTrust
         };
-        // Share ChatWidgetArgs between steps so changes in the TrustDirectory step
-        // are reflected when continuing to chat.
-        let shared_chat_args = Arc::new(Mutex::new(chat_widget_args));
         if show_trust_screen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
@@ -95,31 +118,14 @@ impl OnboardingScreen {
                 selection: None,
                 highlighted,
                 error: None,
-                chat_widget_args: shared_chat_args.clone(),
             }))
         }
-        steps.push(Step::ContinueToChat(ContinueToChatWidget {
-            event_tx: event_tx.clone(),
-            chat_widget_args: shared_chat_args,
-        }));
         // TODO: add git warning.
-        Self { event_tx, steps }
-    }
-
-    pub(crate) fn on_auth_complete(&mut self, result: Result<(), String>) {
-        let current_step = self.current_step_mut();
-        if let Some(Step::Auth(state)) = current_step {
-            match result {
-                Ok(()) => {
-                    state.sign_in_state = SignInState::ChatGptSuccessMessage;
-                    self.event_tx.send(AppEvent::RequestRedraw);
-                }
-                Err(e) => {
-                    state.sign_in_state = SignInState::PickMode;
-                    state.error = Some(e);
-                    self.event_tx.send(AppEvent::RequestRedraw);
-                }
-            }
+        Self {
+            request_frame: tui.frame_requester(),
+            steps,
+            is_done: false,
+            windows_install_selected: false,
         }
     }
 
@@ -153,24 +159,93 @@ impl OnboardingScreen {
         out
     }
 
-    fn current_step_mut(&mut self) -> Option<&mut Step> {
+    pub(crate) fn is_done(&self) -> bool {
+        self.is_done
+            || !self
+                .steps
+                .iter()
+                .any(|step| matches!(step.get_step_state(), StepState::InProgress))
+    }
+
+    pub fn directory_trust_decision(&self) -> Option<TrustDirectorySelection> {
         self.steps
-            .iter_mut()
-            .find(|step| matches!(step.get_step_state(), StepState::InProgress))
+            .iter()
+            .find_map(|step| {
+                if let Step::TrustDirectory(TrustDirectoryWidget { selection, .. }) = step {
+                    Some(*selection)
+                } else {
+                    None
+                }
+            })
+            .flatten()
+    }
+
+    pub fn windows_install_selected(&self) -> bool {
+        self.windows_install_selected
     }
 }
 
 impl KeyboardHandler for OnboardingScreen {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if let Some(active_step) = self.current_steps_mut().into_iter().last() {
-            active_step.handle_key_event(key_event);
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('q'),
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.is_done = true;
+            }
+            _ => {
+                if let Some(Step::Welcome(widget)) = self
+                    .steps
+                    .iter_mut()
+                    .find(|step| matches!(step, Step::Welcome(_)))
+                {
+                    widget.handle_key_event(key_event);
+                }
+                if let Some(active_step) = self.current_steps_mut().into_iter().last() {
+                    active_step.handle_key_event(key_event);
+                }
+            }
+        };
+        if self
+            .steps
+            .iter()
+            .any(|step| matches!(step, Step::Windows(widget) if widget.exit_requested()))
+        {
+            self.windows_install_selected = true;
+            self.is_done = true;
         }
-        self.event_tx.send(AppEvent::RequestRedraw);
+        self.request_frame.schedule_frame();
+    }
+
+    fn handle_paste(&mut self, pasted: String) {
+        if pasted.is_empty() {
+            return;
+        }
+
+        if let Some(active_step) = self.current_steps_mut().into_iter().last() {
+            active_step.handle_paste(pasted);
+        }
+        self.request_frame.schedule_frame();
     }
 }
 
 impl WidgetRef for &OnboardingScreen {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
         // Render steps top-to-bottom, measuring each step's height dynamically.
         let mut y = area.y;
         let bottom = area.y.saturating_add(area.height);
@@ -185,8 +260,12 @@ impl WidgetRef for &OnboardingScreen {
             for yy in 0..height {
                 let mut any = false;
                 for xx in 0..width {
-                    let sym = tmp[(xx, yy)].symbol();
-                    if !sym.trim().is_empty() {
+                    let cell = &tmp[(xx, yy)];
+                    let has_symbol = !cell.symbol().trim().is_empty();
+                    let has_style = cell.fg != Color::Reset
+                        || cell.bg != Color::Reset
+                        || !cell.modifier.is_empty();
+                    if has_symbol || has_style {
                         any = true;
                         break;
                     }
@@ -218,6 +297,7 @@ impl WidgetRef for &OnboardingScreen {
                     width,
                     height: h,
                 };
+                Clear.render(target, buf);
                 step.render_ref(target, buf);
                 y = y.saturating_add(h);
             }
@@ -229,9 +309,19 @@ impl WidgetRef for &OnboardingScreen {
 impl KeyboardHandler for Step {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
-            Step::Welcome(_) | Step::ContinueToChat(_) => (),
+            Step::Windows(widget) => widget.handle_key_event(key_event),
+            Step::Welcome(widget) => widget.handle_key_event(key_event),
             Step::Auth(widget) => widget.handle_key_event(key_event),
             Step::TrustDirectory(widget) => widget.handle_key_event(key_event),
+        }
+    }
+
+    fn handle_paste(&mut self, pasted: String) {
+        match self {
+            Step::Windows(_) => {}
+            Step::Welcome(_) => {}
+            Step::Auth(widget) => widget.handle_paste(pasted),
+            Step::TrustDirectory(widget) => widget.handle_paste(pasted),
         }
     }
 }
@@ -239,10 +329,10 @@ impl KeyboardHandler for Step {
 impl StepStateProvider for Step {
     fn get_step_state(&self) -> StepState {
         match self {
+            Step::Windows(w) => w.get_step_state(),
             Step::Welcome(w) => w.get_step_state(),
             Step::Auth(w) => w.get_step_state(),
             Step::TrustDirectory(w) => w.get_step_state(),
-            Step::ContinueToChat(w) => w.get_step_state(),
         }
     }
 }
@@ -250,6 +340,9 @@ impl StepStateProvider for Step {
 impl WidgetRef for Step {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         match self {
+            Step::Windows(widget) => {
+                widget.render_ref(area, buf);
+            }
             Step::Welcome(widget) => {
                 widget.render_ref(area, buf);
             }
@@ -259,9 +352,76 @@ impl WidgetRef for Step {
             Step::TrustDirectory(widget) => {
                 widget.render_ref(area, buf);
             }
-            Step::ContinueToChat(widget) => {
-                widget.render_ref(area, buf);
+        }
+    }
+}
+
+pub(crate) async fn run_onboarding_app(
+    args: OnboardingScreenArgs,
+    tui: &mut Tui,
+) -> Result<OnboardingResult> {
+    use tokio_stream::StreamExt;
+
+    let mut onboarding_screen = OnboardingScreen::new(tui, args);
+    // One-time guard to fully clear the screen after ChatGPT login success message is shown
+    let mut did_full_clear_after_success = false;
+
+    tui.draw(u16::MAX, |frame| {
+        frame.render_widget_ref(&onboarding_screen, frame.area());
+    })?;
+
+    let tui_events = tui.event_stream();
+    tokio::pin!(tui_events);
+
+    while !onboarding_screen.is_done() {
+        if let Some(event) = tui_events.next().await {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    onboarding_screen.handle_key_event(key_event);
+                }
+                TuiEvent::Paste(text) => {
+                    onboarding_screen.handle_paste(text);
+                }
+                TuiEvent::Draw => {
+                    if !did_full_clear_after_success
+                        && onboarding_screen.steps.iter().any(|step| {
+                            if let Step::Auth(w) = step {
+                                w.sign_in_state.read().is_ok_and(|g| {
+                                    matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+                                })
+                            } else {
+                                false
+                            }
+                        })
+                    {
+                        // Reset any lingering SGR (underline/color) before clearing
+                        let _ = ratatui::crossterm::execute!(
+                            std::io::stdout(),
+                            ratatui::crossterm::style::SetAttribute(
+                                ratatui::crossterm::style::Attribute::Reset
+                            ),
+                            ratatui::crossterm::style::SetAttribute(
+                                ratatui::crossterm::style::Attribute::NoUnderline
+                            ),
+                            ratatui::crossterm::style::SetForegroundColor(
+                                ratatui::crossterm::style::Color::Reset
+                            ),
+                            ratatui::crossterm::style::SetBackgroundColor(
+                                ratatui::crossterm::style::Color::Reset
+                            )
+                        );
+                        let _ = tui.terminal.clear();
+                        did_full_clear_after_success = true;
+                    }
+                    let _ = tui.draw(u16::MAX, |frame| {
+                        frame.render_widget_ref(&onboarding_screen, frame.area());
+                    });
+                }
             }
         }
     }
+    Ok(OnboardingResult {
+        directory_trust_decision: onboarding_screen.directory_trust_decision(),
+        windows_install_selected: onboarding_screen.windows_install_selected(),
+    })
 }

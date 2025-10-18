@@ -1,23 +1,28 @@
 //! Project-level documentation discovery.
 //!
-//! Project-level documentation can be stored in a file named `AGENTS.md`.
-//! Currently, we include only the contents of the first file found as follows:
+//! Project-level documentation is primarily stored in files named `AGENTS.md`.
+//! Additional fallback filenames can be configured via `project_doc_fallback_filenames`.
+//! We include the concatenation of all files found along the path from the
+//! repository root to the current working directory as follows:
 //!
-//! 1.  Look for the doc file in the current working directory (as determined
-//!     by the `Config`).
-//! 2.  If not found, walk *upwards* until the Git repository root is reached
-//!     (detected by the presence of a `.git` directory/file), or failing that,
-//!     the filesystem root.
-//! 3.  If the Git root is encountered, look for the doc file there. If it
-//!     exists, the search stops – we do **not** walk past the Git root.
+//! 1.  Determine the Git repository root by walking upwards from the current
+//!     working directory until a `.git` directory or file is found. If no Git
+//!     root is found, only the current working directory is considered.
+//! 2.  Collect every `AGENTS.md` found from the repository root down to the
+//!     current working directory (inclusive) and concatenate their contents in
+//!     that order.
+//! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
-use std::path::Path;
+use dunce::canonicalize as normalize_path;
+use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
 
-/// Currently, we only match the filename `AGENTS.md` exactly.
-const CANDIDATE_FILENAMES: &[&str] = &["AGENTS.md"];
+/// Default filename scanned for project-level docs.
+pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
+/// Preferred local override for project-level docs.
+pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
 
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
@@ -26,7 +31,7 @@ const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
-    match find_project_doc(config).await {
+    match read_project_docs(config).await {
         Ok(Some(project_doc)) => match &config.user_instructions {
             Some(original_instructions) => Some(format!(
                 "{original_instructions}{PROJECT_DOC_SEPARATOR}{project_doc}"
@@ -41,101 +46,157 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
     }
 }
 
-/// Attempt to locate and load the project documentation. Currently, the search
-/// starts from `Config::cwd`, but if we may want to consider other directories
-/// in the future, e.g., additional writable directories in the `SandboxPolicy`.
+/// Attempt to locate and load the project documentation.
 ///
-/// On success returns `Ok(Some(contents))`. If no documentation file is found
-/// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
-/// `Err` so callers can decide how to handle them.
-async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
-    let max_bytes = config.project_doc_max_bytes;
+/// On success returns `Ok(Some(contents))` where `contents` is the
+/// concatenation of all discovered docs. If no documentation file is found the
+/// function returns `Ok(None)`. Unexpected I/O failures bubble up as `Err` so
+/// callers can decide how to handle them.
+pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String>> {
+    let max_total = config.project_doc_max_bytes;
 
-    // Attempt to load from the working directory first.
-    if let Some(doc) = load_first_candidate(&config.cwd, CANDIDATE_FILENAMES, max_bytes).await? {
-        return Ok(Some(doc));
+    if max_total == 0 {
+        return Ok(None);
     }
 
-    // Walk up towards the filesystem root, stopping once we encounter the Git
-    // repository root. The presence of **either** a `.git` *file* or
-    // *directory* counts.
-    let mut dir = config.cwd.clone();
+    let paths = discover_project_doc_paths(config)?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
 
-    // Canonicalize the path so that we do not end up in an infinite loop when
-    // `cwd` contains `..` components.
-    if let Ok(canon) = dir.canonicalize() {
+    let mut remaining: u64 = max_total as u64;
+    let mut parts: Vec<String> = Vec::new();
+
+    for p in paths {
+        if remaining == 0 {
+            break;
+        }
+
+        let file = match tokio::fs::File::open(&p).await {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+
+        let size = file.metadata().await?.len();
+        let mut reader = tokio::io::BufReader::new(file).take(remaining);
+        let mut data: Vec<u8> = Vec::new();
+        reader.read_to_end(&mut data).await?;
+
+        if size > remaining {
+            tracing::warn!(
+                "Project doc `{}` exceeds remaining budget ({} bytes) - truncating.",
+                p.display(),
+                remaining,
+            );
+        }
+
+        let text = String::from_utf8_lossy(&data).to_string();
+        if !text.trim().is_empty() {
+            parts.push(text);
+            remaining = remaining.saturating_sub(data.len() as u64);
+        }
+    }
+
+    if parts.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(parts.join("\n\n")))
+    }
+}
+
+/// Discover the list of AGENTS.md files using the same search rules as
+/// `read_project_docs`, but return the file paths instead of concatenated
+/// contents. The list is ordered from repository root to the current working
+/// directory (inclusive). Symlinks are allowed. When `project_doc_max_bytes`
+/// is zero, returns an empty list.
+pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBuf>> {
+    let mut dir = config.cwd.clone();
+    if let Ok(canon) = normalize_path(&dir) {
         dir = canon;
     }
 
-    while let Some(parent) = dir.parent() {
-        // `.git` can be a *file* (for worktrees or submodules) or a *dir*.
-        let git_marker = dir.join(".git");
-        let git_exists = match tokio::fs::metadata(&git_marker).await {
+    // Build chain from cwd upwards and detect git root.
+    let mut chain: Vec<PathBuf> = vec![dir.clone()];
+    let mut git_root: Option<PathBuf> = None;
+    let mut cursor = dir;
+    while let Some(parent) = cursor.parent() {
+        let git_marker = cursor.join(".git");
+        let git_exists = match std::fs::metadata(&git_marker) {
             Ok(_) => true,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
             Err(e) => return Err(e),
         };
 
         if git_exists {
-            // We are at the repo root – attempt one final load.
-            if let Some(doc) = load_first_candidate(&dir, CANDIDATE_FILENAMES, max_bytes).await? {
-                return Ok(Some(doc));
-            }
+            git_root = Some(cursor.clone());
             break;
         }
 
-        dir = parent.to_path_buf();
+        chain.push(parent.to_path_buf());
+        cursor = parent.to_path_buf();
     }
 
-    Ok(None)
+    let search_dirs: Vec<PathBuf> = if let Some(root) = git_root {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let mut saw_root = false;
+        for p in chain.iter().rev() {
+            if !saw_root {
+                if p == &root {
+                    saw_root = true;
+                } else {
+                    continue;
+                }
+            }
+            dirs.push(p.clone());
+        }
+        dirs
+    } else {
+        vec![config.cwd.clone()]
+    };
+
+    let mut found: Vec<PathBuf> = Vec::new();
+    let candidate_filenames = candidate_filenames(config);
+    for d in search_dirs {
+        for name in &candidate_filenames {
+            let candidate = d.join(name);
+            match std::fs::symlink_metadata(&candidate) {
+                Ok(md) => {
+                    let ft = md.file_type();
+                    // Allow regular files and symlinks; opening will later fail for dangling links.
+                    if ft.is_file() || ft.is_symlink() {
+                        found.push(candidate);
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    Ok(found)
 }
 
-/// Attempt to load the first candidate file found in `dir`. Returns the file
-/// contents (truncated if it exceeds `max_bytes`) when successful.
-async fn load_first_candidate(
-    dir: &Path,
-    names: &[&str],
-    max_bytes: usize,
-) -> std::io::Result<Option<String>> {
-    for name in names {
-        let candidate = dir.join(name);
-
-        let file = match tokio::fs::File::open(&candidate).await {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
-            Ok(f) => f,
-        };
-
-        let size = file.metadata().await?.len();
-
-        let reader = tokio::io::BufReader::new(file);
-        let mut data = Vec::with_capacity(std::cmp::min(size as usize, max_bytes));
-        let mut limited = reader.take(max_bytes as u64);
-        limited.read_to_end(&mut data).await?;
-
-        if size as usize > max_bytes {
-            tracing::warn!(
-                "Project doc `{}` exceeds {max_bytes} bytes - truncating.",
-                candidate.display(),
-            );
-        }
-
-        let contents = String::from_utf8_lossy(&data).to_string();
-        if contents.trim().is_empty() {
-            // Empty file – treat as not found.
+fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
+    let mut names: Vec<&'a str> =
+        Vec::with_capacity(2 + config.project_doc_fallback_filenames.len());
+    names.push(LOCAL_PROJECT_DOC_FILENAME);
+    names.push(DEFAULT_PROJECT_DOC_FILENAME);
+    for candidate in &config.project_doc_fallback_filenames {
+        let candidate = candidate.as_str();
+        if candidate.is_empty() {
             continue;
         }
-
-        return Ok(Some(contents));
+        if !names.contains(&candidate) {
+            names.push(candidate);
+        }
     }
-
-    Ok(None)
+    names
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
-
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
@@ -160,6 +221,20 @@ mod tests {
         config.project_doc_max_bytes = limit;
 
         config.user_instructions = instructions.map(ToOwned::to_owned);
+        config
+    }
+
+    fn make_config_with_fallback(
+        root: &TempDir,
+        limit: usize,
+        instructions: Option<&str>,
+        fallbacks: &[&str],
+    ) -> Config {
+        let mut config = make_config(root, limit, instructions);
+        config.project_doc_fallback_filenames = fallbacks
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect();
         config
     }
 
@@ -279,5 +354,97 @@ mod tests {
         let res = get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS))).await;
 
         assert_eq!(res, Some(INSTRUCTIONS.to_string()));
+    }
+
+    /// When both the repository root and the working directory contain
+    /// AGENTS.md files, their contents are concatenated from root to cwd.
+    #[tokio::test]
+    async fn concatenates_root_and_cwd_docs() {
+        let repo = tempfile::tempdir().expect("tempdir");
+
+        // Simulate a git repository.
+        std::fs::write(
+            repo.path().join(".git"),
+            "gitdir: /path/to/actual/git/dir\n",
+        )
+        .unwrap();
+
+        // Repo root doc.
+        fs::write(repo.path().join("AGENTS.md"), "root doc").unwrap();
+
+        // Nested working directory with its own doc.
+        let nested = repo.path().join("workspace/crate_a");
+        std::fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("AGENTS.md"), "crate doc").unwrap();
+
+        let mut cfg = make_config(&repo, 4096, None);
+        cfg.cwd = nested;
+
+        let res = get_user_instructions(&cfg).await.expect("doc expected");
+        assert_eq!(res, "root doc\n\ncrate doc");
+    }
+
+    /// AGENTS.override.md is preferred over AGENTS.md when both are present.
+    #[tokio::test]
+    async fn agents_local_md_preferred() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join(DEFAULT_PROJECT_DOC_FILENAME), "versioned").unwrap();
+        fs::write(tmp.path().join(LOCAL_PROJECT_DOC_FILENAME), "local").unwrap();
+
+        let cfg = make_config(&tmp, 4096, None);
+
+        let res = get_user_instructions(&cfg)
+            .await
+            .expect("local doc expected");
+
+        assert_eq!(res, "local");
+
+        let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
+        assert_eq!(discovery.len(), 1);
+        assert_eq!(
+            discovery[0].file_name().unwrap().to_string_lossy(),
+            LOCAL_PROJECT_DOC_FILENAME
+        );
+    }
+
+    /// When AGENTS.md is absent but a configured fallback exists, the fallback is used.
+    #[tokio::test]
+    async fn uses_configured_fallback_when_agents_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("EXAMPLE.md"), "example instructions").unwrap();
+
+        let cfg = make_config_with_fallback(&tmp, 4096, None, &["EXAMPLE.md"]);
+
+        let res = get_user_instructions(&cfg)
+            .await
+            .expect("fallback doc expected");
+
+        assert_eq!(res, "example instructions");
+    }
+
+    /// AGENTS.md remains preferred when both AGENTS.md and fallbacks are present.
+    #[tokio::test]
+    async fn agents_md_preferred_over_fallbacks() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "primary").unwrap();
+        fs::write(tmp.path().join("EXAMPLE.md"), "secondary").unwrap();
+
+        let cfg = make_config_with_fallback(&tmp, 4096, None, &["EXAMPLE.md", ".example.md"]);
+
+        let res = get_user_instructions(&cfg)
+            .await
+            .expect("AGENTS.md should win");
+
+        assert_eq!(res, "primary");
+
+        let discovery = discover_project_doc_paths(&cfg).expect("discover paths");
+        assert_eq!(discovery.len(), 1);
+        assert!(
+            discovery[0]
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .eq(DEFAULT_PROJECT_DOC_FILENAME)
+        );
     }
 }

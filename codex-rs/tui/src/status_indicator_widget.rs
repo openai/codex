@@ -1,292 +1,219 @@
 //! A live status indicator that shows the *latest* log line emitted by the
 //! application while the agent is processing a long‑running task.
 
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_core::protocol::Op;
+use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
-use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-
-// We render the live text using markdown so it visually matches the history
-// cells. Before rendering we strip any ANSI escape sequences to avoid writing
-// raw control bytes into the back buffer.
-use codex_ansi_escape::ansi_escape_line;
+use crate::exec_cell::spinner;
+use crate::key_hint;
+use crate::shimmer::shimmer_spans;
+use crate::tui::FrameRequester;
 
 pub(crate) struct StatusIndicatorWidget {
-    /// Latest text to display (truncated to the available width at render
-    /// time).
-    text: String,
+    /// Animated header text (defaults to "Working").
+    header: String,
+    /// Queued user messages to display under the status line.
+    queued_messages: Vec<String>,
 
-    /// Animation state: reveal target `text` progressively like a typewriter.
-    /// We compute the currently visible prefix length based on the current
-    /// frame index and a constant typing speed.  The `base_frame` and
-    /// `reveal_len_at_base` form the anchor from which we advance.
-    last_target_len: usize,
-    base_frame: usize,
-    reveal_len_at_base: usize,
+    elapsed_running: Duration,
+    last_resume_at: Instant,
+    is_paused: bool,
+    app_event_tx: AppEventSender,
+    frame_requester: FrameRequester,
+}
 
-    frame_idx: Arc<AtomicUsize>,
-    running: Arc<AtomicBool>,
-    start_time: Instant,
-    // Keep one sender alive to prevent the channel from closing while the
-    // animation thread is still running. The field itself is currently not
-    // accessed anywhere, therefore the leading underscore silences the
-    // `dead_code` warning without affecting behavior.
-    _app_event_tx: AppEventSender,
+// Format elapsed seconds into a compact human-friendly form used by the status line.
+// Examples: 0s, 59s, 1m 00s, 59m 59s, 1h 00m 00s, 2h 03m 09s
+pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
+    if elapsed_secs < 60 {
+        return format!("{elapsed_secs}s");
+    }
+    if elapsed_secs < 3600 {
+        let minutes = elapsed_secs / 60;
+        let seconds = elapsed_secs % 60;
+        return format!("{minutes}m {seconds:02}s");
+    }
+    let hours = elapsed_secs / 3600;
+    let minutes = (elapsed_secs % 3600) / 60;
+    let seconds = elapsed_secs % 60;
+    format!("{hours}h {minutes:02}m {seconds:02}s")
 }
 
 impl StatusIndicatorWidget {
-    /// Create a new status indicator and start the animation timer.
-    pub(crate) fn new(app_event_tx: AppEventSender) -> Self {
-        let frame_idx = Arc::new(AtomicUsize::new(0));
-        let running = Arc::new(AtomicBool::new(true));
-
-        // Animation thread.
-        {
-            let frame_idx_clone = Arc::clone(&frame_idx);
-            let running_clone = Arc::clone(&running);
-            let app_event_tx_clone = app_event_tx.clone();
-            thread::spawn(move || {
-                let mut counter = 0usize;
-                while running_clone.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(100));
-                    counter = counter.wrapping_add(1);
-                    frame_idx_clone.store(counter, Ordering::Relaxed);
-                    app_event_tx_clone.send(AppEvent::RequestRedraw);
-                }
-            });
-        }
-
+    pub(crate) fn new(app_event_tx: AppEventSender, frame_requester: FrameRequester) -> Self {
         Self {
-            text: String::from("waiting for model"),
-            last_target_len: 0,
-            base_frame: 0,
-            reveal_len_at_base: 0,
-            frame_idx,
-            running,
-            start_time: Instant::now(),
+            header: String::from("Working"),
+            queued_messages: Vec::new(),
+            elapsed_running: Duration::ZERO,
+            last_resume_at: Instant::now(),
+            is_paused: false,
 
-            _app_event_tx: app_event_tx,
+            app_event_tx,
+            frame_requester,
         }
     }
 
-    pub fn desired_height(&self, _width: u16) -> u16 {
-        1
+    pub fn desired_height(&self, width: u16) -> u16 {
+        // Status line + optional blank line + wrapped queued messages (up to 3 lines per message)
+        // + optional ellipsis line per truncated message + 1 spacer line
+        let inner_width = width.max(1) as usize;
+        let mut total: u16 = 1; // status line
+        if !self.queued_messages.is_empty() {
+            total = total.saturating_add(1); // blank line between status and queued messages
+        }
+        let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
+        if text_width > 0 {
+            for q in &self.queued_messages {
+                let wrapped = textwrap::wrap(q, text_width);
+                let lines = wrapped.len().min(3) as u16;
+                total = total.saturating_add(lines);
+                if wrapped.len() > 3 {
+                    total = total.saturating_add(1); // ellipsis line
+                }
+            }
+            if !self.queued_messages.is_empty() {
+                total = total.saturating_add(1); // keybind hint line
+            }
+        } else {
+            // At least one line per message if width is extremely narrow
+            total = total.saturating_add(self.queued_messages.len() as u16);
+        }
+        total.saturating_add(1) // spacer line
     }
 
-    /// Update the line that is displayed in the widget.
-    pub(crate) fn update_text(&mut self, text: String) {
-        // If the text hasn't changed, don't reset the baseline; let the
-        // animation continue advancing naturally.
-        if text == self.text {
+    pub(crate) fn interrupt(&self) {
+        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+    }
+
+    /// Update the animated header label (left of the brackets).
+    pub(crate) fn update_header(&mut self, header: String) {
+        if self.header != header {
+            self.header = header;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn header(&self) -> &str {
+        &self.header
+    }
+
+    /// Replace the queued messages displayed beneath the header.
+    pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
+        self.queued_messages = queued;
+        // Ensure a redraw so changes are visible.
+        self.frame_requester.schedule_frame();
+    }
+
+    pub(crate) fn pause_timer(&mut self) {
+        self.pause_timer_at(Instant::now());
+    }
+
+    pub(crate) fn resume_timer(&mut self) {
+        self.resume_timer_at(Instant::now());
+    }
+
+    pub(crate) fn pause_timer_at(&mut self, now: Instant) {
+        if self.is_paused {
             return;
         }
-        // Update the target text, preserving newlines so wrapping matches history cells.
-        // Strip ANSI escapes for the character count so the typewriter animation speed is stable.
-        let stripped = {
-            let line = ansi_escape_line(&text);
-            line.spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<Vec<_>>()
-                .join("")
-        };
-        let new_len = stripped.chars().count();
-
-        // Compute how many characters are currently revealed so we can carry
-        // this forward as the new baseline when target text changes.
-        let current_frame = self.frame_idx.load(std::sync::atomic::Ordering::Relaxed);
-        let shown_now = self.current_shown_len(current_frame);
-
-        self.text = text;
-        self.last_target_len = new_len;
-        self.base_frame = current_frame;
-        self.reveal_len_at_base = shown_now.min(new_len);
+        self.elapsed_running += now.saturating_duration_since(self.last_resume_at);
+        self.is_paused = true;
     }
 
-    /// Reset the animation and start revealing `text` from the beginning.
-    #[cfg(test)]
-    pub(crate) fn restart_with_text(&mut self, text: String) {
-        let sanitized = text.replace(['\n', '\r'], " ");
-        let stripped = {
-            let line = ansi_escape_line(&sanitized);
-            line.spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<Vec<_>>()
-                .join("")
-        };
-
-        let new_len = stripped.chars().count();
-        let current_frame = self.frame_idx.load(std::sync::atomic::Ordering::Relaxed);
-
-        self.text = sanitized;
-        self.last_target_len = new_len;
-        self.base_frame = current_frame;
-        // Start from zero revealed characters for a fresh typewriter cycle.
-        self.reveal_len_at_base = 0;
+    pub(crate) fn resume_timer_at(&mut self, now: Instant) {
+        if !self.is_paused {
+            return;
+        }
+        self.last_resume_at = now;
+        self.is_paused = false;
+        self.frame_requester.schedule_frame();
     }
 
-    /// Calculate how many characters should currently be visible given the
-    /// animation baseline and frame counter.
-    fn current_shown_len(&self, current_frame: usize) -> usize {
-        // Increase typewriter speed (~5x): reveal more characters per frame.
-        const TYPING_CHARS_PER_FRAME: usize = 7;
-        let frames = current_frame.saturating_sub(self.base_frame);
-        let advanced = self
-            .reveal_len_at_base
-            .saturating_add(frames.saturating_mul(TYPING_CHARS_PER_FRAME));
-        advanced.min(self.last_target_len)
+    fn elapsed_duration_at(&self, now: Instant) -> Duration {
+        let mut elapsed = self.elapsed_running;
+        if !self.is_paused {
+            elapsed += now.saturating_duration_since(self.last_resume_at);
+        }
+        elapsed
     }
-}
 
-impl Drop for StatusIndicatorWidget {
-    fn drop(&mut self) {
-        use std::sync::atomic::Ordering;
-        self.running.store(false, Ordering::Relaxed);
+    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+        self.elapsed_duration_at(now).as_secs()
+    }
+
+    pub fn elapsed_seconds(&self) -> u64 {
+        self.elapsed_seconds_at(Instant::now())
     }
 }
 
 impl WidgetRef for StatusIndicatorWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        // Ensure minimal height
-        if area.height == 0 || area.width == 0 {
+        if area.is_empty() {
             return;
         }
 
-        let idx = self.frame_idx.load(std::sync::atomic::Ordering::Relaxed);
-        let elapsed = self.start_time.elapsed().as_secs();
-        let shown_now = self.current_shown_len(idx);
-        let status_prefix: String = self.text.chars().take(shown_now).collect();
-        let animated_text = "Working";
-        let header_chars: Vec<char> = animated_text.chars().collect();
-        let padding = 4usize; // virtual padding around the animated segment for smoother loop
-        let period = header_chars.len() + padding * 2;
-        let pos = idx % period;
-        let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
-            .map(|level| level.has_16m)
-            .unwrap_or(false);
-        let band_half_width = 2.0; // width of the bright band in characters
-
-        let mut animated_spans: Vec<Span<'static>> = Vec::new();
-        for (i, ch) in header_chars.iter().enumerate() {
-            let i_pos = i as isize + padding as isize;
-            let pos = pos as isize;
-            let dist = (i_pos - pos).abs() as f32;
-
-            let t = if dist <= band_half_width {
-                let x = std::f32::consts::PI * (dist / band_half_width);
-                0.5 * (1.0 + x.cos())
-            } else {
-                0.0
-            };
-
-            let brightness = 0.4 + 0.6 * t;
-            let level = (brightness * 255.0).clamp(0.0, 255.0) as u8;
-            let style = if has_true_color {
-                Style::default()
-                    .fg(Color::Rgb(level, level, level))
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(color_for_level(level))
-            };
-
-            animated_spans.push(Span::styled(ch.to_string(), style));
-        }
+        // Schedule next animation frame.
+        self.frame_requester
+            .schedule_frame_in(Duration::from_millis(32));
+        let now = Instant::now();
+        let elapsed_duration = self.elapsed_duration_at(now);
+        let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let inner_width = area.width as usize;
+        let mut spans = Vec::with_capacity(5);
+        spans.push(spinner(Some(self.last_resume_at)));
+        spans.push(" ".into());
+        spans.extend(shimmer_spans(&self.header));
+        spans.extend(vec![
+            " ".into(),
+            format!("({pretty_elapsed} • ").dim(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " to interrupt)".dim(),
+        ]);
 
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.push(Span::styled("▌ ", Style::default().fg(Color::Cyan)));
-
-        // Simple dim spinner to the left of the header.
-        let spinner_frames = ['·', '•', '●', '•'];
-        const SPINNER_SLOWDOWN: usize = 2;
-        let spinner_ch = spinner_frames[(idx / SPINNER_SLOWDOWN) % spinner_frames.len()];
-        spans.push(Span::styled(
-            spinner_ch.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ));
-        spans.push(Span::raw(" "));
-
-        // Space after header
-        // Animated header after the left bar
-        spans.extend(animated_spans);
-        // Space between header and bracket block
-        spans.push(Span::raw(" "));
-        // Non-animated, dim bracket content, with keys bold
-        let bracket_prefix = format!("({elapsed}s • ");
-        spans.push(Span::styled(
-            bracket_prefix,
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-        ));
-        spans.push(Span::styled(
-            "Esc",
-            Style::default()
-                .fg(Color::Gray)
-                .add_modifier(Modifier::DIM | Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " to interrupt)",
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-        ));
-        // Add a space and then the log text (not animated by the gradient)
-        if !status_prefix.is_empty() {
-            spans.push(Span::styled(
-                " ",
-                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-            ));
-            spans.push(Span::styled(
-                status_prefix,
-                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-            ));
+        // Build lines: status, then queued messages, then spacer.
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(spans));
+        if !self.queued_messages.is_empty() {
+            lines.push(Line::from(""));
         }
-
-        // Truncate spans to fit the width.
-        let mut acc: Vec<Span<'static>> = Vec::new();
-        let mut used = 0usize;
-        for s in spans {
-            let w = s.content.width();
-            if used + w <= inner_width {
-                acc.push(s);
-                used += w;
-            } else {
-                break;
+        // Wrap queued messages using textwrap and show up to the first 3 lines per message.
+        let text_width = area.width.saturating_sub(3); // " ↳ " prefix
+        for q in &self.queued_messages {
+            let wrapped = textwrap::wrap(q, text_width as usize);
+            for (i, piece) in wrapped.iter().take(3).enumerate() {
+                let prefix = if i == 0 { " ↳ " } else { "   " };
+                let content = format!("{prefix}{piece}");
+                lines.push(Line::from(content.dim().italic()));
+            }
+            if wrapped.len() > 3 {
+                lines.push(Line::from("   …".dim().italic()));
             }
         }
-        let lines = vec![Line::from(acc)];
-
-        // No-op once full text is revealed; the app no longer reacts to a completion event.
+        if !self.queued_messages.is_empty() {
+            lines.push(
+                Line::from(vec![
+                    "   ".into(),
+                    key_hint::alt(KeyCode::Up).into(),
+                    " edit".into(),
+                ])
+                .dim(),
+            );
+        }
 
         let paragraph = Paragraph::new(lines);
         paragraph.render_ref(area, buf);
-    }
-}
-
-fn color_for_level(level: u8) -> Color {
-    if level < 128 {
-        Color::DarkGray
-    } else if level < 192 {
-        Color::Gray
-    } else {
-        Color::White
     }
 }
 
@@ -295,63 +222,89 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use std::sync::mpsc::channel;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::time::Duration;
+    use std::time::Instant;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use pretty_assertions::assert_eq;
 
     #[test]
-    fn renders_without_left_border_or_padding() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx);
-        w.restart_with_text("Hello".to_string());
-
-        let area = ratatui::layout::Rect::new(0, 0, 30, 1);
-        // Allow a short delay so the typewriter reveals the first character.
-        std::thread::sleep(std::time::Duration::from_millis(120));
-        let mut buf = ratatui::buffer::Buffer::empty(area);
-        w.render_ref(area, &mut buf);
-
-        // Leftmost column has the left bar
-        let ch0 = buf[(0, 0)].symbol().chars().next().unwrap_or(' ');
-        assert_eq!(ch0, '▌', "expected left bar at col 0: {ch0:?}");
+    fn fmt_elapsed_compact_formats_seconds_minutes_hours() {
+        assert_eq!(fmt_elapsed_compact(0), "0s");
+        assert_eq!(fmt_elapsed_compact(1), "1s");
+        assert_eq!(fmt_elapsed_compact(59), "59s");
+        assert_eq!(fmt_elapsed_compact(60), "1m 00s");
+        assert_eq!(fmt_elapsed_compact(61), "1m 01s");
+        assert_eq!(fmt_elapsed_compact(3 * 60 + 5), "3m 05s");
+        assert_eq!(fmt_elapsed_compact(59 * 60 + 59), "59m 59s");
+        assert_eq!(fmt_elapsed_compact(3600), "1h 00m 00s");
+        assert_eq!(fmt_elapsed_compact(3600 + 60 + 1), "1h 01m 01s");
+        assert_eq!(fmt_elapsed_compact(25 * 3600 + 2 * 60 + 3), "25h 02m 03s");
     }
 
     #[test]
-    fn working_header_is_present_on_last_line() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+    fn renders_with_working_header() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx);
-        w.restart_with_text("Hi".to_string());
-        // Ensure some frames elapse so we get a stable state.
-        std::thread::sleep(std::time::Duration::from_millis(120));
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
 
-        let area = ratatui::layout::Rect::new(0, 0, 30, 1);
-        let mut buf = ratatui::buffer::Buffer::empty(area);
-        w.render_ref(area, &mut buf);
-
-        // Single line; it should contain the animated "Working" header.
-        let mut row = String::new();
-        for x in 0..area.width {
-            row.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(row.contains("Working"), "expected Working header: {row:?}");
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]
-    fn spinner_is_rendered() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+    fn renders_truncated() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx);
-        w.restart_with_text("Hello".to_string());
-        std::thread::sleep(std::time::Duration::from_millis(120));
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
 
-        let area = ratatui::layout::Rect::new(0, 0, 30, 1);
-        let mut buf = ratatui::buffer::Buffer::empty(area);
-        w.render_ref(area, &mut buf);
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+    }
 
-        let ch = buf[(2, 0)].symbol().chars().next().unwrap_or(' ');
-        assert!(
-            matches!(ch, '·' | '•' | '●'),
-            "expected spinner char at col 2: {ch:?}"
-        );
+    #[test]
+    fn renders_with_queued_messages() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+        w.set_queued_messages(vec!["first".to_string(), "second".to_string()]);
+
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn timer_pauses_when_requested() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut widget = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+
+        let baseline = Instant::now();
+        widget.last_resume_at = baseline;
+
+        let before_pause = widget.elapsed_seconds_at(baseline + Duration::from_secs(5));
+        assert_eq!(before_pause, 5);
+
+        widget.pause_timer_at(baseline + Duration::from_secs(5));
+        let paused_elapsed = widget.elapsed_seconds_at(baseline + Duration::from_secs(10));
+        assert_eq!(paused_elapsed, before_pause);
+
+        widget.resume_timer_at(baseline + Duration::from_secs(10));
+        let after_resume = widget.elapsed_seconds_at(baseline + Duration::from_secs(13));
+        assert_eq!(after_resume, before_pause + 3);
     }
 }

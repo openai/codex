@@ -10,6 +10,7 @@ use codex_execpolicy::get_default_policy;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de;
+use starlark::Error as StarlarkError;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -71,13 +72,13 @@ fn main() -> Result<()> {
         }
         None => get_default_policy(),
     };
-    let policy = policy.map_err(|err| err.into_anyhow())?;
+    let policy = policy.map_err(StarlarkError::into_anyhow)?;
 
     let exec = match args.command {
         Command::Check { command } => match command.split_first() {
             Some((first, rest)) => ExecArg {
                 program: first.to_string(),
-                args: rest.iter().map(|s| s.to_string()).collect(),
+                args: rest.to_vec(),
             },
             None => {
                 eprintln!("no command provided");
@@ -161,6 +162,6 @@ impl FromStr for ExecArg {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_json::from_str(s).map_err(|e| e.into())
+        serde_json::from_str(s).map_err(Into::into)
     }
 }
