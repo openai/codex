@@ -98,8 +98,17 @@ impl OllamaClient {
         }
     }
 
-    /// Return the list of model names known to the local Ollama instance.
+    /// Return the list of known model names
     pub async fn fetch_models(&self) -> io::Result<Vec<String>> {
+        if self.uses_openai_compat {
+            self.fetch_models_openai_compat().await
+        } else {
+            self.fetch_models_ollama().await
+        }
+    }
+
+    /// Return the list of model names known to the local Ollama instance.
+    pub async fn fetch_models_ollama(&self) -> io::Result<Vec<String>> {
         let tags_url = format!("{}/api/tags", self.host_root.trim_end_matches('/'));
         let resp = self
             .client
@@ -118,6 +127,32 @@ impl OllamaClient {
                 arr.iter()
                     .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
                     .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Ok(names)
+    }
+
+    /// Return the list of model names known to the local OpenAI compatible instance.
+    pub async fn fetch_models_openai_compat(&self) -> io::Result<Vec<String>> {
+        let url = format!("{}/v1/models", self.host_root.trim_end_matches('/'));
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(io::Error::other)?;
+        if !resp.status().is_success() {
+            return Ok(Vec::new());
+        }
+        let val = resp.json::<JsonValue>().await.map_err(io::Error::other)?;
+        let names = val
+            .get("data")
+            .and_then(|m| m.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.get("id").and_then(|n| n.as_str()))
+                    .map(|s| s.to_string())
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -263,6 +298,39 @@ mod tests {
             .await;
 
         let client = OllamaClient::from_host_root(server.uri());
+        let models = client.fetch_models().await.expect("fetch models");
+        assert!(models.contains(&"llama3.2:3b".to_string()));
+        assert!(models.contains(&"mistral".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_models_happy_path_openai_compat() {
+        if std::env::var(codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+            tracing::info!(
+                "{} is set; skipping test_fetch_models_happy_path_openai_compat",
+                codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+            );
+            return;
+        }
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_raw(
+                    serde_json::json!({
+                        "data": [ {"id": "llama3.2:3b"}, {"id":"mistral"} ]
+                    })
+                    .to_string(),
+                    "application/json",
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OllamaClient::try_from_provider_with_base_url(&format!("{}/v1", server.uri()))
+            .await
+            .expect("probe OpenAI compat");
         let models = client.fetch_models().await.expect("fetch models");
         assert!(models.contains(&"llama3.2:3b".to_string()));
         assert!(models.contains(&"mistral".to_string()));
