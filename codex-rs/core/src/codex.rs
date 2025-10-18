@@ -274,6 +274,7 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) disable_command_timeouts: bool,
+    pub(crate) passthrough_shell_environment: bool,
 }
 
 impl TurnContext {
@@ -499,6 +500,7 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             disable_command_timeouts: config.disable_command_timeouts,
+            passthrough_shell_environment: config.passthrough_shell_environment,
         };
         let services = SessionServices {
             mcp_connection_manager,
@@ -1275,6 +1277,7 @@ async fn submission_loop(
                     is_review_mode: false,
                     final_output_json_schema: None,
                     disable_command_timeouts: prev.disable_command_timeouts,
+                    passthrough_shell_environment: prev.passthrough_shell_environment,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1369,6 +1372,7 @@ async fn submission_loop(
                         is_review_mode: false,
                         final_output_json_schema,
                         disable_command_timeouts: turn_context.disable_command_timeouts,
+                        passthrough_shell_environment: turn_context.passthrough_shell_environment,
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1656,6 +1660,7 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         disable_command_timeouts: parent_turn_context.disable_command_timeouts,
+        passthrough_shell_environment: parent_turn_context.passthrough_shell_environment,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2854,6 +2859,7 @@ mod tests {
             is_review_mode: false,
             final_output_json_schema: None,
             disable_command_timeouts: config.disable_command_timeouts,
+            passthrough_shell_environment: config.passthrough_shell_environment,
         };
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),
@@ -2923,6 +2929,7 @@ mod tests {
             is_review_mode: false,
             final_output_json_schema: None,
             disable_command_timeouts: config.disable_command_timeouts,
+            passthrough_shell_environment: config.passthrough_shell_environment,
         });
         let services = SessionServices {
             mcp_connection_manager: McpConnectionManager::default(),

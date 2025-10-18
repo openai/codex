@@ -291,9 +291,10 @@ impl UnifiedExecSessionManager {
             }
 
             if let Some(deadline) = deadline
-                && Instant::now() >= deadline {
-                    break;
-                }
+                && Instant::now() >= deadline
+            {
+                break;
+            }
         }
 
         let (output, _maybe_tokens) = truncate_middle(

@@ -594,7 +594,11 @@ impl CodexMessageProcessor {
         }
 
         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
-        let env = create_env(&self.config.shell_environment_policy);
+        let env = if self.config.passthrough_shell_environment {
+            std::env::vars().collect::<HashMap<_, _>>()
+        } else {
+            create_env(&self.config.shell_environment_policy)
+        };
         let timeout_ms = params.timeout_ms;
         let exec_params = ExecParams {
             command: params.command,
@@ -1355,6 +1359,7 @@ async fn derive_config_from_params(
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
         disable_command_timeouts: None,
+        passthrough_shell_environment: None,
     };
 
     let cli_overrides = cli_overrides

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use codex_protocol::models::ShellToolCallParams;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
@@ -17,11 +18,17 @@ pub struct ShellHandler;
 
 impl ShellHandler {
     fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
+        let env = if turn_context.passthrough_shell_environment {
+            std::env::vars().collect::<HashMap<_, _>>()
+        } else {
+            create_env(&turn_context.shell_environment_policy)
+        };
+
         ExecParams {
             command: params.command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
             timeout_ms: params.timeout_ms,
-            env: create_env(&turn_context.shell_environment_policy),
+            env,
             with_escalated_permissions: params.with_escalated_permissions,
             justification: params.justification,
             disable_timeout: turn_context.disable_command_timeouts,

@@ -53,6 +53,15 @@ pub struct Cli {
     )]
     pub dangerously_disable_timeouts: bool,
 
+    /// Like --yolo2 but also passes the full host environment through unchanged. EXTREMELY DANGEROUS.
+    #[arg(
+        long = "yolo3",
+        alias = "dangerously-disable-env-wrapping",
+        default_value_t = false,
+        conflicts_with = "full_auto"
+    )]
+    pub dangerously_disable_environment_wrapping: bool,
+
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,

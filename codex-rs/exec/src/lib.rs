@@ -62,6 +62,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
         dangerously_disable_timeouts,
+        dangerously_disable_environment_wrapping,
         cwd,
         skip_git_repo_check,
         color,
@@ -74,8 +75,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_overrides,
     } = cli;
 
-    let dangerously_bypass =
-        dangerously_bypass_approvals_and_sandbox || dangerously_disable_timeouts;
+    let dangerously_bypass = dangerously_bypass_approvals_and_sandbox
+        || dangerously_disable_timeouts
+        || dangerously_disable_environment_wrapping;
 
     // Determine the prompt source (parent or subcommand) and read from stdin if needed.
     let prompt_arg = match &command {
@@ -185,7 +187,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
-        disable_command_timeouts: dangerously_disable_timeouts.then_some(true),
+        disable_command_timeouts: (dangerously_disable_timeouts
+            || dangerously_disable_environment_wrapping)
+            .then_some(true),
+        passthrough_shell_environment: dangerously_disable_environment_wrapping.then_some(true),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {

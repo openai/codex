@@ -33,6 +33,7 @@ Yes, you can disable all approval prompts with `--ask-for-approval never`. This 
 | Auto (preset)                      | `--full-auto` (equivalent to `--sandbox workspace-write` + `--ask-for-approval on-failure`) | Codex can read files, make edits, and run commands in the workspace. Codex requires approval when a sandboxed command fails or needs escalation.      |
 | YOLO (not recommended)             | `--dangerously-bypass-approvals-and-sandbox` (alias: `--yolo`)                              | No sandbox; no prompts                                                                                                                                |
 | YOLO2 (even less safe)             | `--yolo2`                                                                                   | No sandbox; no prompts; disables all command timeouts                                                                                                 |
+| YOLO3 (no guardrails)              | `--yolo3`                                                                                   | No sandbox; no prompts; disables command timeouts and passes through the full host environment                                                        |
 
 > Note: In `workspace-write`, network is disabled by default unless enabled in config (`[sandbox_workspace_write].network_access = true`).
 

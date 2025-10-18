@@ -165,6 +165,7 @@ impl CodexToolCallParam {
             show_raw_agent_reasoning: None,
             tools_web_search_request: None,
             disable_command_timeouts: None,
+            passthrough_shell_environment: None,
         };
 
         let cli_overrides = cli_overrides
