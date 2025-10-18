@@ -2,8 +2,7 @@
   "name": "Codex",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": "..",
-    "platform": "linux/arm64"
+    "context": ".."
   },
 
   /* Force VS Code to run the container as arm64 in
