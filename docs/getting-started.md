@@ -15,6 +15,7 @@ Key flags: `--model/-m`, `--ask-for-approval/-a`.
 - Run `codex resume` to display the session picker UI
 - Resume most recent: `codex resume --last`
 - Resume by id: `codex resume <SESSION_ID>` (You can get session ids from /status or `~/.codex/sessions/`)
+- Resume as a fork: add `--fork` (e.g. `codex resume --last --fork`)
 
 Examples:
 
@@ -27,6 +28,9 @@ codex resume --last
 
 # Resume a specific session by id
 codex resume 7f9f9a2e-1b3c-4c7a-9b0e-123456789abc
+
+# Resume the most recent session as a new fork
+codex resume --last --fork
 ```
 
 ### Running with a prompt as input
