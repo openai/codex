@@ -48,3 +48,17 @@ async fn find_locates_rollout_file_by_id() {
 
     assert_eq!(found.unwrap(), expected);
 }
+
+#[tokio::test]
+async fn find_ignores_gitignore_rules() {
+    let home = TempDir::new().unwrap();
+    std::fs::write(home.path().join(".gitignore"), "sessions/\n").unwrap();
+    let id = Uuid::new_v4();
+    let expected = write_minimal_rollout_with_id(&home, id);
+
+    let found = find_conversation_path_by_id_str(home.path(), &id.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(found, Some(expected));
+}
