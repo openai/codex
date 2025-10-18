@@ -507,7 +507,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     <root>{}</root>
   </writable_roots>
 </environment_context>"#,
-        writable.path().to_string_lossy()
+        writable.path().to_string_lossy(),
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",

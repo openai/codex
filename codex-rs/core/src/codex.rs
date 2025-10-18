@@ -657,7 +657,7 @@ impl Session {
             session_configuration.cwd.clone(),
         );
 
-        let mut turn_context = Self::make_turn_context(
+        let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.otel_event_manager,
             session_configuration.provider.clone(),
@@ -682,7 +682,10 @@ impl Session {
         if prev_context.equals_except_shell(&next_context) {
             return None;
         }
-        Some(ResponseItem::from(next_context))
+        Some(ResponseItem::from(EnvironmentContext::diff(
+            prev.as_ref(),
+            next,
+        )))
     }
 
     /// Persist the event to rollout and send it to clients.
