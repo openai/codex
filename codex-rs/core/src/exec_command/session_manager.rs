@@ -19,6 +19,7 @@ use tokio::time::timeout;
 use crate::exec_command::exec_command_params::ExecCommandParams;
 use crate::exec_command::exec_command_params::WriteStdinParams;
 use crate::exec_command::exec_command_session::ExecCommandSession;
+use crate::exec_command::exec_command_session::ExecCommandSessionParams;
 use crate::exec_command::session_id::SessionId;
 use crate::truncate::truncate_middle;
 
@@ -318,17 +319,22 @@ async fn create_exec_command_session(
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
     let exit_status = Arc::new(AtomicBool::new(false));
     let wait_exit_status = exit_status.clone();
+    let exit_code = Arc::new(StdMutex::new(None));
+    let exit_code_for_wait = exit_code.clone();
     let wait_handle = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
             Ok(status) => status.exit_code() as i32,
             Err(_) => -1,
         };
         wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut guard) = exit_code_for_wait.lock() {
+            *guard = Some(code);
+        }
         let _ = exit_tx.send(code);
     });
 
     // Create and store the session with channels.
-    let (session, initial_output_rx) = ExecCommandSession::new(
+    let (session, initial_output_rx) = ExecCommandSession::new(ExecCommandSessionParams {
         writer_tx,
         output_tx,
         killer,
@@ -336,7 +342,8 @@ async fn create_exec_command_session(
         writer_handle,
         wait_handle,
         exit_status,
-    );
+        exit_code,
+    });
     Ok((session, initial_output_rx, exit_rx))
 }
 

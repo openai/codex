@@ -142,13 +142,10 @@ impl From<JsonSchema> for AdditionalProperties {
 fn create_unified_exec_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
-        "input".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::String { description: None }),
+        "cmd".to_string(),
+        JsonSchema::String {
             description: Some(
-                "When no session_id is provided, treat the array as the command and arguments \
-                 to launch. When session_id is set, concatenate the strings (in order) and write \
-                 them to the session's stdin."
+                "Command to execute when starting a new session. Mutually exclusive with session_id."
                     .to_string(),
             ),
         },
@@ -157,30 +154,87 @@ fn create_unified_exec_tool() -> ToolSpec {
         "session_id".to_string(),
         JsonSchema::String {
             description: Some(
-                "Identifier for an existing interactive session. If omitted, a new command \
-                 is spawned."
+                "Identifier for an existing interactive session. When provided, cmd must be omitted and chars will be written to the session's stdin."
                     .to_string(),
             ),
         },
     );
     properties.insert(
-        "timeout_ms".to_string(),
-        JsonSchema::Number {
+        "chars".to_string(),
+        JsonSchema::String {
             description: Some(
-                "Maximum time in milliseconds to wait for output after writing the input."
+                "Characters to write to an interactive session. Use an empty string to poll for output without sending input."
                     .to_string(),
             ),
+        },
+    );
+    properties.insert(
+        "yield_time_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Milliseconds to wait for output before returning (clamped between 250 and 30_000)."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_output_tokens".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Approximate maximum number of output tokens before truncation.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "output_chunk_id".to_string(),
+        JsonSchema::Boolean {
+            description: Some("Whether to include a chunk identifier in responses.".to_string()),
+        },
+    );
+    properties.insert(
+        "output_wall_time".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to include wall-clock timing metadata in responses.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "output_json".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Return structured JSON instead of formatted text when true.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "shell".to_string(),
+        JsonSchema::String {
+            description: Some("Override the shell executable (default /bin/bash).".to_string()),
+        },
+    );
+    properties.insert(
+        "login".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "Whether to start the shell as a login shell (default true).".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "cwd".to_string(),
+        JsonSchema::String {
+            description: Some("Working directory for the command.".to_string()),
         },
     );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "unified_exec".to_string(),
-        description:
-            "Runs a command in a PTY. Provide a session_id to reuse an existing interactive session.".to_string(),
+        description: "Runs commands in a PTY and streams output, supporting interactive sessions with stdin writes.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["input".to_string()]),
+            required: None,
             additional_properties: Some(false.into()),
         },
     })

@@ -27,18 +27,35 @@ pub(crate) struct ExecCommandSession {
 
     /// Tracks whether the underlying process has exited.
     exit_status: std::sync::Arc<std::sync::atomic::AtomicBool>,
+
+    /// Captures the process exit code once the child terminates.
+    exit_code: std::sync::Arc<StdMutex<Option<i32>>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ExecCommandSessionParams {
+    pub writer_tx: mpsc::Sender<Vec<u8>>,
+    pub output_tx: broadcast::Sender<Vec<u8>>,
+    pub killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    pub reader_handle: JoinHandle<()>,
+    pub writer_handle: JoinHandle<()>,
+    pub wait_handle: JoinHandle<()>,
+    pub exit_status: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub exit_code: std::sync::Arc<StdMutex<Option<i32>>>,
 }
 
 impl ExecCommandSession {
-    pub(crate) fn new(
-        writer_tx: mpsc::Sender<Vec<u8>>,
-        output_tx: broadcast::Sender<Vec<u8>>,
-        killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
-        reader_handle: JoinHandle<()>,
-        writer_handle: JoinHandle<()>,
-        wait_handle: JoinHandle<()>,
-        exit_status: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    ) -> (Self, broadcast::Receiver<Vec<u8>>) {
+    pub(crate) fn new(params: ExecCommandSessionParams) -> (Self, broadcast::Receiver<Vec<u8>>) {
+        let ExecCommandSessionParams {
+            writer_tx,
+            output_tx,
+            killer,
+            reader_handle,
+            writer_handle,
+            wait_handle,
+            exit_status,
+            exit_code,
+        } = params;
         let initial_output_rx = output_tx.subscribe();
         (
             Self {
@@ -49,6 +66,7 @@ impl ExecCommandSession {
                 writer_handle: StdMutex::new(Some(writer_handle)),
                 wait_handle: StdMutex::new(Some(wait_handle)),
                 exit_status,
+                exit_code,
             },
             initial_output_rx,
         )
@@ -64,6 +82,10 @@ impl ExecCommandSession {
 
     pub(crate) fn has_exited(&self) -> bool {
         self.exit_status.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn exit_code(&self) -> Option<i32> {
+        self.exit_code.lock().ok().and_then(|guard| *guard)
     }
 }
 

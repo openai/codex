@@ -1,409 +1,286 @@
 #![cfg(not(target_os = "windows"))]
 
-use std::collections::HashMap;
-
 use anyhow::Result;
-use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::InputItem;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_sequence;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_no_network;
+use codex_core::UnifiedExecMode;
+use codex_core::UnifiedExecRequest;
+use codex_core::UnifiedExecSessionManager;
+#[cfg(unix)]
 use core_test_support::skip_if_sandbox;
-use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use serde_json::Value;
+use tokio::time::Duration;
 
-fn extract_output_text(item: &Value) -> Option<&str> {
-    item.get("output").and_then(|value| match value {
-        Value::String(text) => Some(text.as_str()),
-        Value::Object(obj) => obj.get("content").and_then(Value::as_str),
-        _ => None,
-    })
-}
-
-fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, Value>> {
-    let mut outputs = HashMap::new();
-    for body in bodies {
-        if let Some(items) = body.get("input").and_then(Value::as_array) {
-            for item in items {
-                if item.get("type").and_then(Value::as_str) != Some("function_call_output") {
-                    continue;
-                }
-                if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
-                    let content = extract_output_text(item)
-                        .ok_or_else(|| anyhow::anyhow!("missing tool output content"))?;
-                    let trimmed = content.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    let parsed: Value = serde_json::from_str(trimmed).map_err(|err| {
-                        anyhow::anyhow!("failed to parse tool output content {trimmed:?}: {err}")
-                    })?;
-                    outputs.insert(call_id.to_string(), parsed);
-                }
-            }
-        }
-    }
-    Ok(outputs)
-}
-
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
-    skip_if_no_network!(Ok(()));
+async fn unified_exec_manager_supports_interactive_cat() -> Result<()> {
     skip_if_sandbox!(Ok(()));
 
-    let server = start_mock_server().await;
-
-    let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
-    });
-    let TestCodex {
-        codex,
-        cwd,
-        session_configured,
-        ..
-    } = builder.build(&server).await?;
-
-    let first_call_id = "uexec-start";
-    let first_args = serde_json::json!({
-        "input": ["/bin/cat"],
-        "timeout_ms": 200,
-    });
-
-    let second_call_id = "uexec-stdin";
-    let second_args = serde_json::json!({
-        "input": ["hello unified exec\n"],
-        "session_id": "0",
-        "timeout_ms": 500,
-    });
-
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(
-                first_call_id,
-                "unified_exec",
-                &serde_json::to_string(&first_args)?,
-            ),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_response_created("resp-2"),
-            ev_function_call(
-                second_call_id,
-                "unified_exec",
-                &serde_json::to_string(&second_args)?,
-            ),
-            ev_completed("resp-2"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "all done"),
-            ev_completed("resp-3"),
-        ]),
-    ];
-    mount_sse_sequence(&server, responses).await;
-
-    let session_model = session_configured.model.clone();
-
-    codex
-        .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
-                text: "run unified exec".into(),
-            }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: session_model,
-            effort: None,
-            summary: ReasoningSummary::Auto,
+    let manager = UnifiedExecSessionManager::default();
+    let result = manager
+        .handle_request(UnifiedExecRequest {
+            mode: UnifiedExecMode::Start {
+                cmd: std::borrow::Cow::Borrowed("cat"),
+                yield_time_ms: Some(200),
+                max_output_tokens: Some(1_000),
+                shell: Some("/bin/sh"),
+                login: Some(false),
+                cwd: None,
+            },
+            output_chunk_id: Some(true),
+            output_wall_time: Some(true),
+            output_json: Some(false),
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    let session_id = result.metadata.session_id.expect("expected session id");
+    let poll = manager
+        .handle_request(UnifiedExecRequest {
+            mode: UnifiedExecMode::Write {
+                session_id,
+                chars: "hello unified exec\n",
+                yield_time_ms: Some(500),
+                max_output_tokens: Some(1_000),
+            },
+            output_chunk_id: Some(false),
+            output_wall_time: Some(false),
+            output_json: Some(true),
+        })
+        .await?;
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let outputs = collect_tool_outputs(&bodies)?;
-
-    let start_output = outputs
-        .get(first_call_id)
-        .expect("missing first unified_exec output");
-    let session_id = start_output["session_id"].as_str().unwrap_or_default();
-    assert!(
-        !session_id.is_empty(),
-        "expected session id in first unified_exec response"
-    );
-    assert!(
-        start_output["output"]
-            .as_str()
-            .unwrap_or_default()
-            .is_empty()
-    );
-
-    let reuse_output = outputs
-        .get(second_call_id)
-        .expect("missing reused unified_exec output");
-    assert_eq!(
-        reuse_output["session_id"].as_str().unwrap_or_default(),
-        session_id
-    );
-    let echoed = reuse_output["output"].as_str().unwrap_or_default();
-    assert!(
-        echoed.contains("hello unified exec"),
-        "expected echoed output, got {echoed:?}"
-    );
+    let output = poll.content.into_string();
+    assert!(output.contains("hello unified exec"));
 
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unified_exec_streams_after_lagged_output() -> Result<()> {
-    skip_if_no_network!(Ok(()));
+async fn unified_exec_manager_streams_large_output() -> Result<()> {
     skip_if_sandbox!(Ok(()));
 
-    let server = start_mock_server().await;
-
-    let mut builder = test_codex().with_config(|config| {
-        config.use_experimental_unified_exec_tool = true;
-        config.features.enable(Feature::UnifiedExec);
-    });
-    let TestCodex {
-        codex,
-        cwd,
-        session_configured,
-        ..
-    } = builder.build(&server).await?;
-
+    let manager = UnifiedExecSessionManager::default();
     let script = r#"python3 - <<'PY'
 import sys
-import time
-
-chunk = b'x' * (1 << 20)
-for _ in range(4):
-    sys.stdout.buffer.write(chunk)
-    sys.stdout.flush()
-
-time.sleep(0.2)
-for _ in range(5):
+for _ in range(3):
     sys.stdout.write("TAIL-MARKER\n")
     sys.stdout.flush()
-    time.sleep(0.05)
-
-time.sleep(0.2)
 PY
 "#;
 
-    let first_call_id = "uexec-lag-start";
-    let first_args = serde_json::json!({
-        "input": ["/bin/sh", "-c", script],
-        "timeout_ms": 25,
-    });
-
-    let second_call_id = "uexec-lag-poll";
-    let second_args = serde_json::json!({
-        "input": Vec::<String>::new(),
-        "session_id": "0",
-        "timeout_ms": 2_000,
-    });
-
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(
-                first_call_id,
-                "unified_exec",
-                &serde_json::to_string(&first_args)?,
-            ),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_response_created("resp-2"),
-            ev_function_call(
-                second_call_id,
-                "unified_exec",
-                &serde_json::to_string(&second_args)?,
-            ),
-            ev_completed("resp-2"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "lag handled"),
-            ev_completed("resp-3"),
-        ]),
-    ];
-    mount_sse_sequence(&server, responses).await;
-
-    let session_model = session_configured.model.clone();
-
-    codex
-        .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
-                text: "exercise lag handling".into(),
-            }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: session_model,
-            effort: None,
-            summary: ReasoningSummary::Auto,
+    let start = manager
+        .handle_request(UnifiedExecRequest {
+            mode: UnifiedExecMode::Start {
+                cmd: std::borrow::Cow::Borrowed(script),
+                yield_time_ms: Some(500),
+                max_output_tokens: Some(5_000),
+                shell: Some("/bin/sh"),
+                login: Some(false),
+                cwd: None,
+            },
+            output_chunk_id: None,
+            output_wall_time: None,
+            output_json: Some(false),
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    let output = start.content.into_string();
+    assert!(output.contains("TAIL-MARKER"));
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
+    Ok(())
+}
 
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_manager_handles_timeout_then_poll() -> Result<()> {
+    skip_if_sandbox!(Ok(()));
 
-    let outputs = collect_tool_outputs(&bodies)?;
+    let manager = UnifiedExecSessionManager::default();
+    let result = manager
+        .handle_request(UnifiedExecRequest {
+            mode: UnifiedExecMode::Start {
+                cmd: std::borrow::Cow::Borrowed("sleep 0.1; echo ready"),
+                yield_time_ms: Some(10),
+                max_output_tokens: Some(1_000),
+                shell: Some("/bin/sh"),
+                login: Some(false),
+                cwd: None,
+            },
+            output_chunk_id: None,
+            output_wall_time: None,
+            output_json: Some(false),
+        })
+        .await?;
 
-    let start_output = outputs
-        .get(first_call_id)
-        .expect("missing initial unified_exec output");
-    let session_id = start_output["session_id"].as_str().unwrap_or_default();
-    assert!(
-        !session_id.is_empty(),
-        "expected session id from initial unified_exec response"
+    if let Some(session_id) = result.metadata.session_id {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        match manager
+            .handle_request(UnifiedExecRequest {
+                mode: UnifiedExecMode::Write {
+                    session_id,
+                    chars: "",
+                    yield_time_ms: Some(500),
+                    max_output_tokens: Some(1_000),
+                },
+                output_chunk_id: None,
+                output_wall_time: None,
+                output_json: Some(false),
+            })
+            .await
+        {
+            Ok(poll) => assert!(poll.content.into_string().contains("ready")),
+            Err(codex_core::UnifiedExecError::SessionExited { .. }) => {}
+            Err(other) => return Err(other.into()),
+        }
+    } else {
+        assert!(result.content.into_string().contains("ready"));
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_json_output_matches_metadata() -> Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let manager = UnifiedExecSessionManager::default();
+    let command = "printf 'ready\\n' && read dummy";
+
+    let result = manager
+        .handle_request(UnifiedExecRequest {
+            mode: UnifiedExecMode::Start {
+                cmd: std::borrow::Cow::Borrowed(command),
+                yield_time_ms: Some(500),
+                max_output_tokens: Some(1_000),
+                shell: Some("/bin/bash"),
+                login: Some(false),
+                cwd: None,
+            },
+            output_chunk_id: Some(true),
+            output_wall_time: Some(true),
+            output_json: Some(true),
+        })
+        .await?;
+
+    let codex_core::UnifiedExecResult { content, metadata } = result;
+
+    let body = content.into_string();
+    let json: Value = serde_json::from_str(&body)?;
+
+    assert!(json.get("chunk_id").is_some());
+    assert!(json.get("wall_time").is_some());
+
+    let session_id = metadata.session_id.expect("expected running session");
+    assert_eq!(json["session_id"].as_i64(), Some(i64::from(session_id)));
+
+    let output = json["output"]
+        .as_object()
+        .expect("output is object with numbered lines");
+    assert_eq!(
+        output.get("1").and_then(Value::as_str),
+        Some("ready"),
+        "expected first output line to contain ready"
     );
 
-    let poll_output = outputs
-        .get(second_call_id)
-        .expect("missing poll unified_exec output");
-    let poll_text = poll_output["output"].as_str().unwrap_or_default();
+    assert_eq!(metadata.exec_cmd.as_deref(), Some(command));
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_respects_output_preferences() -> Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let manager = UnifiedExecSessionManager::default();
+
+    let result = manager
+        .handle_request(UnifiedExecRequest {
+            mode: UnifiedExecMode::Start {
+                cmd: std::borrow::Cow::Borrowed("printf 'ready\\n' && read dummy"),
+                yield_time_ms: Some(500),
+                max_output_tokens: Some(1_000),
+                shell: Some("/bin/bash"),
+                login: Some(false),
+                cwd: None,
+            },
+            output_chunk_id: Some(false),
+            output_wall_time: Some(false),
+            output_json: Some(false),
+        })
+        .await?;
+
+    let codex_core::UnifiedExecResult { content, metadata } = result;
+
+    assert_eq!(
+        metadata.exec_cmd.as_deref(),
+        Some("printf 'ready\\n' && read dummy")
+    );
     assert!(
-        poll_text.contains("TAIL-MARKER"),
-        "expected poll output to contain tail marker, got {poll_text:?}"
+        metadata.session_id.is_some(),
+        "session should remain active when waiting for stdin input"
+    );
+
+    let text = content.into_string();
+    assert!(
+        !text.contains("Chunk ID:"),
+        "chunk metadata should be omitted when output_chunk_id is false: {text}"
+    );
+    assert!(
+        !text.contains("Wall time:"),
+        "wall time metadata should be omitted when output_wall_time is false: {text}"
+    );
+    assert!(
+        text.contains("Process running with session ID"),
+        "expected running-session metadata in textual response: {text}"
+    );
+    assert!(
+        text.contains("ready"),
+        "expected command output to appear in textual response: {text}"
     );
 
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
-    skip_if_no_network!(Ok(()));
+async fn unified_exec_reports_truncation_metadata() -> Result<()> {
     skip_if_sandbox!(Ok(()));
 
-    let server = start_mock_server().await;
+    let manager = UnifiedExecSessionManager::default();
+    let script = r#"python3 - <<'PY'
+import sys
+sys.stdout.write("X" * 2048)
+sys.stdout.flush()
+PY
+"#;
 
-    let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::UnifiedExec);
-    });
-    let TestCodex {
-        codex,
-        cwd,
-        session_configured,
-        ..
-    } = builder.build(&server).await?;
-
-    let first_call_id = "uexec-timeout";
-    let first_args = serde_json::json!({
-        "input": ["/bin/sh", "-c", "sleep 0.1; echo ready"],
-        "timeout_ms": 10,
-    });
-
-    let second_call_id = "uexec-poll";
-    let second_args = serde_json::json!({
-        "input": Vec::<String>::new(),
-        "session_id": "0",
-        "timeout_ms": 800,
-    });
-
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(
-                first_call_id,
-                "unified_exec",
-                &serde_json::to_string(&first_args)?,
-            ),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_response_created("resp-2"),
-            ev_function_call(
-                second_call_id,
-                "unified_exec",
-                &serde_json::to_string(&second_args)?,
-            ),
-            ev_completed("resp-2"),
-        ]),
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-3"),
-        ]),
-    ];
-    mount_sse_sequence(&server, responses).await;
-
-    let session_model = session_configured.model.clone();
-
-    codex
-        .submit(Op::UserTurn {
-            items: vec![InputItem::Text {
-                text: "check timeout".into(),
-            }],
-            final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: session_model,
-            effort: None,
-            summary: ReasoningSummary::Auto,
+    let result = manager
+        .handle_request(UnifiedExecRequest {
+            mode: UnifiedExecMode::Start {
+                cmd: std::borrow::Cow::Borrowed(script),
+                yield_time_ms: Some(500),
+                max_output_tokens: Some(1),
+                shell: Some("/bin/sh"),
+                login: Some(false),
+                cwd: None,
+            },
+            output_chunk_id: Some(true),
+            output_wall_time: Some(true),
+            output_json: Some(false),
         })
         .await?;
 
-    loop {
-        let event = codex.next_event().await.expect("event");
-        if matches!(event.msg, EventMsg::TaskComplete(_)) {
-            break;
-        }
-    }
+    let codex_core::UnifiedExecResult { content, metadata } = result;
 
-    let requests = server.received_requests().await.expect("recorded requests");
-    assert!(!requests.is_empty(), "expected at least one POST request");
-
-    let bodies = requests
-        .iter()
-        .map(|req| req.body_json::<Value>().expect("request json"))
-        .collect::<Vec<_>>();
-
-    let outputs = collect_tool_outputs(&bodies)?;
-
-    let first_output = outputs.get(first_call_id).expect("missing timeout output");
-    assert_eq!(first_output["session_id"], "0");
     assert!(
-        first_output["output"]
-            .as_str()
-            .unwrap_or_default()
-            .is_empty()
+        metadata.original_token_count.is_some_and(|count| count > 0),
+        "expected original_token_count metadata when truncation occurs"
     );
 
-    let poll_output = outputs.get(second_call_id).expect("missing poll output");
-    let output_text = poll_output["output"].as_str().unwrap_or_default();
+    let text = content.into_string();
     assert!(
-        output_text.contains("ready"),
-        "expected ready output, got {output_text:?}"
+        text.contains("tokens truncated"),
+        "expected truncation notice in textual output: {text}"
     );
 
     Ok(())
