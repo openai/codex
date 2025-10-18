@@ -188,17 +188,22 @@ pub async fn default_user_shell() -> Shell {
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
-    let bash_exe = if Command::new("bash.exe")
-        .arg("--version")
-        .output()
-        .await
-        .ok()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        which::which("bash.exe").ok()
-    } else {
-        None
+    // Consistency: use which::which("bash.exe") to resolve a concrete path and
+    // validate that specific path with --version. This avoids discrepancies
+    // between the path used for detection vs the fallback path we return.
+    let bash_exe = match which::which("bash.exe") {
+        Ok(path) => {
+            let ok = Command::new(&path)
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .await
+                .ok()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if ok { Some(path) } else { None }
+        }
+        Err(_) => None,
     };
 
     if has_pwsh {
@@ -567,5 +572,81 @@ mod tests_windows {
                 Some(expected_cmd.iter().map(|s| (*s).to_string()).collect())
             );
         }
+    }
+
+    // Ignored-by-default environment check: requires WSL installed, and the target bash
+    // precedes System32\bash.exe in PATH. Compare run resolution (bash.exe --version)
+    // with the which-resolved path (<which path> --version). Expect different outputs to
+    // highlight the Windows run vs which mismatch.
+    #[test]
+    #[ignore]
+    fn test_bash_run_vs_which_with_target_bash_priority() {
+        use std::path::PathBuf;
+        use std::process::Command;
+
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let sys32 = PathBuf::from(&windir).join("System32");
+        let wsl_exe = sys32.join("wsl.exe");
+        let sys_bash_exe = sys32.join("bash.exe");
+        if !wsl_exe.exists() && !sys_bash_exe.exists() {
+            eprintln!("[test] skip: WSL not detected under System32");
+            return;
+        }
+
+        let which_path = match which::which("bash.exe") {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[test] skip: which('bash.exe') failed: {}", e);
+                return;
+            }
+        };
+        let sys_bash_canon = sys_bash_exe.canonicalize().ok();
+        let which_canon = which_path.canonicalize().ok();
+        if sys_bash_canon.is_some() && which_canon.is_some() && sys_bash_canon == which_canon {
+            eprintln!(
+                "[test] skip: which resolved to System32\\bash.exe; ensure target bash precedes WSL in PATH"
+            );
+            return;
+        }
+
+        let run_out = Command::new("bash.exe").arg("--version").output();
+        let which_out = Command::new(&which_path).arg("--version").output();
+
+        let (run_ok, run_stdout) = match run_out {
+            Ok(o) => (
+                o.status.success(),
+                String::from_utf8_lossy(&o.stdout).to_string(),
+            ),
+            Err(e) => {
+                eprintln!("[test] run bash.exe failed: {}", e);
+                return;
+            }
+        };
+        let (which_ok, which_stdout) = match which_out {
+            Ok(o) => (
+                o.status.success(),
+                String::from_utf8_lossy(&o.stdout).to_string(),
+            ),
+            Err(e) => {
+                eprintln!("[test] which path {:?} failed: {}", which_path, e);
+                return;
+            }
+        };
+
+        eprintln!("[test] which_path: {:?}", which_path);
+        eprintln!("[test] run_ok: {}", run_ok);
+        eprintln!("[test] which_ok: {}", which_ok);
+        eprintln!("[test] run_stdout:\n{}", run_stdout.trim());
+        eprintln!("[test] which_stdout:\n{}", which_stdout.trim());
+
+        assert!(
+            run_ok,
+            "run bash.exe --version should succeed (WSL present)"
+        );
+        assert!(which_ok, "which-resolved bash --version should succeed");
+        assert_ne!(
+            run_stdout, which_stdout,
+            "Expected different outputs; ensure PATH target bash precedes WSL bash"
+        );
     }
 }
