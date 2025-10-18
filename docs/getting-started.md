@@ -59,6 +59,8 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 | 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
 | 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
 
+Looking to reuse your own instructions? Create slash commands with [custom prompts](./prompts.md).
+
 ### Memory with AGENTS.md
 
 You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
