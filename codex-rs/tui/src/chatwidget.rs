@@ -831,7 +831,7 @@ impl ChatWidget {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
 
-        if command.as_deref().map_or(true, str::is_empty) {
+        if command.as_deref().is_none_or(str::is_empty) {
             return Some(format!("Tool call ({tool}):\n{payload}"));
         }
 
@@ -879,7 +879,7 @@ impl ChatWidget {
             ));
         }
         if !output.is_empty() {
-            formatted.push_str("\n");
+            formatted.push('\n');
             formatted.push_str(output);
         }
         Some(formatted)

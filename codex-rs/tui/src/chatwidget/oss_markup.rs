@@ -43,20 +43,20 @@ pub(crate) fn parse_oss_segments(message: &str) -> Option<Vec<OssSegment>> {
             continue;
         }
         if token.starts_with("end|>") {
-            if let Some(msg) = pending_message.take() {
-                if let Some(segment) = classify_segment(pending_channels.clone(), msg, false) {
-                    segments.push(segment);
-                }
+            if let Some(msg) = pending_message.take()
+                && let Some(segment) = classify_segment(pending_channels.clone(), msg, false)
+            {
+                segments.push(segment);
             }
             pending_channels.clear();
             active_channels.clear();
             continue;
         }
         if token.starts_with("call|>") {
-            if let Some(msg) = pending_message.take() {
-                if let Some(segment) = classify_segment(pending_channels.clone(), msg, true) {
-                    segments.push(segment);
-                }
+            if let Some(msg) = pending_message.take()
+                && let Some(segment) = classify_segment(pending_channels.clone(), msg, true)
+            {
+                segments.push(segment);
             }
             pending_channels.clear();
             active_channels.clear();
