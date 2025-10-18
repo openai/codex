@@ -713,7 +713,11 @@ impl CodexMessageProcessor {
         }
 
         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
-        let env = create_env(&self.config.shell_environment_policy);
+        let env = if self.config.passthrough_shell_environment {
+            std::env::vars().collect()
+        } else {
+            create_env(&self.config.shell_environment_policy)
+        };
         let timeout_ms = params.timeout_ms;
         let exec_params = ExecParams {
             command: params.command,
@@ -723,6 +727,8 @@ impl CodexMessageProcessor {
             with_escalated_permissions: None,
             justification: None,
             arg0: None,
+            disable_timeout: self.config.disable_command_timeouts,
+            passthrough_stdio: self.config.passthrough_shell_stdio,
         };
 
         let effective_policy = params
@@ -1530,10 +1536,16 @@ async fn derive_config_from_params(
         codex_linux_sandbox_exe,
         base_instructions,
         include_apply_patch_tool,
+        include_plan_tool: None,
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
+        disable_command_timeouts: None,
+        passthrough_shell_environment: None,
+        passthrough_shell_stdio: None,
+        auto_next_steps: None,
+        auto_next_idea: None,
         additional_writable_roots: Vec::new(),
     };
 

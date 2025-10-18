@@ -115,8 +115,17 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
         attempt: &SandboxAttempt<'_>,
         _ctx: &ToolCtx<'_>,
     ) -> Result<UnifiedExecSession, ToolError> {
-        let spec = build_command_spec(&req.command, &req.cwd, &req.env, None, None, None)
-            .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+        let spec = build_command_spec(
+            &req.command,
+            &req.cwd,
+            &req.env,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
             .env_for(&spec)
             .map_err(|err| ToolError::Codex(err.into()))?;

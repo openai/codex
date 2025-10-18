@@ -34,6 +34,10 @@ const ALIASES: &[Alias] = &[
         feature: Feature::ApplyPatchFreeform,
     },
     Alias {
+        legacy_key: "include_plan_tool",
+        feature: Feature::PlanTool,
+    },
+    Alias {
         legacy_key: "include_view_image_tool",
         feature: Feature::ViewImageTool,
     },
@@ -55,6 +59,7 @@ pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
 
 #[derive(Debug, Default)]
 pub struct LegacyFeatureToggles {
+    pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
@@ -68,6 +73,12 @@ pub struct LegacyFeatureToggles {
 
 impl LegacyFeatureToggles {
     pub fn apply(self, features: &mut Features) {
+        set_if_some(
+            features,
+            Feature::PlanTool,
+            self.include_plan_tool,
+            "include_plan_tool",
+        );
         set_if_some(
             features,
             Feature::ApplyPatchFreeform,

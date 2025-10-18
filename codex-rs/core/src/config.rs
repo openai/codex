@@ -109,6 +109,11 @@ pub struct Config {
     pub did_user_set_custom_approval_policy_or_sandbox_mode: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
+    pub disable_command_timeouts: bool,
+    pub passthrough_shell_environment: bool,
+    pub passthrough_shell_stdio: bool,
+    pub auto_next_steps: bool,
+    pub auto_next_idea: bool,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -215,6 +220,9 @@ pub struct Config {
 
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
+
+    /// Include the experimental plan tool so the agent can update and track task plans.
+    pub include_plan_tool: bool,
 
     /// Include the `apply_patch` tool for models that benefit from invoking
     /// file edits as a structured tool call. When unset, this falls back to the
@@ -854,6 +862,24 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
+    /// Disable command execution timeouts.
+    pub disable_command_timeouts: Option<bool>,
+
+    /// Pass the host environment variables through to shell commands.
+    pub passthrough_shell_environment: Option<bool>,
+
+    /// Stream shell stdout/stderr directly to the user terminal.
+    pub passthrough_shell_stdio: Option<bool>,
+
+    /// Continue automatically by prompting for detailed next steps.
+    pub auto_next_steps: Option<bool>,
+
+    /// Continue autonomously by scouting for fresh work once current tasks complete.
+    pub auto_next_idea: Option<bool>,
+
+    /// Include the plan tool in conversations.
+    pub include_plan_tool: Option<bool>,
+
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -1120,9 +1146,15 @@ pub struct ConfigOverrides {
     pub base_instructions: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
+    pub include_plan_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub experimental_sandbox_command_assessment: Option<bool>,
+    pub disable_command_timeouts: Option<bool>,
+    pub passthrough_shell_environment: Option<bool>,
+    pub passthrough_shell_stdio: Option<bool>,
+    pub auto_next_steps: Option<bool>,
+    pub auto_next_idea: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1150,9 +1182,15 @@ impl Config {
             base_instructions,
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
+            include_plan_tool: include_plan_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             experimental_sandbox_command_assessment: sandbox_command_assessment_override,
+            disable_command_timeouts,
+            passthrough_shell_environment,
+            passthrough_shell_stdio,
+            auto_next_steps,
+            auto_next_idea,
             additional_writable_roots,
         } = overrides;
 
@@ -1175,6 +1213,7 @@ impl Config {
         };
 
         let feature_overrides = FeatureOverrides {
+            plan_tool: include_plan_tool_override,
             include_apply_patch_tool: include_apply_patch_tool_override,
             include_view_image_tool: include_view_image_tool_override,
             web_search_request: override_tools_web_search_request,
@@ -1270,6 +1309,28 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let disable_command_timeouts = disable_command_timeouts
+            .or(config_profile.disable_command_timeouts)
+            .or(cfg.disable_command_timeouts)
+            .unwrap_or(false);
+        let passthrough_shell_environment = passthrough_shell_environment
+            .or(config_profile.passthrough_shell_environment)
+            .or(cfg.passthrough_shell_environment)
+            .unwrap_or(false);
+        let passthrough_shell_stdio = passthrough_shell_stdio
+            .or(config_profile.passthrough_shell_stdio)
+            .or(cfg.passthrough_shell_stdio)
+            .unwrap_or(false);
+        let auto_next_steps = auto_next_steps
+            .or(config_profile.auto_next_steps)
+            .or(cfg.auto_next_steps)
+            .unwrap_or(false);
+        let auto_next_idea = auto_next_idea
+            .or(config_profile.auto_next_idea)
+            .or(cfg.auto_next_idea)
+            .unwrap_or(false);
+
+        let include_plan_tool_flag = features.enabled(Feature::PlanTool);
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let include_view_image_tool_flag = features.enabled(Feature::ViewImageTool);
         let tools_web_search_request = features.enabled(Feature::WebSearchRequest);
@@ -1351,6 +1412,11 @@ impl Config {
             sandbox_policy,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             shell_environment_policy,
+            disable_command_timeouts,
+            passthrough_shell_environment,
+            passthrough_shell_stdio,
+            auto_next_steps,
+            auto_next_idea,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -1397,6 +1463,7 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             forced_chatgpt_workspace_id,
             forced_login_method,
+            include_plan_tool: include_plan_tool_flag,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             tools_web_search_request,
             experimental_sandbox_command_assessment,
@@ -2860,6 +2927,11 @@ model_verbosity = "high"
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
+                disable_command_timeouts: false,
+                passthrough_shell_environment: false,
+                passthrough_shell_stdio: false,
+                auto_next_steps: false,
+                auto_next_idea: false,
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -2882,6 +2954,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
+                include_plan_tool: false,
                 tools_web_search_request: false,
                 experimental_sandbox_command_assessment: false,
                 use_experimental_streamable_shell_tool: false,
@@ -2929,6 +3002,11 @@ model_verbosity = "high"
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            disable_command_timeouts: false,
+            passthrough_shell_environment: false,
+            passthrough_shell_stdio: false,
+            auto_next_steps: false,
+            auto_next_idea: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -2951,6 +3029,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
+            include_plan_tool: false,
             tools_web_search_request: false,
             experimental_sandbox_command_assessment: false,
             use_experimental_streamable_shell_tool: false,
@@ -3013,6 +3092,11 @@ model_verbosity = "high"
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            disable_command_timeouts: false,
+            passthrough_shell_environment: false,
+            passthrough_shell_stdio: false,
+            auto_next_steps: false,
+            auto_next_idea: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3035,6 +3119,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
+            include_plan_tool: false,
             tools_web_search_request: false,
             experimental_sandbox_command_assessment: false,
             use_experimental_streamable_shell_tool: false,
@@ -3083,6 +3168,11 @@ model_verbosity = "high"
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            disable_command_timeouts: false,
+            passthrough_shell_environment: false,
+            passthrough_shell_stdio: false,
+            auto_next_steps: false,
+            auto_next_idea: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3105,6 +3195,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
+            include_plan_tool: false,
             tools_web_search_request: false,
             experimental_sandbox_command_assessment: false,
             use_experimental_streamable_shell_tool: false,

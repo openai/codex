@@ -61,6 +61,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_profile,
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
+        dangerously_disable_timeouts,
+        dangerously_disable_environment_wrapping,
+        dangerously_passthrough_stdio,
+        auto_next_steps,
+        auto_next_idea,
+        include_plan_tool,
         cwd,
         skip_git_repo_check,
         color,
@@ -175,11 +181,22 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         model_provider,
         codex_linux_sandbox_exe,
         base_instructions: None,
+        include_plan_tool: Some(include_plan_tool),
         include_apply_patch_tool: None,
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
         experimental_sandbox_command_assessment: None,
+        disable_command_timeouts: (dangerously_disable_timeouts
+            || dangerously_disable_environment_wrapping
+            || dangerously_passthrough_stdio)
+            .then_some(true),
+        passthrough_shell_environment: (dangerously_disable_environment_wrapping
+            || dangerously_passthrough_stdio)
+            .then_some(true),
+        passthrough_shell_stdio: dangerously_passthrough_stdio.then_some(true),
+        auto_next_steps: auto_next_steps.then_some(true),
+        auto_next_idea: auto_next_idea.then_some(true),
         additional_writable_roots: Vec::new(),
     };
     // Parse `-c` overrides.

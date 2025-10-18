@@ -178,6 +178,11 @@ impl Codex {
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            disable_command_timeouts: config.disable_command_timeouts,
+            passthrough_shell_environment: config.passthrough_shell_environment,
+            passthrough_shell_stdio: config.passthrough_shell_stdio,
+            auto_next_steps: config.auto_next_steps,
+            auto_next_idea: config.auto_next_idea,
             original_config_do_not_use: Arc::clone(&config),
         };
 
@@ -272,6 +277,11 @@ pub(crate) struct TurnContext {
     pub(crate) is_review_mode: bool,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) disable_command_timeouts: bool,
+    pub(crate) passthrough_shell_environment: bool,
+    pub(crate) passthrough_shell_stdio: bool,
+    pub(crate) auto_next_steps: bool,
+    pub(crate) auto_next_idea: bool,
 }
 
 impl TurnContext {
@@ -312,6 +322,11 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+    disable_command_timeouts: bool,
+    passthrough_shell_environment: bool,
+    passthrough_shell_stdio: bool,
+    auto_next_steps: bool,
+    auto_next_idea: bool,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -407,6 +422,11 @@ impl Session {
             is_review_mode: false,
             final_output_json_schema: None,
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            disable_command_timeouts: session_configuration.disable_command_timeouts,
+            passthrough_shell_environment: session_configuration.passthrough_shell_environment,
+            passthrough_shell_stdio: session_configuration.passthrough_shell_stdio,
+            auto_next_steps: session_configuration.auto_next_steps,
+            auto_next_idea: session_configuration.auto_next_idea,
         }
     }
 
@@ -1104,6 +1124,17 @@ impl Session {
         }
     }
 
+    pub async fn has_pending_input(&self) -> bool {
+        let active = self.active_turn.lock().await;
+        match active.as_ref() {
+            Some(at) => {
+                let ts = at.turn_state.lock().await;
+                ts.has_pending_input()
+            }
+            None => false,
+        }
+    }
+
     pub async fn list_resources(
         &self,
         server: &str,
@@ -1518,6 +1549,11 @@ async fn spawn_review_thread(
         is_review_mode: true,
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
+        disable_command_timeouts: parent_turn_context.disable_command_timeouts,
+        passthrough_shell_environment: parent_turn_context.passthrough_shell_environment,
+        passthrough_shell_stdio: parent_turn_context.passthrough_shell_stdio,
+        auto_next_steps: parent_turn_context.auto_next_steps,
+        auto_next_idea: parent_turn_context.auto_next_idea,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -1691,6 +1727,42 @@ pub(crate) async fn run_task(
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
+
+                    let auto_next_steps = turn_context.auto_next_steps;
+                    let auto_next_idea = turn_context.auto_next_idea;
+                    if (auto_next_steps || auto_next_idea)
+                        && !sess.has_pending_input().await
+                        && let Some(next_prompt) = build_autonomy_follow_up_prompt(
+                            last_agent_message.as_deref(),
+                            auto_next_steps,
+                            auto_next_idea,
+                        )
+                    {
+                        match sess
+                            .inject_input(vec![UserInput::Text {
+                                text: next_prompt.clone(),
+                            }])
+                            .await
+                        {
+                            Ok(()) => {
+                                sess.notify_background_event(
+                                    turn_context.as_ref(),
+                                    background_autonomy_message(auto_next_steps, auto_next_idea),
+                                )
+                                .await;
+                                continue;
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    auto_next_steps,
+                                    auto_next_idea,
+                                    error = ?err,
+                                    "autonomy: failed to queue follow-up prompt"
+                                );
+                            }
+                        }
+                    }
+
                     sess.notifier()
                         .notify(&UserNotification::AgentTurnComplete {
                             thread_id: sess.conversation_id.to_string(),
@@ -2143,6 +2215,53 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
         }
     })
 }
+
+fn build_autonomy_follow_up_prompt(
+    last_agent_message: Option<&str>,
+    auto_next_steps: bool,
+    auto_next_idea: bool,
+) -> Option<String> {
+    if !auto_next_steps && !auto_next_idea {
+        return None;
+    }
+
+    const STEPS_DIRECTIVE: &str = "Continue working autonomously. Break the overall goal into concrete next steps, execute them sequentially, and after each step write a concise progress update before deciding what to do next. Treat this follow-up as a fresh thinking prompt instead of wrapping up early.";
+    const IDEA_DIRECTIVE: &str = "Whenever you run out of meaningful next steps or reach a natural stopping point, shift into ideation mode. Inspect the repository and surrounding context, brainstorm at least three concrete improvements for this product, explain the expected impact, rank them, choose the top opportunity, and immediately begin executing it.";
+    const INTERRUPT_DIRECTIVE: &str = "Always check for new user instructions, review requests, or approvals before acting, and respond to them first. If the session resumes after an interruption, briefly summarize where you left off before continuing.";
+    const LOOP_DIRECTIVE: &str = "Repeat this cycle indefinitely while autonomy is enabled. Only stop if the user explicitly intervenes or ends the session.";
+
+    let mut sections: Vec<&'static str> = Vec::new();
+    if auto_next_steps {
+        sections.push(STEPS_DIRECTIVE);
+    }
+    if auto_next_idea {
+        sections.push(IDEA_DIRECTIVE);
+    }
+    sections.push(INTERRUPT_DIRECTIVE);
+    sections.push(LOOP_DIRECTIVE);
+
+    let mut prompt = sections.join("\n\n");
+
+    if let Some(summary) = last_agent_message
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+    {
+        prompt.push_str("\n\nLatest summary from your previous work:\n");
+        prompt.push_str(summary);
+    }
+
+    Some(prompt)
+}
+
+fn background_autonomy_message(auto_next_steps: bool, auto_next_idea: bool) -> &'static str {
+    match (auto_next_steps, auto_next_idea) {
+        (true, true) => "Autonomy: continuing with next steps and fresh ideas.",
+        (true, false) => "Auto-next-steps: queuing detailed follow-up tasks.",
+        (false, true) => "Auto-next-idea: proposing new high-impact work.",
+        (false, false) => "Autonomy disabled.",
+    }
+}
+
 pub(crate) fn convert_call_tool_result_to_function_call_output_payload(
     call_tool_result: &CallToolResult,
 ) -> FunctionCallOutputPayload {
@@ -2601,6 +2720,11 @@ mod tests {
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            disable_command_timeouts: config.disable_command_timeouts,
+            passthrough_shell_environment: config.passthrough_shell_environment,
+            passthrough_shell_stdio: config.passthrough_shell_stdio,
+            auto_next_steps: config.auto_next_steps,
+            auto_next_idea: config.auto_next_idea,
             original_config_do_not_use: Arc::clone(&config),
         };
 
@@ -2669,6 +2793,11 @@ mod tests {
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            disable_command_timeouts: config.disable_command_timeouts,
+            passthrough_shell_environment: config.passthrough_shell_environment,
+            passthrough_shell_stdio: config.passthrough_shell_stdio,
+            auto_next_steps: config.auto_next_steps,
+            auto_next_idea: config.auto_next_idea,
             original_config_do_not_use: Arc::clone(&config),
         };
 
@@ -3032,6 +3161,8 @@ mod tests {
             with_escalated_permissions: Some(true),
             justification: Some("test".to_string()),
             arg0: None,
+            disable_timeout: false,
+            passthrough_stdio: false,
         };
 
         let params2 = ExecParams {
