@@ -85,12 +85,14 @@ console.log(turn.finalResponse);
 
 ### Attaching images
 
-Provide image file paths with the `images` option to include visual context in a turn.
+Provide structured input entries when you need to include images alongside text. Text entries are concatenated into the final prompt while image entries are passed to the Codex CLI via `--image`.
 
 ```typescript
-const turn = await thread.run("Describe these screenshots", {
-  images: ["./ui.png", "./diagram.jpg"],
-});
+const turn = await thread.run([
+  { type: "text", text: "Describe these screenshots" },
+  { type: "local_image", path: "./ui.png" },
+  { type: "local_image", path: "./diagram.jpg" },
+]);
 ```
 
 ### Resuming an existing thread
