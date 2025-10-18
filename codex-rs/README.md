@@ -21,6 +21,8 @@ The Rust implementation is now the maintained Codex CLI and serves as the defaul
 
 Codex supports a rich set of configuration options. Note that the Rust CLI uses `config.toml` instead of `config.json`. See [`docs/config.md`](../docs/config.md) for details.
 
+Project-local overrides: When running Codex inside a project that contains a `.codex/` directory at the repository root (current working directory), Codex will use that directory as `CODEX_HOME`. This means files like `config.toml`, `config.json`, `auth.json`, and history will be read from and written to the project’s `.codex/` instead of the global `~/.codex/`. If no project-local `.codex/` exists, Codex falls back to `CODEX_HOME` (when set) or `~/.codex/`.
+
 ### Model Context Protocol Support
 
 #### MCP client
