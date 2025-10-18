@@ -1015,6 +1015,7 @@ impl CodexMessageProcessor {
             model,
             effort,
             summary,
+            final_output_json_schema,
         } = params;
 
         let Ok(conversation) = self
@@ -1049,7 +1050,7 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary,
-                final_output_json_schema: None,
+                final_output_json_schema,
             })
             .await;
 
