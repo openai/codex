@@ -1001,7 +1001,7 @@ pub(crate) fn new_mcp_tools_output(
     }
 
     for (server, cfg) in config.mcp_servers.iter() {
-        let prefix = format!("{server}__");
+        let prefix = format!("mcp__{server}__");
         let mut names: Vec<String> = tools
             .keys()
             .filter(|k| k.starts_with(&prefix))

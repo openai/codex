@@ -44,7 +44,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     let call_id = "call-123";
     let server_name = "rmcp";
-    let tool_name = format!("{server_name}__echo");
+    let tool_name = format!("mcp__{server_name}__echo");
 
     mount_sse_once_match(
         &server,
@@ -182,7 +182,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 
     let call_id = "call-1234";
     let server_name = "rmcp_whitelist";
-    let tool_name = format!("{server_name}__echo");
+    let tool_name = format!("mcp__{server_name}__echo");
 
     mount_sse_once_match(
         &server,
@@ -317,7 +317,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 
     let call_id = "call-456";
     let server_name = "rmcp_http";
-    let tool_name = format!("{server_name}__echo");
+    let tool_name = format!("mcp__{server_name}__echo");
 
     mount_sse_once_match(
         &server,
@@ -485,7 +485,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
 
     let call_id = "call-789";
     let server_name = "rmcp_http_oauth";
-    let tool_name = format!("{server_name}__echo");
+    let tool_name = format!("mcp__{server_name}__echo");
 
     mount_sse_once_match(
         &server,
