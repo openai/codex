@@ -38,6 +38,8 @@ pub struct FileMatch {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
+    #[serde(default)]
+    pub is_directory: bool,
 }
 
 pub struct FileSearchResults {
@@ -187,7 +189,7 @@ pub fn run(
 
         Box::new(move |entry| {
             if let Some(path) = get_file_path(&entry, search_directory) {
-                best_list.insert(path);
+                best_list.insert(&path);
             }
 
             processed += 1;
@@ -199,22 +201,29 @@ pub fn run(
         })
     });
 
-    fn get_file_path<'a>(
-        entry_result: &'a Result<ignore::DirEntry, ignore::Error>,
+    fn get_file_path(
+        entry_result: &Result<ignore::DirEntry, ignore::Error>,
         search_directory: &std::path::Path,
-    ) -> Option<&'a str> {
+    ) -> Option<String> {
         let entry = match entry_result {
             Ok(e) => e,
             Err(_) => return None,
         };
-        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+        let file_type = entry.file_type();
+        let path = entry.path();
+        let rel_path = match path.strip_prefix(search_directory) {
+            Ok(rel_path) => rel_path,
+            Err(_) => return None,
+        };
+        let rel_str = rel_path.to_str()?;
+        if rel_str.is_empty() {
             return None;
         }
-        let path = entry.path();
-        match path.strip_prefix(search_directory) {
-            Ok(rel_path) => rel_path.to_str(),
-            Err(_) => None,
+        let mut formatted = rel_str.to_string();
+        if file_type.is_some_and(|ft| ft.is_dir()) && !formatted.ends_with('/') {
+            formatted.push('/');
         }
+        Some(formatted)
     }
 
     // If the cancel flag is set, we return early with an empty result.
@@ -256,6 +265,7 @@ pub fn run(
     let matches: Vec<FileMatch> = raw_matches
         .into_iter()
         .map(|(score, path)| {
+            let is_directory = path.ends_with('/');
             let indices = if compute_indices {
                 let mut buf = Vec::<char>::new();
                 let haystack: Utf32Str<'_> = Utf32Str::new(&path, &mut buf);
@@ -275,6 +285,7 @@ pub fn run(
                 score,
                 path,
                 indices,
+                is_directory,
             }
         })
         .collect();
@@ -389,6 +400,12 @@ fn create_pattern(pattern: &str) -> Pattern {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::num::NonZeroUsize;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use tempfile::tempdir;
 
     #[test]
     fn verify_score_is_none_for_non_match() {
@@ -419,5 +436,61 @@ mod tests {
         ];
 
         assert_eq!(matches, expected);
+    }
+
+    #[test]
+    fn directories_are_returned_with_trailing_slash() {
+        let tmp = tempdir().expect("tempdir");
+        let dir_path = tmp.path().join("nested");
+        fs::create_dir(&dir_path).expect("create nested dir");
+
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let results = run(
+            "nest",
+            NonZeroUsize::new(8).expect("non-zero"),
+            tmp.path(),
+            Vec::new(),
+            NonZeroUsize::new(1).expect("non-zero"),
+            cancel_flag.clone(),
+            false,
+        )
+        .expect("run search");
+
+        assert!(
+            results
+                .matches
+                .iter()
+                .any(|m| m.path == "nested/" && m.is_directory),
+            "expected directory path with trailing slash, got {:?}",
+            results.matches,
+        );
+    }
+
+    #[test]
+    fn files_do_not_get_trailing_slash() {
+        let tmp = tempdir().expect("tempdir");
+        let file_path = tmp.path().join("note.txt");
+        fs::write(&file_path, "hello").expect("write file");
+
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let results = run(
+            "note",
+            NonZeroUsize::new(8).expect("non-zero"),
+            tmp.path(),
+            Vec::new(),
+            NonZeroUsize::new(1).expect("non-zero"),
+            cancel_flag.clone(),
+            false,
+        )
+        .expect("run search");
+
+        assert!(
+            results
+                .matches
+                .iter()
+                .any(|m| m.path == "note.txt" && !m.is_directory),
+            "expected file path without trailing slash, got {:?}",
+            results.matches,
+        );
     }
 }

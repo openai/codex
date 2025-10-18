@@ -58,17 +58,24 @@ pub(crate) async fn run_fuzzy_file_search(
             Ok(Ok((root, res))) => {
                 for m in res.matches {
                     let path = m.path;
+                    let is_directory = m.is_directory;
+                    let name_source = if is_directory {
+                        path.trim_end_matches('/')
+                    } else {
+                        path.as_str()
+                    };
                     //TODO(shijie): Move file name generation to file_search lib.
-                    let file_name = Path::new(&path)
+                    let file_name = Path::new(name_source)
                         .file_name()
                         .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| path.clone());
+                        .unwrap_or_else(|| name_source.to_string());
                     let result = FuzzyFileSearchResult {
                         root: root.clone(),
                         path,
                         file_name,
                         score: m.score,
                         indices: m.indices,
+                        is_directory,
                     };
                     files.push(result);
                 }
