@@ -83,6 +83,22 @@ pub fn assess_patch_safety(
     }
 }
 
+impl From<crate::approval::SafetyCheck> for SafetyCheck {
+    fn from(decision: crate::approval::SafetyCheck) -> Self {
+        match decision {
+            crate::approval::SafetyCheck::AutoApprove {
+                sandbox_type,
+                user_explicitly_approved,
+            } => SafetyCheck::AutoApprove {
+                sandbox_type,
+                user_explicitly_approved,
+            },
+            crate::approval::SafetyCheck::AskUser => SafetyCheck::AskUser,
+            crate::approval::SafetyCheck::Reject { reason } => SafetyCheck::Reject { reason },
+        }
+    }
+}
+
 /// For a command to be run _without_ a sandbox, one of the following must be
 /// true:
 ///
@@ -90,6 +106,25 @@ pub fn assess_patch_safety(
 /// - the command is on the "known safe" list
 /// - `DangerFullAccess` was specified and `UnlessTrusted` was not
 pub fn assess_command_safety(
+    command: &[String],
+    approval_policy: AskForApproval,
+    sandbox_policy: &SandboxPolicy,
+    approved: &HashSet<Vec<String>>,
+    with_escalated_permissions: bool,
+) -> SafetyCheck {
+    let decision = crate::approval::assess_command_safety(
+        command,
+        approval_policy,
+        sandbox_policy,
+        approved,
+        with_escalated_permissions,
+    );
+
+    decision.into()
+}
+
+#[allow(dead_code)]
+pub(crate) fn assess_command_safety_legacy(
     command: &[String],
     approval_policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
@@ -405,7 +440,7 @@ mod tests {
         assert_eq!(
             safety_check,
             SafetyCheck::Reject {
-                reason: "dangerous command detected; rejected by user approval settings"
+                reason: "Destructive command detected; rejected by user approval settings"
                     .to_string(),
             }
         );
@@ -435,5 +470,49 @@ mod tests {
             None => SafetyCheck::AskUser,
         };
         assert_eq!(safety_check, expected);
+    }
+
+    #[cfg(test)]
+    mod api_contract {
+        use super::*;
+
+        // Compile-time function signature locks
+        #[test]
+        fn function_signatures_are_stable() {
+            let _p: fn(&ApplyPatchAction, AskForApproval, &SandboxPolicy, &Path) -> SafetyCheck =
+                assess_patch_safety;
+
+            let _c: fn(
+                &[String],
+                AskForApproval,
+                &SandboxPolicy,
+                &HashSet<Vec<String>>,
+                bool,
+            ) -> SafetyCheck = assess_command_safety;
+
+            let _g: fn() -> Option<SandboxType> = get_platform_sandbox;
+        }
+
+        // Enforce enum traits & variant shapes
+        fn _assert_traits<T: std::fmt::Debug + PartialEq>() {}
+
+        #[test]
+        fn safetycheck_traits_and_variants_are_stable() {
+            _assert_traits::<SafetyCheck>();
+
+            // If you change variant names/fields, these will fail to compile.
+            let s = SandboxType::None;
+
+            let _ = SafetyCheck::AutoApprove {
+                sandbox_type: s,
+                user_explicitly_approved: false,
+            };
+            let _ = SafetyCheck::AskUser;
+            let _ = SafetyCheck::Reject {
+                reason: String::new(),
+            };
+        }
+
+        // Intentionally do NOT expose or import crate-private helpers here.
     }
 }
