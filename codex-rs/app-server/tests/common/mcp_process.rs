@@ -39,6 +39,20 @@ use codex_app_server_protocol::RequestId;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
 
+// GitHub-hosted runners on every OS export HTTP proxy variables that point at a
+// loopback MITM. Reqwest obeys those settings and will emit absolute-form URIs,
+// which Wiremock does not match against simple path predicates. We first noticed
+// the resulting "expected request" flakes on Windows, but we clear the proxy
+// variables everywhere so the tests behave consistently across runners.
+const DISABLED_PROXY_ENV_VARS: &[&str] = &[
+    "ALL_PROXY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "http_proxy",
+    "https_proxy",
+];
+
 pub struct McpProcess {
     next_request_id: AtomicI64,
     /// Retain this child process until the client is dropped. The Tokio runtime
@@ -78,6 +92,10 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
+
+        for proxy_env in DISABLED_PROXY_ENV_VARS {
+            cmd.env_remove(proxy_env);
+        }
 
         for (k, v) in env_overrides {
             match v {
