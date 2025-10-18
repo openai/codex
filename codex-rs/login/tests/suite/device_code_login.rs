@@ -97,7 +97,11 @@ async fn mock_oauth_token_single(server: &MockServer, jwt: String) {
 }
 
 fn server_opts(codex_home: &tempfile::TempDir, issuer: String) -> ServerOptions {
-    let mut opts = ServerOptions::new(codex_home.path().to_path_buf(), "client-id".to_string());
+    let mut opts = ServerOptions::new(
+        codex_home.path().to_path_buf(),
+        "client-id".to_string(),
+        None,
+    );
     opts.issuer = issuer;
     opts.open_browser = false;
     opts
@@ -137,6 +141,42 @@ async fn device_code_login_integration_succeeds() {
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
     assert_eq!(tokens.account_id.as_deref(), Some("acct_321"));
+}
+
+#[tokio::test]
+async fn device_code_login_rejects_workspace_mismatch() {
+    skip_if_no_network!();
+
+    let codex_home = tempdir().unwrap();
+    let mock_server = MockServer::start().await;
+
+    mock_usercode_success(&mock_server).await;
+
+    mock_poll_token_two_step(&mock_server, Arc::new(AtomicUsize::new(0)), 404).await;
+
+    let jwt = make_jwt(json!({
+        "https://api.openai.com/auth": {
+            "chatgpt_account_id": "acct_321",
+            "organization_id": "org-actual"
+        }
+    }));
+
+    mock_oauth_token_single(&mock_server, jwt).await;
+
+    let issuer = mock_server.uri();
+    let mut opts = server_opts(&codex_home, issuer);
+    opts.forced_chatgpt_workspace_id = Some("org-required".to_string());
+
+    let err = run_device_code_login(opts)
+        .await
+        .expect_err("device code login should fail when workspace mismatches");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+
+    let auth_path = get_auth_file(codex_home.path());
+    assert!(
+        !auth_path.exists(),
+        "auth.json should not be created when workspace validation fails"
+    );
 }
 
 #[tokio::test]
@@ -183,7 +223,11 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
 
     let issuer = mock_server.uri();
 
-    let mut opts = ServerOptions::new(codex_home.path().to_path_buf(), "client-id".to_string());
+    let mut opts = ServerOptions::new(
+        codex_home.path().to_path_buf(),
+        "client-id".to_string(),
+        None,
+    );
     opts.issuer = issuer;
     opts.open_browser = false;
 
@@ -226,7 +270,11 @@ async fn device_code_login_integration_handles_error_payload() {
 
     let issuer = mock_server.uri();
 
-    let mut opts = ServerOptions::new(codex_home.path().to_path_buf(), "client-id".to_string());
+    let mut opts = ServerOptions::new(
+        codex_home.path().to_path_buf(),
+        "client-id".to_string(),
+        None,
+    );
     opts.issuer = issuer;
     opts.open_browser = false;
 

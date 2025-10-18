@@ -5,6 +5,7 @@ use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
 use crate::RequestId;
 use codex_protocol::ConversationId;
+use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -472,6 +473,11 @@ pub struct UserSavedConfig {
     pub sandbox_mode: Option<SandboxMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_settings: Option<SandboxSettings>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forced_chatgpt_workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Model-specific configuration
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -28,6 +28,8 @@ pub struct IdTokenInfo {
     /// (e.g., "free", "plus", "pro", "business", "enterprise", "edu").
     /// (Note: values may vary by backend.)
     pub(crate) chatgpt_plan_type: Option<PlanType>,
+    /// Organization/workspace identifier associated with the token, if present.
+    pub chatgpt_account_id: Option<String>,
     pub raw_jwt: String,
 }
 
@@ -71,6 +73,8 @@ struct IdClaims {
 struct AuthClaims {
     #[serde(default)]
     chatgpt_plan_type: Option<PlanType>,
+    #[serde(default)]
+    chatgpt_account_id: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -94,11 +98,20 @@ pub fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64)?;
     let claims: IdClaims = serde_json::from_slice(&payload_bytes)?;
 
-    Ok(IdTokenInfo {
-        email: claims.email,
-        chatgpt_plan_type: claims.auth.and_then(|a| a.chatgpt_plan_type),
-        raw_jwt: id_token.to_string(),
-    })
+    match claims.auth {
+        Some(auth) => Ok(IdTokenInfo {
+            email: claims.email,
+            raw_jwt: id_token.to_string(),
+            chatgpt_plan_type: auth.chatgpt_plan_type,
+            chatgpt_account_id: auth.chatgpt_account_id,
+        }),
+        None => Ok(IdTokenInfo {
+            email: claims.email,
+            raw_jwt: id_token.to_string(),
+            chatgpt_plan_type: None,
+            chatgpt_account_id: None,
+        }),
+    }
 }
 
 fn deserialize_id_token<'de, D>(deserializer: D) -> Result<IdTokenInfo, D::Error>
