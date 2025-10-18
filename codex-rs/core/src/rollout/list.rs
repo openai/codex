@@ -1,12 +1,9 @@
 use std::cmp::Reverse;
+use std::collections::VecDeque;
 use std::io::{self};
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_file_search as file_search;
-use std::num::NonZero;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -18,6 +15,7 @@ use crate::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource;
+use tokio::task::spawn_blocking;
 
 /// Returned page of conversation summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -492,35 +490,79 @@ pub async fn find_conversation_path_by_id_str(
         return Ok(None);
     }
 
-    let mut root = codex_home.to_path_buf();
-    root.push(SESSIONS_SUBDIR);
-    if !root.exists() {
-        return Ok(None);
-    }
-    // This is safe because we know the values are valid.
-    #[allow(clippy::unwrap_used)]
-    let limit = NonZero::new(1).unwrap();
-    // This is safe because we know the values are valid.
-    #[allow(clippy::unwrap_used)]
-    let threads = NonZero::new(2).unwrap();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let exclude: Vec<String> = Vec::new();
-    let compute_indices = false;
+    let codex_home = codex_home.to_path_buf();
+    let id = id_str.to_owned();
 
-    let results = file_search::run(
-        id_str,
-        limit,
-        &root,
-        exclude,
-        threads,
-        cancel,
-        compute_indices,
-    )
-    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+    spawn_blocking(move || {
+        let mut root = codex_home;
+        root.push(SESSIONS_SUBDIR);
+        if !root.exists() {
+            return Ok(None);
+        }
+        let mut pending: VecDeque<PathBuf> = VecDeque::from([root]);
 
-    Ok(results
-        .matches
-        .into_iter()
-        .next()
-        .map(|m| root.join(m.path)))
+        while let Some(dir) = pending.pop_front() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                    ) =>
+                {
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                };
+                let path = entry.path();
+                let file_type = match entry.file_type() {
+                    Ok(ty) => ty,
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                };
+
+                if file_type.is_dir() {
+                    pending.push_back(path);
+                    continue;
+                }
+
+                if !file_type.is_file() {
+                    continue;
+                }
+
+                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+
+                if file_name.ends_with(".jsonl") && file_name.contains(&id) {
+                    return Ok(Some(path));
+                }
+            }
+        }
+
+        Ok(None)
+    })
+    .await
+    .map_err(|err| io::Error::other(format!("spawn_blocking join failed: {err}")))?
 }
