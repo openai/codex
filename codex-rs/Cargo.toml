@@ -2,6 +2,7 @@
 members = [
     "backend-client",
     "ansi-escape",
+    "async-utils",
     "app-server",
     "app-server-protocol",
     "apply-patch",
@@ -56,6 +57,7 @@ codex-arg0 = { path = "arg0" }
 codex-chatgpt = { path = "chatgpt" }
 codex-common = { path = "common" }
 codex-core = { path = "core" }
+codex-async-utils = { path = "async-utils" }
 codex-exec = { path = "exec" }
 codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
@@ -164,6 +166,7 @@ strum_macros = "0.27.2"
 supports-color = "3.0.2"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
+test-log = "0.2.18"
 textwrap = "0.16.2"
 thiserror = "2.0.16"
 time = "0.3"
