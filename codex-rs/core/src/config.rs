@@ -5,6 +5,7 @@ use crate::config_loader::merge_toml_values;
 use crate::config_profile::ConfigProfile;
 use crate::config_types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config_types::History;
+use crate::config_types::KeybindingMode;
 use crate::config_types::McpServerConfig;
 use crate::config_types::McpServerTransportConfig;
 use crate::config_types::Notice;
@@ -148,6 +149,9 @@ pub struct Config {
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
+
+    /// Preferred keybinding mode for interactive TUI components.
+    pub keybinding_mode: KeybindingMode,
 
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
@@ -1350,6 +1354,11 @@ impl Config {
                 .tui
                 .as_ref()
                 .map(|t| t.notifications.clone())
+                .unwrap_or_default(),
+            keybinding_mode: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.keybinding_mode)
                 .unwrap_or_default(),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
@@ -2749,6 +2758,7 @@ model_verbosity = "high"
                 notices: Default::default(),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                keybinding_mode: KeybindingMode::default(),
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -2816,6 +2826,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            keybinding_mode: KeybindingMode::default(),
             otel: OtelConfig::default(),
         };
 
@@ -2898,6 +2909,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            keybinding_mode: KeybindingMode::default(),
             otel: OtelConfig::default(),
         };
 
@@ -2966,6 +2978,7 @@ model_verbosity = "high"
             notices: Default::default(),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            keybinding_mode: KeybindingMode::default(),
             otel: OtelConfig::default(),
         };
 

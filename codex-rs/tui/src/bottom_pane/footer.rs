@@ -11,6 +11,14 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VimStatus {
+    Insert,
+    Normal,
+    Visual,
+    VisualLine,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
@@ -18,6 +26,7 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) context_window_percent: Option<u8>,
+    pub(crate) vim_status: Option<VimStatus>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,12 +72,35 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
 }
 
 pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
+    let lines = footer_lines(props);
     Paragraph::new(prefix_lines(
-        footer_lines(props),
+        lines.clone(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
     .render(area, buf);
+
+    if let Some(status) = props.vim_status
+        && matches!(props.mode, FooterMode::ShortcutSummary)
+    {
+        let label = match status {
+            VimStatus::Insert => "-- INSERT --",
+            VimStatus::Normal => "-- NORMAL --",
+            VimStatus::Visual => "-- VISUAL --",
+            VimStatus::VisualLine => "-- VISUAL LINE --",
+        };
+        let span = Span::from(label.to_string()).dim();
+        let label_width = label.len() as u16;
+        let available_width = area.width;
+        if available_width > label_width + 1 {
+            let mut x = area.x + available_width - label_width - 1;
+            let min_x = area.x + FOOTER_INDENT_COLS as u16 + 1;
+            if x < min_x {
+                x = min_x;
+            }
+            buf.set_span(x, area.y, &span, label_width);
+        }
+    }
 }
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
@@ -400,6 +432,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                vim_status: None,
             },
         );
 
@@ -411,6 +444,7 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 context_window_percent: None,
+                vim_status: None,
             },
         );
 
@@ -422,6 +456,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                vim_status: None,
             },
         );
 
@@ -433,6 +468,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: None,
+                vim_status: None,
             },
         );
 
@@ -444,6 +480,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                vim_status: None,
             },
         );
 
@@ -455,6 +492,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 context_window_percent: None,
+                vim_status: None,
             },
         );
 
@@ -466,6 +504,19 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 context_window_percent: Some(72),
+                vim_status: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_shortcuts_vim_normal",
+            FooterProps {
+                mode: FooterMode::ShortcutSummary,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                context_window_percent: None,
+                vim_status: Some(VimStatus::Normal),
             },
         );
     }

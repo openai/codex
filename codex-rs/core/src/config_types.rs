@@ -37,6 +37,14 @@ pub struct McpServerConfig {
     pub tool_timeout_sec: Option<Duration>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeybindingMode {
+    #[default]
+    Emacs,
+    Vim,
+}
+
 impl<'de> Deserialize<'de> for McpServerConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -359,6 +367,10 @@ pub struct Tui {
     /// Defaults to `false`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Keybinding style to use throughout the TUI (e.g. composer, transcript pager).
+    #[serde(default)]
+    pub keybinding_mode: KeybindingMode,
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

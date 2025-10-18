@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
+use codex_core::config_types::KeybindingMode;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -80,20 +81,33 @@ pub(crate) struct BottomPaneParams {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
+    pub(crate) keybinding_mode: KeybindingMode,
 }
 
 impl BottomPane {
     const BOTTOM_PAD_LINES: u16 = 0;
     pub fn new(params: BottomPaneParams) -> Self {
         let enhanced_keys_supported = params.enhanced_keys_supported;
-        Self {
-            composer: ChatComposer::new(
+        let composer = if params.keybinding_mode == KeybindingMode::Vim {
+            ChatComposer::new_with_keybinding_mode(
                 params.has_input_focus,
                 params.app_event_tx.clone(),
                 enhanced_keys_supported,
                 params.placeholder_text,
                 params.disable_paste_burst,
-            ),
+                params.keybinding_mode,
+            )
+        } else {
+            ChatComposer::new(
+                params.has_input_focus,
+                params.app_event_tx.clone(),
+                enhanced_keys_supported,
+                params.placeholder_text,
+                params.disable_paste_burst,
+            )
+        };
+        Self {
+            composer,
             view_stack: Vec::new(),
             app_event_tx: params.app_event_tx,
             frame_requester: params.frame_requester,
@@ -199,11 +213,14 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
-            // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt even while the composer has focus.
+            // If a task is running and the status line is visible, allow Esc to
+            // send an interrupt while the composer has focus — but only when
+            // Esc would be considered a non-editing key in the composer. In Vim
+            // mode this means only from NORMAL mode; in Emacs mode it's always allowed.
             if matches!(key_event.code, crossterm::event::KeyCode::Esc)
                 && self.is_task_running
                 && let Some(status) = &self.status
+                && self.composer.allows_backtrack_escape()
             {
                 // Send Op::Interrupt
                 status.interrupt();
@@ -396,11 +413,18 @@ impl BottomPane {
         self.is_task_running
     }
 
+    pub(crate) fn composer_in_vim_normal_mode(&self) -> bool {
+        self.composer.is_vim_normal_mode()
+    }
+
     /// Return true when the pane is in the regular composer state without any
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
     pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
-        !self.is_task_running && self.view_stack.is_empty() && !self.composer.popup_active()
+        !self.is_task_running
+            && self.view_stack.is_empty()
+            && !self.composer.popup_active()
+            && self.composer.allows_backtrack_escape()
     }
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
@@ -571,6 +595,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            keybinding_mode: KeybindingMode::Emacs,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -591,6 +616,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            keybinding_mode: KeybindingMode::Emacs,
         });
 
         // Create an approval modal (active view).
@@ -622,6 +648,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            keybinding_mode: KeybindingMode::Emacs,
         });
 
         // Start a running task so the status indicator is active above the composer.
@@ -690,6 +717,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            keybinding_mode: KeybindingMode::Emacs,
         });
 
         // Begin a task: show initial status.
@@ -721,6 +749,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            keybinding_mode: KeybindingMode::Emacs,
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -750,6 +779,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            keybinding_mode: KeybindingMode::Emacs,
         });
 
         pane.set_task_running(true);
