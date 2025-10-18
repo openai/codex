@@ -168,9 +168,10 @@ pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize
 pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> String {
     let time = dt.format("%H:%M").to_string();
     if dt.date_naive() == captured_at.date_naive() {
-        time
+        format!("{time} today")
     } else {
-        format!("{time} on {}", dt.format("%-d %b"))
+        let date = dt.format("%-d %b");
+        format!("{time} on {date}")
     }
 }
 
