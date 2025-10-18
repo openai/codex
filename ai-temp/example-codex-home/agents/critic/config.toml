@@ -1,0 +1,8 @@
+model = "gpt-5"
+sandbox_mode = "read-only"
+
+[history]
+persistence = "none"
+
+[multi_agent]
+agents = []

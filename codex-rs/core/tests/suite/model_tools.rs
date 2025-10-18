@@ -57,6 +57,13 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     config.model = model.to_string();
     config.model_family =
         find_family_for_model(model).unwrap_or_else(|| panic!("unknown model family for {model}"));
+    config.include_plan_tool = false;
+    config.include_delegate_tool = false;
+    config.include_apply_patch_tool = false;
+    config.include_view_image_tool = false;
+    config.tools_web_search_request = false;
+    config.use_experimental_streamable_shell_tool = false;
+    config.use_experimental_unified_exec_tool = false;
     config.features.disable(Feature::PlanTool);
     config.features.disable(Feature::ApplyPatchFreeform);
     config.features.disable(Feature::ViewImageTool);

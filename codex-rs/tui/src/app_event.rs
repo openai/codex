@@ -5,6 +5,7 @@ use codex_common::model_presets::ModelPreset;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
+use codex_multi_agent::DelegateEvent;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
@@ -28,11 +29,13 @@ pub(crate) enum AppEvent {
     /// bubbling channels through layers of widgets.
     CodexOp(codex_core::protocol::Op),
 
+    /// Update emitted from the orchestrator about delegate progress/completion.
+    DelegateUpdate(DelegateEvent),
+
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
     /// is at most one in-flight search.
     StartFileSearch(String),
-
     /// Result of a completed asynchronous file search. The `query` echoes the
     /// original search term so the UI can decide whether the results are
     /// still relevant.
@@ -87,6 +90,21 @@ pub(crate) enum AppEvent {
 
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
+
+    /// Request to open the delegate session picker.
+    OpenDelegatePicker,
+
+    /// Switch into the provided delegate session.
+    EnterDelegateSession(String),
+
+    /// Return from the active delegate session to the main agent.
+    ExitDelegateSession,
+
+    /// Dismiss a detached delegate run from the registry.
+    DismissDetachedRun(String),
+
+    /// Inject text into the main composer as if the user typed it.
+    InsertUserTextMessage(String),
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),

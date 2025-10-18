@@ -186,6 +186,8 @@ async fn prompt_tools_are_consistent_across_requests() {
     config.cwd = cwd.path().to_path_buf();
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
+    config.include_plan_tool = true;
+    config.include_delegate_tool = false;
     config.features.enable(Feature::PlanTool);
 
     let conversation_manager =
