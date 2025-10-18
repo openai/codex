@@ -1485,13 +1485,6 @@ name = "codex-utils-string"
 version = "0.0.0"
 
 [[package]]
-name = "codex-utils-time"
-version = "0.0.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
