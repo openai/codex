@@ -49,7 +49,7 @@ To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the p
 
 ### Use `@` for file search
 
-Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
+Typing `@` triggers a case-insensitive fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
 
 ### Esc–Esc to edit a previous message
 
