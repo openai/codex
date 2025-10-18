@@ -21,6 +21,8 @@ use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use mcp_types::CallToolResult;
+use mcp_types::Resource as McpResource;
+use mcp_types::ResourceTemplate as McpResourceTemplate;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
@@ -642,9 +644,9 @@ pub struct RateLimitWindow {
     /// Rolling window duration, in minutes.
     #[ts(type = "number | null")]
     pub window_minutes: Option<u64>,
-    /// Seconds until the window resets.
-    #[ts(type = "number | null")]
-    pub resets_in_seconds: Option<u64>,
+    /// Timestamp (RFC3339) when the window resets.
+    #[ts(type = "string | null")]
+    pub resets_at: Option<String>,
 }
 
 // Includes prompts, tools and space to call compact.
@@ -1249,6 +1251,10 @@ pub struct GetHistoryEntryResponseEvent {
 pub struct McpListToolsResponseEvent {
     /// Fully qualified tool name -> tool definition.
     pub tools: std::collections::HashMap<String, McpTool>,
+    /// Known resources grouped by server name.
+    pub resources: std::collections::HashMap<String, Vec<McpResource>>,
+    /// Known resource templates grouped by server name.
+    pub resource_templates: std::collections::HashMap<String, Vec<McpResourceTemplate>>,
     /// Authentication status for each configured MCP server.
     pub auth_statuses: std::collections::HashMap<String, McpAuthStatus>,
 }

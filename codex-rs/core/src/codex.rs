@@ -28,10 +28,17 @@ use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use mcp_types::CallToolResult;
+use mcp_types::ListResourceTemplatesRequestParams;
+use mcp_types::ListResourceTemplatesResult;
+use mcp_types::ListResourcesRequestParams;
+use mcp_types::ListResourcesResult;
+use mcp_types::ReadResourceRequestParams;
+use mcp_types::ReadResourceResult;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -113,6 +120,7 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use codex_async_utils::OrCancelExt;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -418,13 +426,16 @@ impl Session {
         // Surface individual client start-up failures to the user.
         if !failed_clients.is_empty() {
             for (server_name, err) in failed_clients {
+                let auth_status = auth_statuses.get(&server_name);
+                let requires_login = match auth_status {
+                    Some(McpAuthStatus::NotLoggedIn) => true,
+                    Some(McpAuthStatus::OAuth) => is_mcp_client_auth_required_error(&err),
+                    _ => false,
+                };
                 let log_message =
                     format!("MCP client for `{server_name}` failed to start: {err:#}");
                 error!("{log_message}");
-                let display_message = if matches!(
-                    auth_statuses.get(&server_name),
-                    Some(McpAuthStatus::NotLoggedIn)
-                ) {
+                let display_message = if requires_login {
                     format!(
                         "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}` to log in."
                     )
@@ -910,6 +921,7 @@ impl Session {
             duration,
             exit_code,
             timed_out: _,
+            ..
         } = output;
         // Send full stdout/stderr to clients; do not truncate.
         let stdout = stdout.text.clone();
@@ -974,14 +986,27 @@ impl Session {
         let sub_id = context.sub_id.clone();
         let call_id = context.call_id.clone();
 
-        self.on_exec_command_begin(turn_diff_tracker.clone(), context.clone())
-            .await;
-
+        let begin_turn_diff = turn_diff_tracker.clone();
+        let begin_context = context.clone();
+        let session = self;
         let result = self
             .services
             .executor
-            .run(request, self, approval_policy, &context)
+            .run(request, self, approval_policy, &context, move || {
+                let turn_diff = begin_turn_diff.clone();
+                let ctx = begin_context.clone();
+                async move {
+                    session.on_exec_command_begin(turn_diff, ctx).await;
+                }
+            })
             .await;
+
+        if matches!(
+            &result,
+            Err(ExecError::Function(FunctionCallError::Denied(_)))
+        ) {
+            return result;
+        }
 
         let normalized = normalize_exec_result(&result);
         let borrowed = normalized.event_output();
@@ -1057,6 +1082,39 @@ impl Session {
         }
     }
 
+    pub async fn list_resources(
+        &self,
+        server: &str,
+        params: Option<ListResourcesRequestParams>,
+    ) -> anyhow::Result<ListResourcesResult> {
+        self.services
+            .mcp_connection_manager
+            .list_resources(server, params)
+            .await
+    }
+
+    pub async fn list_resource_templates(
+        &self,
+        server: &str,
+        params: Option<ListResourceTemplatesRequestParams>,
+    ) -> anyhow::Result<ListResourceTemplatesResult> {
+        self.services
+            .mcp_connection_manager
+            .list_resource_templates(server, params)
+            .await
+    }
+
+    pub async fn read_resource(
+        &self,
+        server: &str,
+        params: ReadResourceRequestParams,
+    ) -> anyhow::Result<ReadResourceResult> {
+        self.services
+            .mcp_connection_manager
+            .read_resource(server, params)
+            .await
+    }
+
     pub async fn call_tool(
         &self,
         server: &str,
@@ -1117,19 +1175,6 @@ impl Session {
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
     }
 
-    fn interrupt_task_sync(&self) {
-        if let Ok(mut active) = self.active_turn.try_lock()
-            && let Some(at) = active.as_mut()
-        {
-            at.try_clear_pending_sync();
-            let tasks = at.drain_tasks();
-            *active = None;
-            for (_sub_id, task) in tasks {
-                task.handle.abort();
-            }
-        }
-    }
-
     pub(crate) fn notifier(&self) -> &UserNotifier {
         &self.services.notifier
     }
@@ -1140,12 +1185,6 @@ impl Session {
 
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        self.interrupt_task_sync();
     }
 }
 
@@ -1419,16 +1458,23 @@ async fn submission_loop(
 
                 // This is a cheap lookup from the connection manager's cache.
                 let tools = sess.services.mcp_connection_manager.list_all_tools();
-                let auth_statuses = compute_auth_statuses(
-                    config.mcp_servers.iter(),
-                    config.mcp_oauth_credentials_store_mode,
-                )
-                .await;
+                let (auth_statuses, resources, resource_templates) = tokio::join!(
+                    compute_auth_statuses(
+                        config.mcp_servers.iter(),
+                        config.mcp_oauth_credentials_store_mode,
+                    ),
+                    sess.services.mcp_connection_manager.list_all_resources(),
+                    sess.services
+                        .mcp_connection_manager
+                        .list_all_resource_templates()
+                );
                 let event = Event {
                     id: sub_id,
                     msg: EventMsg::McpListToolsResponse(
                         crate::protocol::McpListToolsResponseEvent {
                             tools,
+                            resources,
+                            resource_templates,
                             auth_statuses,
                         },
                     ),
@@ -1651,6 +1697,7 @@ pub(crate) async fn run_task(
     sub_id: String,
     input: Vec<InputItem>,
     task_kind: TaskKind,
+    cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() {
         return None;
@@ -1735,6 +1782,7 @@ pub(crate) async fn run_task(
             sub_id.clone(),
             turn_input,
             task_kind,
+            cancellation_token.child_token(),
         )
         .await
         {
@@ -1896,6 +1944,10 @@ pub(crate) async fn run_task(
                 }
                 continue;
             }
+            Err(CodexErr::TurnAborted) => {
+                // Aborted turn is reported via a different event.
+                break;
+            }
             Err(e) => {
                 info!("Turn error: {e:#}");
                 let event = Event {
@@ -1962,6 +2014,7 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
     task_kind: TaskKind,
+    cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
     let router = Arc::new(ToolRouter::from_config(
@@ -1992,10 +2045,12 @@ async fn run_turn(
             &sub_id,
             &prompt,
             task_kind,
+            cancellation_token.child_token(),
         )
         .await
         {
             Ok(output) => return Ok(output),
+            Err(CodexErr::TurnAborted) => return Err(CodexErr::TurnAborted),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
@@ -2058,6 +2113,7 @@ struct TurnRunResult {
     total_token_usage: Option<TokenUsage>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn try_run_turn(
     router: Arc<ToolRouter>,
     sess: Arc<Session>,
@@ -2066,6 +2122,7 @@ async fn try_run_turn(
     sub_id: &str,
     prompt: &Prompt,
     task_kind: TaskKind,
+    cancellation_token: CancellationToken,
 ) -> CodexResult<TurnRunResult> {
     // call_ids that are part of this response.
     let completed_call_ids = prompt
@@ -2135,7 +2192,8 @@ async fn try_run_turn(
         .client
         .clone()
         .stream_with_task_kind(prompt.as_ref(), task_kind)
-        .await?;
+        .or_cancel(&cancellation_token)
+        .await??;
 
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
@@ -2151,7 +2209,8 @@ async fn try_run_turn(
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
-        let event = stream.next().await;
+        let event = stream.next().or_cancel(&cancellation_token).await?;
+
         let event = match event {
             Some(res) => res?,
             None => {
@@ -2216,7 +2275,8 @@ async fn try_run_turn(
                             response: Some(response),
                         });
                     }
-                    Err(FunctionCallError::RespondToModel(message)) => {
+                    Err(FunctionCallError::RespondToModel(message))
+                    | Err(FunctionCallError::Denied(message)) => {
                         let response = ResponseInputItem::FunctionCallOutput {
                             call_id: String::new(),
                             output: FunctionCallOutputPayload {
@@ -2255,7 +2315,10 @@ async fn try_run_turn(
                 sess.update_token_usage_info(sub_id, turn_context.as_ref(), token_usage.as_ref())
                     .await;
 
-                let processed_items: Vec<ProcessedResponseItem> = output.try_collect().await?;
+                let processed_items = output
+                    .try_collect()
+                    .or_cancel(&cancellation_token)
+                    .await??;
 
                 let unified_diff = {
                     let mut tracker = turn_diff_tracker.lock().await;
@@ -2464,6 +2527,11 @@ pub(crate) async fn exit_review_mode(
         .await;
 }
 
+fn is_mcp_client_auth_required_error(error: &anyhow::Error) -> bool {
+    // StreamableHttpError::AuthRequired from the MCP SDK.
+    error.to_string().contains("Auth required")
+}
+
 use crate::executor::errors::ExecError;
 use crate::executor::linkers::PreparedExec;
 use crate::tools::context::ApplyPatchCommandContext;
@@ -2493,6 +2561,8 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use std::time::Duration;
+    use tokio::time::sleep;
 
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -2502,8 +2572,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
-    use tokio::time::Duration;
-    use tokio::time::sleep;
 
     #[test]
     fn reconstruct_history_matches_live_compactions() {
@@ -2883,12 +2951,15 @@ mod tests {
     }
 
     #[derive(Clone, Copy)]
-    struct NeverEndingTask(TaskKind);
+    struct NeverEndingTask {
+        kind: TaskKind,
+        listen_to_cancellation_token: bool,
+    }
 
     #[async_trait::async_trait]
     impl SessionTask for NeverEndingTask {
         fn kind(&self) -> TaskKind {
-            self.0
+            self.kind
         }
 
         async fn run(
@@ -2897,20 +2968,26 @@ mod tests {
             _ctx: Arc<TurnContext>,
             _sub_id: String,
             _input: Vec<InputItem>,
+            cancellation_token: CancellationToken,
         ) -> Option<String> {
+            if self.listen_to_cancellation_token {
+                cancellation_token.cancelled().await;
+                return None;
+            }
             loop {
                 sleep(Duration::from_secs(60)).await;
             }
         }
 
         async fn abort(&self, session: Arc<SessionTaskContext>, sub_id: &str) {
-            if let TaskKind::Review = self.0 {
+            if let TaskKind::Review = self.kind {
                 exit_review_mode(session.clone_session(), sub_id.to_string(), None).await;
             }
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test_log::test]
     async fn abort_regular_task_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-regular".to_string();
@@ -2921,7 +2998,41 @@ mod tests {
             Arc::clone(&tc),
             sub_id.clone(),
             input,
-            NeverEndingTask(TaskKind::Regular),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+        let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for event")
+            .expect("event");
+        match evt.msg {
+            EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn abort_gracefuly_emits_turn_aborted_only() {
+        let (sess, tc, rx) = make_session_and_context_with_rx();
+        let sub_id = "sub-regular".to_string();
+        let input = vec![InputItem::Text {
+            text: "hello".to_string(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            sub_id.clone(),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
         )
         .await;
 
@@ -2935,7 +3046,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         let (sess, tc, rx) = make_session_and_context_with_rx();
         let sub_id = "sub-review".to_string();
@@ -2946,18 +3057,27 @@ mod tests {
             Arc::clone(&tc),
             sub_id.clone(),
             input,
-            NeverEndingTask(TaskKind::Review),
+            NeverEndingTask {
+                kind: TaskKind::Review,
+                listen_to_cancellation_token: false,
+            },
         )
         .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        let first = rx.recv().await.expect("first event");
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for first event")
+            .expect("first event");
         match first.msg {
             EventMsg::ExitedReviewMode(ev) => assert!(ev.review_output.is_none()),
             other => panic!("unexpected first event: {other:?}"),
         }
-        let second = rx.recv().await.expect("second event");
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for second event")
+            .expect("second event");
         match second.msg {
             EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
             other => panic!("unexpected second event: {other:?}"),

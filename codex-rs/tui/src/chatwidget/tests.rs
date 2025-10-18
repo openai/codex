@@ -4,6 +4,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
@@ -234,6 +235,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
         auth_manager,
+        feedback: codex_feedback::CodexFeedback::new(),
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -290,6 +292,7 @@ fn make_chatwidget_manual() -> (
         ghost_snapshots_disabled: false,
         needs_final_message_separator: false,
         last_rendered_width: std::cell::Cell::new(None),
+        feedback: codex_feedback::CodexFeedback::new(),
     };
     (widget, rx, op_rx)
 }
@@ -1088,6 +1091,31 @@ fn model_selection_popup_snapshot() {
 }
 
 #[test]
+fn approvals_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    chat.config.notices.hide_full_access_warning = None;
+    chat.open_approvals_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("approvals_selection_popup", popup);
+}
+
+#[test]
+fn full_access_confirmation_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "full-access")
+        .expect("full access preset");
+    chat.open_full_access_confirmation(preset);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("full_access_confirmation_popup", popup);
+}
+
+#[test]
 fn model_reasoning_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
@@ -1603,7 +1631,7 @@ fn status_widget_and_approval_modal_snapshot() {
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
-        cwd: std::path::PathBuf::from("/tmp"),
+        cwd: PathBuf::from("/tmp"),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
@@ -2282,6 +2310,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
                 ParsedCommand::Read {
                     name: "diff_render.rs".into(),
                     cmd: "cat diff_render.rs".into(),
+                    path: "diff_render.rs".into(),
                 },
             ],
         }),
