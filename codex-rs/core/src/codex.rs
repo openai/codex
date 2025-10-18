@@ -245,6 +245,8 @@ impl Codex {
 
 use crate::state::SessionState;
 
+pub(crate) const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
+
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
@@ -553,6 +555,10 @@ impl Session {
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
         self.tx_event.clone()
+    }
+
+    pub(crate) fn conversation_id(&self) -> ConversationId {
+        self.conversation_id
     }
 
     fn next_internal_sub_id(&self) -> String {
@@ -2561,6 +2567,7 @@ mod tests {
     use codex_app_server_protocol::AuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use std::collections::HashMap;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -2612,6 +2619,16 @@ mod tests {
 
         let actual = tokio_test::block_on(async { session.state.lock().await.history_snapshot() });
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn session_conversation_id_accessor_exposes_inner_value() {
+        let (session, _turn_context) = make_session_and_context();
+
+        let expected = session.conversation_id.to_string();
+        let actual = session.conversation_id().to_string();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -3346,5 +3363,81 @@ mod tests {
 
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn handle_container_exec_exposes_session_id_to_commands() {
+        use crate::exec::ExecParams;
+        use crate::protocol::SandboxPolicy;
+        use crate::turn_diff_tracker::TurnDiffTracker;
+
+        let (session, mut turn_context_raw) = make_session_and_context();
+        turn_context_raw.sandbox_policy = SandboxPolicy::DangerFullAccess;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context_raw);
+
+        let conversation_id = session.conversation_id().to_string();
+
+        let mut env = HashMap::new();
+        env.insert(
+            CODEX_SESSION_ID_ENV_VAR.to_string(),
+            "incorrect".to_string(),
+        );
+
+        let command = if cfg!(windows) {
+            vec![
+                "cmd.exe".to_string(),
+                "/C".to_string(),
+                "echo %CODEX_SESSION_ID%".to_string(),
+            ]
+        } else {
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf %s \"$CODEX_SESSION_ID\"".to_string(),
+            ]
+        };
+
+        let params = ExecParams {
+            command,
+            cwd: turn_context.cwd.clone(),
+            timeout_ms: Some(5_000),
+            env,
+            with_escalated_permissions: Some(false),
+            justification: None,
+        };
+
+        let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+
+        let output = handle_container_exec_with_params(
+            "shell",
+            params,
+            Arc::clone(&session),
+            Arc::clone(&turn_context),
+            Arc::clone(&turn_diff_tracker),
+            "test-sub".to_string(),
+            "test-call".to_string(),
+        )
+        .await
+        .expect("command should succeed");
+
+        #[derive(Deserialize, PartialEq, Eq, Debug)]
+        struct ResponseExecMetadata {
+            exit_code: i32,
+        }
+
+        #[derive(Deserialize)]
+        struct ResponseExecOutput {
+            output: String,
+            metadata: ResponseExecMetadata,
+        }
+
+        let exec_output: ResponseExecOutput =
+            serde_json::from_str(&output).expect("valid exec output json");
+
+        assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
+
+        let observed = exec_output.output.trim_matches(['\r', '\n']);
+        assert_eq!(observed, conversation_id);
     }
 }

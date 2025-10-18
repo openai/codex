@@ -9,6 +9,7 @@ use crate::apply_patch;
 use crate::apply_patch::ApplyPatchExec;
 use crate::apply_patch::InternalApplyPatchInvocation;
 use crate::apply_patch::convert_apply_patch_to_protocol;
+use crate::codex::CODEX_SESSION_ID_ENV_VAR;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
@@ -49,7 +50,7 @@ pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
 // TODO(jif) break this down
 pub(crate) async fn handle_container_exec_with_params(
     tool_name: &str,
-    params: ExecParams,
+    mut params: ExecParams,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
@@ -132,6 +133,11 @@ pub(crate) async fn handle_container_exec_with_params(
     sess.services.executor.update_environment(
         turn_context.sandbox_policy.clone(),
         turn_context.cwd.clone(),
+    );
+
+    params.env.insert(
+        CODEX_SESSION_ID_ENV_VAR.to_string(),
+        sess.conversation_id().to_string(),
     );
 
     let prepared_exec = PreparedExec::new(

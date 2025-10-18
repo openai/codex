@@ -1,3 +1,4 @@
+use crate::codex::CODEX_SESSION_ID_ENV_VAR;
 use crate::config_types::EnvironmentVariablePattern;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyInherit;
@@ -19,18 +20,25 @@ fn populate_env<I>(vars: I, policy: &ShellEnvironmentPolicy) -> HashMap<String, 
 where
     I: IntoIterator<Item = (String, String)>,
 {
+    let vars: Vec<(String, String)> = vars.into_iter().collect();
+    let session_id = vars
+        .iter()
+        .find(|(key, _)| key == CODEX_SESSION_ID_ENV_VAR)
+        .map(|(_, value)| value.clone());
+
     // Step 1 – determine the starting set of variables based on the
     // `inherit` strategy.
     let mut env_map: HashMap<String, String> = match policy.inherit {
-        ShellEnvironmentPolicyInherit::All => vars.into_iter().collect(),
+        ShellEnvironmentPolicyInherit::All => vars.iter().cloned().collect(),
         ShellEnvironmentPolicyInherit::None => HashMap::new(),
         ShellEnvironmentPolicyInherit::Core => {
             const CORE_VARS: &[&str] = &[
                 "HOME", "LOGNAME", "PATH", "SHELL", "USER", "USERNAME", "TMPDIR", "TEMP", "TMP",
             ];
             let allow: HashSet<&str> = CORE_VARS.iter().copied().collect();
-            vars.into_iter()
-                .filter(|(k, _)| allow.contains(k.as_str()))
+            vars.iter()
+                .filter(|&(k, _)| allow.contains(k.as_str()))
+                .cloned()
                 .collect()
         }
     };
@@ -63,6 +71,10 @@ where
     // Step 5 – If include_only is non-empty, keep *only* the matching vars.
     if !policy.include_only.is_empty() {
         env_map.retain(|k, _| matches_any(k, &policy.include_only));
+    }
+
+    if let Some(session_id) = session_id {
+        env_map.insert(CODEX_SESSION_ID_ENV_VAR.to_string(), session_id);
     }
 
     env_map
@@ -190,5 +202,21 @@ mod tests {
             "ONLY_VAR".to_string() => "yes".to_string(),
         };
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_codex_session_id_preserved() {
+        let vars = make_vars(&[
+            ("PATH", "/usr/bin"),
+            (CODEX_SESSION_ID_ENV_VAR, "session-123"),
+        ]);
+
+        let policy = ShellEnvironmentPolicy::default();
+        let result = populate_env(vars, &policy);
+
+        assert_eq!(
+            result.get(CODEX_SESSION_ID_ENV_VAR),
+            Some(&"session-123".to_string())
+        );
     }
 }
