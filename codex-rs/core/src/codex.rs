@@ -373,9 +373,10 @@ impl Session {
             per_turn_config.model_context_window = Some(model_info.context_window);
         }
 
-        let otel_event_manager = otel_event_manager
-            .clone()
-            .with_model(session_configuration.model.as_str(), "TODO");
+        let otel_event_manager = otel_event_manager.clone().with_model(
+            session_configuration.model.as_str(),
+            session_configuration.model.as_str(),
+        );
 
         let client = ModelClient::new(
             Arc::new(per_turn_config),
